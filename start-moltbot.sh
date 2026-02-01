@@ -160,6 +160,42 @@ if (config.models?.providers?.anthropic?.models) {
     if (hasInvalidModels) {
         console.log('Removing broken anthropic provider config (missing model names)');
         delete config.models.providers.anthropic;
+
+// Clean up invalid openrouter provider config (OpenRouter uses built-in support, no providers config needed)
+if (config.models?.providers?.openrouter) {
+    console.log('Removing invalid models.providers.openrouter block');
+    delete config.models.providers.openrouter;
+    if (config.models.providers && Object.keys(config.models.providers).length === 0) {
+        delete config.models.providers;
+    }
+    if (config.models && Object.keys(config.models).length === 0) {
+        delete config.models;
+    }
+}
+    }
+
+// Clean up invalid openrouter provider config (OpenRouter uses built-in support, no providers config needed)
+if (config.models?.providers?.openrouter) {
+    console.log('Removing invalid models.providers.openrouter block');
+    delete config.models.providers.openrouter;
+    if (config.models.providers && Object.keys(config.models.providers).length === 0) {
+        delete config.models.providers;
+    }
+    if (config.models && Object.keys(config.models).length === 0) {
+        delete config.models;
+    }
+}
+}
+
+// Clean up invalid openrouter provider config (OpenRouter uses built-in support, no providers config needed)
+if (config.models?.providers?.openrouter) {
+    console.log('Removing invalid models.providers.openrouter block');
+    delete config.models.providers.openrouter;
+    if (config.models.providers && Object.keys(config.models.providers).length === 0) {
+        delete config.models.providers;
+    }
+    if (config.models && Object.keys(config.models).length === 0) {
+        delete config.models;
     }
 }
 
@@ -187,8 +223,10 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
     config.channels.telegram = config.channels.telegram || {};
     config.channels.telegram.botToken = process.env.TELEGRAM_BOT_TOKEN;
     config.channels.telegram.enabled = true;
-    config.channels.telegram.dm = config.channels.telegram.dm || {};
     config.channels.telegram.dmPolicy = process.env.TELEGRAM_DM_POLICY || 'pairing';
+    if (process.env.TELEGRAM_DM_POLICY === 'open') {
+        config.channels.telegram.allowFrom = ['*'];
+    }
 }
 
 // Discord configuration
@@ -196,7 +234,6 @@ if (process.env.DISCORD_BOT_TOKEN) {
     config.channels.discord = config.channels.discord || {};
     config.channels.discord.token = process.env.DISCORD_BOT_TOKEN;
     config.channels.discord.enabled = true;
-    config.channels.discord.dm = config.channels.discord.dm || {};
     config.channels.discord.dm.policy = process.env.DISCORD_DM_POLICY || 'pairing';
 }
 
@@ -261,8 +298,24 @@ if (isOpenAI) {
     config.agents.defaults.models['anthropic/claude-haiku-4-5-20251001'] = { alias: 'Haiku 4.5' };
     config.agents.defaults.model.primary = 'anthropic/claude-opus-4-5-20251101';
 } else {
-    // Default to Anthropic without custom base URL (uses built-in pi-ai catalog)
-    config.agents.defaults.model.primary = 'anthropic/claude-opus-4-5';
+    // Default to DeepSeek via OpenRouter for cost efficiency
+    console.log('Configuring OpenRouter with multiple models...');
+    
+    
+    // Add all model aliases
+    config.agents.defaults.models = config.agents.defaults.models || {};
+    config.agents.defaults.models['openrouter/deepseek/deepseek-v3.2'] = { alias: 'deep' };
+    config.agents.defaults.models['openrouter/x-ai/grok-code-fast-1'] = { alias: 'grokcode' };
+    config.agents.defaults.models['openrouter/x-ai/grok-4.1-fast'] = { alias: 'grok' };
+    config.agents.defaults.models['openrouter/moonshotai/kimi-k2.5'] = { alias: 'kimi' };
+    config.agents.defaults.models['openrouter/anthropic/claude-haiku-4.5'] = { alias: 'haiku' };
+    config.agents.defaults.models['openrouter/anthropic/claude-sonnet-4.5'] = { alias: 'sonnet' };
+    config.agents.defaults.models['openrouter/google/gemini-3-flash-preview'] = { alias: 'gem3' };
+    config.agents.defaults.models['openrouter/google/gemini-2.5-flash-lite'] = { alias: 'lite' };
+    config.agents.defaults.models['anthropic/claude-opus-4-5'] = { alias: 'opus' };
+    
+    // Set DeepSeek as default for cost efficiency
+    config.agents.defaults.model.primary = 'openrouter/deepseek/deepseek-v3.2';
 }
 
 // Write updated config
@@ -292,3 +345,5 @@ else
     echo "Starting gateway with device pairing (no token)..."
     exec clawdbot gateway --port 18789 --verbose --allow-unconfigured --bind "$BIND_MODE"
 fi
+# force restart Sat Jan 31 08:31:00 UTC 2026
+# 1769863134

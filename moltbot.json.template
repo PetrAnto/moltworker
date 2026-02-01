@@ -1,7 +1,21 @@
 {
   "agents": {
     "defaults": {
-      "workspace": "/root/clawd"
+      "workspace": "/root/clawd",
+      "model": {
+        "primary": "openrouter/deepseek/deepseek-v3.2"
+      },
+      "models": {
+        "openrouter/deepseek/deepseek-v3.2": { "alias": "deep" },
+        "openrouter/moonshotai/kimi-k2.5": { "alias": "kimi" },
+        "openrouter/anthropic/claude-haiku-4.5": { "alias": "haiku" },
+        "openrouter/anthropic/claude-sonnet-4.5": { "alias": "sonnet" },
+        "openrouter/x-ai/grok-4.1-fast": { "alias": "grok" },
+        "openrouter/x-ai/grok-code-fast-1": { "alias": "grokcode" },
+        "openrouter/google/gemini-3-flash-preview": { "alias": "gem3" },
+        "openrouter/google/gemini-2.5-flash-lite": { "alias": "lite" },
+        "anthropic/claude-opus-4-5": { "alias": "opus" }
+      }
     }
   },
   "gateway": {
