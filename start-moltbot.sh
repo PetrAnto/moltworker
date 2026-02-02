@@ -39,30 +39,30 @@ mkdir -p "$CONFIG_DIR"
 should_restore_from_r2() {
     local R2_SYNC_FILE="$BACKUP_DIR/.last-sync"
     local LOCAL_SYNC_FILE="$CONFIG_DIR/.last-sync"
-    
+
     # If no R2 sync timestamp, don't restore
     if [ ! -f "$R2_SYNC_FILE" ]; then
         echo "No R2 sync timestamp found, skipping restore"
         return 1
     fi
-    
+
     # If no local sync timestamp, restore from R2
     if [ ! -f "$LOCAL_SYNC_FILE" ]; then
         echo "No local sync timestamp, will restore from R2"
         return 0
     fi
-    
+
     # Compare timestamps
     R2_TIME=$(cat "$R2_SYNC_FILE" 2>/dev/null)
     LOCAL_TIME=$(cat "$LOCAL_SYNC_FILE" 2>/dev/null)
-    
+
     echo "R2 last sync: $R2_TIME"
     echo "Local last sync: $LOCAL_TIME"
-    
+
     # Convert to epoch seconds for comparison
     R2_EPOCH=$(date -d "$R2_TIME" +%s 2>/dev/null || echo "0")
     LOCAL_EPOCH=$(date -d "$LOCAL_TIME" +%s 2>/dev/null || echo "0")
-    
+
     if [ "$R2_EPOCH" -gt "$LOCAL_EPOCH" ]; then
         echo "R2 backup is newer, will restore"
         return 0
@@ -160,31 +160,7 @@ if (config.models?.providers?.anthropic?.models) {
     if (hasInvalidModels) {
         console.log('Removing broken anthropic provider config (missing model names)');
         delete config.models.providers.anthropic;
-
-// Clean up invalid openrouter provider config (OpenRouter uses built-in support, no providers config needed)
-if (config.models?.providers?.openrouter) {
-    console.log('Removing invalid models.providers.openrouter block');
-    delete config.models.providers.openrouter;
-    if (config.models.providers && Object.keys(config.models.providers).length === 0) {
-        delete config.models.providers;
     }
-    if (config.models && Object.keys(config.models).length === 0) {
-        delete config.models;
-    }
-}
-    }
-
-// Clean up invalid openrouter provider config (OpenRouter uses built-in support, no providers config needed)
-if (config.models?.providers?.openrouter) {
-    console.log('Removing invalid models.providers.openrouter block');
-    delete config.models.providers.openrouter;
-    if (config.models.providers && Object.keys(config.models.providers).length === 0) {
-        delete config.models.providers;
-    }
-    if (config.models && Object.keys(config.models).length === 0) {
-        delete config.models;
-    }
-}
 }
 
 // Clean up invalid openrouter provider config (OpenRouter uses built-in support, no providers config needed)
@@ -198,8 +174,6 @@ if (config.models?.providers?.openrouter) {
         delete config.models;
     }
 }
-
-
 
 // Gateway configuration
 config.gateway.port = 18789;
@@ -223,18 +197,31 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
     config.channels.telegram = config.channels.telegram || {};
     config.channels.telegram.botToken = process.env.TELEGRAM_BOT_TOKEN;
     config.channels.telegram.enabled = true;
-    config.channels.telegram.dmPolicy = process.env.TELEGRAM_DM_POLICY || 'pairing';
-    if (process.env.TELEGRAM_DM_POLICY === 'open') {
+    const telegramDmPolicy = process.env.TELEGRAM_DM_POLICY || 'pairing';
+    config.channels.telegram.dmPolicy = telegramDmPolicy;
+    if (process.env.TELEGRAM_DM_ALLOW_FROM) {
+        // Explicit allowlist: "123,456,789" → ['123', '456', '789']
+        config.channels.telegram.allowFrom = process.env.TELEGRAM_DM_ALLOW_FROM.split(',');
+    } else if (telegramDmPolicy === 'open') {
+        // "open" policy requires allowFrom: ["*"]
         config.channels.telegram.allowFrom = ['*'];
     }
 }
 
 // Discord configuration
+// Note: Discord uses nested dm.policy, not flat dmPolicy like Telegram
+// See: https://github.com/moltbot/moltbot/blob/v2026.1.24-1/src/config/zod-schema.providers-core.ts#L147-L155
 if (process.env.DISCORD_BOT_TOKEN) {
     config.channels.discord = config.channels.discord || {};
     config.channels.discord.token = process.env.DISCORD_BOT_TOKEN;
     config.channels.discord.enabled = true;
-    config.channels.discord.dm.policy = process.env.DISCORD_DM_POLICY || 'pairing';
+    const discordDmPolicy = process.env.DISCORD_DM_POLICY || 'pairing';
+    config.channels.discord.dm = config.channels.discord.dm || {};
+    config.channels.discord.dm.policy = discordDmPolicy;
+    // "open" policy requires allowFrom: ["*"]
+    if (discordDmPolicy === 'open') {
+        config.channels.discord.dm.allowFrom = ['*'];
+    }
 }
 
 // Slack configuration
@@ -300,8 +287,7 @@ if (isOpenAI) {
 } else {
     // Default to DeepSeek via OpenRouter for cost efficiency
     console.log('Configuring OpenRouter with multiple models...');
-    
-    
+
     // Add all model aliases
     config.agents.defaults.models = config.agents.defaults.models || {};
     config.agents.defaults.models['openrouter/deepseek/deepseek-v3.2'] = { alias: 'deep' };
@@ -313,7 +299,7 @@ if (isOpenAI) {
     config.agents.defaults.models['openrouter/google/gemini-3-flash-preview'] = { alias: 'gem3' };
     config.agents.defaults.models['openrouter/google/gemini-2.5-flash-lite'] = { alias: 'lite' };
     config.agents.defaults.models['anthropic/claude-opus-4-5'] = { alias: 'opus' };
-    
+
     // Set DeepSeek as default for cost efficiency
     config.agents.defaults.model.primary = 'openrouter/deepseek/deepseek-v3.2';
 }
@@ -345,5 +331,3 @@ else
     echo "Starting gateway with device pairing (no token)..."
     exec clawdbot gateway --port 18789 --verbose --allow-unconfigured --bind "$BIND_MODE"
 fi
-# force restart Sat Jan 31 08:31:00 UTC 2026
-# 1769863134
