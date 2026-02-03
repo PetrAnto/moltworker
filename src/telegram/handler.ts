@@ -480,21 +480,47 @@ export class TelegramHandler {
 
   /**
    * Handle /img command
+   * Usage: /img <prompt> or /img <model> <prompt>
+   * Example: /img a cat in space
+   * Example: /img fluxmax a detailed portrait
    */
-  private async handleImageCommand(chatId: number, prompt: string): Promise<void> {
-    if (!prompt) {
-      await this.bot.sendMessage(chatId, 'Usage: /img <description of image>\nExample: /img a cat in space');
+  private async handleImageCommand(chatId: number, promptInput: string): Promise<void> {
+    if (!promptInput) {
+      await this.bot.sendMessage(
+        chatId,
+        'Usage: /img <prompt>\n' +
+        'Or: /img <model> <prompt>\n\n' +
+        'Available models:\n' +
+        '  fluxpro - FLUX 2 Pro (default)\n' +
+        '  fluxmax - FLUX 2 Max (higher quality)\n\n' +
+        'Examples:\n' +
+        '  /img a cat in space\n' +
+        '  /img fluxmax a detailed portrait'
+      );
       return;
+    }
+
+    // Check if first word is a model alias
+    const words = promptInput.split(/\s+/);
+    let modelAlias: string | undefined;
+    let prompt: string;
+
+    if (words.length > 1 && isImageGenModel(words[0].toLowerCase())) {
+      modelAlias = words[0].toLowerCase();
+      prompt = words.slice(1).join(' ');
+    } else {
+      prompt = promptInput;
     }
 
     await this.bot.sendChatAction(chatId, 'upload_photo');
 
     try {
-      const result = await this.openrouter.generateImage(prompt);
+      const result = await this.openrouter.generateImage(prompt, modelAlias);
       const imageUrl = result.data[0]?.url;
 
       if (imageUrl) {
-        await this.bot.sendPhoto(chatId, imageUrl, prompt);
+        const caption = modelAlias ? `[${modelAlias}] ${prompt}` : prompt;
+        await this.bot.sendPhoto(chatId, imageUrl, caption);
       } else if (result.data[0]?.b64_json) {
         // If we get base64, we'd need to upload it differently
         await this.bot.sendMessage(chatId, 'Image generated but format not supported for direct send.');
