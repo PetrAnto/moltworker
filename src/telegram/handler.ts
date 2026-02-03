@@ -4,7 +4,7 @@
  */
 
 import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type ChatMessage } from '../openrouter/client';
-import { UserStorage, createUserStorage } from '../openrouter/storage';
+import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
 import {
   MODELS,
   getModel,
@@ -203,16 +203,40 @@ export class TelegramHandler {
   private bot: TelegramBot;
   private openrouter: OpenRouterClient;
   private storage: UserStorage;
+  private skills: SkillStorage;
+  private defaultSkill: string;
+  private cachedSkillPrompt: string | null = null;
 
   constructor(
     telegramToken: string,
     openrouterKey: string,
     r2Bucket: R2Bucket,
-    workerUrl?: string
+    workerUrl?: string,
+    defaultSkill: string = 'storia-orchestrator'
   ) {
     this.bot = new TelegramBot(telegramToken);
     this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
     this.storage = createUserStorage(r2Bucket);
+    this.skills = createSkillStorage(r2Bucket);
+    this.defaultSkill = defaultSkill;
+  }
+
+  /**
+   * Get the system prompt from the skill (cached)
+   */
+  private async getSystemPrompt(): Promise<string> {
+    if (this.cachedSkillPrompt) {
+      return this.cachedSkillPrompt;
+    }
+
+    const skillContent = await this.skills.getSkill(this.defaultSkill);
+    if (skillContent) {
+      this.cachedSkillPrompt = skillContent;
+      return skillContent;
+    }
+
+    // Fallback default prompt
+    return 'You are a helpful AI assistant. Be concise but thorough. Use markdown formatting when appropriate.';
   }
 
   /**
@@ -328,6 +352,10 @@ export class TelegramHandler {
         }
         break;
 
+      case '/skill':
+        await this.handleSkillCommand(chatId, args);
+        break;
+
       default:
         // Check if it's a model alias command (e.g., /deep, /gpt)
         const modelAlias = cmd.slice(1); // Remove leading /
@@ -375,6 +403,56 @@ export class TelegramHandler {
       `Alias: /${alias}\n` +
       `${model.specialty}\n` +
       `Cost: ${model.cost}`
+    );
+  }
+
+  /**
+   * Handle /skill command
+   */
+  private async handleSkillCommand(chatId: number, args: string[]): Promise<void> {
+    if (args.length === 0 || args[0] === 'info') {
+      // Show current skill info
+      const hasSkill = await this.skills.hasSkill(this.defaultSkill);
+      const availableSkills = await this.skills.listSkills();
+
+      await this.bot.sendMessage(
+        chatId,
+        `Current skill: ${this.defaultSkill}\n` +
+        `Status: ${hasSkill ? '✓ Loaded from R2' : '✗ Not found (using fallback)'}\n` +
+        `Cached: ${this.cachedSkillPrompt ? 'Yes' : 'No'}\n` +
+        `\nAvailable skills in R2:\n${availableSkills.length > 0 ? availableSkills.map(s => `  - ${s}`).join('\n') : '  (none found)'}`
+      );
+      return;
+    }
+
+    if (args[0] === 'reload') {
+      // Clear cache and reload
+      this.cachedSkillPrompt = null;
+      const prompt = await this.getSystemPrompt();
+      const loaded = prompt !== 'You are a helpful AI assistant. Be concise but thorough. Use markdown formatting when appropriate.';
+      await this.bot.sendMessage(
+        chatId,
+        loaded
+          ? `✓ Skill "${this.defaultSkill}" reloaded (${prompt.length} chars)`
+          : `✗ Skill "${this.defaultSkill}" not found in R2, using fallback prompt`
+      );
+      return;
+    }
+
+    if (args[0] === 'preview') {
+      // Show first 500 chars of the skill prompt
+      const prompt = await this.getSystemPrompt();
+      const preview = prompt.length > 500 ? prompt.slice(0, 500) + '...' : prompt;
+      await this.bot.sendMessage(chatId, `Skill preview:\n\n${preview}`);
+      return;
+    }
+
+    await this.bot.sendMessage(
+      chatId,
+      `Usage:\n` +
+      `/skill - Show current skill info\n` +
+      `/skill reload - Reload skill from R2\n` +
+      `/skill preview - Preview skill content`
     );
   }
 
@@ -464,12 +542,13 @@ export class TelegramHandler {
     // Get user's model and conversation history
     const modelAlias = await this.storage.getUserModel(userId);
     const history = await this.storage.getConversation(userId, 10);
+    const systemPrompt = await this.getSystemPrompt();
 
     // Build messages array
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: 'You are a helpful AI assistant. Be concise but thorough. Use markdown formatting when appropriate.',
+        content: systemPrompt,
       },
       ...history.map(msg => ({
         role: msg.role as 'user' | 'assistant',
@@ -514,6 +593,7 @@ Commands:
 /clear - Clear conversation history
 /img <prompt> - Generate an image
 /credits - Check OpenRouter credits
+/skill - Show/reload AI skill from R2
 
 Quick model switch (just type the alias):
 /auto - Auto-route (default, best value)

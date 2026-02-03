@@ -193,3 +193,75 @@ export class UserStorage {
 export function createUserStorage(bucket: R2Bucket): UserStorage {
   return new UserStorage(bucket, 'telegram-users');
 }
+
+/**
+ * Skills storage for reading skills from R2
+ */
+export class SkillStorage {
+  private bucket: R2Bucket;
+  private prefix: string;
+
+  constructor(bucket: R2Bucket, prefix: string = 'skills') {
+    this.bucket = bucket;
+    this.prefix = prefix;
+  }
+
+  /**
+   * Get a skill by name
+   * Looks for skill content in: skills/{skillName}/prompt.md or skills/{skillName}/system.md
+   */
+  async getSkill(skillName: string): Promise<string | null> {
+    // Try different common file names
+    const possibleFiles = [
+      `${this.prefix}/${skillName}/prompt.md`,
+      `${this.prefix}/${skillName}/system.md`,
+      `${this.prefix}/${skillName}/index.md`,
+      `${this.prefix}/${skillName}.md`,
+    ];
+
+    for (const key of possibleFiles) {
+      const object = await this.bucket.get(key);
+      if (object) {
+        return await object.text();
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * List available skills
+   */
+  async listSkills(): Promise<string[]> {
+    const listed = await this.bucket.list({
+      prefix: `${this.prefix}/`,
+      delimiter: '/',
+    });
+
+    const skills: string[] = [];
+    for (const prefix of listed.delimitedPrefixes || []) {
+      // Extract skill name from prefix like "skills/storia-orchestrator/"
+      const name = prefix.replace(`${this.prefix}/`, '').replace(/\/$/, '');
+      if (name) {
+        skills.push(name);
+      }
+    }
+
+    return skills;
+  }
+
+  /**
+   * Check if a skill exists
+   */
+  async hasSkill(skillName: string): Promise<boolean> {
+    const skill = await this.getSkill(skillName);
+    return skill !== null;
+  }
+}
+
+/**
+ * Create a skill storage instance
+ */
+export function createSkillStorage(bucket: R2Bucket): SkillStorage {
+  return new SkillStorage(bucket, 'skills');
+}
