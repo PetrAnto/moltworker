@@ -3,7 +3,7 @@
  * Handles incoming Telegram updates and routes to appropriate handlers
  */
 
-import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type ChatMessage } from '../openrouter/client';
+import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type ChatMessage, type DirectApiKeys } from '../openrouter/client';
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
 import { modelSupportsTools } from '../openrouter/tools';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
@@ -370,6 +370,7 @@ export class TelegramHandler {
   private openrouterKey: string; // Store for DO
   private taskProcessor?: DurableObjectNamespace<TaskProcessor>; // For long-running tasks
   private browser?: Fetcher; // Browser binding for browse_url tool
+  private directApiKeys?: DirectApiKeys; // Direct vendor API keys
 
   constructor(
     telegramToken: string,
@@ -380,10 +381,11 @@ export class TelegramHandler {
     allowedUserIds?: string[], // Pass user IDs to restrict access
     githubToken?: string, // GitHub token for tool authentication
     taskProcessor?: DurableObjectNamespace<TaskProcessor>, // DO for long tasks
-    browser?: Fetcher // Browser binding for browse_url tool
+    browser?: Fetcher, // Browser binding for browse_url tool
+    directApiKeys?: DirectApiKeys // Direct vendor API keys (DashScope, Moonshot, DeepSeek)
   ) {
     this.bot = new TelegramBot(telegramToken);
-    this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
+    this.openrouter = createOpenRouterClient(openrouterKey, workerUrl, directApiKeys);
     this.storage = createUserStorage(r2Bucket);
     this.skills = createSkillStorage(r2Bucket);
     this.defaultSkill = defaultSkill;
@@ -392,6 +394,7 @@ export class TelegramHandler {
     this.openrouterKey = openrouterKey;
     this.taskProcessor = taskProcessor;
     this.browser = browser;
+    this.directApiKeys = directApiKeys;
     if (allowedUserIds && allowedUserIds.length > 0) {
       this.allowedUsers = new Set(allowedUserIds);
     }
@@ -1235,6 +1238,11 @@ Models: fluxklein, fluxpro, fluxflex, fluxmax
 /sonnet - Claude Sonnet 4.5
 /haiku - Claude Haiku 4.5
 
+🔌 Direct API Models:
+/q25 - Qwen2.5-Coder (DashScope)
+/k21 - Kimi 128K (Moonshot)
+/dcode - DeepSeek Coder
+
 🆓 Free Models:
 /trinity - Premium reasoning
 /deepchimera - Deep reasoning
@@ -1268,7 +1276,8 @@ export function createTelegramHandler(
   allowedUserIds?: string[],
   githubToken?: string,
   taskProcessor?: DurableObjectNamespace<TaskProcessor>,
-  browser?: Fetcher
+  browser?: Fetcher,
+  directApiKeys?: DirectApiKeys
 ): TelegramHandler {
   return new TelegramHandler(
     telegramToken,
@@ -1279,6 +1288,7 @@ export function createTelegramHandler(
     allowedUserIds,
     githubToken,
     taskProcessor,
-    browser
+    browser,
+    directApiKeys
   );
 }

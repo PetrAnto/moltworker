@@ -3,8 +3,9 @@
  * Direct integration with OpenRouter API using OpenAI-compatible format
  */
 
-import { getModelId, isImageGenModel, DEFAULT_IMAGE_MODEL } from './models';
+import { getModelId, getModel, isImageGenModel, DEFAULT_IMAGE_MODEL, usesDirectApi, getDirectApiProvider } from './models';
 import { AVAILABLE_TOOLS, executeTool, type ToolDefinition, type ToolCall, type ToolResult, type ToolContext } from './tools';
+import { DirectApiClient, type DirectApiKeys } from './direct-api';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -81,11 +82,22 @@ export class OpenRouterClient {
   private apiKey: string;
   private siteUrl?: string;
   private siteName?: string;
+  private directApiClient?: DirectApiClient;
 
-  constructor(apiKey: string, options?: { siteUrl?: string; siteName?: string }) {
+  constructor(apiKey: string, options?: { siteUrl?: string; siteName?: string; directApiKeys?: DirectApiKeys }) {
     this.apiKey = apiKey;
     this.siteUrl = options?.siteUrl;
     this.siteName = options?.siteName || 'Moltworker Bot';
+    if (options?.directApiKeys) {
+      this.directApiClient = new DirectApiClient(options.directApiKeys);
+    }
+  }
+
+  /**
+   * Set direct API keys (can be called after construction)
+   */
+  setDirectApiKeys(keys: DirectApiKeys): void {
+    this.directApiClient = new DirectApiClient(keys);
   }
 
   /**
@@ -112,6 +124,14 @@ export class OpenRouterClient {
       temperature?: number;
     }
   ): Promise<ChatCompletionResponse> {
+    // Check if this model uses a direct API
+    if (usesDirectApi(modelAlias)) {
+      if (!this.directApiClient) {
+        throw new Error(`Direct API keys not configured. Set DASHSCOPE_API_KEY, MOONSHOT_API_KEY, or DEEPSEEK_API_KEY.`);
+      }
+      return this.directApiClient.chatCompletion(modelAlias, messages, options);
+    }
+
     const modelId = getModelId(modelAlias);
 
     const request: ChatCompletionRequest = {
@@ -152,12 +172,18 @@ export class OpenRouterClient {
       toolContext?: ToolContext; // Context with secrets for tool execution
     }
   ): Promise<{ response: ChatCompletionResponse; finalText: string; toolsUsed: string[]; hitLimit: boolean }> {
+    const isDirectApi = usesDirectApi(modelAlias);
     const modelId = getModelId(modelAlias);
     const maxIterations = options?.maxToolCalls || 10;
     const maxTimeMs = options?.maxTimeMs || 120000; // Default 2 minutes for paid Workers plan
     const startTime = Date.now();
     const toolsUsed: string[] = [];
     let hitLimit = false;
+
+    // Check direct API availability
+    if (isDirectApi && !this.directApiClient) {
+      throw new Error(`Direct API keys not configured. Set DASHSCOPE_API_KEY, MOONSHOT_API_KEY, or DEEPSEEK_API_KEY.`);
+    }
 
     // Clone messages to avoid mutating the original
     const conversationMessages: ChatMessage[] = [...messages];
@@ -179,27 +205,37 @@ export class OpenRouterClient {
         options.onIteration(iterations, toolsUsed.length);
       }
 
-      const request: ChatCompletionRequest = {
-        model: modelId,
-        messages: conversationMessages,
-        max_tokens: options?.maxTokens || 4096,
-        temperature: options?.temperature ?? 0.7,
-        tools: AVAILABLE_TOOLS,
-        tool_choice: 'auto',
-      };
+      // Route to direct API or OpenRouter
+      if (isDirectApi) {
+        lastResponse = await this.directApiClient!.chatCompletionWithTools(
+          modelAlias,
+          conversationMessages,
+          AVAILABLE_TOOLS,
+          { maxTokens: options?.maxTokens, temperature: options?.temperature }
+        );
+      } else {
+        const request: ChatCompletionRequest = {
+          model: modelId,
+          messages: conversationMessages,
+          max_tokens: options?.maxTokens || 4096,
+          temperature: options?.temperature ?? 0.7,
+          tools: AVAILABLE_TOOLS,
+          tool_choice: 'auto',
+        };
 
-      const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(request),
-      });
+        const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: this.getHeaders(),
+          body: JSON.stringify(request),
+        });
 
-      if (!response.ok) {
-        const error = await response.json() as OpenRouterError;
-        throw new Error(`OpenRouter API error: ${error.error?.message || response.statusText}`);
+        if (!response.ok) {
+          const error = await response.json() as OpenRouterError;
+          throw new Error(`OpenRouter API error: ${error.error?.message || response.statusText}`);
+        }
+
+        lastResponse = await response.json() as ChatCompletionResponse;
       }
-
-      lastResponse = await response.json() as ChatCompletionResponse;
       const choice = lastResponse.choices[0];
 
       // Check if the model wants to call tools
@@ -468,12 +504,20 @@ export class OpenRouterClient {
 /**
  * Create an OpenRouter client from environment
  */
-export function createOpenRouterClient(apiKey: string, workerUrl?: string): OpenRouterClient {
+export function createOpenRouterClient(
+  apiKey: string,
+  workerUrl?: string,
+  directApiKeys?: DirectApiKeys
+): OpenRouterClient {
   return new OpenRouterClient(apiKey, {
     siteUrl: workerUrl,
     siteName: 'Moltworker Telegram Bot',
+    directApiKeys,
   });
 }
+
+// Re-export DirectApiKeys type for consumers
+export type { DirectApiKeys } from './direct-api';
 
 /**
  * Extract text response from chat completion

@@ -14,6 +14,7 @@ export interface ModelInfo {
   supportsTools?: boolean;
   isImageGen?: boolean;
   isFree?: boolean;
+  directApi?: 'dashscope' | 'moonshot' | 'deepseek'; // Direct vendor API instead of OpenRouter
 }
 
 /**
@@ -293,6 +294,39 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsVision: true,
     supportsTools: true,
   },
+
+  // === DIRECT API MODELS ===
+  // These use vendor APIs directly (not OpenRouter)
+  q25: {
+    id: 'qwen2.5-coder-32b-instruct',
+    alias: 'q25',
+    name: 'Qwen2.5-Coder',
+    specialty: 'Best price/performance coding',
+    score: 'Top coding benchmarks',
+    cost: 'Very cheap (DashScope)',
+    supportsTools: true,
+    directApi: 'dashscope',
+  },
+  k21: {
+    id: 'moonshot-v1-128k',
+    alias: 'k21',
+    name: 'Kimi',
+    specialty: '128K+ context, good reasoning',
+    score: 'Strong long-context',
+    cost: 'Moderate (Moonshot)',
+    supportsTools: true,
+    directApi: 'moonshot',
+  },
+  dcode: {
+    id: 'deepseek-coder',
+    alias: 'dcode',
+    name: 'DeepSeek Coder',
+    specialty: 'Very cheap, good coding',
+    score: 'Strong coding benchmarks',
+    cost: 'Very cheap (DeepSeek)',
+    supportsTools: true,
+    directApi: 'deepseek',
+  },
 };
 
 /**
@@ -327,6 +361,22 @@ export function isImageGenModel(alias: string): boolean {
 }
 
 /**
+ * Check if model uses direct vendor API (not OpenRouter)
+ */
+export function usesDirectApi(alias: string): boolean {
+  const model = getModel(alias);
+  return !!model?.directApi;
+}
+
+/**
+ * Get the direct API provider for a model
+ */
+export function getDirectApiProvider(alias: string): 'dashscope' | 'moonshot' | 'deepseek' | undefined {
+  const model = getModel(alias);
+  return model?.directApi;
+}
+
+/**
  * Format models list for /models command
  */
 export function formatModelsList(): string {
@@ -335,7 +385,8 @@ export function formatModelsList(): string {
   // Group by category
   const free = Object.values(MODELS).filter(m => m.isFree && !m.isImageGen);
   const imageGen = Object.values(MODELS).filter(m => m.isImageGen);
-  const paid = Object.values(MODELS).filter(m => !m.isFree && !m.isImageGen);
+  const directApi = Object.values(MODELS).filter(m => m.directApi);
+  const paid = Object.values(MODELS).filter(m => !m.isFree && !m.isImageGen && !m.directApi);
 
   lines.push('FREE:');
   for (const m of free) {
@@ -349,10 +400,16 @@ export function formatModelsList(): string {
     lines.push(`    ${m.specialty}`);
   }
 
-  lines.push('\nPAID:');
+  lines.push('\nPAID (OpenRouter):');
   for (const m of paid) {
     lines.push(`  /${m.alias} - ${m.name}`);
     lines.push(`    ${m.specialty} | ${m.score} | ${m.cost}`);
+  }
+
+  lines.push('\nDIRECT API (Vendor):');
+  for (const m of directApi) {
+    lines.push(`  /${m.alias} - ${m.name}`);
+    lines.push(`    ${m.specialty} | ${m.cost}`);
   }
 
   lines.push('\nUsage: /use <alias> to set your default model');

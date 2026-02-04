@@ -52,6 +52,13 @@ telegram.post('/webhook/:token', async (c) => {
       ? env.TELEGRAM_ALLOWED_USERS.split(',').map((id: string) => id.trim())
       : undefined;
 
+    // Build direct API keys from environment
+    const directApiKeys = {
+      dashscope: env.DASHSCOPE_API_KEY,
+      moonshot: env.MOONSHOT_API_KEY,
+      deepseek: env.DEEPSEEK_API_KEY,
+    };
+
     const handler = createTelegramHandler(
       env.TELEGRAM_BOT_TOKEN,
       env.OPENROUTER_API_KEY,
@@ -61,7 +68,8 @@ telegram.post('/webhook/:token', async (c) => {
       allowedUsers,
       env.GITHUB_TOKEN, // Pass GitHub token for tool authentication
       env.TASK_PROCESSOR, // Pass TaskProcessor DO for long-running tasks
-      env.BROWSER // Pass browser binding for browse_url tool
+      env.BROWSER, // Pass browser binding for browse_url tool
+      directApiKeys // Direct vendor API keys (Qwen, Kimi, DeepSeek)
     );
 
     // Process update asynchronously
@@ -117,6 +125,10 @@ telegram.get('/info', async (c) => {
     github_configured: !!env.GITHUB_TOKEN,
     task_processor_configured: !!env.TASK_PROCESSOR,
     browser_configured: !!env.BROWSER,
+    // Direct API providers
+    dashscope_configured: !!env.DASHSCOPE_API_KEY, // /q25 - Qwen2.5-Coder
+    moonshot_configured: !!env.MOONSHOT_API_KEY,   // /k21 - Kimi
+    deepseek_configured: !!env.DEEPSEEK_API_KEY,   // /dcode - DeepSeek Coder
     webhook_path: '/telegram/webhook/:token',
     setup_path: '/telegram/setup',
   });
