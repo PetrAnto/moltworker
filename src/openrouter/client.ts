@@ -154,7 +154,7 @@ export class OpenRouterClient {
   ): Promise<{ response: ChatCompletionResponse; finalText: string; toolsUsed: string[]; hitLimit: boolean }> {
     const modelId = getModelId(modelAlias);
     const maxIterations = options?.maxToolCalls || 10;
-    const maxTimeMs = options?.maxTimeMs || 25000; // Default 25s (under Cloudflare's 30s limit)
+    const maxTimeMs = options?.maxTimeMs || 120000; // Default 2 minutes for paid Workers plan
     const startTime = Date.now();
     const toolsUsed: string[] = [];
     let hitLimit = false;

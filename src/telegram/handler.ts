@@ -791,12 +791,13 @@ export class TelegramHandler {
         };
 
         // Use tool-calling chat completion with higher limits for complex tasks
+        // Paid Workers plan allows longer execution via waitUntil()
         const { finalText, toolsUsed, hitLimit } = await this.openrouter.chatCompletionWithTools(
           modelAlias,
           messages,
           {
-            maxToolCalls: 30, // Increased for complex tasks
-            maxTimeMs: 25000, // 25 seconds to stay under Cloudflare limit
+            maxToolCalls: 50, // High limit for complex multi-file tasks
+            maxTimeMs: 120000, // 2 minutes for paid Workers plan
             onToolCall: (toolName, _args) => {
               updateStatus(toolName);
             },
