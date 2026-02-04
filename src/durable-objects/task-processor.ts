@@ -6,7 +6,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { createOpenRouterClient, type ChatMessage } from '../openrouter/client';
-import { executeTool, AVAILABLE_TOOLS, type ToolContext, type ToolCall } from '../openrouter/tools';
+import { executeTool, AVAILABLE_TOOLS, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER } from '../openrouter/tools';
 import { getModelId } from '../openrouter/models';
 
 // Task state stored in DO
@@ -141,7 +141,7 @@ export class TaskProcessor extends DurableObject<Record<string, unknown>> {
             messages: conversationMessages,
             max_tokens: 4096,
             temperature: 0.7,
-            tools: AVAILABLE_TOOLS,
+            tools: TOOLS_WITHOUT_BROWSER, // Use tools without browser (not available in DO)
             tool_choice: 'auto',
           }),
         });
