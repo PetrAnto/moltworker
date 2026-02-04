@@ -59,7 +59,8 @@ telegram.post('/webhook/:token', async (c) => {
       workerUrl,
       'storia-orchestrator',
       allowedUsers,
-      env.GITHUB_TOKEN // Pass GitHub token for tool authentication
+      env.GITHUB_TOKEN, // Pass GitHub token for tool authentication
+      env.TASK_PROCESSOR // Pass TaskProcessor DO for long-running tasks
     );
 
     // Process update asynchronously
@@ -113,6 +114,7 @@ telegram.get('/info', async (c) => {
     openrouter_configured: !!env.OPENROUTER_API_KEY,
     storage_configured: !!env.MOLTBOT_BUCKET,
     github_configured: !!env.GITHUB_TOKEN,
+    task_processor_configured: !!env.TASK_PROCESSOR,
     webhook_path: '/telegram/webhook/:token',
     setup_path: '/telegram/setup',
   });

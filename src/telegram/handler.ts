@@ -6,6 +6,7 @@
 import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type ChatMessage } from '../openrouter/client';
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
 import { modelSupportsTools } from '../openrouter/tools';
+import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import {
   MODELS,
   getModel,
@@ -282,6 +283,9 @@ export class TelegramHandler {
   private cachedSkillPrompt: string | null = null;
   private allowedUsers: Set<string> | null = null; // null = allow all, Set = allowlist
   private githubToken?: string; // GitHub token for tool calls
+  private telegramToken: string; // Store for DO
+  private openrouterKey: string; // Store for DO
+  private taskProcessor?: DurableObjectNamespace<TaskProcessor>; // For long-running tasks
 
   constructor(
     telegramToken: string,
@@ -290,7 +294,8 @@ export class TelegramHandler {
     workerUrl?: string,
     defaultSkill: string = 'storia-orchestrator',
     allowedUserIds?: string[], // Pass user IDs to restrict access
-    githubToken?: string // GitHub token for tool authentication
+    githubToken?: string, // GitHub token for tool authentication
+    taskProcessor?: DurableObjectNamespace<TaskProcessor> // DO for long tasks
   ) {
     this.bot = new TelegramBot(telegramToken);
     this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
@@ -298,6 +303,9 @@ export class TelegramHandler {
     this.skills = createSkillStorage(r2Bucket);
     this.defaultSkill = defaultSkill;
     this.githubToken = githubToken;
+    this.telegramToken = telegramToken;
+    this.openrouterKey = openrouterKey;
+    this.taskProcessor = taskProcessor;
     if (allowedUserIds && allowedUserIds.length > 0) {
       this.allowedUsers = new Set(allowedUserIds);
     }
@@ -728,7 +736,39 @@ export class TelegramHandler {
 
       // Check if model supports tools
       if (modelSupportsTools(modelAlias)) {
-        // Send initial status message
+        // Use Durable Object for tool-calling models (unlimited time)
+        if (this.taskProcessor) {
+          // Route to Durable Object for long-running processing
+          const taskId = `${userId}-${Date.now()}`;
+          const taskRequest: TaskRequest = {
+            taskId,
+            chatId,
+            userId,
+            modelAlias,
+            messages,
+            telegramToken: this.telegramToken,
+            openrouterKey: this.openrouterKey,
+            githubToken: this.githubToken,
+          };
+
+          // Get or create DO instance for this user
+          const doId = this.taskProcessor.idFromName(userId);
+          const doStub = this.taskProcessor.get(doId);
+
+          // Start processing in DO (it will send results directly to Telegram)
+          await doStub.fetch(new Request('https://do/process', {
+            method: 'POST',
+            body: JSON.stringify(taskRequest),
+          }));
+
+          // Save user message to history (DO will handle the rest)
+          await this.storage.addMessage(userId, 'user', text);
+
+          // Return early - DO handles everything from here
+          return;
+        }
+
+        // Fallback: Direct processing (with timeout) if DO not available
         let statusMessage: TelegramMessage | null = null;
         let toolCallCount = 0;
         const uniqueTools = new Set<string>();
@@ -954,7 +994,8 @@ export function createTelegramHandler(
   workerUrl?: string,
   defaultSkill?: string,
   allowedUserIds?: string[],
-  githubToken?: string
+  githubToken?: string,
+  taskProcessor?: DurableObjectNamespace<TaskProcessor>
 ): TelegramHandler {
   return new TelegramHandler(
     telegramToken,
@@ -963,6 +1004,7 @@ export function createTelegramHandler(
     workerUrl,
     defaultSkill,
     allowedUserIds,
-    githubToken
+    githubToken,
+    taskProcessor
   );
 }
