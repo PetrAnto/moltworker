@@ -769,14 +769,39 @@ export class TelegramHandler {
           }
         };
 
-        // Use tool-calling chat completion
-        const { finalText, toolsUsed } = await this.openrouter.chatCompletionWithTools(
+        let lastIterationUpdate = 0;
+        const updateIteration = async (iteration: number, totalTools: number) => {
+          // Update status every 3 iterations to avoid rate limits
+          if (iteration - lastIterationUpdate >= 3 || iteration === 1) {
+            lastIterationUpdate = iteration;
+            if (statusMessage) {
+              try {
+                await this.bot.editMessage(
+                  chatId,
+                  statusMessage.message_id,
+                  `⏳ Processing... (iteration ${iteration}, ${totalTools} tool calls)`
+                );
+              } catch {
+                // Ignore edit failures
+              }
+            }
+            // Send typing indicator as heartbeat
+            this.bot.sendChatAction(chatId, 'typing');
+          }
+        };
+
+        // Use tool-calling chat completion with higher limits for complex tasks
+        const { finalText, toolsUsed, hitLimit } = await this.openrouter.chatCompletionWithTools(
           modelAlias,
           messages,
           {
-            maxToolCalls: 15,
+            maxToolCalls: 30, // Increased for complex tasks
+            maxTimeMs: 25000, // 25 seconds to stay under Cloudflare limit
             onToolCall: (toolName, _args) => {
               updateStatus(toolName);
+            },
+            onIteration: (iteration, totalTools) => {
+              updateIteration(iteration, totalTools);
             },
             toolContext: {
               githubToken: this.githubToken,
@@ -799,6 +824,11 @@ export class TelegramHandler {
         if (toolsUsed.length > 0) {
           const toolsSummary = `[Used ${toolsUsed.length} tool(s): ${[...new Set(toolsUsed)].join(', ')}]\n\n`;
           responseText = toolsSummary + responseText;
+        }
+
+        // If we hit the limit, add a warning
+        if (hitLimit) {
+          responseText += '\n\n⚠️ Task was too complex and hit time/iteration limit. Send "continue" to keep going, or break into smaller steps.'
         }
       } else {
         // Regular chat completion without tools
