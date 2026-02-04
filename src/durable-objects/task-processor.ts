@@ -155,6 +155,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   /**
    * Compress old tool results to save context space
    * Keeps recent messages intact, summarizes older tool results
+   * IMPORTANT: Must maintain valid tool_call/result pairing for API compatibility
    */
   private compressContext(messages: ChatMessage[], keepRecent: number = 6): ChatMessage[] {
     if (messages.length <= keepRecent + 2) {
@@ -167,46 +168,47 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const recentMessages = messages.slice(-keepRecent);
     const middleMessages = messages.slice(2, -keepRecent);
 
-    // Compress middle messages - summarize tool results
-    const compressedMiddle: ChatMessage[] = [];
-    let toolSummary: string[] = [];
+    // Summarize middle messages into a single assistant message
+    // We can't keep tool messages without their tool_calls, so just summarize everything
+    const summaryParts: string[] = [];
+    let toolCount = 0;
+    let filesMentioned: string[] = [];
 
     for (const msg of middleMessages) {
       if (msg.role === 'tool') {
-        // Summarize tool results into brief descriptions
+        toolCount++;
+        // Extract file paths if mentioned
         const content = typeof msg.content === 'string' ? msg.content : '';
-        const preview = content.slice(0, 200).replace(/\n/g, ' ');
-        toolSummary.push(`[Tool result: ${preview}...]`);
-      } else if (msg.role === 'assistant' && msg.tool_calls) {
-        // Keep assistant tool call messages but summarize
-        const toolNames = msg.tool_calls.map(tc => tc.function.name).join(', ');
-        toolSummary.push(`[Called: ${toolNames}]`);
-      } else if (msg.role === 'assistant' && msg.content) {
-        // Flush tool summary and add assistant message
-        if (toolSummary.length > 0) {
-          compressedMiddle.push({
-            role: 'assistant',
-            content: `[Previous actions: ${toolSummary.join(' → ')}]`,
-          });
-          toolSummary = [];
+        const fileMatch = content.match(/(?:file|path|reading|wrote).*?([\/\w\-\.]+\.(ts|js|md|json|tsx|jsx))/gi);
+        if (fileMatch) {
+          filesMentioned.push(...fileMatch.slice(0, 3));
         }
-        // Keep assistant messages but truncate
-        compressedMiddle.push({
-          role: 'assistant',
-          content: typeof msg.content === 'string' && msg.content.length > 500
-            ? msg.content.slice(0, 500) + '...'
-            : msg.content,
-        });
+      } else if (msg.role === 'assistant' && msg.tool_calls) {
+        // Count tool calls
+        const toolNames = msg.tool_calls.map(tc => tc.function.name);
+        summaryParts.push(`Called: ${toolNames.join(', ')}`);
+      } else if (msg.role === 'assistant' && msg.content) {
+        // Keep first 200 chars of assistant responses
+        const preview = typeof msg.content === 'string'
+          ? msg.content.slice(0, 200).replace(/\n/g, ' ')
+          : '';
+        if (preview) {
+          summaryParts.push(`Response: ${preview}...`);
+        }
       }
     }
 
-    // Flush remaining tool summary
-    if (toolSummary.length > 0) {
-      compressedMiddle.push({
-        role: 'assistant',
-        content: `[Previous actions: ${toolSummary.join(' → ')}]`,
-      });
-    }
+    // Create a single summary message (no tool messages = no pairing issues)
+    const summary = [
+      `[Previous work: ${toolCount} tool operations]`,
+      summaryParts.length > 0 ? summaryParts.slice(0, 5).join(' | ') : '',
+      filesMentioned.length > 0 ? `Files: ${[...new Set(filesMentioned)].slice(0, 5).join(', ')}` : '',
+    ].filter(Boolean).join('\n');
+
+    const compressedMiddle: ChatMessage[] = summary ? [{
+      role: 'assistant',
+      content: summary,
+    }] : [];
 
     return [systemMsg, userMsg, ...compressedMiddle, ...recentMessages];
   }
