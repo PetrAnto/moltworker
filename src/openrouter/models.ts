@@ -91,24 +91,22 @@ export const MODELS: Record<string, ModelInfo> = {
 
   // === IMAGE GENERATION ===
   fluxpro: {
-    id: 'black-forest-labs/flux-2-pro',
+    id: 'black-forest-labs/flux.2-pro',
     alias: 'fluxpro',
-    name: 'FLUX 2 Pro',
+    name: 'FLUX.2 Pro',
     specialty: 'Pro Image Generation',
     score: 'Top-tier images',
-    cost: 'FREE',
+    cost: '$0.03/MP',
     isImageGen: true,
-    isFree: true,
   },
   fluxmax: {
-    id: 'black-forest-labs/flux-2-max',
+    id: 'black-forest-labs/flux.2-max',
     alias: 'fluxmax',
-    name: 'FLUX 2 Max',
+    name: 'FLUX.2 Max',
     specialty: 'Advanced Image Gen',
-    score: 'Higher quality',
-    cost: 'FREE',
+    score: 'Highest quality',
+    cost: '$0.07/MP',
     isImageGen: true,
-    isFree: true,
   },
 
   // === PAID MODELS (by cost) ===
@@ -158,12 +156,22 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsTools: true,
   },
   qwencoder: {
-    id: 'qwen/qwen3-coder-480b-a35b',
+    id: 'qwen/qwen3-coder',
     alias: 'qwencoder',
-    name: 'Qwen3 Coder 480B',
-    specialty: 'Paid Coding',
-    score: '81-85% SWE leader',
+    name: 'Qwen3 Coder',
+    specialty: 'Paid Flagship Agentic Coding',
+    score: '54-55% SWE-Bench, 480B MoE',
     cost: '$0.22/$0.95',
+    supportsTools: true,
+  },
+  qwennext: {
+    id: 'qwen/qwen3-coder-next',
+    alias: 'qwennext',
+    name: 'Qwen3 Coder Next',
+    specialty: 'Paid Efficient Agentic Coding',
+    score: '70.6% SWE-Bench, 80B MoE',
+    cost: '$0.20/$1.50',
+    supportsTools: true,
   },
   deep: {
     id: 'deepseek/deepseek-v3.2',
