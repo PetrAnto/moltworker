@@ -1,10 +1,12 @@
 import type { Sandbox } from '@cloudflare/sandbox';
+import type { TaskProcessor } from './durable-objects/task-processor';
 
 /**
  * Environment bindings for the Moltbot Worker
  */
 export interface MoltbotEnv {
   Sandbox: DurableObjectNamespace<Sandbox>;
+  TASK_PROCESSOR?: DurableObjectNamespace<TaskProcessor>; // Optional: for long-running AI tasks
   ASSETS: Fetcher; // Assets binding for admin UI static files
   MOLTBOT_BUCKET: R2Bucket; // R2 bucket for persistent storage
   // AI Gateway configuration (preferred)

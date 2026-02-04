@@ -137,7 +137,7 @@ export class OpenRouterClient {
 
   /**
    * Send a chat completion with tool calling support
-   * Handles the tool call loop automatically
+   * Handles the tool call loop automatically with timeout protection
    */
   async chatCompletionWithTools(
     modelAlias: string,
@@ -146,13 +146,18 @@ export class OpenRouterClient {
       maxTokens?: number;
       temperature?: number;
       maxToolCalls?: number; // Limit iterations to prevent infinite loops
+      maxTimeMs?: number; // Maximum time in ms before returning partial result
       onToolCall?: (toolName: string, args: string) => void; // Callback for progress updates
+      onIteration?: (iteration: number, totalTools: number) => void; // Callback for iteration progress
       toolContext?: ToolContext; // Context with secrets for tool execution
     }
-  ): Promise<{ response: ChatCompletionResponse; finalText: string; toolsUsed: string[] }> {
+  ): Promise<{ response: ChatCompletionResponse; finalText: string; toolsUsed: string[]; hitLimit: boolean }> {
     const modelId = getModelId(modelAlias);
     const maxIterations = options?.maxToolCalls || 10;
+    const maxTimeMs = options?.maxTimeMs || 120000; // Default 2 minutes for paid Workers plan
+    const startTime = Date.now();
     const toolsUsed: string[] = [];
+    let hitLimit = false;
 
     // Clone messages to avoid mutating the original
     const conversationMessages: ChatMessage[] = [...messages];
@@ -161,7 +166,18 @@ export class OpenRouterClient {
     let lastResponse: ChatCompletionResponse;
 
     while (iterations < maxIterations) {
+      // Check time limit
+      if (Date.now() - startTime > maxTimeMs) {
+        hitLimit = true;
+        break;
+      }
+
       iterations++;
+
+      // Notify about iteration
+      if (options?.onIteration) {
+        options.onIteration(iterations, toolsUsed.length);
+      }
 
       const request: ChatCompletionRequest = {
         model: modelId,
@@ -188,6 +204,12 @@ export class OpenRouterClient {
 
       // Check if the model wants to call tools
       if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+        // Check time before executing tools
+        if (Date.now() - startTime > maxTimeMs - 5000) { // Leave 5s buffer
+          hitLimit = true;
+          break;
+        }
+
         // Add assistant message with tool calls to conversation
         conversationMessages.push({
           role: 'assistant',
@@ -224,6 +246,11 @@ export class OpenRouterClient {
       break;
     }
 
+    // Check if we hit the iteration limit
+    if (iterations >= maxIterations) {
+      hitLimit = true;
+    }
+
     // Extract final text response
     const finalText = lastResponse!.choices[0]?.message?.content || 'No response generated.';
 
@@ -231,6 +258,7 @@ export class OpenRouterClient {
       response: lastResponse!,
       finalText,
       toolsUsed,
+      hitLimit,
     };
   }
 

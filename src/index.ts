@@ -48,6 +48,7 @@ function transformErrorMessage(message: string, host: string): string {
 }
 
 export { Sandbox };
+export { TaskProcessor } from './durable-objects/task-processor';
 
 /**
  * Validate required environment variables.
