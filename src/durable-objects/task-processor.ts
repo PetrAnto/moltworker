@@ -388,9 +388,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             }),
           });
 
-          // 2 minute timeout per API call
+          // 5 minute timeout per API call (complex tasks need time)
           const timeoutPromise = new Promise<Response>((_, reject) => {
-            setTimeout(() => reject(new Error('OpenRouter API timeout (2 min)')), 120000);
+            setTimeout(() => reject(new Error('OpenRouter API timeout (5 min)')), 300000);
           });
 
           response = await Promise.race([fetchPromise, timeoutPromise]);
