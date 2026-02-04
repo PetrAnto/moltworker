@@ -374,6 +374,6 @@ async function githubApi(
  * Check if a model supports tools
  */
 export function modelSupportsTools(modelAlias: string): boolean {
-  const toolModels = ['grok', 'grokcode', 'qwencoder', 'qwennext', 'mini', 'kimi', 'gpt', 'sonnet', 'opus', 'haiku', 'geminipro', 'devstral'];
+  const toolModels = ['grok', 'grokcode', 'qwencoder', 'qwennext', 'qwenthink', 'mini', 'kimi', 'gpt', 'sonnet', 'opus', 'haiku', 'geminipro', 'devstral'];
   return toolModels.includes(modelAlias.toLowerCase());
 }

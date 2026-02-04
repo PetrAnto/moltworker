@@ -281,7 +281,7 @@ export class OpenRouterClient {
 
   /**
    * Generate an image using FLUX or other image models
-   * OpenRouter uses chat completions for image generation
+   * Uses OpenRouter's images/generations endpoint
    */
   async generateImage(
     prompt: string,
@@ -291,63 +291,34 @@ export class OpenRouterClient {
     const alias = modelAlias || DEFAULT_IMAGE_MODEL;
     const modelId = getModelId(alias);
 
-    // OpenRouter handles FLUX through chat completions with modalities
-    const messages: ChatMessage[] = [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ];
-
+    // OpenRouter's image generation endpoint
     const request = {
       model: modelId,
-      messages,
-      modalities: ['image', 'text'], // Required for image generation
+      prompt: prompt,
+      n: 1,
+      size: '1024x1024',
     };
 
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${OPENROUTER_BASE_URL}/images/generations`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(request),
     });
 
     if (!response.ok) {
-      const error = await response.json() as OpenRouterError;
-      throw new Error(`Image generation error: ${error.error?.message || response.statusText}`);
+      const errorText = await response.text();
+      let errorMessage: string;
+      try {
+        const error = JSON.parse(errorText) as OpenRouterError;
+        errorMessage = error.error?.message || response.statusText;
+      } catch {
+        errorMessage = errorText || response.statusText;
+      }
+      throw new Error(`Image generation error: ${errorMessage}`);
     }
 
-    const result = await response.json() as ChatCompletionResponse;
-    const content = result.choices[0]?.message?.content || '';
-
-    // OpenRouter returns images as base64 data URLs: data:image/png;base64,...
-    const dataUrlMatch = content.match(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/);
-    if (dataUrlMatch) {
-      return {
-        created: Date.now(),
-        data: [{ url: dataUrlMatch[0] }],
-      };
-    }
-
-    // FLUX models may return markdown image syntax: ![...](url)
-    const urlMatch = content.match(/!\[.*?\]\((https?:\/\/[^\)]+)\)/);
-    if (urlMatch) {
-      return {
-        created: Date.now(),
-        data: [{ url: urlMatch[1] }],
-      };
-    }
-
-    // Some models return just a URL
-    const plainUrlMatch = content.match(/(https?:\/\/[^\s]+\.(png|jpg|jpeg|webp|gif))/i);
-    if (plainUrlMatch) {
-      return {
-        created: Date.now(),
-        data: [{ url: plainUrlMatch[1] }],
-      };
-    }
-
-    // If no URL found, throw error with the actual response for debugging
-    throw new Error(`No image URL in response. Model returned: ${content.slice(0, 200)}`);
+    const result = await response.json() as ImageGenerationResponse;
+    return result;
   }
 
   /**
