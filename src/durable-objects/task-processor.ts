@@ -460,7 +460,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           }
         }
 
-        console.log(`[TaskProcessor] Iteration ${task.iterations}, tools: ${task.toolsUsed.length}, messages: ${conversationMessages.length}`);
+        const iterStartTime = Date.now();
+        console.log(`[TaskProcessor] Iteration ${task.iterations} START - tools: ${task.toolsUsed.length}, messages: ${conversationMessages.length}`);
 
         // Note: Checkpoint is saved after tool execution, not before API call
         // This reduces CPU usage from redundant JSON.stringify operations
@@ -555,6 +556,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           throw new Error('Invalid API response: no choices returned');
         }
 
+        console.log(`[TaskProcessor] API call completed in ${Date.now() - iterStartTime}ms`);
+
         const choice = result.choices[0];
 
         // Check if model wants to call tools
@@ -568,6 +571,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // Execute each tool
           for (const toolCall of choice.message.tool_calls) {
+            const toolStartTime = Date.now();
             const toolName = toolCall.function.name;
             task.toolsUsed.push(toolName);
 
@@ -586,6 +590,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 content: `Error: ${toolError instanceof Error ? toolError.message : String(toolError)}`,
               };
             }
+
+            console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
 
             // Truncate large tool results to prevent context explosion
             const truncatedContent = this.truncateToolResult(toolResult.content, toolName);
@@ -631,6 +637,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           task.lastUpdate = Date.now();
           await this.doState.storage.put('task', task);
           await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
+
+          console.log(`[TaskProcessor] Iteration ${task.iterations} COMPLETE - total time: ${Date.now() - iterStartTime}ms`);
 
           // Continue loop for next iteration
           continue;
