@@ -229,12 +229,13 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsTools: true,
   },
   deep: {
-    id: 'deepseek/deepseek-chat-v3',
+    id: 'deepseek/deepseek-v3.2',
     alias: 'deep',
-    name: 'DeepSeek V3',
-    specialty: 'Paid General/Reasoning (Value)',
-    score: '68-75% SWE, top weekly',
+    name: 'DeepSeek V3.2',
+    specialty: 'Paid General/Reasoning (Value King)',
+    score: '68-75% SWE, GPT-5 class reasoning',
     cost: '$0.25/$0.38',
+    supportsTools: true,
   },
   deepreason: {
     id: 'deepseek/deepseek-r1',
