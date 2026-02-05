@@ -61,8 +61,8 @@ interface TaskProcessorEnv {
 const WATCHDOG_INTERVAL_MS = 90000;
 // Max time without update before considering task stuck
 const STUCK_THRESHOLD_MS = 60000;
-// Save checkpoint every N tools (reduces CPU from JSON.stringify)
-const CHECKPOINT_EVERY_N_TOOLS = 5;
+// Save checkpoint every N tools (more frequent = less lost progress on crash)
+const CHECKPOINT_EVERY_N_TOOLS = 3;
 
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
@@ -568,18 +568,25 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         try {
           console.log(`[TaskProcessor] Reading response body...`);
 
-          // Heartbeat while reading response body (can be slow for large responses)
+          // Wrap response.text() in a timeout to catch hangs
+          // Also keep heartbeat running to prevent hibernation
           let readHeartbeat: ReturnType<typeof setInterval> | null = null;
           let readHeartbeatCount = 0;
           try {
             readHeartbeat = setInterval(() => {
               readHeartbeatCount++;
-              console.log(`[TaskProcessor] Reading body heartbeat #${readHeartbeatCount} (${readHeartbeatCount * 5}s)`);
+              console.log(`[TaskProcessor] Reading body heartbeat #${readHeartbeatCount} (${readHeartbeatCount * 2}s)`);
               task.lastUpdate = Date.now();
               this.doState.storage.put('task', task).catch(() => {});
-            }, 5000);
+            }, 2000); // More frequent: every 2 seconds
 
-            const responseText = await response.text();
+            // Timeout after 30 seconds - if response.text() takes longer, something is wrong
+            const textPromise = response.text();
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error('response.text() timeout after 30s')), 30000);
+            });
+
+            const responseText = await Promise.race([textPromise, timeoutPromise]);
             console.log(`[TaskProcessor] Response size: ${responseText.length} chars`);
 
             console.log(`[TaskProcessor] Parsing JSON...`);
