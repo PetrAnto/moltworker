@@ -34,6 +34,10 @@ interface TaskState {
   telegramToken?: string; // Store for cancel
   openrouterKey?: string; // Store for alarm recovery
   githubToken?: string; // Store for alarm recovery
+  // Direct provider API keys for alarm recovery
+  dashscopeKey?: string;
+  moonshotKey?: string;
+  deepseekKey?: string;
   // Auto-resume settings
   autoResume?: boolean; // If true, automatically resume on timeout
   autoResumeCount?: number; // Number of auto-resumes so far
@@ -148,6 +152,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         telegramToken: task.telegramToken,
         openrouterKey: task.openrouterKey,
         githubToken: task.githubToken,
+        // Include direct provider API keys for resume
+        dashscopeKey: task.dashscopeKey,
+        moonshotKey: task.moonshotKey,
+        deepseekKey: task.deepseekKey,
         autoResume: task.autoResume,
       };
 
@@ -427,6 +435,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.telegramToken = request.telegramToken;
     task.openrouterKey = request.openrouterKey;
     task.githubToken = request.githubToken;
+    // Store direct provider API keys for alarm recovery
+    task.dashscopeKey = request.dashscopeKey;
+    task.moonshotKey = request.moonshotKey;
+    task.deepseekKey = request.deepseekKey;
     // Preserve auto-resume setting (and count if resuming)
     task.autoResume = request.autoResume;
     // Keep existing autoResumeCount if resuming, otherwise start at 0
