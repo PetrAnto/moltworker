@@ -2,6 +2,8 @@
 
 Guidelines for AI agents working on this codebase.
 
+> **IMPORTANT:** Also read `CLAUDE.md` for project instructions and `claude-share/core/SYNC_CHECKLIST.md` for post-task requirements.
+
 ## Project Overview
 
 This is a Cloudflare Worker that runs [Moltbot](https://molt.bot/) in a Cloudflare Sandbox container. It provides:
@@ -244,3 +246,83 @@ R2 is mounted via s3fs at `/data/moltbot`. Important gotchas:
 - **Never delete R2 data**: The mount directory `/data/moltbot` IS the R2 bucket. Running `rm -rf /data/moltbot/*` will DELETE your backup data. Always check mount status before any destructive operations.
 
 - **Process status**: The sandbox API's `proc.status` may not update immediately after a process completes. Instead of checking `proc.status === 'completed'`, verify success by checking for expected output (e.g., timestamp file exists after sync).
+
+---
+
+## Multi-Agent Coordination
+
+> Multiple AI assistants (Claude, Codex, others) work on this codebase simultaneously.
+> These rules ensure coordination without conflicts.
+
+### Orchestration Documentation
+
+Orchestration docs are stored in a **private companion repo** and symlinked into `claude-share/`.
+If `claude-share/` exists locally, read and follow those docs. If not, follow the protocols below.
+
+### Branch Naming Convention
+
+| AI Agent | Branch Pattern | Example |
+|----------|---------------|---------|
+| Claude | `claude/<task-slug>-<id>` | `claude/parallel-tools-x7k2` |
+| Codex | `codex/<task-slug>-<id>` | `codex/cost-tracking-m3p1` |
+| Other AI | `bot/<task-slug>-<id>` | `bot/gemini-flash-tools-q2w3` |
+| Human | `feat/<slug>` or `fix/<slug>` | `feat/mcp-integration` |
+
+### Session Start Protocol
+
+1. Fetch latest main: `git fetch origin main`
+2. Check recent merges: `git log origin/main --oneline -10`
+3. Read `claude-share/core/SYNC_CHECKLIST.md`
+4. Read `claude-share/core/next_prompt.md` for current task
+5. Acknowledge with format:
+   ```
+   ACK: [Task ID] — [Task Name]
+   Branch: [branch-name]
+   Files to modify: [list]
+   Starting now.
+   ```
+
+### Session End Protocol
+
+1. Update session log (`claude-share/core/claude-log.md` or equivalent)
+2. Update `claude-share/core/GLOBAL_ROADMAP.md` — task status + changelog entry
+3. Update `claude-share/core/WORK_STATUS.md` — sprint state
+4. Update `claude-share/core/next_prompt.md` — point to next task
+5. Run `npm test && npm run typecheck`
+6. Commit and push
+
+### Verification Checklist (Before Claiming "Done")
+
+- [ ] All changes compile: `npm run typecheck`
+- [ ] All tests pass: `npm test`
+- [ ] No secrets committed (check `git diff --staged`)
+- [ ] Session log updated
+- [ ] Global roadmap updated
+- [ ] Work status updated
+- [ ] Next prompt updated
+- [ ] Branch pushed
+
+### Parallel Work Rules
+
+1. **Check WORK_STATUS.md** before starting — avoid working on same files as another agent
+2. **Claim your task** — Update the Parallel Work Tracking table immediately
+3. **Small, atomic PRs** — One task per branch, one concern per PR
+4. **No cross-branch dependencies** — Each branch must work independently
+5. **Communicate via docs** — If you discover something another agent needs to know, write it in WORK_STATUS.md under "Notes for Other Agents"
+
+### Handoff Protocol
+
+When handing off work to another AI agent:
+1. Commit all changes (even partial work)
+2. Update `next_prompt.md` with detailed context
+3. Add "Notes for Next Session" to your session log entry
+4. Push your branch
+5. If blocked, add to the "Blocked" table in WORK_STATUS.md
+
+### Human Checkpoint Format
+
+```
+🧑 HUMAN CHECK X.X: [Description of what to test] — ⏳ PENDING
+```
+
+Human checkpoints require manual verification before the next phase can begin. Never skip or auto-resolve these.
