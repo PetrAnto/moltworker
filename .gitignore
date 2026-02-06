@@ -49,3 +49,4 @@ Thumbs.db
 # Private orchestration docs (stored in companion repo)
 claude-share/
 brainstorming/tool-calling-analysis.md
+setup-private-repo*.sh
