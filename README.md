@@ -19,6 +19,25 @@ The following Cloudflare features used by this project have free tiers:
 - AI Gateway (optional, for API routing/analytics)
 - R2 Storage (optional, for persistence)
 
+## Container Cost Estimate
+
+This project uses a `standard-1` Cloudflare Container instance (1/2 vCPU, 4 GiB memory, 8 GB disk). Below are approximate monthly costs assuming the container runs 24/7, based on [Cloudflare Containers pricing](https://developers.cloudflare.com/containers/pricing/):
+
+| Resource | Provisioned | Monthly Usage | Included Free | Overage | Approx. Cost |
+|----------|-------------|---------------|---------------|---------|--------------|
+| Memory | 4 GiB | 2,920 GiB-hrs | 25 GiB-hrs | 2,895 GiB-hrs | ~$26/mo |
+| CPU (at ~10% utilization) | 1/2 vCPU | ~2,190 vCPU-min | 375 vCPU-min | ~1,815 vCPU-min | ~$2/mo |
+| Disk | 8 GB | 5,840 GB-hrs | 200 GB-hrs | 5,640 GB-hrs | ~$1.50/mo |
+| Workers Paid plan | | | | | $5/mo |
+| **Total** | | | | | **~$34.50/mo** |
+
+Notes:
+- CPU is billed on **active usage only**, not provisioned capacity. The 10% utilization estimate is a rough baseline for a lightly-used personal assistant; your actual cost will vary with usage.
+- Memory and disk are billed on **provisioned capacity** for the full time the container is running.
+- To reduce costs, configure `SANDBOX_SLEEP_AFTER` (e.g., `10m`) so the container sleeps when idle. A container that only runs 4 hours/day would cost roughly ~$5-6/mo in compute on top of the $5 plan fee.
+- Network egress, Workers/Durable Objects requests, and logs are additional but typically minimal for personal use.
+- See the [instance types table](https://developers.cloudflare.com/containers/pricing/) for other options (e.g., `lite` at 256 MiB/$0.50/mo memory or `standard-4` at 12 GiB for heavier workloads).
+
 ## What is OpenClaw?
 
 [OpenClaw](https://github.com/openclaw/openclaw) (formerly Moltbot, formerly Clawdbot) is a personal AI assistant with a gateway architecture that connects to multiple chat platforms. Key features:
