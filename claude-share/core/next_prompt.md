@@ -7,30 +7,27 @@
 
 ---
 
-## Current Task: Phase 2.5.2 — Chart Image Generation (QuickChart)
+## Current Task: Phase 2.5.3 — Weather Tool (Open-Meteo)
 
 ### Requirements
 
 You are working on Moltworker, a multi-platform AI assistant gateway on Cloudflare Workers.
 
-Add a new `generate_chart` tool that creates chart images via the free QuickChart API. This enables data visualization in Telegram `/brief` messages and Discord digests without client-side rendering.
+Add a new `get_weather` tool that fetches current weather conditions and a 7-day forecast using the free Open-Meteo API. No API key needed, no rate limits. This feeds into the future daily briefing aggregator (Phase 2.5.7).
 
 ### API
 
-- **Endpoint:** `https://quickchart.io/chart?c=<chart_config>`
-- **Auth:** None required (free tier)
-- **Response:** Image (PNG). The URL itself is the image — no API call needed, just construct the URL.
-- **Chart.js config:** `{ type: 'bar'|'line'|'pie'|'doughnut'|'radar', data: { labels: [...], datasets: [{ label, data: [...] }] } }`
+- **Endpoint:** `https://api.open-meteo.com/v1/forecast?latitude=<lat>&longitude=<lon>&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto`
+- **Auth:** None required (completely free, no rate limits)
+- **Response:** JSON with `current_weather` (temperature, windspeed, weathercode) and `daily` arrays
 
 ### Files to modify
 
-1. **`src/openrouter/tools.ts`** — Add `generate_chart` tool definition and execution handler
-   - Tool schema: `{ name: "generate_chart", parameters: { type: string, labels: string, datasets: string } }`
-   - `type`: Chart type (bar, line, pie, doughnut, radar)
-   - `labels`: JSON array of label strings
-   - `datasets`: JSON array of dataset objects `[{ label: string, data: number[] }]`
-   - Returns the QuickChart image URL
-   - Validate the chart config before constructing the URL
+1. **`src/openrouter/tools.ts`** — Add `get_weather` tool definition and execution handler
+   - Tool schema: `{ name: "get_weather", parameters: { latitude: string, longitude: string } }`
+   - Returns formatted weather summary (current conditions + 7-day forecast)
+   - Validate lat/lon ranges (-90 to 90, -180 to 180)
+   - Map WMO weather codes to human-readable descriptions
 
 ### Implementation
 
@@ -39,38 +36,59 @@ Add a new `generate_chart` tool that creates chart images via the free QuickChar
 {
   type: 'function',
   function: {
-    name: 'generate_chart',
-    description: 'Generate a chart image URL using Chart.js configuration. Returns a URL that renders as a PNG image. Use for data visualization in messages.',
+    name: 'get_weather',
+    description: 'Get current weather and 7-day forecast for a location. Provide latitude and longitude coordinates.',
     parameters: {
       type: 'object',
       properties: {
-        type: { type: 'string', description: 'Chart type', enum: ['bar', 'line', 'pie', 'doughnut', 'radar'] },
-        labels: { type: 'string', description: 'JSON array of label strings, e.g. ["Jan","Feb","Mar"]' },
-        datasets: { type: 'string', description: 'JSON array of dataset objects, e.g. [{"label":"Sales","data":[10,20,30]}]' }
+        latitude: { type: 'string', description: 'Latitude (-90 to 90)' },
+        longitude: { type: 'string', description: 'Longitude (-180 to 180)' }
       },
-      required: ['type', 'labels', 'datasets']
+      required: ['latitude', 'longitude']
     }
   }
 }
 
+// WMO Weather Code mapping (subset)
+const WMO_CODES: Record<number, string> = {
+  0: 'Clear sky', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
+  45: 'Fog', 48: 'Depositing rime fog',
+  51: 'Light drizzle', 53: 'Moderate drizzle', 55: 'Dense drizzle',
+  61: 'Slight rain', 63: 'Moderate rain', 65: 'Heavy rain',
+  71: 'Slight snow', 73: 'Moderate snow', 75: 'Heavy snow',
+  80: 'Slight rain showers', 81: 'Moderate rain showers', 82: 'Violent rain showers',
+  95: 'Thunderstorm', 96: 'Thunderstorm with slight hail', 99: 'Thunderstorm with heavy hail',
+};
+
 // Execution
-async function generateChart(type: string, labelsJson: string, datasetsJson: string): Promise<string> {
-  const labels = JSON.parse(labelsJson);
-  const datasets = JSON.parse(datasetsJson);
-  const config = { type, data: { labels, datasets } };
-  const url = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(config))}&w=600&h=400`;
-  // Verify the URL works
-  const response = await fetch(url, { method: 'HEAD' });
-  if (!response.ok) throw new Error(`QuickChart error: HTTP ${response.status}`);
-  return url;
+async function getWeather(latitude: string, longitude: string): Promise<string> {
+  const lat = parseFloat(latitude);
+  const lon = parseFloat(longitude);
+  if (isNaN(lat) || lat < -90 || lat > 90) throw new Error('Invalid latitude');
+  if (isNaN(lon) || lon < -180 || lon > 180) throw new Error('Invalid longitude');
+
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Open-Meteo API error: HTTP ${response.status}`);
+  const data = await response.json();
+
+  // Format current weather + 7-day forecast
+  const current = data.current_weather;
+  let output = `Current: ${WMO_CODES[current.weathercode] || 'Unknown'}, ${current.temperature}°C, wind ${current.windspeed} km/h\n\nForecast:\n`;
+  for (let i = 0; i < data.daily.time.length; i++) {
+    output += `${data.daily.time[i]}: ${data.daily.temperature_2m_min[i]}–${data.daily.temperature_2m_max[i]}°C, ${WMO_CODES[data.daily.weathercode[i]] || 'Unknown'}\n`;
+  }
+  return output;
 }
 ```
 
 ### Success Criteria
 
-- [ ] New `generate_chart` tool appears in tool definitions
-- [ ] Tool returns a valid QuickChart URL
-- [ ] Handles errors gracefully (invalid chart type, malformed JSON)
+- [ ] New `get_weather` tool appears in tool definitions
+- [ ] Tool returns formatted current weather + 7-day forecast
+- [ ] Validates latitude/longitude ranges
+- [ ] Maps WMO weather codes to descriptions
+- [ ] Handles errors gracefully (invalid coords, API failure)
 - [ ] Test file: `src/openrouter/tools.test.ts` (extend existing)
 - [ ] `npm test` passes
 - [ ] `npm run typecheck` passes (pre-existing errors OK)
@@ -84,8 +102,7 @@ async function generateChart(type: string, labelsJson: string, datasetsJson: str
 
 | Priority | Task | Effort |
 |----------|------|--------|
-| Next | 2.5.3: Weather tool (Open-Meteo) | 2h |
-| Then | 2.5.5: News feeds (HN + Reddit + arXiv) | 3h |
+| Next | 2.5.5: News feeds (HN + Reddit + arXiv) | 3h |
 | Then | 1.3: Configurable reasoning per model | Medium |
 | Then | 2.5.7: Daily briefing aggregator | 6h |
 
@@ -95,6 +112,7 @@ async function generateChart(type: string, labelsJson: string, datasetsJson: str
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-08 | Phase 2.5.2: Chart image generation (QuickChart) | Claude Opus 4.6 | 01Wjud3VHKMfSRbvMTzFohGS |
 | 2026-02-08 | Phase 2.5.1: URL metadata tool (Microlink) | Claude Opus 4.6 | 01Wjud3VHKMfSRbvMTzFohGS |
 | 2026-02-08 | Phase 1.1: Parallel tool execution | Claude Opus 4.6 | 01Lg3st5TTU3gXnMqPxfCPpW |
 | 2026-02-08 | Phase 1.2: Model capability metadata | Claude Opus 4.6 | 01Lg3st5TTU3gXnMqPxfCPpW |
