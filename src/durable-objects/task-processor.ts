@@ -8,6 +8,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { createOpenRouterClient, type ChatMessage } from '../openrouter/client';
 import { executeTool, AVAILABLE_TOOLS, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER } from '../openrouter/tools';
 import { getModelId, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, type Provider, type ReasoningLevel } from '../openrouter/models';
+import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 
 // Max characters for a single tool result before truncation
 const MAX_TOOL_RESULT_LENGTH = 8000; // ~2K tokens (reduced for CPU)
@@ -406,6 +407,24 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       });
     }
 
+    if (url.pathname === '/usage' && request.method === 'GET') {
+      // Return usage data from the in-memory store
+      const userId = url.searchParams.get('userId') || '';
+      const days = parseInt(url.searchParams.get('days') || '1');
+      const { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } = await import('../openrouter/costs');
+
+      if (days > 1) {
+        const records = getUsageRange(userId, days);
+        return new Response(JSON.stringify({ summary: formatWeekSummary(records) }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      const record = getUsage(userId);
+      return new Response(JSON.stringify({ summary: formatUsageSummary(record) }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     if (url.pathname === '/cancel' && request.method === 'POST') {
       const task = await this.doState.storage.get<TaskState>('task');
       if (task && task.status === 'processing') {
@@ -525,6 +544,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       }
     }
 
+    // Track cumulative token usage across all iterations
+    const totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
+
     try {
       while (task.iterations < maxIterations) {
         // Check if cancelled
@@ -610,6 +632,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             };
             finish_reason: string;
           }>;
+          usage?: {
+            prompt_tokens: number;
+            completion_tokens: number;
+            total_tokens: number;
+          };
         } | null = null;
         let lastError: Error | null = null;
 
@@ -736,6 +763,21 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
 
         console.log(`[TaskProcessor] API call completed in ${Date.now() - iterStartTime}ms`);
+
+        // Track token usage and costs
+        if (result.usage) {
+          const iterationUsage = recordUsage(
+            request.userId,
+            request.modelAlias,
+            result.usage.prompt_tokens,
+            result.usage.completion_tokens
+          );
+          totalUsage.promptTokens += iterationUsage.promptTokens;
+          totalUsage.completionTokens += iterationUsage.completionTokens;
+          totalUsage.totalTokens += iterationUsage.totalTokens;
+          totalUsage.costUsd += iterationUsage.costUsd;
+          console.log(`[TaskProcessor] Usage: ${result.usage.prompt_tokens}+${result.usage.completion_tokens} tokens, $${iterationUsage.costUsd.toFixed(4)}`);
+        }
 
         const choice = result.choices[0];
 
@@ -867,6 +909,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         const elapsed = Math.round((Date.now() - task.startTime) / 1000);
         finalResponse += `\n\n⏱️ Completed in ${elapsed}s (${task.iterations} iterations)`;
+        if (totalUsage.totalTokens > 0) {
+          finalResponse += ` | ${formatCostFooter(totalUsage, request.modelAlias)}`;
+        }
 
         // Send final result (split if too long)
         await this.sendLongMessage(request.telegramToken, request.chatId, finalResponse);

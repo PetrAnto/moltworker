@@ -6,6 +6,7 @@
 import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type ChatMessage } from '../openrouter/client';
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
 import { modelSupportsTools, generateDailyBriefing } from '../openrouter/tools';
+import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import {
   MODELS,
@@ -758,6 +759,11 @@ export class TelegramHandler {
         await this.handleBriefingCommand(chatId, args);
         break;
 
+      case '/costs':
+      case '/usage':
+        await this.handleCostsCommand(chatId, userId, args);
+        break;
+
       default:
         // Check if it's a model alias command (e.g., /deep, /gpt)
         const modelAlias = cmd.slice(1); // Remove leading /
@@ -966,6 +972,21 @@ export class TelegramHandler {
       }
     } catch (error) {
       await this.bot.sendMessage(chatId, `Briefing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle /costs command
+   * Usage: /costs - today's usage
+   *        /costs week - 7-day breakdown
+   */
+  private async handleCostsCommand(chatId: number, userId: string, args: string[]): Promise<void> {
+    if (args.length > 0 && args[0].toLowerCase() === 'week') {
+      const records = getUsageRange(userId, 7);
+      await this.bot.sendMessage(chatId, formatWeekSummary(records));
+    } else {
+      const record = getUsage(userId);
+      await this.bot.sendMessage(chatId, formatUsageSummary(record));
     }
   }
 
@@ -1456,6 +1477,7 @@ export class TelegramHandler {
 /clear - Clear history
 /cancel - Cancel running task
 /credits - Check OpenRouter credits
+/costs - Your token usage and costs
 /briefing - Daily briefing (weather+news+research)
 /ping - Test bot response
 
