@@ -19,7 +19,6 @@
 | Task ID | Description | Assignee | Status | Branch |
 |---------|-------------|----------|--------|--------|
 | 1.3 | Configurable reasoning per model | Unassigned | 🔲 Not Started | — |
-| 2.5.2 | Chart image generation (QuickChart) | Unassigned | 🔲 Not Started | — |
 | 2.5.3 | Weather tool (Open-Meteo) | Unassigned | 🔲 Not Started | — |
 
 ---
@@ -28,7 +27,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | Phase 2.5.1 complete | `claude/review-moltworker-roadmap-q5aqD` | 2026-02-08 |
+| Claude | Phase 2.5.2 complete | `claude/review-moltworker-roadmap-q5aqD` | 2026-02-08 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -49,6 +48,7 @@
 | — | Multi-AI orchestration docs | Claude Opus 4.6 | 2026-02-06 | `claude/analyze-tool-calling-5ee5w` |
 | — | Free APIs integration analysis | Claude Opus 4.6 | 2026-02-08 | `claude/resume-tool-calling-analysis-ZELCJ` |
 | 2.5.1 | URL metadata tool (Microlink) | Claude Opus 4.6 | 2026-02-08 | `claude/review-moltworker-roadmap-q5aqD` |
+| 2.5.2 | Chart image generation (QuickChart) | Claude Opus 4.6 | 2026-02-08 | `claude/review-moltworker-roadmap-q5aqD` |
 
 ---
 
@@ -64,8 +64,7 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **Phase 2.5.2** — Chart image generation via QuickChart (2h, no auth, `/brief` charts)
-3. **Phase 2.5.3** — Weather tool via Open-Meteo (2h, no auth, daily briefing)
+1. **Phase 2.5.3** — Weather tool via Open-Meteo (2h, no auth, daily briefing)
 4. **Phase 2.5.5** — News feeds: HackerNews + Reddit + arXiv (3h, no auth, data sources)
 5. **Phase 1.3** — Configurable reasoning per model (medium effort, uses 1.2 metadata)
 6. **Phase 2.1** — Token/cost tracking (medium effort, high value)
@@ -77,4 +76,4 @@
 
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
-| Sprint 1 (current) | 8 | 12 | Phase 0 complete, Phase 1.1+1.2 complete, upstream sync complete, Phase 2.5.1 complete, ahead of plan |
+| Sprint 1 (current) | 8 | 13 | Phase 0 complete, Phase 1.1+1.2 complete, upstream sync complete, Phase 2.5.1+2.5.2 complete, ahead of plan |

@@ -180,3 +180,228 @@ describe('url_metadata tool', () => {
     expect(calledUrl).toContain(encodeURIComponent('https://example.com/path?q=hello world&lang=en'));
   });
 });
+
+describe('generate_chart tool', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should be included in AVAILABLE_TOOLS', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'generate_chart');
+    expect(tool).toBeDefined();
+    expect(tool!.function.parameters.required).toEqual(['type', 'labels', 'datasets']);
+  });
+
+  it('should be included in TOOLS_WITHOUT_BROWSER', () => {
+    const tool = TOOLS_WITHOUT_BROWSER.find(t => t.function.name === 'generate_chart');
+    expect(tool).toBeDefined();
+  });
+
+  it('should return a QuickChart URL on success', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await executeTool({
+      id: 'chart_1',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'bar',
+          labels: '["Jan","Feb","Mar"]',
+          datasets: '[{"label":"Sales","data":[10,20,30]}]',
+        }),
+      },
+    });
+
+    expect(result.role).toBe('tool');
+    expect(result.tool_call_id).toBe('chart_1');
+    expect(result.content).toContain('https://quickchart.io/chart');
+    expect(result.content).toContain('w=600');
+    expect(result.content).toContain('h=400');
+  });
+
+  it('should encode chart config in URL', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await executeTool({
+      id: 'chart_2',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'line',
+          labels: '["A","B"]',
+          datasets: '[{"label":"Test","data":[1,2]}]',
+        }),
+      },
+    });
+
+    // The URL should contain the encoded chart config
+    const expectedConfig = JSON.stringify({
+      type: 'line',
+      data: { labels: ['A', 'B'], datasets: [{ label: 'Test', data: [1, 2] }] },
+    });
+    expect(result.content).toContain(encodeURIComponent(expectedConfig));
+  });
+
+  it('should verify URL with HEAD request', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await executeTool({
+      id: 'chart_3',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'pie',
+          labels: '["A","B"]',
+          datasets: '[{"data":[60,40]}]',
+        }),
+      },
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('quickchart.io/chart'),
+      { method: 'HEAD' },
+    );
+  });
+
+  it('should reject invalid chart type', async () => {
+    const result = await executeTool({
+      id: 'chart_4',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'invalid_type',
+          labels: '["A"]',
+          datasets: '[{"data":[1]}]',
+        }),
+      },
+    });
+
+    expect(result.content).toContain('Error executing generate_chart');
+    expect(result.content).toContain('Invalid chart type');
+  });
+
+  it('should reject invalid labels JSON', async () => {
+    const result = await executeTool({
+      id: 'chart_5',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'bar',
+          labels: 'not-json',
+          datasets: '[{"data":[1]}]',
+        }),
+      },
+    });
+
+    expect(result.content).toContain('Error executing generate_chart');
+    expect(result.content).toContain('Invalid labels JSON');
+  });
+
+  it('should reject non-array labels', async () => {
+    const result = await executeTool({
+      id: 'chart_6',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'bar',
+          labels: '"just a string"',
+          datasets: '[{"data":[1]}]',
+        }),
+      },
+    });
+
+    expect(result.content).toContain('Error executing generate_chart');
+    expect(result.content).toContain('Labels must be a JSON array');
+  });
+
+  it('should reject invalid datasets JSON', async () => {
+    const result = await executeTool({
+      id: 'chart_7',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'bar',
+          labels: '["A"]',
+          datasets: 'not-json',
+        }),
+      },
+    });
+
+    expect(result.content).toContain('Error executing generate_chart');
+    expect(result.content).toContain('Invalid datasets JSON');
+  });
+
+  it('should reject empty datasets array', async () => {
+    const result = await executeTool({
+      id: 'chart_8',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'bar',
+          labels: '["A"]',
+          datasets: '[]',
+        }),
+      },
+    });
+
+    expect(result.content).toContain('Error executing generate_chart');
+    expect(result.content).toContain('non-empty JSON array');
+  });
+
+  it('should handle QuickChart HTTP errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+    }));
+
+    const result = await executeTool({
+      id: 'chart_9',
+      type: 'function',
+      function: {
+        name: 'generate_chart',
+        arguments: JSON.stringify({
+          type: 'bar',
+          labels: '["A"]',
+          datasets: '[{"data":[1]}]',
+        }),
+      },
+    });
+
+    expect(result.content).toContain('Error executing generate_chart');
+    expect(result.content).toContain('QuickChart error: HTTP 400');
+  });
+
+  it('should support all valid chart types', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const types = ['bar', 'line', 'pie', 'doughnut', 'radar'];
+    for (const chartType of types) {
+      const result = await executeTool({
+        id: `chart_type_${chartType}`,
+        type: 'function',
+        function: {
+          name: 'generate_chart',
+          arguments: JSON.stringify({
+            type: chartType,
+            labels: '["A"]',
+            datasets: '[{"data":[1]}]',
+          }),
+        },
+      });
+
+      expect(result.content).toContain('quickchart.io/chart');
+    }
+  });
+});

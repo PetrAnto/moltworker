@@ -123,10 +123,10 @@ Provide a self-hosted, multi-model AI assistant that gets better with every inte
 - **Implementation:** `src/openrouter/tools.ts` — tool definition + `urlMetadata()` handler. 9 tests in `tools.test.ts`.
 
 #### F2.5.2: Chart Image Generation (QuickChart)
-- **Status:** 🔲 Planned
-- **Spec:** New tool `generate_chart({ type, labels, data })` returning chart image URL.
+- **Status:** ✅ Complete
+- **Spec:** New tool `generate_chart({ type, labels, datasets })` returning QuickChart image URL (600x400 PNG).
 - **API:** `quickchart.io/chart?c=<config>` — 🟢 No auth.
-- **Effort:** 2h. Enables data visualization in Telegram `/brief` and Discord digests.
+- **Implementation:** `src/openrouter/tools.ts` — tool definition + `generateChart()` handler with type/JSON validation + HEAD check. 12 tests in `tools.test.ts`.
 
 #### F2.5.3: Weather Tool (Open-Meteo)
 - **Status:** 🔲 Planned

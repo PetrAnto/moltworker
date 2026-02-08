@@ -4,6 +4,43 @@
 
 ---
 
+## Session: 2026-02-08 | Phase 2.5.2: Chart Image Generation (Session: 01Wjud3VHKMfSRbvMTzFohGS)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-moltworker-roadmap-q5aqD`
+**Status:** Completed
+
+### Summary
+Implemented Phase 2.5.2: new `generate_chart` tool using the free QuickChart API. The tool generates Chart.js-powered PNG chart images (bar, line, pie, doughnut, radar) and returns the image URL for embedding in Telegram/Discord messages.
+
+### Changes Made
+1. **New `generate_chart` tool definition** — Added to `AVAILABLE_TOOLS` array with type/labels/datasets parameters
+2. **Execution handler** — `generateChart()` function validates chart type, parses JSON labels/datasets, constructs QuickChart URL, verifies via HEAD request
+3. **Input validation** — Validates chart type against allowed set, validates labels and datasets are proper JSON arrays, rejects empty datasets
+4. **12 new tests** — Tool presence, URL construction, URL encoding, HEAD verification, all 5 chart types, plus error cases (invalid type, bad JSON, empty datasets, HTTP errors)
+5. **Documentation updates** — Updated GLOBAL_ROADMAP, WORK_STATUS, SPECIFICATION, next_prompt, claude-log
+
+### Files Modified
+- `src/openrouter/tools.ts` (tool definition + execution handler)
+- `src/openrouter/tools.test.ts` (12 new tests)
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/SPECIFICATION.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+
+### Tests
+- [x] All 105 tests pass (12 new for generate_chart + 9 for url_metadata + 84 existing)
+- [x] Typecheck: no new errors (pre-existing errors unchanged)
+
+### Notes for Next Session
+- Phase 2.5.2 complete. Tool count now: 7 (was 6)
+- **Next priority: Phase 2.5.3** — Weather tool via Open-Meteo
+- See `next_prompt.md` for ready-to-copy task prompt
+- The `generate_chart` tool is automatically included in `TOOLS_WITHOUT_BROWSER`
+
+---
+
 ## Session: 2026-02-08 | Phase 2.5.1: URL Metadata Tool (Session: 01Wjud3VHKMfSRbvMTzFohGS)
 
 **AI:** Claude Opus 4.6

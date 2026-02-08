@@ -171,6 +171,32 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'generate_chart',
+      description: 'Generate a chart image URL using Chart.js configuration. Returns a URL that renders as a PNG image. Use for data visualization in messages.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            description: 'Chart type',
+            enum: ['bar', 'line', 'pie', 'doughnut', 'radar'],
+          },
+          labels: {
+            type: 'string',
+            description: 'JSON array of label strings, e.g. ["Jan","Feb","Mar"]',
+          },
+          datasets: {
+            type: 'string',
+            description: 'JSON array of dataset objects, e.g. [{"label":"Sales","data":[10,20,30]}]',
+          },
+        },
+        required: ['type', 'labels', 'datasets'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'browse_url',
       description: 'Browse a URL using a real browser. Use this for JavaScript-rendered pages, screenshots, or when fetch_url fails. Returns text content by default, or a screenshot/PDF.',
       parameters: {
@@ -236,6 +262,9 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         break;
       case 'url_metadata':
         result = await urlMetadata(args.url);
+        break;
+      case 'generate_chart':
+        result = await generateChart(args.type, args.labels, args.datasets);
         break;
       case 'browse_url':
         result = await browseUrl(args.url, args.action as 'extract_text' | 'screenshot' | 'pdf' | undefined, args.wait_for, context?.browser);
@@ -485,6 +514,61 @@ async function urlMetadata(url: string): Promise<string> {
   }
 
   return output;
+}
+
+/**
+ * Valid chart types for QuickChart
+ */
+const VALID_CHART_TYPES = ['bar', 'line', 'pie', 'doughnut', 'radar'] as const;
+
+/**
+ * Generate a chart image URL via QuickChart.io
+ */
+async function generateChart(
+  chartType: string,
+  labelsJson: string,
+  datasetsJson: string
+): Promise<string> {
+  if (!VALID_CHART_TYPES.includes(chartType as typeof VALID_CHART_TYPES[number])) {
+    throw new Error(`Invalid chart type: ${chartType}. Must be one of: ${VALID_CHART_TYPES.join(', ')}`);
+  }
+
+  let labels: unknown;
+  try {
+    labels = JSON.parse(labelsJson);
+  } catch {
+    throw new Error('Invalid labels JSON: must be an array of strings');
+  }
+
+  if (!Array.isArray(labels)) {
+    throw new Error('Labels must be a JSON array');
+  }
+
+  let datasets: unknown;
+  try {
+    datasets = JSON.parse(datasetsJson);
+  } catch {
+    throw new Error('Invalid datasets JSON: must be an array of dataset objects');
+  }
+
+  if (!Array.isArray(datasets) || datasets.length === 0) {
+    throw new Error('Datasets must be a non-empty JSON array');
+  }
+
+  const config = {
+    type: chartType,
+    data: { labels, datasets },
+  };
+
+  const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(config))}&w=600&h=400`;
+
+  // Verify the URL is reachable
+  const response = await fetch(chartUrl, { method: 'HEAD' });
+  if (!response.ok) {
+    throw new Error(`QuickChart error: HTTP ${response.status}`);
+  }
+
+  return chartUrl;
 }
 
 /**
