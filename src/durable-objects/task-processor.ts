@@ -498,7 +498,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const statusMessageId = await this.sendTelegramMessage(
       request.telegramToken,
       request.chatId,
-      '⏳ Processing complex task...'
+      '⏳ Thinking...'
     );
 
     // Store status message ID for cancel cleanup

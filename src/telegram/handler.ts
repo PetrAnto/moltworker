@@ -1050,15 +1050,26 @@ export class TelegramHandler {
     const messageText = cleanMessage;
 
     // Get user's model and conversation history
-    const modelAlias = await this.storage.getUserModel(userId);
+    let modelAlias = await this.storage.getUserModel(userId);
+
+    // If user's model is image-gen only, fall back to default text model
+    if (isImageGenModel(modelAlias)) {
+      await this.bot.sendMessage(chatId, `Model /${modelAlias} is image-only. Use /img <prompt> to generate images.\nFalling back to /${DEFAULT_MODEL} for text.`);
+      modelAlias = DEFAULT_MODEL;
+    }
     const history = await this.storage.getConversation(userId, 10);
     const systemPrompt = await this.getSystemPrompt();
+
+    // Augment system prompt with tool hints for tool-supporting models
+    const toolHint = modelSupportsTools(modelAlias)
+      ? '\n\nYou have access to tools (web browsing, GitHub, weather, news, currency conversion, charts, etc). Use them proactively when a question could benefit from real-time data, external lookups, or verification. Don\'t hesitate to call tools — they are fast and free.'
+      : '';
 
     // Build messages array
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: systemPrompt,
+        content: systemPrompt + toolHint,
       },
       ...history.map(msg => ({
         role: msg.role as 'user' | 'assistant',
