@@ -18,6 +18,7 @@
 
 | Task ID | Description | Assignee | Status | Branch |
 |---------|-------------|----------|--------|--------|
+| BUG-1,2,5 | Fix all 3 remaining UX bugs | Claude Opus 4.6 | ✅ Complete | `claude/daily-briefing-aggregator-NfHhi` |
 | 2.1+2.2 | Token/cost tracking + /costs command | Claude Opus 4.6 | ✅ Complete | `claude/daily-briefing-aggregator-NfHhi` |
 | 2.5.4 | Currency conversion tool | Claude Opus 4.6 | ✅ Complete | `claude/daily-briefing-aggregator-NfHhi` |
 | 2.5.7 | Daily briefing aggregator | Claude Opus 4.6 | ✅ Complete | `claude/daily-briefing-aggregator-NfHhi` |
@@ -60,6 +61,9 @@
 | BUG-4 | /img modalities fix | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
 | 2.5.4 | Currency conversion tool | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
 | 2.1+2.2 | Token/cost tracking + /costs command | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
+| BUG-1 | "Processing..." → "Thinking..." | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
+| BUG-2 | Tool usage hint in system prompt | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
+| BUG-5 | Image-gen model fallback for text | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
 
 ---
 
@@ -67,11 +71,11 @@
 
 | Bug ID | Issue | Severity | Files | Status |
 |--------|-------|----------|-------|--------|
-| BUG-1 | "Processing complex task..." shown for ALL messages | Low/UX | `task-processor.ts:476` | 🔲 Open |
-| BUG-2 | DeepSeek doesn't proactively use tools | Medium | `client.ts` / system prompt | 🔲 Open |
+| BUG-1 | "Processing complex task..." shown for ALL messages | Low/UX | `task-processor.ts:501` | ✅ Fixed — changed to "Thinking..." |
+| BUG-2 | DeepSeek doesn't proactively use tools | Medium | `handler.ts` system prompt | ✅ Fixed — added tool usage hint |
 | BUG-3 | `think:` override not passed through DO path | Medium | `handler.ts`, `task-processor.ts` | ✅ Fixed |
 | BUG-4 | `/img` fails — modalities not supported | High | `client.ts:357` | ✅ Fixed |
-| BUG-5 | `/use fluxpro` + text → "No response" | Low | `handler.ts` | 🔲 Open |
+| BUG-5 | `/use fluxpro` + text → "No response" | Low | `handler.ts` | ✅ Fixed — fallback to default model |
 
 ### Blocked
 
@@ -85,11 +89,10 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **BUG-1** — "Processing complex task..." shown for ALL messages (UX polish)
-2. **BUG-2** — DeepSeek doesn't proactively use tools (system prompt hint)
-3. **BUG-5** — `/use fluxpro` + text → "No response" (UX routing)
-4. **Phase 2.5.6** — Crypto expansion (CoinCap + DEX Screener)
-5. **Phase 2.5.8** — Geolocation from IP (ipapi)
+1. **Phase 2.5.6** — Crypto expansion (CoinCap + DEX Screener)
+2. **Phase 2.5.8** — Geolocation from IP (ipapi)
+3. **Phase 1.4** — Combine vision + tools into unified method
+4. **Phase 1.5** — Structured output support
 
 ---
 
@@ -97,4 +100,4 @@
 
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
-| Sprint 1 (current) | 8 | 22 | Phase 0 complete, Phase 1.1-1.3 complete, upstream sync complete, Phase 2.1+2.2 complete, Phase 2.5.1-2.5.5+2.5.7 complete, BUG-3+BUG-4 fixed, well ahead of plan |
+| Sprint 1 (current) | 8 | 25 | Phase 0 complete, Phase 1.1-1.3 complete, upstream sync complete, Phase 2.1+2.2 complete, Phase 2.5.1-2.5.5+2.5.7 complete, ALL 5 bugs fixed, well ahead of plan |
