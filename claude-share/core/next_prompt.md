@@ -7,33 +7,33 @@
 
 ---
 
-## Current Task: BUG-1 — "Processing complex task..." UX Fix
+## Current Task: Phase 2.5.6 — Crypto Expansion
 
-### BUG-1: "Processing complex task..." shown for ALL messages
+### Phase 2.5.6: Crypto Expansion (CoinCap + DEX Screener + CoinPaprika)
 
-The bot currently sends "Processing complex task..." for every message, even simple ones that don't use the Durable Object path. This is confusing UX — the message should only appear when a task is actually delegated to the DO.
+Expand crypto capabilities beyond the existing CoinGecko integration with DeFi pairs and richer metadata. All APIs are free/no-auth.
 
-#### Problem Location
-- `src/durable-objects/task-processor.ts:476` — the status message is always sent
-- `src/telegram/handler.ts` — the DO delegation decision logic
+#### APIs to Integrate
+1. **CoinCap** — Real-time crypto pricing (`api.coincap.io/v2/assets`)
+2. **DEX Screener** — DeFi pair data (`api.dexscreener.com/latest/dex/tokens/{address}`)
+3. **CoinPaprika** — Detailed coin metadata (`api.coinpaprika.com/v1/tickers/{coin_id}`)
 
-#### Expected Behavior
-- Simple messages (no tools, fast response): No "Processing..." message
-- Complex tasks (tools, long-running): Show "Processing complex task..." appropriately
+#### Implementation Notes
+- Add as a new tool `get_crypto` or expand existing tool
+- Support queries like: price of BTC, top gainers, ETH trading pairs
+- Cache responses (5-10 min TTL)
+- No auth required for any API
 
-#### Files to Modify
-1. **`src/telegram/handler.ts`** — Adjust DO delegation logic or suppress status message for simple tasks
-2. **`src/durable-objects/task-processor.ts`** — Consider making status message conditional
+#### Files to Create/Modify
+1. **`src/openrouter/tools.ts`** — Add `get_crypto` tool definition and handler
+2. **`src/openrouter/tools.test.ts`** — Tests with mocked API responses
 
 #### Success Criteria
-- [ ] Simple messages don't show "Processing complex task..."
-- [ ] Complex/tool-using tasks still show progress feedback
+- [ ] Tool queries crypto prices/metadata from multiple sources
+- [ ] Graceful fallback if one API is down
+- [ ] Tests added with mocked responses
 - [ ] `npm test` passes
 - [ ] `npm run typecheck` passes (pre-existing errors OK)
-
-### Other Known Bugs (Lower Priority)
-- **BUG-2:** DeepSeek doesn't proactively use tools (needs system prompt hint)
-- **BUG-5:** `/use fluxpro` + text → "No response" (image-gen model detection missing)
 
 ---
 
@@ -41,11 +41,10 @@ The bot currently sends "Processing complex task..." for every message, even sim
 
 | Priority | Task | Effort |
 |----------|------|--------|
-| Next | BUG-1: "Processing complex task..." UX fix | Low |
-| Then | BUG-2: DeepSeek tool prompting | Medium |
-| Then | BUG-5: fluxpro text UX fix | Low |
-| Then | 2.5.6: Crypto expansion (CoinCap + DEX Screener) | 4h |
+| Next | 2.5.6: Crypto expansion (CoinCap + DEX Screener) | 4h |
 | Then | 2.5.8: Geolocation from IP (ipapi) | 1h |
+| Then | 1.4: Combine vision + tools into unified method | Medium |
+| Then | 1.5: Structured output support | Medium |
 
 ---
 
@@ -53,6 +52,7 @@ The bot currently sends "Processing complex task..." for every message, even sim
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-08 | BUG-1, BUG-2, BUG-5 fixes (all 5 bugs resolved) | Claude Opus 4.6 | 013wvC2kun5Mbr3J81KUPn99 |
 | 2026-02-08 | Phase 2.1+2.2: Token/cost tracking + /costs command | Claude Opus 4.6 | 013wvC2kun5Mbr3J81KUPn99 |
 | 2026-02-08 | Phase 2.5.4: Currency conversion tool | Claude Opus 4.6 | 013wvC2kun5Mbr3J81KUPn99 |
 | 2026-02-08 | Phase 2.5.7: Daily briefing aggregator + BUG-3/BUG-4 fixes | Claude Opus 4.6 | 013wvC2kun5Mbr3J81KUPn99 |

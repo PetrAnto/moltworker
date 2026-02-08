@@ -223,11 +223,11 @@ Provide a self-hosted, multi-model AI assistant that gets better with every inte
 
 | ID | Issue | Severity | Root Cause | Location |
 |----|-------|----------|------------|----------|
-| BUG-1 | "Processing complex task..." shown for ALL messages on tool-capable models | Low/UX | Durable Object always sends this status, even for simple queries | `task-processor.ts:476` |
-| BUG-2 | DeepSeek V3.2 doesn't proactively use tools (prefers answering from knowledge) | Medium | Model behavior — Grok uses tools naturally; DeepSeek needs system prompt hint | Model-specific |
+| BUG-1 | "Processing complex task..." shown for ALL messages on tool-capable models | Low/UX | ✅ Fixed — Changed to neutral "Thinking..." message | `task-processor.ts:501` |
+| BUG-2 | DeepSeek V3.2 doesn't proactively use tools (prefers answering from knowledge) | Medium | ✅ Fixed — Added tool usage hint to system prompt for tool-supporting models | `handler.ts` |
 | BUG-3 | `think:LEVEL` override only works on direct fallback path, not through Durable Object | Medium | ✅ Fixed — `reasoningLevel` now added to `TaskRequest` and passed through DO | `handler.ts` → `task-processor.ts` |
 | BUG-4 | `/img` fails: "No endpoints found that support output modalities: image, text" | High | ✅ Fixed — FLUX models need `modalities: ['image']`, not `['image', 'text']` | `client.ts:357` |
-| BUG-5 | `/use fluxpro` then text message → "No response generated" | Low | Chat path doesn't detect image-gen-only model and redirect to `/img` | `handler.ts` |
+| BUG-5 | `/use fluxpro` then text message → "No response generated" | Low | ✅ Fixed — Detect image-gen model in chat, fallback to default text model with message | `handler.ts` |
 
 ---
 

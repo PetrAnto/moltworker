@@ -4,6 +4,32 @@
 
 ---
 
+## Session: 2026-02-08 | BUG-1, BUG-2, BUG-5 Fixes (Session: 013wvC2kun5Mbr3J81KUPn99)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/daily-briefing-aggregator-NfHhi`
+**Status:** Completed
+
+### Summary
+Fixed all 3 remaining bugs from the live testing session. All 5 bugs (BUG-1 through BUG-5) are now resolved.
+
+### Changes Made
+1. **BUG-1 (Low/UX):** Changed "Processing complex task..." to "Thinking..." in `task-processor.ts:501`. The old message was misleading for simple queries that happen to use tool-supporting models.
+
+2. **BUG-2 (Medium):** Added tool usage instruction to the system prompt in `handler.ts` for tool-supporting models. The prompt now tells models: "You have access to tools... Use them proactively when a question could benefit from real-time data, external lookups, or verification." This encourages DeepSeek and other models to actually invoke tools instead of guessing from training data.
+
+3. **BUG-5 (Low):** Added `isImageGenModel()` check at the start of `handleChat()` in `handler.ts`. When a user's model is image-gen-only (e.g., fluxpro), the bot now sends a helpful message ("Model /fluxpro is image-only. Use /img <prompt> to generate images.") and falls back to the default text model.
+
+### Files Modified
+- `src/durable-objects/task-processor.ts` (BUG-1: status message text)
+- `src/telegram/handler.ts` (BUG-2: tool hint in system prompt; BUG-5: image-gen model fallback)
+
+### Test Results
+- 212 tests pass (no new tests needed — these are behavioral/UX fixes)
+- TypeScript: only pre-existing errors
+
+---
+
 ## Session: 2026-02-08 | Phase 2.1+2.2: Token/Cost Tracking + /costs command (Session: 013wvC2kun5Mbr3J81KUPn99)
 
 **AI:** Claude Opus 4.6
