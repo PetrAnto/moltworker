@@ -72,12 +72,15 @@ Provide a self-hosted, multi-model AI assistant that gets better with every inte
 - **Usage:** Enables future intelligent model routing and reasoning control (F1.3).
 
 #### F1.3: Configurable Reasoning
-- **Status:** 🔲 Planned
+- **Status:** ✅ Complete
 - **Spec:** Pass `reasoning` parameter to API for models that support it:
   - DeepSeek V3.2: `reasoning: { enabled: boolean }`
-  - Gemini 3 Flash: `reasoning: { effort: 'minimal' | 'low' | 'medium' | 'high' }`
+  - Gemini 3 Flash/Pro: `reasoning: { effort: 'minimal' | 'low' | 'medium' | 'high' }`
   - Grok 4.1: `reasoning: { enabled: boolean }`
-- **Default:** Auto-detect from task type (simple Q&A → disabled, coding → medium, research → high).
+- **Default:** Auto-detect from task type (simple Q&A → off, coding/tools → medium, research → high).
+- **User override:** `think:LEVEL` message prefix (e.g., `think:high explain X`).
+- **Tool-use boost:** When using tools, `off` is upgraded to `medium` automatically.
+- **Implementation:** `models.ts` (types + `getReasoningParam()`, `detectReasoningLevel()`, `parseReasoningOverride()`), `client.ts` (injection in 3 methods), `handler.ts` (prefix parsing). 36 tests in `reasoning.test.ts`.
 
 #### F1.4: Vision + Tools Combined
 - **Status:** 🔲 Planned
