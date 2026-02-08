@@ -18,6 +18,7 @@
 
 | Task ID | Description | Assignee | Status | Branch |
 |---------|-------------|----------|--------|--------|
+| 2.5.6+2.5.8 | Crypto tool + Geolocation tool | Claude Opus 4.6 | ✅ Complete | `claude/daily-briefing-aggregator-NfHhi` |
 | BUG-1,2,5 | Fix all 3 remaining UX bugs | Claude Opus 4.6 | ✅ Complete | `claude/daily-briefing-aggregator-NfHhi` |
 | 2.1+2.2 | Token/cost tracking + /costs command | Claude Opus 4.6 | ✅ Complete | `claude/daily-briefing-aggregator-NfHhi` |
 | 2.5.4 | Currency conversion tool | Claude Opus 4.6 | ✅ Complete | `claude/daily-briefing-aggregator-NfHhi` |
@@ -64,6 +65,8 @@
 | BUG-1 | "Processing..." → "Thinking..." | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
 | BUG-2 | Tool usage hint in system prompt | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
 | BUG-5 | Image-gen model fallback for text | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
+| 2.5.6 | Crypto tool (CoinCap+CoinPaprika+DEX Screener) | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
+| 2.5.8 | Geolocation from IP (ipapi.co) | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
 
 ---
 
@@ -89,10 +92,9 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **Phase 2.5.6** — Crypto expansion (CoinCap + DEX Screener)
-2. **Phase 2.5.8** — Geolocation from IP (ipapi)
-3. **Phase 1.4** — Combine vision + tools into unified method
-4. **Phase 1.5** — Structured output support
+1. **Phase 1.4** — Combine vision + tools into unified method
+2. **Phase 1.5** — Structured output support
+3. **Phase 2.5.9** — Additional free API tools (if any remain)
 
 ---
 
@@ -100,4 +102,4 @@
 
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
-| Sprint 1 (current) | 8 | 25 | Phase 0 complete, Phase 1.1-1.3 complete, upstream sync complete, Phase 2.1+2.2 complete, Phase 2.5.1-2.5.5+2.5.7 complete, ALL 5 bugs fixed, well ahead of plan |
+| Sprint 1 (current) | 8 | 27 | Phase 0 complete, Phase 1.1-1.3 complete, upstream sync complete, Phase 2.1+2.2 complete, Phase 2.5 COMPLETE (all 8 tools), ALL 5 bugs fixed, well ahead of plan |

@@ -4,6 +4,37 @@
 
 ---
 
+## Session: 2026-02-08 | Phase 2.5.6+2.5.8: Crypto + Geolocation Tools (Session: 013wvC2kun5Mbr3J81KUPn99)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/daily-briefing-aggregator-NfHhi`
+**Status:** Completed
+
+### Summary
+Implemented Phase 2.5.6 (Crypto expansion) and Phase 2.5.8 (Geolocation from IP) as two new tools. This completes the entire Phase 2.5 (Free API Integration) — all 8 tools shipped.
+
+### Changes Made
+1. **`get_crypto` tool** — 3 actions:
+   - `price`: Single coin data from CoinCap + CoinPaprika (ATH, multi-timeframe % changes). Uses `Promise.allSettled()` for graceful partial failures.
+   - `top`: Top N coins by market cap via CoinCap (max 25).
+   - `dex`: DEX pair search via DEX Screener, sorted by liquidity, top 5 results.
+   - 5-minute cache per query. Helper functions: `formatLargeNumber()`, `formatPrice()`.
+
+2. **`geolocate_ip` tool** — ipapi.co integration returning city, region, country, coordinates, timezone, ISP/org. IPv4+IPv6 support, input validation, 15-minute cache.
+
+3. **18 new tests** (11 crypto + 7 geo) — 230 total passing.
+
+### Files Modified
+- `src/openrouter/tools.ts` (2 new tool definitions + handlers + caches)
+- `src/openrouter/tools.test.ts` (18 new tests)
+- `claude-share/core/*.md` (all sync docs updated)
+
+### Test Results
+- 230 tests pass (18 new)
+- TypeScript: only pre-existing errors
+
+---
+
 ## Session: 2026-02-08 | BUG-1, BUG-2, BUG-5 Fixes (Session: 013wvC2kun5Mbr3J81KUPn99)
 
 **AI:** Claude Opus 4.6
