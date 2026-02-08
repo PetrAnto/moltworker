@@ -33,7 +33,7 @@ Provide a self-hosted, multi-model AI assistant that gets better with every inte
 - **Capability metadata:** Each model tagged with `parallelCalls`, `structuredOutput`, `reasoning`, `maxContext`
 
 #### F0.2: Tool Calling
-- **Status:** ✅ Complete (5 tools, parallel execution)
+- **Status:** ✅ Complete (12 tools, parallel execution)
 - **Tools:** `fetch_url`, `github_read_file`, `github_list_files`, `github_api`, `url_metadata`, `generate_chart`, `get_weather`, `fetch_news`, `convert_currency`, `browse_url`
 - **Execution:** Parallel via `Promise.all()`, max 10 iterations (Worker) or 100 (Durable Object)
 
@@ -157,6 +157,16 @@ Provide a self-hosted, multi-model AI assistant that gets better with every inte
 - **Spec:** Telegram `/briefing` command combining weather + HackerNews top 5 + Reddit top 3 + arXiv latest 3 into a single formatted message.
 - **Dependencies:** F2.5.3 (weather), F2.5.5 (news feeds).
 - **Implementation:** `src/openrouter/tools.ts` — `generateDailyBriefing()` with `Promise.allSettled()` for parallel fetching + graceful partial failures. 15-minute cache via `briefingCache`. `src/telegram/handler.ts` — `/briefing` and `/brief` commands with configurable lat/lon, subreddit, arXiv category. 6 tests in `tools.test.ts`.
+
+#### F2.5.6: Crypto Expansion (CoinCap + CoinPaprika + DEX Screener)
+- **Status:** ✅ Complete
+- **Spec:** `get_crypto` tool with 3 actions: `price` (single coin via CoinCap + CoinPaprika ATH/multi-timeframe), `top` (top N by market cap, max 25), `dex` (DEX pair search via DEX Screener, sorted by liquidity).
+- **Implementation:** `src/openrouter/tools.ts` — `getCrypto()` dispatcher + `getCryptoPrice()`, `getCryptoTop()`, `getCryptoDex()` handlers. 5-minute cache. `Promise.allSettled()` for graceful partial failures on price queries. 11 tests.
+
+#### F2.5.8: Geolocation from IP (ipapi.co)
+- **Status:** ✅ Complete
+- **Spec:** `geolocate_ip` tool returning city, region, country, coordinates, timezone, ISP/org for any IPv4/IPv6 address.
+- **Implementation:** `src/openrouter/tools.ts` — `geolocateIp()` with input validation, 15-minute cache, error handling. 7 tests.
 
 ---
 
