@@ -7,22 +7,22 @@
 
 ---
 
-## Current Task: Phase 1.5 — Structured Output Support
+## Current Task: Phase 3.1 — Compound Learning Loop
 
-### Phase 1.5: Add Structured Output Support
+### Phase 3.1: Implement Compound Learning Loop
 
-Add `response_format: { type: "json_schema" }` support for compatible models, enabling structured JSON responses.
+After each completed Durable Object task, extract structured metadata (tools used, model, iterations, success/failure, category) and store in R2. Before new tasks, inject relevant past patterns into the system prompt to improve future performance.
 
-#### Files to Modify
-1. **`src/openrouter/client.ts`** — Add `response_format` to `ChatCompletionRequest`, inject for compatible models
-2. **`src/openrouter/models.ts`** — `structuredOutput` flag already exists on models
-3. **`src/telegram/handler.ts`** — Consider a `/json` command or prefix to request structured output
-4. **Tests** — Add tests for structured output requests
+#### Files to Create/Modify
+1. **`src/openrouter/learnings.ts`** (NEW) — Learning extraction, storage, retrieval
+2. **`src/durable-objects/task-processor.ts`** — After task completion, call learning extractor
+3. **`src/telegram/handler.ts`** — Inject relevant learnings into system prompt before tasks
+4. **Tests** — Add tests for learning extraction and injection
 
 #### Success Criteria
-- [ ] `response_format` correctly injected for models with `structuredOutput: true`
-- [ ] User can request JSON responses via command or prefix
-- [ ] Non-compatible models gracefully fall back
+- [ ] Structured metadata extracted after each completed DO task
+- [ ] Learnings stored in R2 (`learnings/{userId}/history.json`)
+- [ ] Before new tasks, relevant past patterns injected into system prompt
 - [ ] Tests added
 - [ ] `npm test` passes
 - [ ] `npm run typecheck` passes (pre-existing errors OK)
@@ -33,9 +33,9 @@ Add `response_format: { type: "json_schema" }` support for compatible models, en
 
 | Priority | Task | Effort |
 |----------|------|--------|
-| Next | 1.5: Structured output support | Medium |
-| Then | 3.1: Compound learning loop | High |
+| Next | 3.1: Compound learning loop | High |
 | Then | 3.2: Structured task phases | High |
+| Then | 2.5.9: Holiday awareness (Nager.Date) | Low |
 
 ---
 
@@ -43,6 +43,7 @@ Add `response_format: { type: "json_schema" }` support for compatible models, en
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-09 | Phase 1.5: Structured output support (json: prefix) | Claude Opus 4.6 | 013wvC2kun5Mbr3J81KUPn99 |
 | 2026-02-09 | Phase 1.4: Vision + tools unified + /help update | Claude Opus 4.6 | 013wvC2kun5Mbr3J81KUPn99 |
 | 2026-02-08 | Phase 2.5.6+2.5.8: Crypto + Geolocation tools | Claude Opus 4.6 | 013wvC2kun5Mbr3J81KUPn99 |
 | 2026-02-08 | BUG-1, BUG-2, BUG-5 fixes (all 5 bugs resolved) | Claude Opus 4.6 | 013wvC2kun5Mbr3J81KUPn99 |
