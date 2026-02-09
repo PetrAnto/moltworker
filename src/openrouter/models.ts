@@ -515,6 +515,12 @@ export const MODELS: Record<string, ModelInfo> = {
 const DYNAMIC_MODELS: Record<string, ModelInfo> = {};
 
 /**
+ * Blocked model aliases (hidden at runtime).
+ * Used to hide stale free models that no longer work on OpenRouter.
+ */
+const BLOCKED_ALIASES: Set<string> = new Set();
+
+/**
  * Register dynamically discovered models (from R2 or API sync).
  * These take priority over the static MODELS catalog.
  */
@@ -527,6 +533,27 @@ export function registerDynamicModels(models: Record<string, ModelInfo>): void {
 }
 
 /**
+ * Add models to the blocked list (hidden from getModel/getAllModels).
+ */
+export function blockModels(aliases: string[]): void {
+  for (const a of aliases) BLOCKED_ALIASES.add(a.toLowerCase());
+}
+
+/**
+ * Remove models from the blocked list.
+ */
+export function unblockModels(aliases: string[]): void {
+  for (const a of aliases) BLOCKED_ALIASES.delete(a.toLowerCase());
+}
+
+/**
+ * Get list of currently blocked aliases.
+ */
+export function getBlockedAliases(): string[] {
+  return [...BLOCKED_ALIASES];
+}
+
+/**
  * Get the count of dynamically registered models.
  */
 export function getDynamicModelCount(): number {
@@ -535,16 +562,22 @@ export function getDynamicModelCount(): number {
 
 /**
  * Get all models (static + dynamic merged, dynamic wins on conflict).
+ * Excludes blocked models.
  */
 export function getAllModels(): Record<string, ModelInfo> {
-  return { ...MODELS, ...DYNAMIC_MODELS };
+  const all = { ...MODELS, ...DYNAMIC_MODELS };
+  for (const alias of BLOCKED_ALIASES) {
+    delete all[alias];
+  }
+  return all;
 }
 
 /**
- * Get model by alias (checks dynamic models first, then static)
+ * Get model by alias (checks blocked list, then dynamic, then static)
  */
 export function getModel(alias: string): ModelInfo | undefined {
   const lower = alias.toLowerCase();
+  if (BLOCKED_ALIASES.has(lower)) return undefined;
   return DYNAMIC_MODELS[lower] || MODELS[lower];
 }
 

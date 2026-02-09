@@ -335,23 +335,36 @@ export class UserStorage {
   private static readonly DYNAMIC_MODELS_KEY = 'sync/dynamic-models.json';
 
   /**
-   * Save dynamically discovered models to R2.
+   * Save dynamically discovered models and blocked list to R2.
    */
-  async saveDynamicModels(models: Record<string, ModelInfo>, meta?: { syncedAt: number; totalFetched: number }): Promise<void> {
-    const payload = { models, meta: meta || { syncedAt: Date.now(), totalFetched: 0 } };
+  async saveDynamicModels(
+    models: Record<string, ModelInfo>,
+    blocked: string[] = [],
+    meta?: { syncedAt: number; totalFetched: number }
+  ): Promise<void> {
+    const payload = { models, blocked, meta: meta || { syncedAt: Date.now(), totalFetched: 0 } };
     await this.bucket.put(UserStorage.DYNAMIC_MODELS_KEY, JSON.stringify(payload));
   }
 
   /**
-   * Load dynamically discovered models from R2.
+   * Load dynamically discovered models and blocked list from R2.
    * Returns null if no sync has been performed.
    */
-  async loadDynamicModels(): Promise<{ models: Record<string, ModelInfo>; meta: { syncedAt: number; totalFetched: number } } | null> {
+  async loadDynamicModels(): Promise<{
+    models: Record<string, ModelInfo>;
+    blocked: string[];
+    meta: { syncedAt: number; totalFetched: number };
+  } | null> {
     const obj = await this.bucket.get(UserStorage.DYNAMIC_MODELS_KEY);
     if (!obj) return null;
 
     try {
-      return await obj.json() as { models: Record<string, ModelInfo>; meta: { syncedAt: number; totalFetched: number } };
+      const data = await obj.json() as {
+        models: Record<string, ModelInfo>;
+        blocked?: string[];
+        meta: { syncedAt: number; totalFetched: number };
+      };
+      return { models: data.models, blocked: data.blocked || [], meta: data.meta };
     } catch {
       return null;
     }
