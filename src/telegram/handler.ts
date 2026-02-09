@@ -667,11 +667,11 @@ export class TelegramHandler {
 
       case '/saveinfo':
       case '/save': {
-        // Show current save state
+        // Show checkpoint details + AI-generated conversation summary
         const slotName = args[0] || 'latest';
         const info = await this.storage.getCheckpointInfo(userId, slotName);
         if (!info) {
-          await this.bot.sendMessage(chatId, `📭 No checkpoint found for slot: \`${slotName}\``, { parse_mode: 'Markdown' });
+          await this.bot.sendMessage(chatId, `📭 No checkpoint found for slot: \`${slotName}\``, { parseMode: 'Markdown' });
           break;
         }
 
@@ -679,15 +679,38 @@ export class TelegramHandler {
         const savedDate = new Date(info.savedAt).toLocaleString();
         const statusEmoji = info.completed ? '✅' : '⏸️';
         const statusText = info.completed ? 'Completed' : 'Interrupted';
-        let msg = `💾 *Checkpoint: ${info.slotName}* ${statusEmoji}\n\n`;
-        msg += `📊 Iterations: ${info.iterations}\n`;
-        msg += `🔧 Tools used: ${info.toolsUsed}\n`;
-        msg += `📋 Status: ${statusText}\n`;
-        msg += `⏰ Saved: ${savedDate} (${age})\n`;
+        let msg = `💾 Checkpoint: ${info.slotName} ${statusEmoji}\n\n`;
+        msg += `Iterations: ${info.iterations}\n`;
+        msg += `Tools used: ${info.toolsUsed}\n`;
+        msg += `Status: ${statusText}\n`;
+        msg += `Saved: ${savedDate} (${age})\n`;
         if (info.taskPrompt) {
-          msg += `\n📝 Task:\n_${this.escapeMarkdown(info.taskPrompt)}_`;
+          msg += `\nTask: ${info.taskPrompt}\n`;
         }
-        await this.bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+
+        // Generate a brief AI summary of the conversation content
+        try {
+          const conversation = await this.storage.getCheckpointConversation(userId, slotName, 15);
+          if (conversation && conversation.length > 0) {
+            const conversationText = conversation
+              .map(m => `${m.role}: ${m.content}`)
+              .join('\n');
+
+            const summaryResponse = await this.openrouter.chatCompletion('auto', [
+              { role: 'system', content: 'Summarize this conversation in 2-3 short sentences. Focus on what the user asked and what was accomplished. Be concise.' },
+              { role: 'user', content: conversationText },
+            ], { maxTokens: 150 });
+
+            const summary = extractTextResponse(summaryResponse);
+            if (summary) {
+              msg += `\n--- Conversation Summary ---\n${summary}`;
+            }
+          }
+        } catch {
+          // Summary generation failed, just show metadata
+        }
+
+        await this.bot.sendMessage(chatId, msg);
         break;
       }
 
@@ -1631,7 +1654,7 @@ Available: fluxklein, fluxpro, fluxflex, fluxmax
 ━━━ Models (quick switch) ━━━
 Paid:  /deep /grok /gpt /sonnet /haiku /flash
 Free:  /trinity /deepfree /qwencoderfree /devstral
-All:   /models for full list (50+)
+All:   /models for full list
 
 ━━━ 12 Live Tools ━━━
 The bot calls these automatically when relevant:

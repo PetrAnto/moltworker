@@ -105,24 +105,8 @@ export const MODELS: Record<string, ModelInfo> = {
     cost: 'FREE',
     isFree: true,
   },
-  llama405free: {
-    id: 'meta-llama/llama-3.1-405b-instruct:free',
-    alias: 'llama405free',
-    name: 'Llama 3.1 405B',
-    specialty: 'Free Large Reliable/Uncensored',
-    score: 'High scale',
-    cost: 'FREE',
-    isFree: true,
-  },
-  nemofree: {
-    id: 'mistralai/mistral-nemo:free',
-    alias: 'nemofree',
-    name: 'Mistral Nemo (Free)',
-    specialty: 'Free General/Coding',
-    score: '12B, 128K context, multilingual',
-    cost: 'FREE',
-    isFree: true,
-  },
+  // llama405free removed — deprecated on OpenRouter (Jan 2026)
+  // nemofree removed — no longer in OpenRouter free collection
   qwencoderfree: {
     id: 'qwen/qwen3-coder:free',
     alias: 'qwencoderfree',
@@ -179,17 +163,7 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     maxContext: 128000,
   },
-  mimo: {
-    id: 'xiaomi/mimo-v2-flash:free',
-    alias: 'mimo',
-    name: 'MiMo V2 Flash',
-    specialty: 'Free Top-Tier Coding/Reasoning',
-    score: '#1 OSS SWE-Bench, 309B MoE (15B active), 256K ctx',
-    cost: 'FREE',
-    supportsTools: true,
-    isFree: true,
-    maxContext: 262144,
-  },
+  // mimo removed — free period ended Jan 26, 2026 (404 error)
   phi4reason: {
     id: 'microsoft/phi-4-reasoning:free',
     alias: 'phi4reason',
@@ -313,7 +287,7 @@ export const MODELS: Record<string, ModelInfo> = {
     cost: '$0.15/$1.20',
     supportsTools: true,
     reasoning: 'fixed',
-    maxContext: 131072,
+    maxContext: 262144,
   },
   grok: {
     id: 'x-ai/grok-4.1-fast',
@@ -477,7 +451,7 @@ export const MODELS: Record<string, ModelInfo> = {
     name: 'Claude Opus 4.5',
     specialty: 'Paid Best Quality',
     score: 'Top overall',
-    cost: '$15/$75',
+    cost: '$5/$25',
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
