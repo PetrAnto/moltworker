@@ -113,11 +113,12 @@ Run top-to-bottom after every deploy. Takes ~10 minutes.
 |---|--------|----------|
 | 33 | `/saveas test1` | Saves checkpoint |
 | 34 | `/saves` | Shows "test1" in list |
-| 35 | `/new` | Clears conversation |
-| 36 | `/load test1` | Restores conversation |
-| 37 | `/delsave test1` | Deletes checkpoint |
-| 38 | `/credits` | Shows OpenRouter balance |
-| 39 | `/costs` | Shows token usage |
+| 35 | `/save test1` | Shows checkpoint details + AI summary of conversation |
+| 36 | `/new` | Clears conversation |
+| 37 | `/load test1` | Restores conversation |
+| 38 | `/delsave test1` | Deletes checkpoint |
+| 39 | `/credits` | Shows OpenRouter balance |
+| 40 | `/costs` | Shows token usage |
 
 ---
 
@@ -131,7 +132,7 @@ Copy this table, fill in as you go:
 | 1 | | |
 | 2 | | |
 | ... | | |
-| 39 | | |
+| 40 | | |
 ```
 
-**Pass criteria:** All 39 tests pass. If any fail, note the exact response and which model was active.
+**Pass criteria:** All 40 tests pass. If any fail, note the exact response and which model was active.

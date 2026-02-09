@@ -283,6 +283,39 @@ export class UserStorage {
   }
 
   /**
+   * Get checkpoint conversation messages for preview/summary.
+   * Returns user and assistant messages (skips system/tool), truncated for efficiency.
+   */
+  async getCheckpointConversation(userId: string, slotName: string = 'latest', maxMessages: number = 20): Promise<{ role: string; content: string }[] | null> {
+    const key = `checkpoints/${userId}/${slotName}.json`;
+    const obj = await this.bucket.get(key);
+    if (!obj) return null;
+
+    try {
+      const data = await obj.json() as {
+        messages?: Array<{ role: string; content: string | null }>;
+      };
+      if (!data.messages || !Array.isArray(data.messages)) return null;
+
+      // Filter to user/assistant messages only, skip system/tool
+      const relevant = data.messages
+        .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+        .map(m => ({
+          role: m.role,
+          // Truncate long messages (tool results embedded in assistant messages)
+          content: typeof m.content === 'string'
+            ? m.content.substring(0, 500)
+            : String(m.content).substring(0, 500),
+        }));
+
+      // Return last N messages
+      return relevant.slice(-maxMessages);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Copy checkpoint to a named slot (backup/restore)
    */
   async copyCheckpoint(userId: string, fromSlot: string, toSlot: string): Promise<boolean> {
