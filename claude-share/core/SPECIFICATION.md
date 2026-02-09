@@ -83,8 +83,9 @@ Provide a self-hosted, multi-model AI assistant that gets better with every inte
 - **Implementation:** `models.ts` (types + `getReasoningParam()`, `detectReasoningLevel()`, `parseReasoningOverride()`), `client.ts` (injection in 3 methods), `handler.ts` (prefix parsing). 36 tests in `reasoning.test.ts`.
 
 #### F1.4: Vision + Tools Combined
-- **Status:** 🔲 Planned
-- **Spec:** Unified method that accepts both image input and tool definitions. User sends screenshot + "fix this" → model sees image AND calls GitHub tools.
+- **Status:** ✅ Complete
+- **Spec:** Vision messages (photo + caption) now route through the tool-calling path for tool-supporting models. User sends photo + caption → model sees image AND can use all 12 tools (weather, GitHub, crypto, etc).
+- **Implementation:** `handleVision()` in `handler.ts` builds `ContentPart[]` message (text + image_url) and routes through DO/tool-calling path for tool-supporting models. Falls back to simple `chatCompletionWithVision()` for non-tool models. `/help` updated with all 12 tools and vision+tools capability. 6 tests in `vision-tools.test.ts`.
 
 ---
 
