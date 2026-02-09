@@ -164,6 +164,16 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 128000,
   },
   // mimo removed — free period ended Jan 26, 2026 (404 error)
+  mimo: {
+    id: 'xiaomi/mimo-v2-flash',
+    alias: 'mimo',
+    name: 'MiMo V2 Flash',
+    specialty: 'Paid Top-Tier Coding/Reasoning',
+    score: '#1 OSS SWE-Bench, 309B MoE (15B active), 256K ctx',
+    cost: '$0.10/$0.30',
+    supportsTools: true,
+    maxContext: 262144,
+  },
   phi4reason: {
     id: 'microsoft/phi-4-reasoning:free',
     alias: 'phi4reason',
@@ -496,11 +506,79 @@ export const MODELS: Record<string, ModelInfo> = {
   },
 };
 
+// === DYNAMIC MODELS (synced from OpenRouter at runtime) ===
+
 /**
- * Get model by alias
+ * Dynamic models discovered via /syncmodels.
+ * Checked first by getModel() — overrides static catalog.
+ */
+const DYNAMIC_MODELS: Record<string, ModelInfo> = {};
+
+/**
+ * Blocked model aliases (hidden at runtime).
+ * Used to hide stale free models that no longer work on OpenRouter.
+ */
+const BLOCKED_ALIASES: Set<string> = new Set();
+
+/**
+ * Register dynamically discovered models (from R2 or API sync).
+ * These take priority over the static MODELS catalog.
+ */
+export function registerDynamicModels(models: Record<string, ModelInfo>): void {
+  // Clear existing dynamic models first
+  for (const key of Object.keys(DYNAMIC_MODELS)) {
+    delete DYNAMIC_MODELS[key];
+  }
+  Object.assign(DYNAMIC_MODELS, models);
+}
+
+/**
+ * Add models to the blocked list (hidden from getModel/getAllModels).
+ */
+export function blockModels(aliases: string[]): void {
+  for (const a of aliases) BLOCKED_ALIASES.add(a.toLowerCase());
+}
+
+/**
+ * Remove models from the blocked list.
+ */
+export function unblockModels(aliases: string[]): void {
+  for (const a of aliases) BLOCKED_ALIASES.delete(a.toLowerCase());
+}
+
+/**
+ * Get list of currently blocked aliases.
+ */
+export function getBlockedAliases(): string[] {
+  return [...BLOCKED_ALIASES];
+}
+
+/**
+ * Get the count of dynamically registered models.
+ */
+export function getDynamicModelCount(): number {
+  return Object.keys(DYNAMIC_MODELS).length;
+}
+
+/**
+ * Get all models (static + dynamic merged, dynamic wins on conflict).
+ * Excludes blocked models.
+ */
+export function getAllModels(): Record<string, ModelInfo> {
+  const all = { ...MODELS, ...DYNAMIC_MODELS };
+  for (const alias of BLOCKED_ALIASES) {
+    delete all[alias];
+  }
+  return all;
+}
+
+/**
+ * Get model by alias (checks blocked list, then dynamic, then static)
  */
 export function getModel(alias: string): ModelInfo | undefined {
-  return MODELS[alias.toLowerCase()];
+  const lower = alias.toLowerCase();
+  if (BLOCKED_ALIASES.has(lower)) return undefined;
+  return DYNAMIC_MODELS[lower] || MODELS[lower];
 }
 
 /**
@@ -585,11 +663,12 @@ function parseCostForSort(cost: string): number {
 export function formatModelsList(): string {
   const lines: string[] = ['📋 Available Models (sorted by cost):\n'];
 
-  // Group by category
-  const free = Object.values(MODELS).filter(m => m.isFree && !m.isImageGen && !m.provider);
-  const imageGen = Object.values(MODELS).filter(m => m.isImageGen);
-  const paid = Object.values(MODELS).filter(m => !m.isFree && !m.isImageGen && !m.provider);
-  const direct = Object.values(MODELS).filter(m => m.provider && m.provider !== 'openrouter');
+  // Group by category (includes dynamic models)
+  const all = Object.values(getAllModels());
+  const free = all.filter(m => m.isFree && !m.isImageGen && !m.provider);
+  const imageGen = all.filter(m => m.isImageGen);
+  const paid = all.filter(m => !m.isFree && !m.isImageGen && !m.provider);
+  const direct = all.filter(m => m.provider && m.provider !== 'openrouter');
 
   // Sort by cost (cheapest first)
   const sortByCost = (a: ModelInfo, b: ModelInfo) => parseCostForSort(a.cost) - parseCostForSort(b.cost);

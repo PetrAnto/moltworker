@@ -11,6 +11,7 @@ import type { TaskProcessor, TaskRequest } from '../durable-objects/task-process
 import {
   MODELS,
   getModel,
+  getAllModels,
   getModelId,
   formatModelsList,
   supportsVision,
@@ -19,6 +20,11 @@ import {
   parseReasoningOverride,
   parseJsonPrefix,
   supportsStructuredOutput,
+  registerDynamicModels,
+  getDynamicModelCount,
+  blockModels,
+  getBlockedAliases,
+  type ModelInfo,
   type ReasoningLevel,
 } from '../openrouter/models';
 import type { ResponseFormat } from '../openrouter/client';
@@ -260,6 +266,31 @@ export class TelegramBot {
   }
 
   /**
+   * Edit a message with inline keyboard buttons
+   */
+  async editMessageWithButtons(
+    chatId: number,
+    messageId: number,
+    text: string,
+    buttons: InlineKeyboardButton[][] | null
+  ): Promise<void> {
+    if (text.length > 4000) {
+      text = text.slice(0, 3997) + '...';
+    }
+
+    await fetch(`${this.baseUrl}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        reply_markup: buttons ? { inline_keyboard: buttons } : undefined,
+      }),
+    });
+  }
+
+  /**
    * Delete a message
    */
   async deleteMessage(chatId: number, messageId: number): Promise<void> {
@@ -361,6 +392,26 @@ export class TelegramBot {
 }
 
 /**
+ * Sync session state for interactive /syncmodels picker
+ */
+interface SyncModelCandidate {
+  alias: string;
+  name: string;
+  modelId: string;
+  contextK: number;
+  vision: boolean;
+}
+
+interface SyncSession {
+  newModels: SyncModelCandidate[];
+  staleModels: SyncModelCandidate[];
+  selectedAdd: Set<string>;
+  selectedRemove: Set<string>;
+  chatId: number;
+  messageId: number;
+}
+
+/**
  * Main handler for Telegram updates
  */
 export class TelegramHandler {
@@ -380,6 +431,8 @@ export class TelegramHandler {
   private dashscopeKey?: string;
   private moonshotKey?: string;
   private deepseekKey?: string;
+  // Interactive sync sessions (keyed by userId)
+  private syncSessions = new Map<string, SyncSession>();
 
   constructor(
     telegramToken: string,
@@ -410,6 +463,29 @@ export class TelegramHandler {
     this.deepseekKey = deepseekKey;
     if (allowedUserIds && allowedUserIds.length > 0) {
       this.allowedUsers = new Set(allowedUserIds);
+    }
+    // Load dynamic models from R2 (async, non-blocking)
+    this.loadDynamicModelsFromR2();
+  }
+
+  /**
+   * Load previously synced dynamic models and blocked list from R2 into runtime.
+   */
+  private async loadDynamicModelsFromR2(): Promise<void> {
+    try {
+      const data = await this.storage.loadDynamicModels();
+      if (data) {
+        if (data.models && Object.keys(data.models).length > 0) {
+          registerDynamicModels(data.models);
+          console.log(`[Telegram] Loaded ${Object.keys(data.models).length} dynamic models from R2`);
+        }
+        if (data.blocked && data.blocked.length > 0) {
+          blockModels(data.blocked);
+          console.log(`[Telegram] Loaded ${data.blocked.length} blocked models from R2`);
+        }
+      }
+    } catch (error) {
+      console.error('[Telegram] Failed to load dynamic models from R2:', error);
     }
   }
 
@@ -792,10 +868,15 @@ export class TelegramHandler {
         await this.handleCostsCommand(chatId, userId, args);
         break;
 
+      case '/syncmodels':
+      case '/sync':
+        await this.handleSyncModelsCommand(chatId, userId);
+        break;
+
       default:
         // Check if it's a model alias command (e.g., /deep, /gpt)
         const modelAlias = cmd.slice(1); // Remove leading /
-        if (MODELS[modelAlias]) {
+        if (getModel(modelAlias)) {
           await this.handleUseCommand(chatId, userId, username, [modelAlias]);
         } else {
           await this.bot.sendMessage(chatId, `Unknown command: ${cmd}\nType /help for available commands.`);
@@ -1534,6 +1615,11 @@ export class TelegramHandler {
         }
         break;
 
+      case 's':
+        // Sync models picker: s:a:alias (toggle add), s:r:alias (toggle remove), s:ok, s:x
+        await this.handleSyncCallback(query, parts, userId, chatId);
+        break;
+
       default:
         console.log('[Telegram] Unknown callback action:', action);
     }
@@ -1556,7 +1642,7 @@ export class TelegramHandler {
       ],
       [
         { text: '🆓 Trinity (Free)', callback_data: 'model:trinity' },
-        { text: '🆓 Mimo (Free)', callback_data: 'model:mimo' },
+        { text: '🤖 MiMo', callback_data: 'model:mimo' },
       ],
     ];
 
@@ -1586,7 +1672,333 @@ export class TelegramHandler {
   }
 
   /**
-   * Get help message
+   * Generate a short alias from an OpenRouter model ID.
+   */
+  private generateModelAlias(modelId: string): string {
+    return modelId
+      .replace(/:free$/, '')
+      .replace(/^[^/]+\//, '')   // Remove provider prefix
+      .replace(/-(instruct|preview|base|chat)$/i, '')
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase()
+      .substring(0, 14);
+  }
+
+  /**
+   * Build the sync picker message text from session state.
+   */
+  private buildSyncMessage(session: SyncSession, totalFree: number, totalApi: number): string {
+    const currentModels = getAllModels();
+    const catalogCount = Object.values(currentModels).filter(m => m.isFree && !m.isImageGen).length;
+
+    let msg = `🔄 OpenRouter Free Models Sync\n\n`;
+    msg += `📊 ${totalFree} free text models on API, ${catalogCount} in catalog\n`;
+
+    if (session.newModels.length > 0) {
+      msg += `\n━━━ New (can add) ━━━\n`;
+      for (const m of session.newModels) {
+        const sel = session.selectedAdd.has(m.alias) ? '☑' : '☐';
+        const vis = m.vision ? ' [vision]' : '';
+        msg += `${sel} /${m.alias} — ${m.name}${vis}\n`;
+        msg += `   ${m.contextK}K ctx | ${m.modelId}\n`;
+      }
+    }
+
+    if (session.staleModels.length > 0) {
+      msg += `\n━━━ Stale (can remove) ━━━\n`;
+      for (const m of session.staleModels) {
+        const sel = session.selectedRemove.has(m.alias) ? '☑' : '☐';
+        msg += `${sel} /${m.alias} — ${m.name}\n`;
+        msg += `   No longer free on OpenRouter\n`;
+      }
+    }
+
+    if (session.newModels.length === 0 && session.staleModels.length === 0) {
+      msg += `\n✅ Catalog is up to date — no changes needed.`;
+    } else {
+      const addCount = session.selectedAdd.size;
+      const rmCount = session.selectedRemove.size;
+      msg += `\nTap models to select, then Validate.`;
+      if (addCount > 0 || rmCount > 0) {
+        msg += ` (${addCount} to add, ${rmCount} to remove)`;
+      }
+    }
+
+    return msg;
+  }
+
+  /**
+   * Build inline keyboard buttons for the sync picker.
+   */
+  private buildSyncButtons(session: SyncSession): InlineKeyboardButton[][] {
+    const buttons: InlineKeyboardButton[][] = [];
+
+    // New models — 2 per row
+    for (let i = 0; i < session.newModels.length; i += 2) {
+      const row: InlineKeyboardButton[] = [];
+      for (let j = i; j < Math.min(i + 2, session.newModels.length); j++) {
+        const m = session.newModels[j];
+        const sel = session.selectedAdd.has(m.alias) ? '☑' : '☐';
+        row.push({ text: `${sel} ${m.alias}`, callback_data: `s:a:${m.alias}` });
+      }
+      buttons.push(row);
+    }
+
+    // Stale models — 2 per row
+    for (let i = 0; i < session.staleModels.length; i += 2) {
+      const row: InlineKeyboardButton[] = [];
+      for (let j = i; j < Math.min(i + 2, session.staleModels.length); j++) {
+        const m = session.staleModels[j];
+        const sel = session.selectedRemove.has(m.alias) ? '☑' : '☐';
+        row.push({ text: `${sel} ✕ ${m.alias}`, callback_data: `s:r:${m.alias}` });
+      }
+      buttons.push(row);
+    }
+
+    // Bottom row: Validate + Cancel
+    const addCount = session.selectedAdd.size;
+    const rmCount = session.selectedRemove.size;
+    const total = addCount + rmCount;
+    buttons.push([
+      { text: `✓ Validate${total > 0 ? ` (${total})` : ''}`, callback_data: 's:ok' },
+      { text: '✗ Cancel', callback_data: 's:x' },
+    ]);
+
+    return buttons;
+  }
+
+  /**
+   * Handle /syncmodels — fetch free models from OpenRouter and show interactive picker.
+   */
+  private async handleSyncModelsCommand(chatId: number, userId: string): Promise<void> {
+    await this.bot.sendChatAction(chatId, 'typing');
+
+    try {
+      // 1. Fetch models from OpenRouter API
+      const response = await fetch('https://openrouter.ai/api/v1/models', {
+        headers: {
+          'Authorization': `Bearer ${this.openrouterKey}`,
+          'HTTP-Referer': 'https://moltworker.com',
+        },
+      });
+
+      if (!response.ok) {
+        await this.bot.sendMessage(chatId, `Failed to fetch models from OpenRouter: HTTP ${response.status}`);
+        return;
+      }
+
+      const rawData = await response.json() as { data: Array<{
+        id: string;
+        name: string;
+        context_length: number;
+        architecture: { modality: string };
+        pricing: { prompt: string; completion: string };
+      }> };
+
+      const allApiModels = rawData.data.map(m => ({
+        id: m.id,
+        name: m.name,
+        contextLength: m.context_length,
+        modality: m.architecture?.modality || 'text->text',
+        promptCost: parseFloat(m.pricing?.prompt || '0'),
+        completionCost: parseFloat(m.pricing?.completion || '0'),
+      }));
+
+      // 2. Filter for free text models
+      const freeApiModels = allApiModels.filter(m =>
+        m.promptCost === 0 && m.completionCost === 0 &&
+        !m.id.includes('flux') &&
+        !m.id.includes('stable-diffusion') &&
+        m.modality.includes('text')
+      );
+
+      // 3. Compare with current catalog (including dynamic)
+      const currentModels = getAllModels();
+      const currentIds = new Set(Object.values(currentModels).map(m => m.id));
+
+      // New free models not in our catalog
+      const newModels: SyncModelCandidate[] = [];
+      const usedAliases = new Set(Object.keys(currentModels));
+      for (const m of freeApiModels) {
+        if (currentIds.has(m.id)) continue;
+
+        let alias = this.generateModelAlias(m.id);
+        // Avoid conflicts
+        while (usedAliases.has(alias)) alias = alias + 'f';
+        usedAliases.add(alias);
+
+        newModels.push({
+          alias,
+          name: m.name,
+          modelId: m.id,
+          contextK: Math.round(m.contextLength / 1024),
+          vision: m.modality.includes('image'),
+        });
+      }
+
+      // Stale: models in catalog as isFree but not found as free on OpenRouter
+      const freeApiIds = new Set(freeApiModels.map(m => m.id));
+      const staleModels: SyncModelCandidate[] = [];
+      for (const m of Object.values(currentModels)) {
+        if (!m.isFree || m.isImageGen || m.alias === 'auto') continue;
+        if (!freeApiIds.has(m.id)) {
+          staleModels.push({
+            alias: m.alias,
+            name: m.name,
+            modelId: m.id,
+            contextK: m.maxContext ? Math.round(m.maxContext / 1024) : 0,
+            vision: !!m.supportsVision,
+          });
+        }
+      }
+
+      // 4. Create session
+      const session: SyncSession = {
+        newModels,
+        staleModels,
+        selectedAdd: new Set(),
+        selectedRemove: new Set(),
+        chatId,
+        messageId: 0, // Set after sending
+      };
+
+      // 5. Build message + buttons and send
+      const text = this.buildSyncMessage(session, freeApiModels.length, allApiModels.length);
+      const buttons = this.buildSyncButtons(session);
+
+      if (newModels.length === 0 && staleModels.length === 0) {
+        await this.bot.sendMessage(chatId, text);
+        return;
+      }
+
+      const sent = await this.bot.sendMessageWithButtons(chatId, text, buttons);
+      session.messageId = sent.message_id;
+      this.syncSessions.set(userId, session);
+
+    } catch (error) {
+      await this.bot.sendMessage(chatId, `Sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Handle sync picker callback queries (toggle, validate, cancel).
+   */
+  private async handleSyncCallback(
+    query: TelegramCallbackQuery,
+    parts: string[],
+    userId: string,
+    chatId: number
+  ): Promise<void> {
+    const session = this.syncSessions.get(userId);
+    if (!session) {
+      await this.bot.answerCallbackQuery(query.id, { text: 'Session expired. Run /syncmodels again.' });
+      return;
+    }
+
+    const subAction = parts[1]; // a=add toggle, r=remove toggle, ok=validate, x=cancel
+    const alias = parts[2];
+
+    switch (subAction) {
+      case 'a': // Toggle add selection
+        if (session.selectedAdd.has(alias)) {
+          session.selectedAdd.delete(alias);
+        } else {
+          session.selectedAdd.add(alias);
+        }
+        break;
+
+      case 'r': // Toggle remove selection
+        if (session.selectedRemove.has(alias)) {
+          session.selectedRemove.delete(alias);
+        } else {
+          session.selectedRemove.add(alias);
+        }
+        break;
+
+      case 'ok': { // Validate — apply changes
+        const addCount = session.selectedAdd.size;
+        const rmCount = session.selectedRemove.size;
+
+        if (addCount === 0 && rmCount === 0) {
+          await this.bot.answerCallbackQuery(query.id, { text: 'No models selected!' });
+          return;
+        }
+
+        // Load existing dynamic models to merge
+        const existing = await this.storage.loadDynamicModels();
+        const dynamicModels = existing?.models || {};
+        const blockedList = existing?.blocked || [];
+
+        // Add selected new models
+        const addedNames: string[] = [];
+        for (const addAlias of session.selectedAdd) {
+          const candidate = session.newModels.find(m => m.alias === addAlias);
+          if (!candidate) continue;
+          dynamicModels[addAlias] = {
+            id: candidate.modelId,
+            alias: addAlias,
+            name: candidate.name,
+            specialty: 'Free (synced from OpenRouter)',
+            score: `${candidate.contextK}K context`,
+            cost: 'FREE',
+            isFree: true,
+            supportsVision: candidate.vision || undefined,
+            maxContext: candidate.contextK * 1024,
+          };
+          addedNames.push(addAlias);
+        }
+
+        // Block selected stale models
+        const removedNames: string[] = [];
+        for (const rmAlias of session.selectedRemove) {
+          if (!blockedList.includes(rmAlias)) {
+            blockedList.push(rmAlias);
+          }
+          // Also remove from dynamic models if present
+          delete dynamicModels[rmAlias];
+          removedNames.push(rmAlias);
+        }
+
+        // Save to R2 and register in runtime
+        await this.storage.saveDynamicModels(dynamicModels, blockedList, {
+          syncedAt: Date.now(),
+          totalFetched: 0,
+        });
+        registerDynamicModels(dynamicModels);
+        blockModels(blockedList);
+
+        // Build result message
+        let result = '✅ Sync complete!\n\n';
+        if (addedNames.length > 0) {
+          result += `Added ${addedNames.length} model(s):\n`;
+          for (const a of addedNames) result += `  /${a}\n`;
+        }
+        if (removedNames.length > 0) {
+          result += `Removed ${removedNames.length} model(s):\n`;
+          for (const a of removedNames) result += `  /${a}\n`;
+        }
+        result += '\nChanges are active now and persist across deploys.';
+
+        // Update message, remove buttons
+        await this.bot.editMessageWithButtons(chatId, session.messageId, result, null);
+        this.syncSessions.delete(userId);
+        return;
+      }
+
+      case 'x': // Cancel
+        await this.bot.editMessageWithButtons(chatId, session.messageId, '🔄 Sync cancelled.', null);
+        this.syncSessions.delete(userId);
+        return;
+    }
+
+    // Re-render the message with updated selections
+    const text = this.buildSyncMessage(session, 0, 0);
+    const buttons = this.buildSyncButtons(session);
+    await this.bot.editMessageWithButtons(chatId, session.messageId, text, buttons);
+  }
+
+  /**
+   * Get welcome message for /start
    */
   private getStartMessage(): string {
     return `🤖 Welcome to Moltworker!
@@ -1652,9 +2064,10 @@ Available: fluxklein, fluxpro, fluxflex, fluxmax
 /ar — Toggle auto-resume
 
 ━━━ Models (quick switch) ━━━
-Paid:  /deep /grok /gpt /sonnet /haiku /flash
+Paid:  /deep /grok /gpt /sonnet /haiku /flash /mimo
 Free:  /trinity /deepfree /qwencoderfree /devstral
 All:   /models for full list
+/syncmodels — Fetch latest free models from OpenRouter
 
 ━━━ 12 Live Tools ━━━
 The bot calls these automatically when relevant:
