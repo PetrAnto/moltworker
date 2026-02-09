@@ -17,8 +17,11 @@ import {
   isImageGenModel,
   DEFAULT_MODEL,
   parseReasoningOverride,
+  parseJsonPrefix,
+  supportsStructuredOutput,
   type ReasoningLevel,
 } from '../openrouter/models';
+import type { ResponseFormat } from '../openrouter/client';
 
 // Telegram Types
 export interface TelegramUpdate {
@@ -1118,7 +1121,8 @@ export class TelegramHandler {
 
     // Parse optional think:LEVEL prefix (e.g., "think:high how do I ...")
     const { level: reasoningLevel, cleanMessage } = parseReasoningOverride(text);
-    const messageText = cleanMessage;
+    // Parse optional json: prefix (e.g., "json: list 5 cities")
+    const { requestJson, cleanMessage: messageText } = parseJsonPrefix(cleanMessage);
 
     // Get user's model and conversation history
     let modelAlias = await this.storage.getUserModel(userId);
@@ -1159,6 +1163,12 @@ export class TelegramHandler {
           // Route to Durable Object for long-running processing
           const taskId = `${userId}-${Date.now()}`;
           const autoResume = await this.storage.getUserAutoResume(userId);
+          // Determine responseFormat if json: prefix was used and model supports it
+          const responseFormat: ResponseFormat | undefined =
+            requestJson && supportsStructuredOutput(modelAlias)
+              ? { type: 'json_object' }
+              : undefined;
+
           const taskRequest: TaskRequest = {
             taskId,
             chatId,
@@ -1173,6 +1183,7 @@ export class TelegramHandler {
             deepseekKey: this.deepseekKey,
             autoResume,
             reasoningLevel: reasoningLevel ?? undefined,
+            responseFormat,
           };
 
           // Get or create DO instance for this user
@@ -1273,6 +1284,9 @@ export class TelegramHandler {
               browser: this.browser,
             },
             reasoningLevel: reasoningLevel ?? undefined,
+            responseFormat: requestJson && supportsStructuredOutput(modelAlias)
+              ? { type: 'json_object' }
+              : undefined,
           }
         );
 
@@ -1301,6 +1315,9 @@ export class TelegramHandler {
         // Regular chat completion without tools
         const response = await this.openrouter.chatCompletion(modelAlias, messages, {
           reasoningLevel: reasoningLevel ?? undefined,
+          responseFormat: requestJson && supportsStructuredOutput(modelAlias)
+            ? { type: 'json_object' }
+            : undefined,
         });
         responseText = extractTextResponse(response);
       }
@@ -1599,7 +1616,8 @@ Vision models with tools can use tools on images.
 
 💬 Just send a message to chat!
 📷 Send a photo with caption for vision+tools.
-🧠 Prefix with think:high for deeper reasoning.`;
+🧠 Prefix with think:high for deeper reasoning.
+📋 Prefix with json: for structured JSON output.`;
   }
 
   /**
