@@ -11,6 +11,7 @@ import type { TaskProcessor, TaskRequest } from '../durable-objects/task-process
 import {
   MODELS,
   getModel,
+  getAllModels,
   getModelId,
   formatModelsList,
   supportsVision,
@@ -19,6 +20,9 @@ import {
   parseReasoningOverride,
   parseJsonPrefix,
   supportsStructuredOutput,
+  registerDynamicModels,
+  getDynamicModelCount,
+  type ModelInfo,
   type ReasoningLevel,
 } from '../openrouter/models';
 import type { ResponseFormat } from '../openrouter/client';
@@ -411,6 +415,23 @@ export class TelegramHandler {
     if (allowedUserIds && allowedUserIds.length > 0) {
       this.allowedUsers = new Set(allowedUserIds);
     }
+    // Load dynamic models from R2 (async, non-blocking)
+    this.loadDynamicModelsFromR2();
+  }
+
+  /**
+   * Load previously synced dynamic models from R2 into runtime.
+   */
+  private async loadDynamicModelsFromR2(): Promise<void> {
+    try {
+      const data = await this.storage.loadDynamicModels();
+      if (data && data.models) {
+        registerDynamicModels(data.models);
+        console.log(`[Telegram] Loaded ${Object.keys(data.models).length} dynamic models from R2`);
+      }
+    } catch (error) {
+      console.error('[Telegram] Failed to load dynamic models from R2:', error);
+    }
   }
 
   /**
@@ -792,10 +813,15 @@ export class TelegramHandler {
         await this.handleCostsCommand(chatId, userId, args);
         break;
 
+      case '/syncmodels':
+      case '/sync':
+        await this.handleSyncModelsCommand(chatId);
+        break;
+
       default:
         // Check if it's a model alias command (e.g., /deep, /gpt)
         const modelAlias = cmd.slice(1); // Remove leading /
-        if (MODELS[modelAlias]) {
+        if (getModel(modelAlias)) {
           await this.handleUseCommand(chatId, userId, username, [modelAlias]);
         } else {
           await this.bot.sendMessage(chatId, `Unknown command: ${cmd}\nType /help for available commands.`);
@@ -1586,7 +1612,153 @@ export class TelegramHandler {
   }
 
   /**
-   * Get help message
+   * OpenRouter model list API response shape
+   */
+  private parseOpenRouterModels(data: { data: Array<{
+    id: string;
+    name: string;
+    context_length: number;
+    architecture: { modality: string };
+    pricing: { prompt: string; completion: string };
+  }> }): Array<{
+    id: string;
+    name: string;
+    contextLength: number;
+    modality: string;
+    promptCost: number;
+    completionCost: number;
+  }> {
+    return data.data.map(m => ({
+      id: m.id,
+      name: m.name,
+      contextLength: m.context_length,
+      modality: m.architecture?.modality || 'text->text',
+      promptCost: parseFloat(m.pricing?.prompt || '0'),
+      completionCost: parseFloat(m.pricing?.completion || '0'),
+    }));
+  }
+
+  /**
+   * Handle /syncmodels — fetch free models from OpenRouter, compare, and save.
+   */
+  private async handleSyncModelsCommand(chatId: number): Promise<void> {
+    await this.bot.sendChatAction(chatId, 'typing');
+
+    try {
+      // 1. Fetch models from OpenRouter API
+      const response = await fetch('https://openrouter.ai/api/v1/models', {
+        headers: {
+          'Authorization': `Bearer ${this.openrouterKey}`,
+          'HTTP-Referer': 'https://moltworker.com',
+        },
+      });
+
+      if (!response.ok) {
+        await this.bot.sendMessage(chatId, `Failed to fetch models from OpenRouter: HTTP ${response.status}`);
+        return;
+      }
+
+      const rawData = await response.json() as { data: Array<{
+        id: string;
+        name: string;
+        context_length: number;
+        architecture: { modality: string };
+        pricing: { prompt: string; completion: string };
+      }> };
+      const allApiModels = this.parseOpenRouterModels(rawData);
+
+      // 2. Filter for free models (both prompt and completion cost == 0)
+      const freeApiModels = allApiModels.filter(m =>
+        m.promptCost === 0 && m.completionCost === 0 &&
+        !m.id.includes('flux') && // Skip image-gen
+        m.modality.includes('text') // Text models only
+      );
+
+      // 3. Compare with our current catalog
+      const currentModels = getAllModels();
+      const currentIds = new Set(Object.values(currentModels).map(m => m.id));
+      const currentFreeIds = new Set(
+        Object.values(currentModels).filter(m => m.isFree).map(m => m.id)
+      );
+
+      // New free models not in our catalog at all
+      const newFree = freeApiModels.filter(m => !currentIds.has(m.id));
+      // Models we list as free but no longer free on OpenRouter
+      const removedFree = Object.values(currentModels)
+        .filter(m => m.isFree && !m.isImageGen)
+        .filter(m => !freeApiModels.some(f => f.id === m.id));
+
+      // 4. Build dynamic models from new free models
+      const dynamicModels: Record<string, ModelInfo> = {};
+      for (const m of newFree) {
+        // Create a short alias from the model ID
+        const alias = m.id
+          .replace(/:free$/, '')
+          .replace(/.*\//, '')  // Remove provider prefix
+          .replace(/[^a-z0-9]/gi, '')
+          .toLowerCase()
+          .substring(0, 16);
+
+        // Skip if alias conflicts with existing static model
+        if (currentModels[alias]) continue;
+
+        const supportsVisionFlag = m.modality.includes('image');
+        dynamicModels[alias] = {
+          id: m.id,
+          alias,
+          name: m.name.replace(/^.*?:\s*/, ''), // Strip provider prefix from name
+          specialty: 'Free (synced from OpenRouter)',
+          score: `${Math.round(m.contextLength / 1024)}K context`,
+          cost: 'FREE',
+          isFree: true,
+          supportsVision: supportsVisionFlag || undefined,
+          maxContext: m.contextLength,
+        };
+      }
+
+      // 5. Save to R2 and register in memory
+      await this.storage.saveDynamicModels(dynamicModels, {
+        syncedAt: Date.now(),
+        totalFetched: allApiModels.length,
+      });
+      registerDynamicModels(dynamicModels);
+
+      // 6. Build report
+      let report = `Synced models from OpenRouter API\n\n`;
+      report += `Total models on OpenRouter: ${allApiModels.length}\n`;
+      report += `Free text models found: ${freeApiModels.length}\n`;
+      report += `Already in catalog: ${freeApiModels.length - newFree.length}\n`;
+      report += `New free models added: ${Object.keys(dynamicModels).length}\n`;
+
+      if (removedFree.length > 0) {
+        report += `\nPossibly stale (in catalog but not found as free):\n`;
+        for (const m of removedFree) {
+          report += `  /${m.alias} — ${m.name} (${m.id})\n`;
+        }
+      }
+
+      if (Object.keys(dynamicModels).length > 0) {
+        report += `\nNewly added (available now via /use):\n`;
+        for (const m of Object.values(dynamicModels)) {
+          const vis = m.supportsVision ? ' [vision]' : '';
+          report += `  /${m.alias} — ${m.name}${vis} (${m.maxContext ? Math.round(m.maxContext / 1024) + 'K ctx' : ''})\n`;
+        }
+      }
+
+      if (Object.keys(dynamicModels).length === 0 && removedFree.length === 0) {
+        report += `\nCatalog is up to date — no changes needed.`;
+      }
+
+      report += `\nDynamic models are available immediately. They persist across deploys via R2.`;
+
+      await this.bot.sendMessage(chatId, report);
+    } catch (error) {
+      await this.bot.sendMessage(chatId, `Sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Get welcome message for /start
    */
   private getStartMessage(): string {
     return `🤖 Welcome to Moltworker!
@@ -1652,9 +1824,10 @@ Available: fluxklein, fluxpro, fluxflex, fluxmax
 /ar — Toggle auto-resume
 
 ━━━ Models (quick switch) ━━━
-Paid:  /deep /grok /gpt /sonnet /haiku /flash
+Paid:  /deep /grok /gpt /sonnet /haiku /flash /mimo
 Free:  /trinity /deepfree /qwencoderfree /devstral
 All:   /models for full list
+/syncmodels — Fetch latest free models from OpenRouter
 
 ━━━ 12 Live Tools ━━━
 The bot calls these automatically when relevant:
