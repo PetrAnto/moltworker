@@ -4,6 +4,42 @@
 
 ---
 
+## Session: 2026-02-10 | 6 Bot Improvements from Telegram Analysis (Session: 018gmCDcuBJqs9ffrrDHHBBd)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/extract-task-metadata-8lMCM`
+**Status:** Completed
+
+### Summary
+Analyzed real Telegram conversation logs and implemented 6 targeted bot improvements addressing tool-use reliability, error handling, cross-task context, runaway task prevention, and prompt quality.
+
+### Changes Made
+1. **GLM `supportsTools` flag** — Added missing `supportsTools: true` to `glmfree` model so it uses real tools instead of hallucinating tool calls.
+2. **402 error handling** — Fail fast on quota exceeded (HTTP 402), auto-rotate to a free model, show helpful user-facing message.
+3. **Cross-task context** — Store last task summary in R2 after completion, inject into next task's system prompt with 1-hour TTL for continuity.
+4. **Elapsed time cap** — 15 min for free models, 30 min for paid. Prevents runaway auto-resume loops in Durable Objects.
+5. **Tool-intent detection** — Warn users when their message likely needs tools but their selected model doesn't support them.
+6. **Parallel tool-call prompt** — Stronger instruction for models with `parallelCalls` flag to encourage concurrent tool execution.
+
+### Files Modified
+- `src/openrouter/models.ts` (GLM supportsTools flag)
+- `src/openrouter/client.ts` (402 handling, parallel prompt)
+- `src/durable-objects/task-processor.ts` (elapsed time cap, cross-task context, 402 rotation)
+- `src/telegram/handler.ts` (tool-intent warning, cross-task injection)
+- Various test files (33 new tests)
+- `claude-share/core/*.md` (sync docs)
+
+### Tests
+- [x] 447 tests pass (33 new)
+- [x] TypeScript: only pre-existing errors
+
+### Notes for Next Session
+- Phase 3.2 (Structured task phases) is next
+- Cross-task context quality should be observed over real usage
+- Time cap values (15/30 min) may need tuning based on real workloads
+
+---
+
 ## Session: 2026-02-10 | Phase 3.1: Compound Learning Loop (Session: 018gmCDcuBJqs9ffrrDHHBBd)
 
 **AI:** Claude Opus 4.6
