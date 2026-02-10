@@ -82,7 +82,14 @@ const STUCK_THRESHOLD_MS = 60000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max auto-resume attempts before requiring manual intervention
-const MAX_AUTO_RESUMES = 10;
+const MAX_AUTO_RESUMES_DEFAULT = 10;
+const MAX_AUTO_RESUMES_FREE = 50;
+
+/** Get the auto-resume limit based on model cost */
+function getAutoResumeLimit(modelAlias: string): number {
+  const model = getModel(modelAlias);
+  return model?.isFree ? MAX_AUTO_RESUMES_FREE : MAX_AUTO_RESUMES_DEFAULT;
+}
 
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
@@ -133,10 +140,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
     const resumeCount = task.autoResumeCount ?? 0;
     const elapsed = Math.round((Date.now() - task.startTime) / 1000);
+    const maxResumes = getAutoResumeLimit(task.modelAlias);
 
     // Check if auto-resume is enabled and under limit
-    if (task.autoResume && resumeCount < MAX_AUTO_RESUMES && task.telegramToken && task.openrouterKey) {
-      console.log(`[TaskProcessor] Auto-resuming (attempt ${resumeCount + 1}/${MAX_AUTO_RESUMES})`);
+    if (task.autoResume && resumeCount < maxResumes && task.telegramToken && task.openrouterKey) {
+      console.log(`[TaskProcessor] Auto-resuming (attempt ${resumeCount + 1}/${maxResumes})`);
 
       // Update resume count
       task.autoResumeCount = resumeCount + 1;
@@ -148,7 +156,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       await this.sendTelegramMessage(
         task.telegramToken,
         task.chatId,
-        `🔄 Auto-resuming... (${resumeCount + 1}/${MAX_AUTO_RESUMES})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations`
+        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations`
       );
 
       // Reconstruct TaskRequest and trigger resume
@@ -181,8 +189,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     await this.doState.storage.put('task', task);
 
     if (task.telegramToken) {
-      const limitReachedMsg = resumeCount >= MAX_AUTO_RESUMES
-        ? `\n\n⚠️ Auto-resume limit (${MAX_AUTO_RESUMES}) reached.`
+      const limitReachedMsg = resumeCount >= maxResumes
+        ? `\n\n⚠️ Auto-resume limit (${maxResumes}) reached.`
         : '';
       await this.sendTelegramMessageWithButtons(
         task.telegramToken,

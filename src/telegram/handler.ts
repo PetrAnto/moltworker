@@ -663,7 +663,7 @@ export class TelegramHandler {
           `📊 Bot Status\n\n` +
           `Model: ${statusModelInfo?.name || statusModel}\n` +
           `Conversation: ${statusHistory.length} messages\n` +
-          `Auto-resume: ${statusAutoResume ? '✓ Enabled' : '✗ Disabled'}\n` +
+          `Auto-resume: ${statusAutoResume ? `✓ Enabled (${statusModelInfo?.isFree ? '50x free' : '10x paid'})` : '✗ Disabled'}\n` +
           `GitHub Tools: ${hasGithub ? '✓ Configured' : '✗ Not configured'}\n` +
           `Browser Tools: ${hasBrowser ? '✓ Configured' : '✗ Not configured'}\n` +
           `Skill: ${this.defaultSkill}\n\n` +
@@ -689,7 +689,7 @@ export class TelegramHandler {
         await this.bot.sendMessage(
           chatId,
           newAutoResume
-            ? '✓ Auto-resume enabled. Tasks will automatically retry on timeout (up to 10 times).'
+            ? '✓ Auto-resume enabled. Tasks will automatically retry on timeout (10x paid, 50x free models).'
             : '✗ Auto-resume disabled. You will need to manually tap Resume when tasks timeout.'
         );
         break;
