@@ -9,6 +9,7 @@ import { createOpenRouterClient, type ChatMessage, type ResponseFormat } from '.
 import { executeTool, AVAILABLE_TOOLS, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER } from '../openrouter/tools';
 import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, getFreeToolModels, type Provider, type ReasoningLevel } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
+import { extractLearning, storeLearning } from '../openrouter/learnings';
 
 // Max characters for a single tool result before truncation
 const MAX_TOOL_RESULT_LENGTH = 8000; // ~2K tokens (reduced for CPU)
@@ -981,6 +982,27 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           );
         }
 
+        // Extract and store learning (non-blocking, failure-safe)
+        if (this.r2) {
+          try {
+            const userMsg = request.messages.find(m => m.role === 'user');
+            const userMessage = typeof userMsg?.content === 'string' ? userMsg.content : '';
+            const learning = extractLearning({
+              taskId: task.taskId,
+              modelAlias: task.modelAlias,
+              toolsUsed: task.toolsUsed,
+              iterations: task.iterations,
+              durationMs: Date.now() - task.startTime,
+              success: true,
+              userMessage,
+            });
+            await storeLearning(this.r2, task.userId, learning);
+            console.log(`[TaskProcessor] Learning stored: ${learning.category}, ${learning.uniqueTools.length} unique tools`);
+          } catch (learnErr) {
+            console.error('[TaskProcessor] Failed to store learning:', learnErr);
+          }
+        }
+
         // Delete status message
         if (statusMessageId) {
           await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
@@ -1030,6 +1052,27 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       // Cancel watchdog alarm - we're handling the error here
       await this.doState.storage.deleteAlarm();
+
+      // Store failure learning (only if task made progress)
+      if (this.r2 && task.iterations > 0) {
+        try {
+          const userMsg = request.messages.find(m => m.role === 'user');
+          const userMessage = typeof userMsg?.content === 'string' ? userMsg.content : '';
+          const learning = extractLearning({
+            taskId: task.taskId,
+            modelAlias: task.modelAlias,
+            toolsUsed: task.toolsUsed,
+            iterations: task.iterations,
+            durationMs: Date.now() - task.startTime,
+            success: false,
+            userMessage,
+          });
+          await storeLearning(this.r2, task.userId, learning);
+          console.log(`[TaskProcessor] Failure learning stored: ${learning.category}`);
+        } catch (learnErr) {
+          console.error('[TaskProcessor] Failed to store failure learning:', learnErr);
+        }
+      }
 
       // Save checkpoint so we can resume later
       if (this.r2 && task.iterations > 0) {

@@ -7,6 +7,7 @@ import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type Cha
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
 import { modelSupportsTools, generateDailyBriefing, type SandboxLike } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
+import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt } from '../openrouter/learnings';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import {
   MODELS,
@@ -420,6 +421,7 @@ export class TelegramHandler {
   private openrouter: OpenRouterClient;
   private storage: UserStorage;
   private skills: SkillStorage;
+  private r2Bucket: R2Bucket;
   private defaultSkill: string;
   private cachedSkillPrompt: string | null = null;
   private allowedUsers: Set<string> | null = null; // null = allow all, Set = allowlist
@@ -454,6 +456,7 @@ export class TelegramHandler {
     this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
     this.storage = createUserStorage(r2Bucket);
     this.skills = createSkillStorage(r2Bucket);
+    this.r2Bucket = r2Bucket;
     this.defaultSkill = defaultSkill;
     this.githubToken = githubToken;
     this.telegramToken = telegramToken;
@@ -518,6 +521,21 @@ export class TelegramHandler {
 
     // Fallback default prompt
     return 'You are a helpful AI assistant. Be concise but thorough. Use markdown formatting when appropriate.';
+  }
+
+  /**
+   * Get relevant past learnings formatted for system prompt injection.
+   * Returns empty string if no relevant learnings found or on error.
+   */
+  private async getLearningsHint(userId: string, userMessage: string): Promise<string> {
+    try {
+      const history = await loadLearnings(this.r2Bucket, userId);
+      if (!history) return '';
+      const relevant = getRelevantLearnings(history, userMessage);
+      return formatLearningsForPrompt(relevant);
+    } catch {
+      return ''; // Non-fatal: skip learnings on error
+    }
   }
 
   /**
@@ -1160,9 +1178,10 @@ export class TelegramHandler {
         const history = await this.storage.getConversation(userId, 10);
         const systemPrompt = await this.getSystemPrompt();
         const toolHint = '\n\nYou have access to tools (web browsing, GitHub, weather, news, currency conversion, charts, etc). Use them proactively when a question could benefit from real-time data, external lookups, or verification.';
+        const learningsHint = await this.getLearningsHint(userId, caption);
 
         const messages: ChatMessage[] = [
-          { role: 'system', content: systemPrompt + toolHint },
+          { role: 'system', content: systemPrompt + toolHint + learningsHint },
           ...history.map(msg => ({
             role: msg.role as 'user' | 'assistant',
             content: msg.content,
@@ -1263,11 +1282,14 @@ export class TelegramHandler {
       ? '\n\nYou have access to tools (web browsing, GitHub, weather, news, currency conversion, charts, etc). Use them proactively when a question could benefit from real-time data, external lookups, or verification. Don\'t hesitate to call tools — they are fast and free.'
       : '';
 
+    // Inject relevant past learnings into system prompt
+    const learningsHint = await this.getLearningsHint(userId, messageText);
+
     // Build messages array
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: systemPrompt + toolHint,
+        content: systemPrompt + toolHint + learningsHint,
       },
       ...history.map(msg => ({
         role: msg.role as 'user' | 'assistant',
