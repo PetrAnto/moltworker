@@ -856,9 +856,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         if (!result && lastError) {
           const isRateLimited = /429|503|rate.?limit|overloaded|capacity|busy/i.test(lastError.message);
           const isQuotaExceeded = /\b402\b/.test(lastError.message);
+          const isModelGone = /\b404\b/.test(lastError.message);
           const currentIsFree = getModel(task.modelAlias)?.isFree === true;
 
-          if ((isRateLimited || isQuotaExceeded) && currentIsFree && freeModels.length > 1 && freeRotationCount < MAX_FREE_ROTATIONS) {
+          if ((isRateLimited || isQuotaExceeded || isModelGone) && currentIsFree && freeModels.length > 1 && freeRotationCount < MAX_FREE_ROTATIONS) {
             // Find next free model (skip current one)
             const currentIdx = freeModels.indexOf(task.modelAlias);
             const nextIdx = (currentIdx + 1) % freeModels.length;
@@ -871,14 +872,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               task.lastUpdate = Date.now();
               await this.doState.storage.put('task', task);
 
-              console.log(`[TaskProcessor] Rotating from /${prevAlias} to /${nextAlias} (rotation ${freeRotationCount}/${MAX_FREE_ROTATIONS})`);
+              const reason = isModelGone ? 'unavailable (404)' : 'busy';
+              console.log(`[TaskProcessor] Rotating from /${prevAlias} to /${nextAlias} — ${reason} (rotation ${freeRotationCount}/${MAX_FREE_ROTATIONS})`);
 
               // Notify user about model switch
               if (statusMessageId) {
                 try {
                   await this.editTelegramMessage(
                     request.telegramToken, request.chatId, statusMessageId,
-                    `🔄 /${prevAlias} is busy. Switching to /${nextAlias}... (${task.iterations} iter)`
+                    `🔄 /${prevAlias} is ${reason}. Switching to /${nextAlias}... (${task.iterations} iter)`
                   );
                 } catch { /* non-fatal */ }
               }
@@ -887,9 +889,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             }
           }
 
-          // Can't rotate — provide helpful message for 402
+          // Can't rotate — provide helpful message
           if (isQuotaExceeded) {
-            throw new Error(`API key quota exceeded (402). Try a free model: /qwencoderfree, /pony, or /gptoss`);
+            const suggestions = freeModels.slice(0, 3).map(a => `/${a}`).join(', ');
+            throw new Error(`API key quota exceeded (402). Try a free model: ${suggestions}`);
+          }
+          if (isModelGone) {
+            const suggestions = freeModels.slice(0, 3).map(a => `/${a}`).join(', ');
+            throw new Error(`Model unavailable (404 — possibly sunset). Try: ${suggestions}`);
           }
           throw lastError;
         }

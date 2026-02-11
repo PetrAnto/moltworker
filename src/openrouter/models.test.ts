@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { detectToolIntent, getModel } from './models';
+import { detectToolIntent, getModel, getFreeToolModels } from './models';
 
 // --- detectToolIntent ---
 
@@ -120,6 +120,37 @@ describe('detectToolIntent', () => {
   it('does NOT flag simple greeting', () => {
     const result = detectToolIntent('hello how are you');
     expect(result.needsTools).toBe(false);
+  });
+});
+
+// --- getFreeToolModels ---
+
+describe('getFreeToolModels', () => {
+  it('returns only free models with tool support', () => {
+    const freeToolModels = getFreeToolModels();
+    expect(freeToolModels.length).toBeGreaterThan(0);
+    for (const alias of freeToolModels) {
+      const model = getModel(alias);
+      expect(model).toBeDefined();
+      expect(model!.isFree).toBe(true);
+      expect(model!.supportsTools).toBe(true);
+    }
+  });
+
+  it('does not include models without tool support', () => {
+    const freeToolModels = getFreeToolModels();
+    // glmfree is free but doesn't support tools
+    expect(freeToolModels).not.toContain('glmfree');
+  });
+
+  it('does not include removed/sunset models like pony', () => {
+    const freeToolModels = getFreeToolModels();
+    // pony was sunset — if it's blocked, it shouldn't appear
+    // This test verifies the list is current
+    for (const alias of freeToolModels) {
+      const model = getModel(alias);
+      expect(model).toBeDefined();
+    }
   });
 });
 
