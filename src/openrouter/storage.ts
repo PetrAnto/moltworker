@@ -10,6 +10,9 @@ export interface UserPreferences {
   username?: string;
   model: string;
   autoResume?: boolean; // Auto-resume tasks on timeout
+  locationLat?: string; // Saved briefing latitude
+  locationLon?: string; // Saved briefing longitude
+  locationName?: string; // Human-readable location name
   createdAt: string;
   updatedAt: string;
 }
