@@ -11,6 +11,13 @@ import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { extractLearning, storeLearning, storeLastTaskSummary } from '../openrouter/learnings';
 
+// Task phase type for structured task processing
+export type TaskPhase = 'plan' | 'work' | 'review';
+
+// Phase-aware prompts injected at each stage
+const PLAN_PHASE_PROMPT = 'Before starting, briefly outline your approach (2-3 bullet points): what tools you\'ll use and in what order. Then proceed immediately with execution.';
+const REVIEW_PHASE_PROMPT = 'Before delivering your final answer, briefly verify: (1) Did you answer the complete question? (2) Are all data points current and accurate? (3) Is anything missing?';
+
 // Max characters for a single tool result before truncation
 const MAX_TOOL_RESULT_LENGTH = 8000; // ~2K tokens (reduced for CPU)
 // Compress context after this many tool calls
@@ -47,6 +54,9 @@ interface TaskState {
   reasoningLevel?: ReasoningLevel;
   // Structured output format
   responseFormat?: ResponseFormat;
+  // Structured task phases (plan → work → review)
+  phase?: TaskPhase;
+  phaseStartIteration?: number;
 }
 
 // Task request from the worker
@@ -272,7 +282,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     iterations: number,
     taskPrompt?: string,
     slotName: string = 'latest',
-    completed: boolean = false
+    completed: boolean = false,
+    phase?: TaskPhase
   ): Promise<void> {
     const checkpoint = {
       taskId,
@@ -282,6 +293,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       savedAt: Date.now(),
       taskPrompt: taskPrompt?.substring(0, 200), // Store first 200 chars for display
       completed, // If true, this checkpoint won't be used for auto-resume
+      phase, // Structured task phase for resume
     };
     const key = `checkpoints/${userId}/${slotName}.json`;
     await r2.put(key, JSON.stringify(checkpoint));
@@ -298,7 +310,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     userId: string,
     slotName: string = 'latest',
     includeCompleted: boolean = false
-  ): Promise<{ messages: ChatMessage[]; toolsUsed: string[]; iterations: number; savedAt: number; taskPrompt?: string; completed?: boolean } | null> {
+  ): Promise<{ messages: ChatMessage[]; toolsUsed: string[]; iterations: number; savedAt: number; taskPrompt?: string; completed?: boolean; phase?: TaskPhase } | null> {
     const key = `checkpoints/${userId}/${slotName}.json`;
     const obj = await r2.get(key);
     if (!obj) return null;
@@ -318,6 +330,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         savedAt: checkpoint.savedAt,
         taskPrompt: checkpoint.taskPrompt,
         completed: checkpoint.completed,
+        phase: checkpoint.phase,
       };
     } catch {
       // Ignore parse errors
@@ -522,6 +535,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.autoResume = request.autoResume;
     task.reasoningLevel = request.reasoningLevel;
     task.responseFormat = request.responseFormat;
+    // Initialize structured task phase
+    task.phase = 'plan';
+    task.phaseStartIteration = 0;
     // Keep existing autoResumeCount only if resuming the SAME task
     const existingTask = await this.doState.storage.get<TaskState>('task');
     if (existingTask?.taskId === request.taskId && existingTask?.autoResumeCount !== undefined) {
@@ -537,7 +553,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const statusMessageId = await this.sendTelegramMessage(
       request.telegramToken,
       request.chatId,
-      '⏳ Thinking...'
+      '⏳ Planning...'
     );
 
     // Store status message ID for cancel cleanup
@@ -560,6 +576,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     let lastCheckpoint = Date.now();
 
     // Try to resume from checkpoint if available
+    let resumedFromCheckpoint = false;
     if (this.r2) {
       const checkpoint = await this.loadCheckpoint(this.r2, request.userId);
       if (checkpoint && checkpoint.iterations > 0) {
@@ -567,6 +584,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         conversationMessages = checkpoint.messages;
         task.toolsUsed = checkpoint.toolsUsed;
         task.iterations = checkpoint.iterations;
+        // Restore phase from checkpoint, or default to 'work' (plan is already done)
+        task.phase = checkpoint.phase || 'work';
+        task.phaseStartIteration = checkpoint.iterations;
+        resumedFromCheckpoint = true;
         await this.doState.storage.put('task', task);
 
         // CRITICAL: Add resume instruction to break the "re-read rules" loop
@@ -587,6 +608,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
         console.log(`[TaskProcessor] Resumed from checkpoint: ${checkpoint.iterations} iterations`);
       }
+    }
+
+    // Inject planning prompt for fresh tasks (not resumed from checkpoint)
+    if (!resumedFromCheckpoint) {
+      conversationMessages.push({
+        role: 'user',
+        content: `[PLANNING PHASE] ${PLAN_PHASE_PROMPT}`,
+      });
     }
 
     // Track cumulative token usage across all iterations
@@ -610,11 +639,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           try {
             lastProgressUpdate = Date.now();
             const elapsed = Math.round((Date.now() - task.startTime) / 1000);
+            const phaseLabel = task.phase === 'plan' ? 'Planning' : task.phase === 'review' ? 'Reviewing' : 'Working';
             await this.editTelegramMessage(
               request.telegramToken,
               request.chatId,
               statusMessageId,
-              `⏳ Processing... (${task.iterations} iter, ${task.toolsUsed.length} tools, ${elapsed}s)`
+              `⏳ ${phaseLabel}... (${task.iterations} iter, ${task.toolsUsed.length} tools, ${elapsed}s)`
             );
           } catch (updateError) {
             console.log('[TaskProcessor] Progress update failed (non-fatal):', updateError);
@@ -887,6 +917,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         const choice = result.choices[0];
 
+        // Phase transition: plan → work after first model response
+        if (task.phase === 'plan') {
+          task.phase = 'work';
+          task.phaseStartIteration = task.iterations;
+          await this.doState.storage.put('task', task);
+          console.log(`[TaskProcessor] Phase transition: plan → work (iteration ${task.iterations})`);
+        }
+
         // Check if model wants to call tools
         if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
           // Add assistant message with tool calls
@@ -963,7 +1001,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               conversationMessages,
               task.toolsUsed,
               task.iterations,
-              request.prompt
+              request.prompt,
+              'latest',
+              false,
+              task.phase
             );
           }
 
@@ -994,6 +1035,26 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           continue; // Retry the iteration
         }
 
+        // Phase transition: work → review when tools were used but model stopped calling them
+        // Only trigger review once (skip if already in review phase or no tools were used)
+        if (task.phase === 'work' && task.toolsUsed.length > 0) {
+          task.phase = 'review';
+          task.phaseStartIteration = task.iterations;
+          await this.doState.storage.put('task', task);
+          console.log(`[TaskProcessor] Phase transition: work → review (iteration ${task.iterations})`);
+
+          // Add the model's current response and inject review prompt
+          conversationMessages.push({
+            role: 'assistant',
+            content: choice.message.content || '',
+          });
+          conversationMessages.push({
+            role: 'user',
+            content: `[REVIEW PHASE] ${REVIEW_PHASE_PROMPT}`,
+          });
+          continue; // One more iteration for the review response
+        }
+
         // Final response (may still be empty after retries, but we tried)
         task.status = 'completed';
         task.result = choice.message.content || 'No response generated.';
@@ -1013,7 +1074,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.iterations,
             request.prompt,
             'latest',
-            true // completed flag
+            true, // completed flag
+            task.phase
           );
         }
 
@@ -1119,7 +1181,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           conversationMessages,
           task.toolsUsed,
           task.iterations,
-          request.prompt
+          request.prompt,
+          'latest',
+          false,
+          task.phase
         );
       }
 
