@@ -342,8 +342,8 @@ export class UserStorage {
    * Save a sync picker session to R2 (persists across Worker invocations).
    */
   async saveSyncSession(userId: string, session: {
-    newModels: Array<{ alias: string; name: string; modelId: string; contextK: number; vision: boolean }>;
-    staleModels: Array<{ alias: string; name: string; modelId: string; contextK: number; vision: boolean }>;
+    newModels: Array<{ alias: string; name: string; modelId: string; contextK: number; vision: boolean; tools?: boolean }>;
+    staleModels: Array<{ alias: string; name: string; modelId: string; contextK: number; vision: boolean; tools?: boolean }>;
     selectedAdd: string[];
     selectedRemove: string[];
     chatId: number;
@@ -357,8 +357,8 @@ export class UserStorage {
    * Load a sync picker session from R2.
    */
   async loadSyncSession(userId: string): Promise<{
-    newModels: Array<{ alias: string; name: string; modelId: string; contextK: number; vision: boolean }>;
-    staleModels: Array<{ alias: string; name: string; modelId: string; contextK: number; vision: boolean }>;
+    newModels: Array<{ alias: string; name: string; modelId: string; contextK: number; vision: boolean; tools?: boolean }>;
+    staleModels: Array<{ alias: string; name: string; modelId: string; contextK: number; vision: boolean; tools?: boolean }>;
     selectedAdd: string[];
     selectedRemove: string[];
     chatId: number;

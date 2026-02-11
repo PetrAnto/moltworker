@@ -27,6 +27,7 @@ import {
   unblockModels,
   getBlockedAliases,
   detectToolIntent,
+  getFreeToolModels,
   type ModelInfo,
   type ReasoningLevel,
 } from '../openrouter/models';
@@ -417,6 +418,7 @@ interface SyncModelCandidate {
   modelId: string;
   contextK: number;
   vision: boolean;
+  tools?: boolean;
 }
 
 interface SyncSession {
@@ -1343,6 +1345,13 @@ export class TelegramHandler {
       await this.bot.sendMessage(chatId, `Model /${modelAlias} is image-only. Use /img <prompt> to generate images.\nFalling back to /${DEFAULT_MODEL} for text.`);
       modelAlias = DEFAULT_MODEL;
     }
+
+    // If user's model was removed/blocked/sunset, fall back to default
+    if (modelAlias !== DEFAULT_MODEL && !getModel(modelAlias)) {
+      await this.bot.sendMessage(chatId, `⚠️ Model /${modelAlias} is no longer available. Switching to /${DEFAULT_MODEL}.\nRun /models to pick a new one.`);
+      modelAlias = DEFAULT_MODEL;
+      await this.storage.setUserModel(userId, modelAlias);
+    }
     const history = await this.storage.getConversation(userId, 10);
     const systemPrompt = await this.getSystemPrompt();
 
@@ -1362,7 +1371,7 @@ export class TelegramHandler {
       if (intent.needsTools) {
         await this.bot.sendMessage(
           chatId,
-          `⚠️ ${intent.reason}\nModel /${modelAlias} doesn't support tools. Switch to a tool model:\n/qwencoderfree /pony /gptoss (free)\n/deep /grok /gpt (paid)\n\nSending your message anyway — the model will try its best without tools.`
+          `⚠️ ${intent.reason}\nModel /${modelAlias} doesn't support tools. Switch to a tool model:\n${getFreeToolModels().slice(0, 3).map(a => `/${a}`).join(' ')} (free)\n/deep /grok /gpt (paid)\n\nSending your message anyway — the model will try its best without tools.`
         );
       }
     }
@@ -1854,8 +1863,9 @@ export class TelegramHandler {
       msg += `\n━━━ New (can add) ━━━\n`;
       for (const m of session.newModels) {
         const sel = session.selectedAdd.includes(m.alias) ? '☑' : '☐';
-        const vis = m.vision ? ' [vision]' : '';
-        msg += `${sel} /${m.alias} — ${m.name}${vis}\n`;
+        const badges = [m.vision ? '👁️' : '', m.tools ? '🔧' : ''].filter(Boolean).join('');
+        const badgeStr = badges ? ` ${badges}` : '';
+        msg += `${sel} /${m.alias} — ${m.name}${badgeStr}\n`;
         msg += `   ${m.contextK}K ctx | ${m.modelId}\n`;
       }
     }
@@ -1949,6 +1959,7 @@ export class TelegramHandler {
         context_length: number;
         architecture: { modality: string };
         pricing: { prompt: string; completion: string };
+        supported_parameters?: string[];
       }> };
 
       const allApiModels = rawData.data.map(m => ({
@@ -1958,6 +1969,7 @@ export class TelegramHandler {
         modality: m.architecture?.modality || 'text->text',
         promptCost: parseFloat(m.pricing?.prompt || '0'),
         completionCost: parseFloat(m.pricing?.completion || '0'),
+        supportsTools: Array.isArray(m.supported_parameters) && m.supported_parameters.includes('tools'),
       }));
 
       // 2. Filter for free text models
@@ -1989,6 +2001,7 @@ export class TelegramHandler {
           modelId: m.id,
           contextK: Math.round(m.contextLength / 1024),
           vision: m.modality.includes('image'),
+          tools: m.supportsTools,
         });
       }
 
@@ -2004,6 +2017,7 @@ export class TelegramHandler {
             modelId: m.id,
             contextK: m.maxContext ? Math.round(m.maxContext / 1024) : 0,
             vision: !!m.supportsVision,
+            tools: !!m.supportsTools,
           });
         }
       }
@@ -2103,6 +2117,7 @@ export class TelegramHandler {
             cost: 'FREE',
             isFree: true,
             supportsVision: candidate.vision || undefined,
+            supportsTools: candidate.tools || undefined,
             maxContext: candidate.contextK * 1024,
           };
           addedNames.push(addAlias);

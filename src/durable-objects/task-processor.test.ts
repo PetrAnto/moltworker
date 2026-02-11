@@ -481,6 +481,69 @@ describe('TaskProcessor phases', () => {
     });
   });
 
+  describe('model fallback on 404/sunset', () => {
+    it('should rotate to next free model on 404 error', async () => {
+      const mockState = createMockState();
+      const { getModel, getFreeToolModels } = await import('../openrouter/models');
+
+      // Make model "free" so rotation applies
+      vi.mocked(getModel).mockReturnValue({ id: 'test', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' });
+      vi.mocked(getFreeToolModels).mockReturnValue(['free1', 'free2']);
+
+      let apiCallCount = 0;
+      vi.stubGlobal('fetch', vi.fn((url: string | Request, init?: RequestInit) => {
+        const urlStr = typeof url === 'string' ? url : url.url;
+        if (urlStr.includes('api.telegram.org')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ ok: true, result: { message_id: 999 } }),
+            text: () => Promise.resolve(JSON.stringify({ ok: true, result: { message_id: 999 } })),
+          });
+        }
+
+        apiCallCount++;
+        // First 3 attempts (retries) return 404
+        if (apiCallCount <= 3) {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            text: () => Promise.resolve('{"error":{"message":"Model has been sunset"}}'),
+          });
+        }
+        // After rotation, succeed
+        const body = JSON.stringify({
+          choices: [{ message: { content: 'Done.', tool_calls: undefined }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 100, completion_tokens: 50 },
+        });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(body),
+          json: () => Promise.resolve(JSON.parse(body)),
+        });
+      }));
+
+      const processor = new TaskProcessorClass(mockState as never, {} as never);
+      await processor.fetch(new Request('https://do/process', {
+        method: 'POST',
+        body: JSON.stringify(createTaskRequest({ modelAlias: 'free1' })),
+      }));
+
+      await vi.waitFor(
+        () => {
+          const task = mockState.storage._store.get('task') as Record<string, unknown> | undefined;
+          if (!task || task.status !== 'completed') throw new Error('not completed yet');
+        },
+        { timeout: 15000, interval: 50 }
+      );
+
+      const task = mockState.storage._store.get('task') as Record<string, unknown>;
+      expect(task.status).toBe('completed');
+      // Model should have been rotated from free1 to free2
+      expect(task.modelAlias).toBe('free2');
+    });
+  });
+
   describe('phase persistence', () => {
     it('should include phase in saveCheckpoint calls', async () => {
       const mockState = createMockState();
