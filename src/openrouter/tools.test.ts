@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, type SandboxLike, type SandboxProcess } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, type SandboxLike, type SandboxProcess } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -1147,6 +1147,76 @@ describe('generateDailyBriefing', () => {
 
     // After clearing cache, new fetch calls should be made
     expect(callCount2).toBeGreaterThan(callCount1);
+  });
+});
+
+describe('geocodeCity', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should return coordinates for a valid city', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([
+        { lat: '48.8566', lon: '2.3522', display_name: 'Paris, Ile-de-France, France' },
+      ]),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await geocodeCity('Paris');
+    expect(result).not.toBeNull();
+    expect(result!.lat).toBe('48.8566');
+    expect(result!.lon).toBe('2.3522');
+    expect(result!.displayName).toContain('Paris');
+  });
+
+  it('should return null when city is not found', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([]),
+    }));
+
+    const result = await geocodeCity('xyznonexistentcity123');
+    expect(result).toBeNull();
+  });
+
+  it('should return null on API error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    }));
+
+    const result = await geocodeCity('London');
+    expect(result).toBeNull();
+  });
+
+  it('should URL-encode city names with special characters', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([
+        { lat: '47.3769', lon: '8.5417', display_name: 'Zürich, Switzerland' },
+      ]),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await geocodeCity('Zürich');
+    const url = mockFetch.mock.calls[0][0] as string;
+    expect(url).toContain('Z%C3%BCrich');
+  });
+
+  it('should trim whitespace from query', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([
+        { lat: '51.5074', lon: '-0.1278', display_name: 'London, England, United Kingdom' },
+      ]),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await geocodeCity('  London  ');
+    expect(result).not.toBeNull();
+    expect(result!.displayName).toContain('London');
   });
 });
 

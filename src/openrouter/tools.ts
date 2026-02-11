@@ -1948,6 +1948,26 @@ interface BriefingSection {
 }
 
 /**
+ * Forward geocode a city/place name to coordinates using Nominatim.
+ * Returns { lat, lon, displayName } or null if not found.
+ */
+export async function geocodeCity(query: string): Promise<{ lat: string; lon: string; displayName: string } | null> {
+  const encoded = encodeURIComponent(query.trim());
+  const response = await fetch(
+    `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1&accept-language=en`,
+    { headers: { 'User-Agent': 'MoltworkerBot/1.0' } }
+  );
+  if (!response.ok) return null;
+  const results = await response.json() as Array<{ lat: string; lon: string; display_name: string }>;
+  if (!results || results.length === 0) return null;
+  return {
+    lat: results[0].lat,
+    lon: results[0].lon,
+    displayName: results[0].display_name,
+  };
+}
+
+/**
  * Generate a daily briefing by aggregating weather, news, and research data.
  * Calls multiple APIs in parallel and formats results for Telegram.
  *

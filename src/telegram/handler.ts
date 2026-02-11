@@ -5,7 +5,7 @@
 
 import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type ChatMessage } from '../openrouter/client';
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
-import { modelSupportsTools, generateDailyBriefing, type SandboxLike } from '../openrouter/tools';
+import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
 import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, loadLastTaskSummary, formatLastTaskForPrompt } from '../openrouter/learnings';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
@@ -911,7 +911,7 @@ export class TelegramHandler {
 
       case '/briefing':
       case '/brief':
-        await this.handleBriefingCommand(chatId, args);
+        await this.handleBriefingCommand(chatId, userId, args);
         break;
 
       case '/costs':
@@ -1102,32 +1102,68 @@ export class TelegramHandler {
 
   /**
    * Handle /briefing command
-   * Usage: /briefing [lat,lon] [subreddit] [arxiv_category]
-   * Example: /briefing
-   * Example: /briefing 40.71,-74.01 programming cs.LG
+   * Usage: /briefing — use saved location (or prompt to set one)
+   * Usage: /briefing set <city> — save location for future briefings
+   * Usage: /briefing <city> — one-off briefing for that city
+   * Usage: /briefing <lat,lon> [subreddit] [arxiv_category] — explicit coords
    */
-  private async handleBriefingCommand(chatId: number, args: string[]): Promise<void> {
+  private async handleBriefingCommand(chatId: number, userId: string, args: string[]): Promise<void> {
     await this.bot.sendChatAction(chatId, 'typing');
 
-    // Parse optional arguments
-    let latitude = '50.08'; // Prague default
-    let longitude = '14.44';
     let subreddit = 'technology';
     let arxivCategory = 'cs.AI';
 
+    // Handle "set <city>" subcommand
+    if (args.length >= 2 && args[0].toLowerCase() === 'set') {
+      const cityQuery = args.slice(1).join(' ');
+      const geo = await geocodeCity(cityQuery);
+      if (!geo) {
+        await this.bot.sendMessage(chatId, `Could not find location "${cityQuery}". Try a different city name.`);
+        return;
+      }
+      // Save to user preferences
+      const prefs = await this.storage.getPreferences(userId);
+      prefs.locationLat = geo.lat;
+      prefs.locationLon = geo.lon;
+      prefs.locationName = geo.displayName;
+      await this.storage.setPreferences(prefs);
+      await this.bot.sendMessage(chatId, `Location saved: ${geo.displayName}\nYour briefings will now use this location.`);
+      return;
+    }
+
+    // Resolve coordinates: explicit coords > city arg > saved pref > no default
+    let latitude: string | undefined;
+    let longitude: string | undefined;
+
     if (args.length > 0) {
-      // First arg: lat,lon
+      // Check for lat,lon format
       const coordMatch = args[0].match(/^(-?[\d.]+),(-?[\d.]+)$/);
       if (coordMatch) {
         latitude = coordMatch[1];
         longitude = coordMatch[2];
+        if (args.length > 1) subreddit = args[1];
+        if (args.length > 2) arxivCategory = args[2];
+      } else {
+        // Treat as city name for one-off geocoding
+        const cityQuery = args.join(' ');
+        const geo = await geocodeCity(cityQuery);
+        if (!geo) {
+          await this.bot.sendMessage(chatId, `Could not find location "${cityQuery}". Try a different city name or use /briefing set <city> to save your location.`);
+          return;
+        }
+        latitude = geo.lat;
+        longitude = geo.lon;
       }
-    }
-    if (args.length > 1) {
-      subreddit = args[1];
-    }
-    if (args.length > 2) {
-      arxivCategory = args[2];
+    } else {
+      // No args — use saved location
+      const prefs = await this.storage.getPreferences(userId);
+      if (prefs.locationLat && prefs.locationLon) {
+        latitude = prefs.locationLat;
+        longitude = prefs.locationLon;
+      } else {
+        await this.bot.sendMessage(chatId, 'No location set. Use /briefing set <city> to save your location, or /briefing <city> for a one-off briefing.');
+        return;
+      }
     }
 
     try {
