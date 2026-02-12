@@ -1217,7 +1217,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
 
         const elapsed = Math.round((Date.now() - task.startTime) / 1000);
-        finalResponse += `\n\n⏱️ Completed in ${elapsed}s (${task.iterations} iterations)`;
+        const modelInfo = task.modelAlias !== request.modelAlias
+          ? `🤖 /${task.modelAlias} (rotated from /${request.modelAlias})`
+          : `🤖 /${task.modelAlias}`;
+        finalResponse += `\n\n${modelInfo} | ⏱️ ${elapsed}s (${task.iterations} iter)`;
         if (totalUsage.totalTokens > 0) {
           finalResponse += ` | ${formatCostFooter(totalUsage, task.modelAlias)}`;
         }
