@@ -7,7 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { createOpenRouterClient, type ChatMessage, type ResponseFormat } from '../openrouter/client';
 import { executeTool, AVAILABLE_TOOLS, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER } from '../openrouter/tools';
-import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, getFreeToolModels, type Provider, type ReasoningLevel } from '../openrouter/models';
+import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, getFreeToolModels, categorizeModel, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { extractLearning, storeLearning, storeLastTaskSummary } from '../openrouter/learnings';
 
@@ -24,6 +24,75 @@ const MAX_TOOL_RESULT_LENGTH = 8000; // ~2K tokens (reduced for CPU)
 const COMPRESS_AFTER_TOOLS = 6; // Compress more frequently
 // Max estimated tokens before forcing compression
 const MAX_CONTEXT_TOKENS = 60000; // Lower threshold
+
+// Emergency core: highly reliable models that are tried last when all rotation fails.
+// These are hardcoded and only changed by code deploy — the unhackable fallback.
+const EMERGENCY_CORE_ALIASES = ['qwencoderfree', 'gptoss', 'devstral'];
+
+// Task category for capability-aware model rotation
+type TaskCategory = 'coding' | 'reasoning' | 'general';
+
+/**
+ * Detect what capability the task primarily needs from the user message.
+ */
+function detectTaskCategory(messages: readonly ChatMessage[]): TaskCategory {
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  if (!lastUserMsg || typeof lastUserMsg.content !== 'string') return 'general';
+  const text = lastUserMsg.content.toLowerCase();
+
+  if (/\b(code|implement|debug|fix|refactor|function|class|script|deploy|build|test|coding|programming|pr\b|pull.?request|repository|repo\b|commit|merge|branch)\b/.test(text)) {
+    return 'coding';
+  }
+  if (/\b(research|analy[sz]e|compare|explain.{0,10}detail|reason|math|calculate|solve|prove|algorithm|investigate|comprehensive)\b/.test(text)) {
+    return 'reasoning';
+  }
+  return 'general';
+}
+
+/**
+ * Build a capability-aware rotation order for free models.
+ * Prefers models matching the task category, then others, then emergency core.
+ */
+function buildRotationOrder(
+  currentAlias: string,
+  freeToolModels: string[],
+  taskCategory: TaskCategory
+): string[] {
+  const preferred: string[] = [];
+  const fallback: string[] = [];
+
+  for (const alias of freeToolModels) {
+    if (alias === currentAlias) continue;
+    const model = getModel(alias);
+    if (!model) continue;
+    const modelCat: ModelCategory = categorizeModel(model.id, model.name);
+
+    // Match task category to model category
+    const isMatch =
+      (taskCategory === 'coding' && modelCat === 'coding') ||
+      (taskCategory === 'reasoning' && modelCat === 'reasoning') ||
+      (taskCategory === 'general' && (modelCat === 'general' || modelCat === 'fast'));
+
+    if (isMatch) {
+      preferred.push(alias);
+    } else {
+      fallback.push(alias);
+    }
+  }
+
+  // Append emergency core models if not already in the list
+  const result = [...preferred, ...fallback];
+  for (const emergencyAlias of EMERGENCY_CORE_ALIASES) {
+    if (!result.includes(emergencyAlias) && emergencyAlias !== currentAlias) {
+      const model = getModel(emergencyAlias);
+      if (model?.isFree && model?.supportsTools) {
+        result.push(emergencyAlias);
+      }
+    }
+  }
+
+  return result;
+}
 
 // Task state stored in DO
 interface TaskState {
@@ -598,10 +667,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const client = createOpenRouterClient(request.openrouterKey);
     const toolContext: ToolContext = { githubToken: request.githubToken };
 
-    // Free model rotation: when a free model hits 429/503, rotate to the next one
+    // Capability-aware free model rotation: prioritize models matching the task type
     const freeModels = getFreeToolModels();
-    let freeRotationCount = 0;
-    const MAX_FREE_ROTATIONS = freeModels.length; // Try each free model once
+    const taskCategory = detectTaskCategory(request.messages);
+    const rotationOrder = buildRotationOrder(request.modelAlias, freeModels, taskCategory);
+    let rotationIndex = 0;
+    const MAX_FREE_ROTATIONS = rotationOrder.length;
+    console.log(`[TaskProcessor] Task category: ${taskCategory}, rotation order: ${rotationOrder.join(', ')} (${MAX_FREE_ROTATIONS} candidates)`);
     let emptyContentRetries = 0;
     const MAX_EMPTY_RETRIES = 2;
 
@@ -894,44 +966,41 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           const isModelGone = /\b404\b/.test(lastError.message);
           const currentIsFree = getModel(task.modelAlias)?.isFree === true;
 
-          if ((isRateLimited || isQuotaExceeded || isModelGone) && currentIsFree && freeModels.length > 1 && freeRotationCount < MAX_FREE_ROTATIONS) {
-            // Find next free model (skip current one)
-            const currentIdx = freeModels.indexOf(task.modelAlias);
-            const nextIdx = (currentIdx + 1) % freeModels.length;
-            const nextAlias = freeModels[nextIdx];
+          if ((isRateLimited || isQuotaExceeded || isModelGone) && currentIsFree && rotationIndex < MAX_FREE_ROTATIONS) {
+            // Use capability-aware rotation order (preferred category first, emergency core last)
+            const nextAlias = rotationOrder[rotationIndex];
+            rotationIndex++;
 
-            if (nextAlias !== task.modelAlias) {
-              freeRotationCount++;
-              const prevAlias = task.modelAlias;
-              task.modelAlias = nextAlias;
-              task.lastUpdate = Date.now();
-              await this.doState.storage.put('task', task);
+            const prevAlias = task.modelAlias;
+            task.modelAlias = nextAlias;
+            task.lastUpdate = Date.now();
+            await this.doState.storage.put('task', task);
 
-              const reason = isModelGone ? 'unavailable (404)' : 'busy';
-              console.log(`[TaskProcessor] Rotating from /${prevAlias} to /${nextAlias} — ${reason} (rotation ${freeRotationCount}/${MAX_FREE_ROTATIONS})`);
+            const reason = isModelGone ? 'unavailable (404)' : 'busy';
+            const isEmergency = EMERGENCY_CORE_ALIASES.includes(nextAlias) && rotationIndex > MAX_FREE_ROTATIONS - EMERGENCY_CORE_ALIASES.length;
+            console.log(`[TaskProcessor] Rotating from /${prevAlias} to /${nextAlias} — ${reason} (${rotationIndex}/${MAX_FREE_ROTATIONS}${isEmergency ? ', emergency core' : ''}, task: ${taskCategory})`);
 
-              // Notify user about model switch
-              if (statusMessageId) {
-                try {
-                  await this.editTelegramMessage(
-                    request.telegramToken, request.chatId, statusMessageId,
-                    `🔄 /${prevAlias} is ${reason}. Switching to /${nextAlias}... (${task.iterations} iter)`
-                  );
-                } catch { /* non-fatal */ }
-              }
-
-              continue; // Retry the iteration with the new model
+            // Notify user about model switch
+            if (statusMessageId) {
+              try {
+                await this.editTelegramMessage(
+                  request.telegramToken, request.chatId, statusMessageId,
+                  `🔄 /${prevAlias} is ${reason}. Switching to /${nextAlias}... (${task.iterations} iter)`
+                );
+              } catch { /* non-fatal */ }
             }
+
+            continue; // Retry the iteration with the new model
           }
 
-          // Can't rotate — provide helpful message
+          // Can't rotate — all models exhausted (including emergency core)
           if (isQuotaExceeded) {
-            const suggestions = freeModels.slice(0, 3).map(a => `/${a}`).join(', ');
-            throw new Error(`API key quota exceeded (402). Try a free model: ${suggestions}`);
+            const suggestions = EMERGENCY_CORE_ALIASES.map(a => `/${a}`).join(', ');
+            throw new Error(`All free models quota-exhausted (tried ${rotationIndex} rotations). Emergency core: ${suggestions}`);
           }
           if (isModelGone) {
-            const suggestions = freeModels.slice(0, 3).map(a => `/${a}`).join(', ');
-            throw new Error(`Model unavailable (404 — possibly sunset). Try: ${suggestions}`);
+            const suggestions = EMERGENCY_CORE_ALIASES.map(a => `/${a}`).join(', ');
+            throw new Error(`All free models unavailable (tried ${rotationIndex} rotations). Emergency core: ${suggestions}`);
           }
           throw lastError;
         }
@@ -1122,41 +1191,37 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // b. Try model rotation for free models (empty response = model can't handle context)
           const emptyCurrentIsFree = getModel(task.modelAlias)?.isFree === true;
-          if (emptyCurrentIsFree && freeModels.length > 1 && freeRotationCount < MAX_FREE_ROTATIONS) {
-            const currentIdx = freeModels.indexOf(task.modelAlias);
-            const nextIdx = (currentIdx + 1) % freeModels.length;
-            const nextAlias = freeModels[nextIdx];
+          if (emptyCurrentIsFree && rotationIndex < MAX_FREE_ROTATIONS) {
+            const nextAlias = rotationOrder[rotationIndex];
+            rotationIndex++;
 
-            if (nextAlias !== task.modelAlias) {
-              freeRotationCount++;
-              const prevAlias = task.modelAlias;
-              task.modelAlias = nextAlias;
-              task.lastUpdate = Date.now();
-              emptyContentRetries = 0; // Reset retries for new model
-              await this.doState.storage.put('task', task);
+            const prevAlias = task.modelAlias;
+            task.modelAlias = nextAlias;
+            task.lastUpdate = Date.now();
+            emptyContentRetries = 0; // Reset retries for new model
+            await this.doState.storage.put('task', task);
 
-              console.log(`[TaskProcessor] Empty response rotation: /${prevAlias} → /${nextAlias} (rotation ${freeRotationCount}/${MAX_FREE_ROTATIONS})`);
+            console.log(`[TaskProcessor] Empty response rotation: /${prevAlias} → /${nextAlias} (${rotationIndex}/${MAX_FREE_ROTATIONS}, task: ${taskCategory})`);
 
-              if (statusMessageId) {
-                try {
-                  await this.editTelegramMessage(
-                    request.telegramToken, request.chatId, statusMessageId,
-                    `🔄 /${prevAlias} couldn't summarize results. Trying /${nextAlias}...`
-                  );
-                } catch { /* non-fatal */ }
-              }
-
-              // Compress for the new model
-              const compressed = this.compressContext(conversationMessages, 2);
-              conversationMessages.length = 0;
-              conversationMessages.push(...compressed);
-
-              conversationMessages.push({
-                role: 'user',
-                content: '[Please provide a concise answer based on the tool results summarized above.]',
-              });
-              continue;
+            if (statusMessageId) {
+              try {
+                await this.editTelegramMessage(
+                  request.telegramToken, request.chatId, statusMessageId,
+                  `🔄 /${prevAlias} couldn't summarize results. Trying /${nextAlias}...`
+                );
+              } catch { /* non-fatal */ }
             }
+
+            // Compress for the new model
+            const compressed = this.compressContext(conversationMessages, 2);
+            conversationMessages.length = 0;
+            conversationMessages.push(...compressed);
+
+            conversationMessages.push({
+              role: 'user',
+              content: '[Please provide a concise answer based on the tool results summarized above.]',
+            });
+            continue;
           }
 
           // c. All retries and rotations exhausted — will use fallback below
