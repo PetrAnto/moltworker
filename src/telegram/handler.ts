@@ -1809,24 +1809,25 @@ export class TelegramHandler {
   async sendModelPicker(chatId: number): Promise<void> {
     const buttons: InlineKeyboardButton[][] = [
       [
-        { text: '🧠 DeepSeek', callback_data: 'model:deep' },
-        { text: '⚡ Grok', callback_data: 'model:grok' },
-        { text: '🤖 GPT-4o', callback_data: 'model:gpt' },
+        { text: '🆓 QwenCoder 🔧', callback_data: 'model:qwencoderfree' },
+        { text: '🆓 Trinity 🔧', callback_data: 'model:trinity' },
+        { text: '🆓 Devstral 🔧', callback_data: 'model:devstral' },
       ],
       [
-        { text: '🎭 Claude Sonnet', callback_data: 'model:sonnet' },
-        { text: '💨 Claude Haiku', callback_data: 'model:haiku' },
-        { text: '🔮 Qwen', callback_data: 'model:qwennext' },
+        { text: '🧠 DeepSeek 🔧', callback_data: 'model:deep' },
+        { text: '⚡ Grok 🔧', callback_data: 'model:grok' },
+        { text: '🤖 GPT-4o 🔧👁️', callback_data: 'model:gpt' },
       ],
       [
-        { text: '🆓 Trinity (Free)', callback_data: 'model:trinity' },
-        { text: '🤖 MiMo', callback_data: 'model:mimo' },
+        { text: '🎭 Sonnet 🔧👁️', callback_data: 'model:sonnet' },
+        { text: '💨 Haiku 🔧👁️', callback_data: 'model:haiku' },
+        { text: '🔮 Qwen 🔧', callback_data: 'model:qwennext' },
       ],
     ];
 
     await this.bot.sendMessageWithButtons(
       chatId,
-      '🤖 Select a model:',
+      '🤖 Select a model:\n🆓 = free  🔧 = tools  👁️ = vision',
       buttons
     );
   }
@@ -1997,9 +1998,13 @@ export class TelegramHandler {
       const isAdded = session.selectedAdd.includes(m.alias);
       const isReplacing = session.selectedReplace.includes(m.alias);
 
+      // Capability badges for buttons
+      const btnBadges = [m.tools ? '🔧' : '', m.vision ? '👁️' : ''].filter(Boolean).join('');
+      const badgeSuffix = btnBadges ? ` ${btnBadges}` : '';
+
       // Add button
       const addSel = isAdded ? '☑' : '☐';
-      row.push({ text: `${addSel} + ${m.alias}`, callback_data: `s:a:${m.alias}` });
+      row.push({ text: `${addSel} + ${m.alias}${badgeSuffix}`, callback_data: `s:a:${m.alias}` });
 
       // Replace button (if this model has a replacement recommendation)
       const repl = session.replacements.find(r => r.newAlias === m.alias);
@@ -2378,11 +2383,18 @@ What I can do:
 • Run code in a sandbox (git, node, npm)
 • Analyze code, refactor, debug
 
-Best models for coding:
-/deep — Best value ($0.25/M)
-/qwencoderfree — Free, strong coding
-/grok — Best agentic (#1 tool use)
-/sonnet — Premium quality
+🆓 Free models with tools (🔧):
+/qwencoderfree — Qwen3 Coder 480B MoE 🔧 (262K ctx)
+/trinity — Trinity Large 400B MoE 🔧 (128K ctx)
+/devstral — Devstral Small 🔧 (131K ctx)
+/gptoss — GPT-OSS 120B 🔧 (128K ctx)
+
+💰 Best paid models for coding:
+/deep — DeepSeek V3.2 🔧 ($0.25/M)
+/grok — Grok 4.1 🔧 (#1 agentic)
+/sonnet — Claude Sonnet 4.5 🔧👁️
+
+⚠️ Models without 🔧 can't use tools (no GitHub, no web fetch).
 
 Try it: "Read the README of PetrAnto/moltworker and summarize it"`;
 
