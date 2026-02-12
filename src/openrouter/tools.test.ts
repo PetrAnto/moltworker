@@ -2095,54 +2095,73 @@ describe('github_create_pr tool', () => {
   });
 
   it('should create a PR successfully with all API calls', async () => {
-    let fetchCallIndex = 0;
-    const mockFetch = vi.fn().mockImplementation(() => {
-      fetchCallIndex++;
-      switch (fetchCallIndex) {
-        case 1: // GET ref
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ object: { sha: 'base-sha-123' } }),
-          });
-        case 2: // POST blob for file1
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ sha: 'blob-sha-1' }),
-          });
-        case 3: // POST blob for file2
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ sha: 'blob-sha-2' }),
-          });
-        case 4: // POST tree
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ sha: 'tree-sha-456' }),
-          });
-        case 5: // POST commit
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ sha: 'commit-sha-789' }),
-          });
-        case 6: // POST ref (create branch)
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ ref: 'refs/heads/bot/test-branch' }),
-          });
-        case 7: // POST pull request
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ html_url: 'https://github.com/testowner/testrepo/pull/42', number: 42 }),
-          });
-        default:
-          return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : '';
+      const method = init?.method || 'GET';
+
+      // File size check for "update" actions (safety guardrail)
+      if (method === 'GET' && urlStr.includes('/contents/')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ size: 50 }), // Small original = update is fine
+        });
       }
+
+      // GET ref
+      if (method === 'GET' && urlStr.includes('/git/ref/')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ object: { sha: 'base-sha-123' } }),
+        });
+      }
+
+      // POST blob
+      if (method === 'POST' && urlStr.includes('/git/blobs')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sha: `blob-sha-${Math.random().toString(36).slice(2, 6)}` }),
+        });
+      }
+
+      // POST tree
+      if (method === 'POST' && urlStr.includes('/git/trees')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sha: 'tree-sha-456' }),
+        });
+      }
+
+      // POST commit
+      if (method === 'POST' && urlStr.includes('/git/commits')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sha: 'commit-sha-789' }),
+        });
+      }
+
+      // POST ref (create branch)
+      if (method === 'POST' && urlStr.includes('/git/refs')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ref: 'refs/heads/bot/test-branch' }),
+        });
+      }
+
+      // POST pull request
+      if (method === 'POST' && urlStr.includes('/pulls')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ html_url: 'https://github.com/testowner/testrepo/pull/42', number: 42 }),
+        });
+      }
+
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
     vi.stubGlobal('fetch', mockFetch);
 
     const changes = [
       { path: 'src/new-file.ts', content: 'export const hello = "world";', action: 'create' },
-      { path: 'README.md', content: '# Updated README', action: 'update' },
+      { path: 'README.md', content: '# Updated README\n\nThis project does X and Y.\n\n## Getting Started\n\nRun `npm install` to get started.', action: 'update' },
     ];
 
     const result = await executeTool({
@@ -2168,38 +2187,16 @@ describe('github_create_pr tool', () => {
     expect(result.content).toContain('bot/test-branch');
     expect(result.content).toContain('2 file(s)');
 
-    // Verify API calls were made
-    expect(mockFetch).toHaveBeenCalledTimes(7);
-
-    // Verify the ref GET call
-    const firstCall = mockFetch.mock.calls[0];
-    expect(firstCall[0]).toContain('/git/ref/heads/main');
-
-    // Verify blob creation calls
-    const blobCall1 = mockFetch.mock.calls[1];
-    expect(blobCall1[0]).toContain('/git/blobs');
-
-    // Verify tree creation
-    const treeCall = mockFetch.mock.calls[3];
-    expect(treeCall[0]).toContain('/git/trees');
-
-    // Verify commit creation
-    const commitCall = mockFetch.mock.calls[4];
-    expect(commitCall[0]).toContain('/git/commits');
-
-    // Verify branch creation
-    const refCall = mockFetch.mock.calls[5];
-    expect(refCall[0]).toContain('/git/refs');
-    const refBody = JSON.parse(refCall[1].body);
-    expect(refBody.ref).toBe('refs/heads/bot/test-branch');
-
-    // Verify PR creation
-    const prCall = mockFetch.mock.calls[6];
-    expect(prCall[0]).toContain('/pulls');
-    const prBody = JSON.parse(prCall[1].body);
-    expect(prBody.title).toBe('Add new feature');
-    expect(prBody.head).toBe('bot/test-branch');
-    expect(prBody.base).toBe('main');
+    // Verify key API calls were made (URL-based matching, order may vary with guardrail checks)
+    const allCalls = mockFetch.mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(allCalls.some((u: string) => u.includes('/git/ref/heads/main'))).toBe(true);
+    expect(allCalls.some((u: string) => u.includes('/git/blobs'))).toBe(true);
+    expect(allCalls.some((u: string) => u.includes('/git/trees'))).toBe(true);
+    expect(allCalls.some((u: string) => u.includes('/git/commits'))).toBe(true);
+    expect(allCalls.some((u: string) => u.includes('/git/refs'))).toBe(true);
+    expect(allCalls.some((u: string) => u.includes('/pulls'))).toBe(true);
+    // Safety guardrail: file size check for "update" action
+    expect(allCalls.some((u: string) => u.includes('/contents/'))).toBe(true);
   });
 
   it('should handle delete actions (null sha in tree)', async () => {
@@ -2370,6 +2367,294 @@ describe('github_create_pr tool', () => {
 
     expect(result.content).toContain('Failed to get base branch');
     expect(result.content).toContain('404');
+  });
+
+  // --- Safety guardrail tests ---
+
+  it('should block binary file writes (images, fonts, etc)', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+
+    const changes = [
+      { path: 'src/assets/logo.png', content: 'fake-binary-data', action: 'create' },
+    ];
+
+    const result = await executeTool({
+      id: 'call_pr_binary',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'o',
+          repo: 'r',
+          title: 'Add logo',
+          branch: 'test',
+          changes: JSON.stringify(changes),
+        }),
+      },
+    }, { githubToken: 'token' });
+
+    expect(result.content).toContain('Cannot write binary file');
+    expect(result.content).toContain('logo.png');
+    // No API calls should have been made
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('should block binary file updates too', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+
+    const changes = [
+      { path: 'public/banner.jpg', content: 'corrupted-data', action: 'update' },
+    ];
+
+    const result = await executeTool({
+      id: 'call_pr_binary2',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'o',
+          repo: 'r',
+          title: 'Update banner',
+          branch: 'test',
+          changes: JSON.stringify(changes),
+        }),
+      },
+    }, { githubToken: 'token' });
+
+    expect(result.content).toContain('Cannot write binary file');
+    expect(result.content).toContain('banner.jpg');
+  });
+
+  it('should block comment-only stub replacing code file', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+
+    const changes = [
+      { path: 'src/App.jsx', content: '// Updated with component splitting and optimizations', action: 'update' },
+    ];
+
+    const result = await executeTool({
+      id: 'call_pr_stub',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'o',
+          repo: 'r',
+          title: 'Optimize app',
+          branch: 'test',
+          changes: JSON.stringify(changes),
+        }),
+      },
+    }, { githubToken: 'token' });
+
+    expect(result.content).toContain('Rejecting update');
+    expect(result.content).toContain('App.jsx');
+    expect(result.content).toContain('comment line');
+  });
+
+  it('should allow comment-only content in markdown files', async () => {
+    // Markdown files use # for headings, not comments — should NOT be blocked
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : '';
+      const method = init?.method || 'GET';
+
+      if (method === 'GET' && urlStr.includes('/contents/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ size: 50 }) });
+      }
+      if (method === 'GET' && urlStr.includes('/git/ref/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/blobs')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob-sha' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/trees')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree-sha' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/commits')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit-sha' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/refs')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/test' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/pulls')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/1', number: 1 }) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const changes = [
+      { path: 'README.md', content: '# My Project', action: 'update' },
+    ];
+
+    const result = await executeTool({
+      id: 'call_pr_md',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'o',
+          repo: 'r',
+          title: 'Update readme',
+          branch: 'test',
+          changes: JSON.stringify(changes),
+        }),
+      },
+    }, { githubToken: 'token' });
+
+    // Should succeed, not be blocked
+    expect(result.content).toContain('Pull Request created successfully');
+  });
+
+  it('should block destructive updates that shrink file below 20%', async () => {
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : '';
+      const method = init?.method || 'GET';
+
+      // Return large original file size (simulating 789-line App.jsx)
+      if (method === 'GET' && urlStr.includes('/contents/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ size: 25000 }) });
+      }
+      if (method === 'GET' && urlStr.includes('/git/ref/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const changes = [
+      {
+        path: 'src/App.jsx',
+        content: 'import React from "react";\nconst App = () => <div>Hello</div>;\nexport default App;',
+        action: 'update',
+      },
+    ];
+
+    const result = await executeTool({
+      id: 'call_pr_destructive',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'o',
+          repo: 'r',
+          title: 'Refactor app',
+          branch: 'test',
+          changes: JSON.stringify(changes),
+        }),
+      },
+    }, { githubToken: 'token' });
+
+    expect(result.content).toContain('Destructive update blocked');
+    expect(result.content).toContain('App.jsx');
+    expect(result.content).toContain('25000 bytes');
+  });
+
+  it('should allow updates that maintain reasonable file size', async () => {
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : '';
+      const method = init?.method || 'GET';
+
+      // Original file is 200 bytes, new content is 180 bytes (90% — fine)
+      if (method === 'GET' && urlStr.includes('/contents/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ size: 200 }) });
+      }
+      if (method === 'GET' && urlStr.includes('/git/ref/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/blobs')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob-sha' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/trees')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree-sha' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/commits')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit-sha' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/refs')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/test' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/pulls')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/1', number: 1 }) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const content = 'import React from "react";\n\nconst App = () => {\n  return (\n    <div className="app">\n      <h1>Hello World</h1>\n      <p>This is a refactored component.</p>\n    </div>\n  );\n};\n\nexport default App;\n';
+    const changes = [
+      { path: 'src/App.jsx', content, action: 'update' },
+    ];
+
+    const result = await executeTool({
+      id: 'call_pr_ok_size',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'o',
+          repo: 'r',
+          title: 'Refactor',
+          branch: 'test',
+          changes: JSON.stringify(changes),
+        }),
+      },
+    }, { githubToken: 'token' });
+
+    expect(result.content).toContain('Pull Request created successfully');
+  });
+
+  it('should block multiple binary extensions (woff2, gif, pdf)', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+
+    for (const ext of ['woff2', 'gif', 'pdf', 'mp4', 'zip']) {
+      const result = await executeTool({
+        id: `call_pr_bin_${ext}`,
+        type: 'function',
+        function: {
+          name: 'github_create_pr',
+          arguments: JSON.stringify({
+            owner: 'o',
+            repo: 'r',
+            title: 'Test',
+            branch: 'test',
+            changes: JSON.stringify([{ path: `file.${ext}`, content: 'data', action: 'create' }]),
+          }),
+        },
+      }, { githubToken: 'token' });
+
+      expect(result.content).toContain('Cannot write binary file');
+    }
+  });
+
+  it('should block multi-line comment stubs in code files', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+
+    const changes = [
+      {
+        path: 'src/main.jsx',
+        content: '// Updated with lazy loading\n// Optimized for performance',
+        action: 'update',
+      },
+    ];
+
+    const result = await executeTool({
+      id: 'call_pr_multi_comment',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'o',
+          repo: 'r',
+          title: 'Optimize',
+          branch: 'test',
+          changes: JSON.stringify(changes),
+        }),
+      },
+    }, { githubToken: 'token' });
+
+    expect(result.content).toContain('Rejecting update');
+    expect(result.content).toContain('main.jsx');
   });
 });
 

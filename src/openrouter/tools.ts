@@ -797,6 +797,87 @@ async function githubCreatePr(
 
   const apiBase = `https://api.github.com/repos/${owner}/${repo}`;
 
+  // --- Safety guardrails: detect destructive/bogus changes ---
+  const BINARY_EXTENSIONS = /\.(png|jpg|jpeg|gif|bmp|ico|svg|webp|mp3|mp4|wav|zip|tar|gz|pdf|woff|woff2|ttf|eot)$/i;
+  const CODE_EXTENSIONS = /\.(js|jsx|ts|tsx|mjs|cjs|vue|svelte|py|rb|go|rs|java|c|cpp|h|cs|php|swift|kt|scala|sh|bash|zsh|css|scss|less|html|htm|xml|yaml|yml|toml|ini|cfg|conf|sql|md|mdx|txt|json|jsonc)$/i;
+  const warnings: string[] = [];
+
+  for (const change of changes) {
+    if (change.action === 'delete') continue;
+    const content = change.content || '';
+    const contentLines = content.split('\n').filter(l => l.trim()).length;
+
+    // 1. Block binary file writes (models can't produce valid binary via text)
+    if (BINARY_EXTENSIONS.test(change.path)) {
+      throw new Error(
+        `Cannot write binary file "${change.path}" via text API. ` +
+        `Binary files (images, fonts, archives) must be committed via git/sandbox, not github_create_pr.`
+      );
+    }
+
+    // 2. Block stub/comment-only files that replace real code
+    //    Only applies to code files (not markdown/txt where # is a heading)
+    const isCodeFile = /\.(js|jsx|ts|tsx|mjs|cjs|vue|svelte|py|rb|go|rs|java|c|cpp|h|cs|php|swift|kt|scala|css|scss|less|html|json)$/i.test(change.path);
+    if (isCodeFile && change.action === 'update') {
+      const nonEmpty = content.split('\n').filter(l => l.trim());
+      const allComments = nonEmpty.length > 0 && nonEmpty.every(l =>
+        /^\s*(\/\/|\/\*|\*|#|--|<!--)/.test(l) || l.trim() === ''
+      );
+      if (allComments && nonEmpty.length <= 3) {
+        throw new Error(
+          `Rejecting update to "${change.path}": new content is only ${nonEmpty.length} comment line(s). ` +
+          `This would destroy the existing file. Provide actual code improvements, not placeholder comments.`
+        );
+      }
+    }
+
+    // 3. Warn on suspiciously small updates to code files
+    if (CODE_EXTENSIONS.test(change.path) && change.action === 'update' && contentLines <= 5 && content.length < 200) {
+      warnings.push(`⚠️ "${change.path}": only ${contentLines} line(s) — verify this isn't replacing larger content`);
+    }
+  }
+
+  // 4. For "update" actions, fetch original file sizes and detect destructive shrinkage
+  for (const change of changes) {
+    if (change.action !== 'update' || !change.content) continue;
+
+    try {
+      const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${baseBranch}`, { headers });
+      if (fileResponse.ok) {
+        const fileData = await fileResponse.json() as { size: number };
+        const originalSize = fileData.size;
+        const newSize = change.content.length;
+
+        // If new content is <20% of original, block as destructive
+        if (originalSize > 100 && newSize < originalSize * 0.2) {
+          throw new Error(
+            `Destructive update blocked for "${change.path}": ` +
+            `original is ${originalSize} bytes but new content is only ${newSize} bytes (${Math.round(newSize / originalSize * 100)}% of original). ` +
+            `This would effectively delete the file's content. If this is intentional, use the delete action and create a new file.`
+          );
+        }
+
+        // Warn on significant shrinkage (20-50% of original)
+        if (originalSize > 200 && newSize < originalSize * 0.5) {
+          warnings.push(`⚠️ "${change.path}": shrinks from ${originalSize}→${newSize} bytes (${Math.round(newSize / originalSize * 100)}% of original)`);
+        }
+      }
+    } catch (fetchErr) {
+      if (fetchErr instanceof Error && fetchErr.message.startsWith('Destructive update blocked')) {
+        throw fetchErr;
+      }
+      if (fetchErr instanceof Error && fetchErr.message.startsWith('Rejecting update')) {
+        throw fetchErr;
+      }
+      console.log(`[github_create_pr] Could not fetch original "${change.path}" for size check: ${fetchErr}`);
+    }
+  }
+
+  console.log(`[github_create_pr] Creating PR: ${owner}/${repo} "${title}" (${changes.length} files)${warnings.length > 0 ? ` [${warnings.length} warnings]` : ''}`);
+  for (const change of changes) {
+    console.log(`  ${change.action}: ${change.path} (${change.content?.length || 0} bytes, ${change.content?.split('\n').length || 0} lines)`);
+  }
+
   // --- Step 1: Get base branch SHA ---
   const refResponse = await fetch(`${apiBase}/git/ref/heads/${baseBranch}`, { headers });
   if (!refResponse.ok) {
@@ -925,7 +1006,8 @@ async function githubCreatePr(
     `PR: ${prData.html_url}`,
     `Branch: ${fullBranch} → ${baseBranch}`,
     `Changes: ${changes.length} file(s)`,
-    ...changes.map(c => `  - ${c.action}: ${c.path}`),
+    ...changes.map(c => `  - ${c.action}: ${c.path} (${c.content?.length || 0} bytes)`),
+    ...(warnings.length > 0 ? ['', '⚠️ Warnings:', ...warnings] : []),
   ];
 
   return summary.join('\n');
