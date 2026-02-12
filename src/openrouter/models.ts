@@ -516,12 +516,24 @@ export const MODELS: Record<string, ModelInfo> = {
     parallelCalls: true,
     maxContext: 200000,
   },
+  opus45: {
+    id: 'anthropic/claude-opus-4.5',
+    alias: 'opus45',
+    name: 'Claude Opus 4.5',
+    specialty: 'Paid Premium (Previous Gen)',
+    score: '80.9% SWE-Bench, 200K context',
+    cost: '$5/$25',
+    supportsVision: true,
+    supportsTools: true,
+    parallelCalls: true,
+    maxContext: 200000,
+  },
   opus: {
     id: 'anthropic/claude-opus-4.6',
     alias: 'opus',
     name: 'Claude Opus 4.6',
     specialty: 'Paid Best Quality (Newest)',
-    score: 'Top Anthropic, best for long-running professional tasks',
+    score: 'AA Index #1 (53), best for professional tasks',
     cost: '$5/$25',
     supportsVision: true,
     supportsTools: true,
@@ -959,6 +971,45 @@ export function categorizeModel(modelId: string, name: string, hasReasoning?: bo
   if (hasReasoning || /\br1\b|reason|think|math|chimera/i.test(lower)) return 'reasoning';
   if (/flash|mini|small|fast|turbo|lite|nano/i.test(lower)) return 'fast';
   return 'general';
+}
+
+/**
+ * Value tier based on performance/cost ratio.
+ * Free models are always 'free'. Paid models ranked by intelligence per dollar.
+ */
+export type ValueTier = 'free' | 'exceptional' | 'great' | 'good' | 'premium' | 'outdated';
+
+/**
+ * Get the value tier for a model.
+ * Uses cost string parsing + known benchmark data to compute a rough tier.
+ *
+ * Tiers:
+ * - free: No cost
+ * - exceptional: Best-in-class value (MiMo, DeepSeek V3.2, Devstral 2, Grok Fast)
+ * - great: Strong value (MiniMax, Qwen3 Coder, Mistral Large)
+ * - good: Reasonable for the capability (Gemini Flash, Haiku, Kimi)
+ * - premium: Expensive but highest quality (Opus, Sonnet, Gemini Pro)
+ * - outdated: Poor value — newer/cheaper alternatives exist (GPT-4o)
+ */
+export function getValueTier(model: ModelInfo): ValueTier {
+  if (model.isFree || model.cost === 'FREE') return 'free';
+  if (model.isImageGen) return 'good'; // Image gen pricing is different
+
+  // Parse output cost from "$/M_in / $/M_out" format
+  const costMatch = model.cost.match(/\$[\d.]+\/\$([\d.]+)/);
+  if (!costMatch) return 'good';
+  const outputCostPerM = parseFloat(costMatch[1]);
+  if (isNaN(outputCostPerM)) return 'good';
+
+  // Known outdated models — poor value regardless of cost
+  const outdatedIds = ['openai/gpt-4o'];
+  if (outdatedIds.includes(model.id)) return 'outdated';
+
+  // Tier by output cost + capability class
+  if (outputCostPerM <= 0.5) return 'exceptional';  // Under $0.50/M output
+  if (outputCostPerM <= 2.0) return 'great';         // $0.50-$2.00/M output
+  if (outputCostPerM <= 5.0) return 'good';           // $2.00-$5.00/M output
+  return 'premium';                                    // $5.00+/M output
 }
 
 /**
