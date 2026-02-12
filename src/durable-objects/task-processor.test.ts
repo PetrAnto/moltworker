@@ -33,7 +33,7 @@ vi.mock('../openrouter/tools', () => ({
 // Use deepseek provider to go through the raw fetch() path (not streaming)
 vi.mock('../openrouter/models', () => ({
   getModelId: vi.fn(() => 'deepseek-chat'),
-  getModel: vi.fn(() => ({ id: 'deepseek-chat', isFree: false, supportsTools: true })),
+  getModel: vi.fn(() => ({ id: 'deepseek-chat', alias: 'deep', isFree: false, supportsTools: true, name: 'DeepSeek', specialty: '', score: '', cost: '$0.25' })),
   getProvider: vi.fn(() => 'deepseek'),
   getProviderConfig: vi.fn(() => ({
     baseUrl: 'https://api.deepseek.com/v1/chat/completions',
@@ -42,6 +42,7 @@ vi.mock('../openrouter/models', () => ({
   getReasoningParam: vi.fn(() => ({})),
   detectReasoningLevel: vi.fn(() => undefined),
   getFreeToolModels: vi.fn(() => ['free1', 'free2']),
+  categorizeModel: vi.fn(() => 'general'),
   modelSupportsTools: vi.fn(() => true),
 }));
 
@@ -486,8 +487,12 @@ describe('TaskProcessor phases', () => {
       const mockState = createMockState();
       const { getModel, getFreeToolModels } = await import('../openrouter/models');
 
-      // Make model "free" so rotation applies
-      vi.mocked(getModel).mockReturnValue({ id: 'test', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' });
+      // Make model "free" so rotation applies — only known test aliases return free models
+      const freeModelMap: Record<string, ReturnType<typeof getModel>> = {
+        free1: { id: 'test-free1', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' },
+        free2: { id: 'test-free2', alias: 'free2', isFree: true, supportsTools: true, name: 'Free2', specialty: '', score: '', cost: 'FREE' },
+      };
+      vi.mocked(getModel).mockImplementation((alias: string) => freeModelMap[alias]);
       vi.mocked(getFreeToolModels).mockReturnValue(['free1', 'free2']);
 
       let apiCallCount = 0;
@@ -686,7 +691,11 @@ describe('TaskProcessor phases', () => {
       const mockState = createMockState();
       const { getModel, getFreeToolModels } = await import('../openrouter/models');
 
-      vi.mocked(getModel).mockReturnValue({ id: 'test', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' });
+      const freeModelMap: Record<string, ReturnType<typeof getModel>> = {
+        free1: { id: 'test-free1', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' },
+        free2: { id: 'test-free2', alias: 'free2', isFree: true, supportsTools: true, name: 'Free2', specialty: '', score: '', cost: 'FREE' },
+      };
+      vi.mocked(getModel).mockImplementation((alias: string) => freeModelMap[alias]);
       vi.mocked(getFreeToolModels).mockReturnValue(['free1', 'free2']);
 
       let apiCallCount = 0;
@@ -768,8 +777,10 @@ describe('TaskProcessor phases', () => {
       const mockState = createMockState();
       const { getModel, getFreeToolModels } = await import('../openrouter/models');
 
-      // Only one free model — can't rotate
-      vi.mocked(getModel).mockReturnValue({ id: 'test', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' });
+      // Only one free model — can't rotate (emergency core aliases return undefined)
+      vi.mocked(getModel).mockImplementation((alias: string) =>
+        alias === 'free1' ? { id: 'test-free1', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' } : undefined
+      );
       vi.mocked(getFreeToolModels).mockReturnValue(['free1']);
 
       let apiCallCount = 0;
@@ -844,7 +855,9 @@ describe('TaskProcessor phases', () => {
       const mockState = createMockState();
       const { getModel, getFreeToolModels } = await import('../openrouter/models');
 
-      vi.mocked(getModel).mockReturnValue({ id: 'test', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' });
+      vi.mocked(getModel).mockImplementation((alias: string) =>
+        alias === 'free1' ? { id: 'test-free1', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' } : undefined
+      );
       vi.mocked(getFreeToolModels).mockReturnValue(['free1']);
 
       const capturedBodies: Array<Record<string, unknown>> = [];
