@@ -660,6 +660,13 @@ function parseCostForSort(cost: string): number {
 }
 
 /**
+ * Check if a model alias is from the curated (static) catalog vs synced dynamically.
+ */
+export function isCuratedModel(alias: string): boolean {
+  return alias.toLowerCase() in MODELS;
+}
+
+/**
  * Format models list for /models command
  * Sorted by cost efficiency within each category
  */
@@ -673,17 +680,30 @@ export function formatModelsList(): string {
   const paid = all.filter(m => !m.isFree && !m.isImageGen && !m.provider);
   const direct = all.filter(m => m.provider && m.provider !== 'openrouter');
 
+  // Split free into curated and synced
+  const freeCurated = free.filter(m => isCuratedModel(m.alias));
+  const freeSynced = free.filter(m => !isCuratedModel(m.alias));
+
   // Sort by cost (cheapest first)
   const sortByCost = (a: ModelInfo, b: ModelInfo) => parseCostForSort(a.cost) - parseCostForSort(b.cost);
   paid.sort(sortByCost);
   direct.sort(sortByCost);
   imageGen.sort(sortByCost);
 
-  lines.push('🆓 FREE (OpenRouter):');
-  for (const m of free) {
+  lines.push('🆓 FREE (curated):');
+  for (const m of freeCurated) {
     const features = [m.supportsVision && '👁️', m.supportsTools && '🔧'].filter(Boolean).join('');
     lines.push(`  /${m.alias} - ${m.name} ${features}`);
     lines.push(`    ${m.specialty} | ${m.score}`);
+  }
+
+  if (freeSynced.length > 0) {
+    lines.push('\n🔄 FREE (synced):');
+    for (const m of freeSynced) {
+      const features = [m.supportsVision && '👁️', m.supportsTools && '🔧'].filter(Boolean).join('');
+      lines.push(`  /${m.alias} - ${m.name} ${features}`);
+      lines.push(`    ${m.specialty}`);
+    }
   }
 
   lines.push('\n⚡ DIRECT API (cheapest, no OpenRouter):');
