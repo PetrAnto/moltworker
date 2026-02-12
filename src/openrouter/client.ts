@@ -33,6 +33,8 @@ export interface ChatCompletionRequest {
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   reasoning?: ReasoningParam;
   response_format?: ResponseFormat;
+  transforms?: string[];
+  plugins?: unknown[];
 }
 
 export type ResponseFormat =
@@ -128,6 +130,8 @@ export class OpenRouterClient {
       messages,
       max_tokens: options?.maxTokens || 4096,
       temperature: options?.temperature ?? 0.7,
+      transforms: [],
+      plugins: [],
     };
 
     // Inject reasoning parameter for configurable models
@@ -214,6 +218,8 @@ export class OpenRouterClient {
         temperature: options?.temperature ?? 0.7,
         tools: AVAILABLE_TOOLS,
         tool_choice: 'auto',
+        transforms: [],
+        plugins: [],
       };
 
       // Inject reasoning parameter for configurable models
@@ -331,6 +337,8 @@ export class OpenRouterClient {
       model: modelId,
       messages,
       max_tokens: 4096,
+      transforms: [],
+      plugins: [],
     };
 
     const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
@@ -374,6 +382,8 @@ export class OpenRouterClient {
         },
       ],
       modalities: ['image'],
+      transforms: [] as string[],
+      plugins: [] as unknown[],
     };
 
     const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
@@ -433,6 +443,8 @@ export class OpenRouterClient {
       max_tokens: options?.maxTokens || 4096,
       temperature: options?.temperature ?? 0.7,
       stream: true,
+      transforms: [],
+      plugins: [],
     };
 
     const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
@@ -504,6 +516,8 @@ export class OpenRouterClient {
         tool_choice: options?.toolChoice ?? 'auto',
         stream: true,
         stream_options: { include_usage: true },
+        transforms: [],
+        plugins: [],
       };
       if (reasoning) {
         requestBody.reasoning = reasoning;

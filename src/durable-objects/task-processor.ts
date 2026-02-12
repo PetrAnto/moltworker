@@ -769,7 +769,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 task.modelAlias, // Pass alias - method will resolve to model ID (supports rotation)
                 conversationMessages,
                 {
-                  maxTokens: 4096,
+                  maxTokens: 16384,
                   temperature: 0.7,
                   tools: useTools ? TOOLS_WITHOUT_BROWSER : undefined,
                   toolChoice: useTools ? 'auto' : undefined,
@@ -809,7 +809,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 const requestBody: Record<string, unknown> = {
                     model: getModelId(task.modelAlias),
                     messages: conversationMessages,
-                    max_tokens: 4096,
+                    max_tokens: 16384,
                     temperature: 0.7,
                   };
                 if (useTools) {
@@ -958,6 +958,36 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
 
         const choice = result.choices[0];
+
+        // Handle finish_reason: length — tool_calls may be truncated with invalid JSON
+        if (choice.finish_reason === 'length' && choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+          // Validate each tool_call's arguments — truncated streams produce incomplete JSON
+          const validToolCalls = choice.message.tool_calls.filter(tc => {
+            try {
+              JSON.parse(tc.function.arguments);
+              return true;
+            } catch {
+              console.log(`[TaskProcessor] Dropping truncated tool_call ${tc.function.name}: invalid JSON args`);
+              return false;
+            }
+          });
+
+          if (validToolCalls.length === 0) {
+            // All tool_calls truncated — compress and retry with nudge
+            console.log(`[TaskProcessor] All tool_calls truncated (finish_reason: length) — compressing and retrying`);
+            const compressed = this.compressContext(conversationMessages, 4);
+            conversationMessages.length = 0;
+            conversationMessages.push(...compressed);
+            conversationMessages.push({
+              role: 'user',
+              content: '[Your last response was cut off. Please try again with a shorter tool call or break it into smaller steps.]',
+            });
+            continue;
+          }
+
+          // Replace with only the valid tool_calls
+          choice.message.tool_calls = validToolCalls;
+        }
 
         // Phase transition: plan → work after first model response
         if (task.phase === 'plan') {
@@ -1159,7 +1189,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           // Construct fallback from tool data instead of "No response generated"
           task.result = this.constructFallbackResponse(conversationMessages, task.toolsUsed);
         } else {
-          task.result = choice.message.content || 'No response generated.';
+          // Strip raw tool_call markup that weak models emit as text instead of using function calling
+          let content = choice.message.content || 'No response generated.';
+          content = content.replace(/<tool_call>\s*\{[\s\S]*?(?:\}\s*<\/tool_call>|\}[\s\S]*$)/g, '').trim();
+          task.result = content || 'No response generated.';
         }
         await this.doState.storage.put('task', task);
 
