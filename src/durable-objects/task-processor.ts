@@ -10,6 +10,7 @@ import { executeTool, AVAILABLE_TOOLS, type ToolContext, type ToolCall, TOOLS_WI
 import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, getFreeToolModels, categorizeModel, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { extractLearning, storeLearning, storeLastTaskSummary } from '../openrouter/learnings';
+import { parseOrchestraResult, storeOrchestraTask, loadOrchestraHistory, type OrchestraTask } from '../orchestra/orchestra';
 
 // Task phase type for structured task processing
 export type TaskPhase = 'plan' | 'work' | 'review';
@@ -1391,6 +1392,44 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             console.log(`[TaskProcessor] Learning stored: ${learning.category}, ${learning.uniqueTools.length} unique tools`);
           } catch (learnErr) {
             console.error('[TaskProcessor] Failed to store learning:', learnErr);
+          }
+        }
+
+        // Orchestra result tracking: if the response contains ORCHESTRA_RESULT, update history
+        if (this.r2 && task.result) {
+          try {
+            const orchestraResult = parseOrchestraResult(task.result);
+            if (orchestraResult) {
+              // Find the orchestra task entry to update (or create a new completed entry)
+              const systemMsg = request.messages.find(m => m.role === 'system');
+              const isOrchestra = typeof systemMsg?.content === 'string' && systemMsg.content.includes('Orchestra Mode');
+              if (isOrchestra) {
+                // Extract repo from system prompt
+                const repoMatch = typeof systemMsg?.content === 'string'
+                  ? systemMsg.content.match(/Full:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/)
+                  : null;
+                const repo = repoMatch ? repoMatch[1] : 'unknown/unknown';
+                const userMsg = request.messages.find(m => m.role === 'user');
+                const prompt = typeof userMsg?.content === 'string' ? userMsg.content : '';
+
+                const completedTask: OrchestraTask = {
+                  taskId: task.taskId,
+                  timestamp: Date.now(),
+                  modelAlias: task.modelAlias,
+                  repo,
+                  prompt: prompt.substring(0, 200),
+                  branchName: orchestraResult.branch,
+                  prUrl: orchestraResult.prUrl,
+                  status: 'completed',
+                  filesChanged: orchestraResult.files,
+                  summary: orchestraResult.summary,
+                };
+                await storeOrchestraTask(this.r2, task.userId, completedTask);
+                console.log(`[TaskProcessor] Orchestra task completed: ${orchestraResult.branch} → ${orchestraResult.prUrl}`);
+              }
+            }
+          } catch (orchErr) {
+            console.error('[TaskProcessor] Failed to store orchestra result:', orchErr);
           }
         }
 

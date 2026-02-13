@@ -8,6 +8,16 @@ import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from
 import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
 import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, loadLastTaskSummary, formatLastTaskForPrompt } from '../openrouter/learnings';
+import {
+  buildOrchestraPrompt,
+  parseOrchestraCommand,
+  parseOrchestraResult,
+  generateTaskSlug,
+  loadOrchestraHistory,
+  storeOrchestraTask,
+  formatOrchestraHistory,
+  type OrchestraTask,
+} from '../orchestra/orchestra';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import {
   MODELS,
@@ -924,6 +934,11 @@ export class TelegramHandler {
         break;
       }
 
+      case '/orchestra':
+      case '/orch':
+        await this.handleOrchestraCommand(message, chatId, userId, args);
+        break;
+
       case '/briefing':
       case '/brief':
         await this.handleBriefingCommand(chatId, userId, args);
@@ -1113,6 +1128,153 @@ export class TelegramHandler {
     } catch (error) {
       await this.bot.sendMessage(chatId, `Image generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Handle /orchestra command
+   * Usage: /orchestra owner/repo <task description>
+   * Usage: /orchestra history — show past orchestra tasks
+   */
+  private async handleOrchestraCommand(
+    message: TelegramMessage,
+    chatId: number,
+    userId: string,
+    args: string[]
+  ): Promise<void> {
+    // /orchestra history — show past tasks
+    if (args.length > 0 && args[0] === 'history') {
+      const history = await loadOrchestraHistory(this.r2Bucket, userId);
+      await this.bot.sendMessage(chatId, formatOrchestraHistory(history));
+      return;
+    }
+
+    // Parse command arguments
+    const parsed = parseOrchestraCommand(args);
+    if (!parsed) {
+      await this.bot.sendMessage(
+        chatId,
+        '🎼 Orchestra Mode — Structured Task Workflow\n\n' +
+        'Usage:\n' +
+        '  /orchestra owner/repo <task description>\n' +
+        '  /orchestra history — view past tasks\n\n' +
+        'Example:\n' +
+        '  /orchestra PetrAnto/moltworker Add health check endpoint\n\n' +
+        'The bot will:\n' +
+        '1. Read the repo structure\n' +
+        '2. Plan the approach\n' +
+        '3. Implement the changes\n' +
+        '4. Create a PR (branch: bot/{task}-{model})\n' +
+        '5. Log the task for next-task context'
+      );
+      return;
+    }
+
+    // Verify prerequisites
+    if (!this.githubToken) {
+      await this.bot.sendMessage(chatId, '❌ GitHub token not configured. Orchestra mode requires GITHUB_TOKEN.');
+      return;
+    }
+    if (!this.taskProcessor) {
+      await this.bot.sendMessage(chatId, '❌ Task processor not available. Orchestra mode requires Durable Objects.');
+      return;
+    }
+
+    const { repo, prompt } = parsed;
+    const modelAlias = await this.storage.getUserModel(userId);
+    const modelInfo = getModel(modelAlias);
+
+    if (!modelInfo?.supportsTools) {
+      await this.bot.sendMessage(
+        chatId,
+        `⚠️ Model /${modelAlias} doesn't support tools. Orchestra needs tool-calling.\n` +
+        `Switch to: ${getFreeToolModels().slice(0, 3).map(a => `/${a}`).join(' ')} (free) or /deep /grok /sonnet (paid)`
+      );
+      return;
+    }
+
+    await this.bot.sendChatAction(chatId, 'typing');
+
+    // Load orchestra history for context injection
+    const history = await loadOrchestraHistory(this.r2Bucket, userId);
+    const previousTasks = history?.tasks.filter(t => t.repo === repo) || [];
+
+    // Build the orchestra system prompt
+    const orchestraSystemPrompt = buildOrchestraPrompt({
+      repo,
+      modelAlias,
+      previousTasks,
+    });
+
+    // Inject learnings and last task context
+    const learningsHint = await this.getLearningsHint(userId, prompt);
+    const lastTaskHint = await this.getLastTaskHint(userId);
+
+    const toolHint = modelInfo.parallelCalls
+      ? '\n\nCall multiple tools in parallel when possible (e.g., read multiple files at once).'
+      : '';
+
+    // Build messages for the task
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: orchestraSystemPrompt + toolHint + learningsHint + lastTaskHint,
+      },
+      { role: 'user', content: prompt },
+    ];
+
+    // Store the orchestra task entry as "started"
+    const taskSlug = generateTaskSlug(prompt);
+    const branchName = `bot/${taskSlug}-${modelAlias}`;
+    const orchestraTask: OrchestraTask = {
+      taskId: `orch-${userId}-${Date.now()}`,
+      timestamp: Date.now(),
+      modelAlias,
+      repo,
+      prompt: prompt.substring(0, 200),
+      branchName,
+      status: 'started',
+      filesChanged: [],
+    };
+    await storeOrchestraTask(this.r2Bucket, userId, orchestraTask);
+
+    // Dispatch to TaskProcessor DO
+    const taskId = `${userId}-${Date.now()}`;
+    const autoResume = await this.storage.getUserAutoResume(userId);
+    const taskRequest: TaskRequest = {
+      taskId,
+      chatId,
+      userId,
+      modelAlias,
+      messages,
+      telegramToken: this.telegramToken,
+      openrouterKey: this.openrouterKey,
+      githubToken: this.githubToken,
+      dashscopeKey: this.dashscopeKey,
+      moonshotKey: this.moonshotKey,
+      deepseekKey: this.deepseekKey,
+      autoResume,
+      prompt: `[Orchestra] ${repo}: ${prompt.substring(0, 150)}`,
+    };
+
+    const doId = this.taskProcessor.idFromName(userId);
+    const doStub = this.taskProcessor.get(doId);
+    await doStub.fetch(new Request('https://do/process', {
+      method: 'POST',
+      body: JSON.stringify(taskRequest),
+    }));
+
+    await this.storage.addMessage(userId, 'user', `[Orchestra: ${repo}] ${prompt}`);
+
+    await this.bot.sendMessage(
+      chatId,
+      `🎼 Orchestra task started!\n\n` +
+      `📦 Repo: ${repo}\n` +
+      `🤖 Model: /${modelAlias}\n` +
+      `🌿 Branch: ${branchName}\n` +
+      `📝 Task: ${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}\n\n` +
+      `The bot will read the repo, implement changes, and create a PR.\n` +
+      `Use /cancel to stop.`
+    );
   }
 
   /**
@@ -2545,6 +2707,10 @@ The bot calls these automatically when relevant:
  • github_api — Full GitHub API access
  • github_create_pr — Create PR with file changes
  • sandbox_exec — Run commands in sandbox container
+
+━━━ Orchestra Mode ━━━
+/orchestra owner/repo <task> — Structured workflow: read repo → implement → create PR
+/orchestra history — View past orchestra tasks
 
 ━━━ Special Prefixes ━━━
 think:high <msg> — Deep reasoning (also: low, medium, off)
