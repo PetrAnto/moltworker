@@ -546,8 +546,8 @@ export const MODELS: Record<string, ModelInfo> = {
     id: 'deepseek-coder',
     alias: 'dcode',
     name: 'DeepSeek Coder (Direct)',
-    specialty: 'Direct DeepSeek API - Coding',
-    score: 'Excellent coding, very cheap',
+    specialty: 'Direct DeepSeek API - Agentic Coding',
+    score: 'Excellent agentic coding, parallel tool calls, very cheap',
     cost: '$0.14/$0.28',
     supportsTools: true,
     provider: 'deepseek',
@@ -1116,6 +1116,12 @@ export function getOrchestraRecommendations(): {
       if (sweScore >= 70) score += 15;
       if (sweScore >= 60) score += 5;
     }
+
+    // Positive: direct API models (faster, more reliable, no OpenRouter overhead)
+    if (m.provider && m.provider !== 'openrouter') score += 10;
+
+    // Positive: parallel tool calls (orchestra uses many tools)
+    if (m.parallelCalls) score += 5;
 
     return { model: m, score };
   });
