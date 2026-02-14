@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   buildInitPrompt,
   buildRunPrompt,
+  buildRedoPrompt,
   buildOrchestraPrompt,
   parseOrchestraCommand,
   parseOrchestraResult,
@@ -15,6 +16,8 @@ import {
   formatOrchestraHistory,
   parseRoadmapPhases,
   formatRoadmapStatus,
+  findMatchingTasks,
+  resetRoadmapTasks,
   type OrchestraTask,
   type OrchestraHistory,
 } from './orchestra';
@@ -774,5 +777,222 @@ describe('formatRoadmapStatus', () => {
     const result = formatRoadmapStatus(content, 'o/r', 'ROADMAP.md');
     expect(result).toContain('[Truncated]');
     expect(result.length).toBeLessThan(4000);
+  });
+});
+
+// --- findMatchingTasks ---
+
+describe('findMatchingTasks', () => {
+  const roadmap = `### Phase 1: Setup
+- [x] **Task 1.1**: Initialize project structure
+- [x] **Task 1.2**: Add CI pipeline
+
+### Phase 2: Core
+- [ ] **Task 2.1**: Add user authentication
+- [x] **Task 2.2**: Add database models
+- [ ] **Task 2.3**: Add API endpoints`;
+
+  it('finds tasks by title substring', () => {
+    const matches = findMatchingTasks(roadmap, 'auth');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].title).toBe('Add user authentication');
+    expect(matches[0].done).toBe(false);
+    expect(matches[0].phase).toBe('Core');
+  });
+
+  it('finds tasks case-insensitively', () => {
+    const matches = findMatchingTasks(roadmap, 'DATABASE');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].title).toBe('Add database models');
+  });
+
+  it('finds all tasks in a phase', () => {
+    const matches = findMatchingTasks(roadmap, 'Phase 2');
+    expect(matches).toHaveLength(3);
+    expect(matches[0].title).toBe('Add user authentication');
+    expect(matches[1].title).toBe('Add database models');
+    expect(matches[2].title).toBe('Add API endpoints');
+  });
+
+  it('returns empty array for no matches', () => {
+    const matches = findMatchingTasks(roadmap, 'nonexistent');
+    expect(matches).toHaveLength(0);
+  });
+
+  it('matches task number in line', () => {
+    const matches = findMatchingTasks(roadmap, 'Task 1.1');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].title).toBe('Initialize project structure');
+  });
+
+  it('includes done status', () => {
+    const matches = findMatchingTasks(roadmap, 'Phase 1');
+    expect(matches).toHaveLength(2);
+    expect(matches[0].done).toBe(true);
+    expect(matches[1].done).toBe(true);
+  });
+
+  it('tracks correct phase names', () => {
+    const matches = findMatchingTasks(roadmap, 'API');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].phase).toBe('Core');
+  });
+});
+
+// --- resetRoadmapTasks ---
+
+describe('resetRoadmapTasks', () => {
+  const roadmap = `### Phase 1: Setup
+- [x] **Task 1.1**: Initialize project
+- [x] **Task 1.2**: Add CI
+
+### Phase 2: Core
+- [ ] **Task 2.1**: Add auth
+- [x] **Task 2.2**: Add database`;
+
+  it('resets matching completed tasks', () => {
+    const result = resetRoadmapTasks(roadmap, 'Initialize');
+    expect(result.resetCount).toBe(1);
+    expect(result.taskNames).toEqual(['Initialize project']);
+    expect(result.modified).toContain('- [ ] **Task 1.1**: Initialize project');
+  });
+
+  it('resets all completed tasks in a phase', () => {
+    const result = resetRoadmapTasks(roadmap, 'Phase 1');
+    expect(result.resetCount).toBe(2);
+    expect(result.taskNames).toContain('Initialize project');
+    expect(result.taskNames).toContain('Add CI');
+    expect(result.modified).toContain('- [ ] **Task 1.1**: Initialize project');
+    expect(result.modified).toContain('- [ ] **Task 1.2**: Add CI');
+  });
+
+  it('does not reset already-pending tasks', () => {
+    const result = resetRoadmapTasks(roadmap, 'auth');
+    expect(result.resetCount).toBe(0);
+    expect(result.taskNames).toHaveLength(0);
+    expect(result.modified).toBe(roadmap);
+  });
+
+  it('preserves other lines unchanged', () => {
+    const result = resetRoadmapTasks(roadmap, 'database');
+    expect(result.resetCount).toBe(1);
+    // Check that Phase 1 tasks are still checked
+    expect(result.modified).toContain('- [x] **Task 1.1**: Initialize project');
+    expect(result.modified).toContain('- [x] **Task 1.2**: Add CI');
+    // Database is unchecked
+    expect(result.modified).toContain('- [ ] **Task 2.2**: Add database');
+  });
+
+  it('returns zero count for no matches', () => {
+    const result = resetRoadmapTasks(roadmap, 'nonexistent');
+    expect(result.resetCount).toBe(0);
+    expect(result.modified).toBe(roadmap);
+  });
+});
+
+// --- buildRedoPrompt ---
+
+describe('buildRedoPrompt', () => {
+  it('includes redo-specific instructions', () => {
+    const prompt = buildRedoPrompt({
+      repo: 'owner/repo',
+      modelAlias: 'deep',
+      previousTasks: [],
+      taskToRedo: 'Add user auth',
+    });
+    expect(prompt).toContain('REDO Mode');
+    expect(prompt).toContain('Add user auth');
+    expect(prompt).toContain('RE-DOING');
+    expect(prompt).toContain('INCORRECT or INCOMPLETE');
+  });
+
+  it('includes repo info', () => {
+    const prompt = buildRedoPrompt({
+      repo: 'owner/repo',
+      modelAlias: 'deep',
+      previousTasks: [],
+      taskToRedo: 'fix something',
+    });
+    expect(prompt).toContain('Owner: owner');
+    expect(prompt).toContain('Repo: repo');
+  });
+
+  it('includes model alias in branch and PR naming', () => {
+    const prompt = buildRedoPrompt({
+      repo: 'o/r',
+      modelAlias: 'grok',
+      previousTasks: [],
+      taskToRedo: 'test task',
+    });
+    expect(prompt).toContain('redo-{task-slug}-grok');
+    expect(prompt).toContain('[grok]');
+  });
+
+  it('includes ORCHESTRA_RESULT format', () => {
+    const prompt = buildRedoPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks: [],
+      taskToRedo: 'task',
+    });
+    expect(prompt).toContain('ORCHESTRA_RESULT:');
+  });
+
+  it('includes previous task history with redo warning', () => {
+    const previousTasks: OrchestraTask[] = [{
+      taskId: 'orch-1',
+      timestamp: Date.now(),
+      modelAlias: 'deep',
+      repo: 'o/r',
+      mode: 'run',
+      prompt: 'Add auth',
+      branchName: 'bot/add-auth-deep',
+      status: 'completed',
+      filesChanged: ['src/auth.ts'],
+      summary: 'Added auth (broken)',
+    }];
+
+    const prompt = buildRedoPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks,
+      taskToRedo: 'Add auth',
+    });
+    expect(prompt).toContain('Recent Orchestra History');
+    expect(prompt).toContain('Do NOT repeat the same mistakes');
+  });
+
+  it('instructs model to uncheck task in roadmap', () => {
+    const prompt = buildRedoPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks: [],
+      taskToRedo: 'something',
+    });
+    expect(prompt).toContain('- [x]');
+    expect(prompt).toContain('- [ ]');
+    expect(prompt).toContain('change it back');
+  });
+});
+
+// --- Model alias in PR/commit messages ---
+
+describe('model alias in prompts', () => {
+  it('init prompt includes model in PR title', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'grok' });
+    expect(prompt).toContain('[grok]');
+    expect(prompt).toContain('Generated by: grok');
+  });
+
+  it('run prompt includes model in PR title', () => {
+    const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
+    expect(prompt).toContain('[deep]');
+    expect(prompt).toContain('Generated by: deep');
+  });
+
+  it('redo prompt includes model in PR title', () => {
+    const prompt = buildRedoPrompt({ repo: 'o/r', modelAlias: 'sonnet', previousTasks: [], taskToRedo: 'x' });
+    expect(prompt).toContain('[sonnet]');
+    expect(prompt).toContain('Generated by: sonnet');
   });
 });

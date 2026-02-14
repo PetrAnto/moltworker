@@ -11,6 +11,7 @@ import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, loadLast
 import {
   buildInitPrompt,
   buildRunPrompt,
+  buildRedoPrompt,
   parseOrchestraCommand,
   parseOrchestraResult,
   generateTaskSlug,
@@ -19,6 +20,9 @@ import {
   formatOrchestraHistory,
   fetchRoadmapFromGitHub,
   formatRoadmapStatus,
+  findMatchingTasks,
+  resetRoadmapTasks,
+  createRoadmapResetPR,
   type OrchestraTask,
 } from '../orchestra/orchestra';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
@@ -1195,6 +1199,118 @@ export class TelegramHandler {
       return;
     }
 
+    // /orch reset <task|phase> — uncheck completed tasks so /orch next re-runs them
+    if (sub === 'reset') {
+      const query = args.slice(1).join(' ').trim();
+      if (!query) {
+        await this.bot.sendMessage(
+          chatId,
+          '❌ Please specify which task(s) to reset.\n\n' +
+          'Usage:\n' +
+          '  /orch reset <task name> — Reset a specific task\n' +
+          '  /orch reset Phase 2 — Reset all tasks in Phase 2\n\n' +
+          'This unchecks completed tasks so `/orch next` picks them up again.\n' +
+          'A PR will be created with the roadmap changes.'
+        );
+        return;
+      }
+      const lockedRepo = await this.storage.getOrchestraRepo(userId);
+      if (!lockedRepo) {
+        await this.bot.sendMessage(chatId, '❌ No default repo set.\n\nFirst run: /orch set owner/repo');
+        return;
+      }
+      if (!this.githubToken) {
+        await this.bot.sendMessage(chatId, '❌ GitHub token not configured. Cannot create reset PR.');
+        return;
+      }
+      const [owner, repoName] = lockedRepo.split('/');
+      try {
+        // Fetch roadmap
+        await this.bot.sendMessage(chatId, `🔍 Looking for roadmap in ${lockedRepo}...`);
+        const { content, path: filePath } = await fetchRoadmapFromGitHub(owner, repoName, this.githubToken);
+
+        // Find and preview matching tasks
+        const matchedTasks = findMatchingTasks(content, query);
+        if (matchedTasks.length === 0) {
+          await this.bot.sendMessage(
+            chatId,
+            `❌ No tasks found matching "${query}".\n\n` +
+            'Use `/orch roadmap` to see all tasks and their exact names.'
+          );
+          return;
+        }
+
+        const doneTasks = matchedTasks.filter(t => t.done);
+        if (doneTasks.length === 0) {
+          const names = matchedTasks.map(t => `  ⬜ ${t.title}`).join('\n');
+          await this.bot.sendMessage(
+            chatId,
+            `ℹ️ Found ${matchedTasks.length} matching task(s), but none are completed:\n${names}\n\n` +
+            'Nothing to reset — these tasks are already pending.'
+          );
+          return;
+        }
+
+        // Perform the reset
+        const { modified, resetCount, taskNames } = resetRoadmapTasks(content, query);
+
+        // Create PR
+        await this.bot.sendMessage(
+          chatId,
+          `📝 Resetting ${resetCount} task(s):\n${taskNames.map(t => `  ✅ → ⬜ ${t}`).join('\n')}\n\nCreating PR...`
+        );
+
+        const { prUrl } = await createRoadmapResetPR({
+          owner,
+          repo: repoName,
+          filePath,
+          newContent: modified,
+          taskNames,
+          githubToken: this.githubToken,
+        });
+
+        await this.bot.sendMessage(
+          chatId,
+          `✅ Reset PR created!\n\n` +
+          `📋 ${resetCount} task(s) unchecked:\n${taskNames.map(t => `  ⬜ ${t}`).join('\n')}\n\n` +
+          `🔗 PR: ${prUrl}\n\n` +
+          `Once merged, run \`/orch next\` to re-execute these tasks.`
+        );
+      } catch (error) {
+        await this.bot.sendMessage(
+          chatId,
+          `❌ Reset failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      return;
+    }
+
+    // /orch redo <task> — re-implement a previously completed task
+    if (sub === 'redo') {
+      const taskQuery = args.slice(1).join(' ').trim();
+      if (!taskQuery) {
+        await this.bot.sendMessage(
+          chatId,
+          '❌ Please specify which task to redo.\n\n' +
+          'Usage:\n' +
+          '  /orch redo <task name> — Re-implement a task that was done incorrectly\n\n' +
+          'The bot will:\n' +
+          '1. Read the current roadmap and find the task\n' +
+          '2. Examine what the previous attempt did wrong\n' +
+          '3. Re-implement it properly\n' +
+          '4. Create a PR with the fix + updated roadmap'
+        );
+        return;
+      }
+      const lockedRepo = await this.storage.getOrchestraRepo(userId);
+      if (!lockedRepo) {
+        await this.bot.sendMessage(chatId, '❌ No default repo set.\n\nFirst run: /orch set owner/repo');
+        return;
+      }
+      // Delegate to executeOrchestra with redo mode
+      return this.executeOrchestra(chatId, userId, 'redo', lockedRepo, taskQuery);
+    }
+
     // /orch set owner/repo — lock the default repo
     if (sub === 'set') {
       const repo = args[1];
@@ -1311,11 +1427,17 @@ export class TelegramHandler {
       '/orch set owner/repo — Lock default repo\n' +
       '/orch unset — Clear locked repo\n' +
       '/orch history — View past tasks\n' +
-      '/orch roadmap — View roadmap status\n\n' +
+      '/orch roadmap — View roadmap status\n' +
+      '/orch reset <task> — Uncheck task(s) for re-run\n' +
+      '/orch redo <task> — Re-implement a failed task\n\n' +
       '━━━ Workflow ━━━\n' +
       '1. /orch set PetrAnto/myapp\n' +
       '2. /orch init Build a user auth system\n' +
-      '3. /orch next  (repeat until done)'
+      '3. /orch next  (repeat until done)\n\n' +
+      '━━━ Fixing Mistakes ━━━\n' +
+      '/orch redo <task> — Bot re-does a bad task\n' +
+      '/orch reset <task> — Uncheck, then /orch next\n' +
+      '/orch reset Phase 2 — Reset an entire phase'
     );
   }
 
@@ -1326,7 +1448,7 @@ export class TelegramHandler {
   private async executeOrchestra(
     chatId: number,
     userId: string,
-    mode: 'init' | 'run',
+    mode: 'init' | 'run' | 'redo',
     repo: string,
     prompt: string
   ): Promise<void> {
@@ -1362,6 +1484,13 @@ export class TelegramHandler {
     let orchestraSystemPrompt: string;
     if (mode === 'init') {
       orchestraSystemPrompt = buildInitPrompt({ repo, modelAlias });
+    } else if (mode === 'redo') {
+      orchestraSystemPrompt = buildRedoPrompt({
+        repo,
+        modelAlias,
+        previousTasks,
+        taskToRedo: prompt,
+      });
     } else {
       orchestraSystemPrompt = buildRunPrompt({
         repo,
@@ -1383,6 +1512,8 @@ export class TelegramHandler {
     // Build messages for the task
     const userMessage = mode === 'init'
       ? prompt
+      : mode === 'redo'
+      ? `Redo this task: ${prompt}`
       : (prompt || 'Execute the next uncompleted task from the roadmap.');
     const messages: ChatMessage[] = [
       {
@@ -1395,16 +1526,19 @@ export class TelegramHandler {
     // Determine branch name
     const taskSlug = mode === 'init'
       ? 'roadmap-init'
+      : mode === 'redo'
+      ? `redo-${generateTaskSlug(prompt)}`
       : generateTaskSlug(prompt || 'next-task');
     const branchName = `bot/${taskSlug}-${modelAlias}`;
 
     // Store the orchestra task entry as "started"
+    // OrchestraTask.mode only supports 'init' | 'run', treat redo as run
     const orchestraTask: OrchestraTask = {
       taskId: `orch-${userId}-${Date.now()}`,
       timestamp: Date.now(),
       modelAlias,
       repo,
-      mode,
+      mode: mode === 'redo' ? 'run' : mode,
       prompt: (prompt || (mode === 'init' ? 'Roadmap creation' : 'Next roadmap task')).substring(0, 200),
       branchName,
       status: 'started',
@@ -1415,7 +1549,7 @@ export class TelegramHandler {
     // Dispatch to TaskProcessor DO
     const taskId = `${userId}-${Date.now()}`;
     const autoResume = await this.storage.getUserAutoResume(userId);
-    const modeLabel = mode === 'init' ? 'Init' : 'Run';
+    const modeLabel = mode === 'init' ? 'Init' : mode === 'redo' ? 'Redo' : 'Run';
     const taskRequest: TaskRequest = {
       taskId,
       chatId,
@@ -1450,6 +1584,21 @@ export class TelegramHandler {
         `🤖 Model: /${modelAlias}\n` +
         `🌿 Branch: ${branchName}\n\n` +
         `The bot will analyze the repo, create ROADMAP.md + WORK_LOG.md, and open a PR.\n` +
+        `Use /cancel to stop.`
+      );
+    } else if (mode === 'redo') {
+      await this.bot.sendMessage(
+        chatId,
+        `🎼 Orchestra REDO started!\n\n` +
+        `📦 Repo: ${repo}\n` +
+        `🤖 Model: /${modelAlias}\n` +
+        `🌿 Branch: ${branchName}\n` +
+        `🔄 Redoing: ${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}\n\n` +
+        `The bot will:\n` +
+        `1. Read the roadmap and find the task\n` +
+        `2. Examine what the previous attempt did wrong\n` +
+        `3. Re-implement it properly\n` +
+        `4. Create a PR with the fix + updated roadmap\n\n` +
         `Use /cancel to stop.`
       );
     } else {
@@ -2924,9 +3073,16 @@ Step 4: Repeat
 /orch next — Execute next task
 /orch next <specific task> — Execute specific task
 /orch run owner/repo — Run with explicit repo
-/orch history — View past tasks
 /orch roadmap — View roadmap status
+/orch history — View past tasks
 /orch unset — Clear locked repo
+
+━━━ Fixing Mistakes ━━━
+/orch redo <task> — Re-implement a task that was done wrong
+  → Bot examines what went wrong and creates a fix PR
+/orch reset <task> — Uncheck a completed task
+  → Creates a PR that flips ✅→⬜, then /orch next re-runs it
+/orch reset Phase 2 — Reset all tasks in a phase
 
 ━━━ What gets created ━━━
 📋 ROADMAP.md — Phased task list with - [ ] / - [x] checkboxes
@@ -3000,8 +3156,10 @@ The bot calls these automatically when relevant:
 /orch init <desc> — Create ROADMAP.md + WORK_LOG.md
 /orch next — Execute next roadmap task
 /orch next <task> — Execute specific task
-/orch history — View past tasks
 /orch roadmap — View roadmap status
+/orch history — View past tasks
+/orch redo <task> — Re-implement a failed task
+/orch reset <task> — Uncheck task(s) for re-run
 
 ━━━ Special Prefixes ━━━
 think:high <msg> — Deep reasoning (also: low, medium, off)
