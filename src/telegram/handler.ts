@@ -646,6 +646,14 @@ export class TelegramHandler {
       return;
     }
 
+    // Detect "continue" keyword — route through resume path instead of regular chat.
+    // When a task hits the iteration limit, it tells the user to send "continue".
+    // Without this, "continue" creates a brand-new task that immediately re-hits the limit.
+    if (text.trim().toLowerCase() === 'continue' && this.taskProcessor) {
+      await this.handleContinueResume(message);
+      return;
+    }
+
     // Regular text message - chat with AI
     if (text) {
       await this.handleChat(message, text);
@@ -1650,6 +1658,62 @@ export class TelegramHandler {
     } catch (error) {
       await this.bot.sendMessage(chatId, `Vision analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Handle "continue" keyword by resuming from checkpoint.
+   * Mirrors the resume button callback logic but triggered by text message.
+   */
+  private async handleContinueResume(message: TelegramMessage): Promise<void> {
+    const chatId = message.chat.id;
+    const userId = String(message.from?.id || chatId);
+
+    if (!this.taskProcessor) return;
+
+    await this.bot.sendChatAction(chatId, 'typing');
+
+    // Get the last user message from storage (the original task, not "continue")
+    const history = await this.storage.getConversation(userId, 1);
+    const lastUserMessage = history.find(m => m.role === 'user');
+
+    if (!lastUserMessage) {
+      await this.bot.sendMessage(chatId, 'No previous task found to continue.');
+      return;
+    }
+
+    // Build minimal messages — checkpoint will be loaded by the TaskProcessor
+    const systemPrompt = await this.getSystemPrompt();
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: lastUserMessage.content },
+    ];
+
+    const modelAlias = await this.storage.getUserModel(userId);
+    const autoResume = await this.storage.getUserAutoResume(userId);
+    const taskId = `${userId}-${Date.now()}`;
+    const taskRequest: TaskRequest = {
+      taskId,
+      chatId,
+      userId,
+      modelAlias,
+      messages,
+      telegramToken: this.telegramToken,
+      openrouterKey: this.openrouterKey,
+      githubToken: this.githubToken,
+      dashscopeKey: this.dashscopeKey,
+      moonshotKey: this.moonshotKey,
+      deepseekKey: this.deepseekKey,
+      autoResume,
+    };
+
+    const doId = this.taskProcessor.idFromName(userId);
+    const doStub = this.taskProcessor.get(doId);
+    await doStub.fetch(new Request('https://do/process', {
+      method: 'POST',
+      body: JSON.stringify(taskRequest),
+    }));
+
+    // Don't add "continue" to conversation history — it's a control command, not content
   }
 
   /**
