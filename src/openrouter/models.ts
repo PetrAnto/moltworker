@@ -1055,6 +1055,130 @@ export function getValueTier(model: ModelInfo): ValueTier {
 }
 
 /**
+ * Get model recommendations for orchestra tasks.
+ * Dynamically picks the best models from the catalog based on:
+ * - Must support tools
+ * - Prefer 'agentic' / 'coding' specialty
+ * - Prefer larger active parameters (avoid tiny MoE models)
+ * - Avoid models with 'mini' / 'small' / 'flash' in name (weak instruction following)
+ * - Group by free / cheap paid / premium paid
+ *
+ * Returns structured recommendations that update automatically when models change.
+ */
+export interface OrchestraModelRec {
+  alias: string;
+  name: string;
+  cost: string;
+  why: string;
+}
+
+export function getOrchestraRecommendations(): {
+  free: OrchestraModelRec[];
+  paid: OrchestraModelRec[];
+  avoid: string[];
+} {
+  const all = getAllModels();
+  const toolModels = Object.values(all).filter(m => m.supportsTools && !m.isImageGen);
+
+  // Score each model for orchestra suitability
+  const scored = toolModels.map(m => {
+    let score = 0;
+    const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
+
+    // Strong positive: agentic / multi-file / coding specialty
+    if (/agentic/i.test(lower)) score += 30;
+    if (/multi-?file/i.test(lower)) score += 25;
+    if (/coding/i.test(lower)) score += 15;
+    if (/swe-?bench/i.test(lower)) score += 10;
+
+    // Positive: large context (orchestra tasks can be long)
+    if ((m.maxContext || 0) >= 200000) score += 10;
+    if ((m.maxContext || 0) >= 128000) score += 5;
+
+    // Positive: dense models (all params active = better instruction following)
+    if (/dense/i.test(lower)) score += 15;
+
+    // Negative: small active parameter models (weak instruction following)
+    if (/\b(mini|small|flash|lite|nano)\b/i.test(m.name)) score -= 20;
+    if (/\b\d+B active\b/i.test(m.score)) {
+      const activeMatch = m.score.match(/(\d+)B active/i);
+      if (activeMatch) {
+        const activeB = parseInt(activeMatch[1], 10);
+        if (activeB < 20) score -= 15; // Very small active params
+        if (activeB >= 40) score += 10; // Large active params
+      }
+    }
+
+    // Positive: high SWE-Bench scores
+    const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
+    if (sweMatch) {
+      const sweScore = parseFloat(sweMatch[1]);
+      if (sweScore >= 70) score += 15;
+      if (sweScore >= 60) score += 5;
+    }
+
+    return { model: m, score };
+  });
+
+  // Separate free vs paid
+  const freeScored = scored.filter(s => s.model.isFree).sort((a, b) => b.score - a.score);
+  const paidScored = scored.filter(s => !s.model.isFree).sort((a, b) => b.score - a.score);
+
+  // Models to avoid for orchestra (small active params, weak instruction following)
+  const avoidList = scored
+    .filter(s => s.score < -5)
+    .map(s => s.model.alias);
+
+  const formatRec = (s: { model: ModelInfo; score: number }): OrchestraModelRec => {
+    const specialty = s.model.specialty.replace(/^(Free|Paid)\s+/i, '');
+    return {
+      alias: s.model.alias,
+      name: s.model.name,
+      cost: s.model.cost,
+      why: specialty,
+    };
+  };
+
+  return {
+    free: freeScored.slice(0, 3).map(formatRec),
+    paid: paidScored.slice(0, 3).map(formatRec),
+    avoid: avoidList,
+  };
+}
+
+/**
+ * Format orchestra model recommendations as a user-friendly string.
+ * Used in /orch help text.
+ */
+export function formatOrchestraModelRecs(): string {
+  const recs = getOrchestraRecommendations();
+
+  const lines: string[] = ['━━━ Recommended Models ━━━'];
+
+  if (recs.free.length > 0) {
+    lines.push('Free:');
+    for (const r of recs.free) {
+      lines.push(`  /${r.alias} — ${r.why}`);
+    }
+  }
+
+  if (recs.paid.length > 0) {
+    lines.push('Paid (best value):');
+    for (const r of recs.paid) {
+      lines.push(`  /${r.alias} (${r.cost}) — ${r.why}`);
+    }
+  }
+
+  if (recs.avoid.length > 0) {
+    lines.push(`Avoid: ${recs.avoid.map(a => '/' + a).join(', ')} (weak instruction following)`);
+  }
+
+  lines.push('Switch model before /orch run: just type /<model>');
+
+  return lines.join('\n');
+}
+
+/**
  * Default model alias
  */
 export const DEFAULT_MODEL = 'auto';
