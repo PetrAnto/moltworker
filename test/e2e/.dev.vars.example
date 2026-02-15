@@ -1,0 +1,27 @@
+# Cloud E2E Test Credentials
+# Copy this file to .dev.vars and fill in your values
+# DO NOT commit .dev.vars to git!
+
+# Required: Cloudflare API token with Workers, Access, and R2 permissions
+CLOUDFLARE_API_TOKEN=
+
+# Required: Your Cloudflare account ID
+CF_ACCOUNT_ID=
+
+# Required: Your workers.dev subdomain (e.g., "myaccount" for myaccount.workers.dev)
+WORKERS_SUBDOMAIN=
+
+# Required: Your Cloudflare Access team domain (e.g., "myteam.cloudflareaccess.com")
+CF_ACCESS_TEAM_DOMAIN=
+
+# Required: R2 storage credentials
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+
+# Optional: Unique test run ID for isolation (defaults to timestamp)
+# E2E_TEST_RUN_ID=
+
+# Optional: AI provider credentials (at least one needed for chat tests)
+# AI_GATEWAY_API_KEY=
+# AI_GATEWAY_BASE_URL=
+# ANTHROPIC_API_KEY=

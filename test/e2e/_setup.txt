@@ -13,7 +13,10 @@ start playwright browser
 ===
 ./start-browser
 ---
-ready
+{{ output }}
+---
+where
+* strip(output) endswith "ready"
 
 ===
 start video recording
@@ -24,3 +27,20 @@ start video recording
 ---
 where
 * output contains "Video recording started"
+
+===
+navigate to main page and wait for worker to be ready
+%require
+===
+TOKEN=$(cat "$CCTR_FIXTURE_DIR/gateway-token.txt")
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./pw --session=moltworker-e2e run-code "async page => {
+  await page.goto('$WORKER_URL/?token=$TOKEN');
+  await page.waitForSelector('text=Pairing required', { timeout: 480000 });
+}"
+echo "Worker is ready"
+---
+{{ output }}
+---
+where
+* output contains "Worker is ready"

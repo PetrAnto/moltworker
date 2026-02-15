@@ -37,7 +37,7 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
@@ -56,6 +56,9 @@ jobs:
             env:
               DISCORD_BOT_TOKEN: "fake-discord-bot-token-for-e2e"
               DISCORD_DM_POLICY: "pairing"
+          - name: workers-ai
+            env:
+              CF_AI_GATEWAY_MODEL: "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
     name: e2e (${{ matrix.config.name }})
 
@@ -70,6 +73,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
 
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
@@ -86,12 +94,24 @@ jobs:
         id: e2e
         continue-on-error: true
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.E2E_CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.E2E_CF_ACCOUNT_ID }}
+          WORKERS_SUBDOMAIN: ${{ secrets.E2E_WORKERS_SUBDOMAIN }}
+          CF_ACCESS_TEAM_DOMAIN: ${{ secrets.E2E_CF_ACCESS_TEAM_DOMAIN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.E2E_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.E2E_R2_SECRET_ACCESS_KEY }}
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           AI_GATEWAY_BASE_URL: ${{ secrets.AI_GATEWAY_BASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLOUDFLARE_AI_GATEWAY_API_KEY: ${{ secrets.CLOUDFLARE_AI_GATEWAY_API_KEY }}
+          CF_AI_GATEWAY_ACCOUNT_ID: ${{ secrets.E2E_CF_ACCOUNT_ID }}
+          CF_AI_GATEWAY_GATEWAY_ID: ${{ secrets.CF_AI_GATEWAY_GATEWAY_ID }}
+          CF_AI_GATEWAY_MODEL: ${{ matrix.config.env.CF_AI_GATEWAY_MODEL }}
           TELEGRAM_BOT_TOKEN: ${{ matrix.config.env.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_DM_POLICY: ${{ matrix.config.env.TELEGRAM_DM_POLICY }}
           DISCORD_BOT_TOKEN: ${{ matrix.config.env.DISCORD_BOT_TOKEN }}
           DISCORD_DM_POLICY: ${{ matrix.config.env.DISCORD_DM_POLICY }}
+          E2E_TEST_RUN_ID: "${{ github.run_id }}-${{ matrix.config.name }}"
         run: cctr -vv test/e2e
 
       - name: Convert video and generate thumbnail
@@ -103,15 +123,15 @@ jobs:
             for webm in /tmp/moltworker-e2e-videos/*.webm; do
               mp4="${webm%.webm}.mp4"
               thumb="${webm%.webm}.png"
-              
+
               # Convert to mp4
               ffmpeg -y -i "$webm" -c:v libx264 -preset fast -crf 22 -c:a aac "$mp4"
-              
+
               # Extract middle frame as thumbnail
               duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$mp4")
               midpoint=$(echo "$duration / 2" | bc -l)
               ffmpeg -y -ss "$midpoint" -i "$mp4" -vframes 1 -update 1 -q:v 2 "$thumb"
-              
+
               # Add play button overlay using ImageMagick
               width=$(identify -format '%w' "$thumb")
               height=$(identify -format '%h' "$thumb")
@@ -121,7 +141,7 @@ jobs:
                 -fill 'rgba(0,0,0,0.6)' -draw "circle ${cx},${cy} $((cx+50)),${cy}" \
                 -fill 'white' -draw "polygon $((cx-15)),$((cy-25)) $((cx-15)),$((cy+25)) $((cx+30)),${cy}" \
                 "$thumb"
-              
+
               echo "video_path=$mp4" >> $GITHUB_OUTPUT
               echo "video_name=$(basename $mp4)" >> $GITHUB_OUTPUT
               echo "thumb_path=$thumb" >> $GITHUB_OUTPUT
