@@ -23,6 +23,10 @@ export interface TokenUsage {
   completionTokens: number;
   totalTokens: number;
   costUsd: number;
+  /** DeepSeek prefix cache hit tokens (charged at ~10% of input rate) */
+  cacheHitTokens?: number;
+  /** DeepSeek prefix cache miss tokens (charged at full input rate) */
+  cacheMissTokens?: number;
 }
 
 /**
@@ -72,19 +76,33 @@ export function parseModelPricing(costString: string): ModelPricing | null {
 }
 
 /**
- * Calculate cost for a single API call
+ * Calculate cost for a single API call.
+ *
+ * For DeepSeek direct models, pass cacheHitTokens and cacheMissTokens
+ * to get accurate pricing (cache hits are ~10% of input rate).
  */
 export function calculateCost(
   modelAlias: string,
   promptTokens: number,
-  completionTokens: number
+  completionTokens: number,
+  cacheInfo?: { cacheHitTokens: number; cacheMissTokens: number }
 ): TokenUsage {
   const model = getModel(modelAlias);
   const pricing = model ? parseModelPricing(model.cost) : null;
 
   let costUsd = 0;
   if (pricing) {
-    costUsd = (promptTokens * pricing.inputPerMillion + completionTokens * pricing.outputPerMillion) / 1_000_000;
+    if (cacheInfo && model?.provider === 'deepseek') {
+      // DeepSeek prefix caching: cache hits cost ~10% of input rate
+      const cacheHitRate = pricing.inputPerMillion * 0.1;
+      costUsd = (
+        cacheInfo.cacheHitTokens * cacheHitRate +
+        cacheInfo.cacheMissTokens * pricing.inputPerMillion +
+        completionTokens * pricing.outputPerMillion
+      ) / 1_000_000;
+    } else {
+      costUsd = (promptTokens * pricing.inputPerMillion + completionTokens * pricing.outputPerMillion) / 1_000_000;
+    }
   }
 
   return {
@@ -92,6 +110,8 @@ export function calculateCost(
     completionTokens,
     totalTokens: promptTokens + completionTokens,
     costUsd,
+    cacheHitTokens: cacheInfo?.cacheHitTokens,
+    cacheMissTokens: cacheInfo?.cacheMissTokens,
   };
 }
 
@@ -115,9 +135,10 @@ export function recordUsage(
   userId: string,
   modelAlias: string,
   promptTokens: number,
-  completionTokens: number
+  completionTokens: number,
+  cacheInfo?: { cacheHitTokens: number; cacheMissTokens: number }
 ): TokenUsage {
-  const usage = calculateCost(modelAlias, promptTokens, completionTokens);
+  const usage = calculateCost(modelAlias, promptTokens, completionTokens, cacheInfo);
   const date = getTodayDate();
   const key = `${userId}:${date}`;
 
@@ -244,10 +265,15 @@ export function formatWeekSummary(records: UsageRecord[]): string {
 /**
  * Format cost as a compact footer string for task responses
  */
-export function formatCostFooter(usage: TokenUsage, modelAlias: string): string {
+export function formatCostFooter(usage: TokenUsage, _modelAlias: string): string {
   const tokens = usage.totalTokens.toLocaleString();
   if (usage.costUsd === 0) {
     return `💰 ${tokens} tokens (free)`;
+  }
+  // Show cache hit savings when available
+  if (usage.cacheHitTokens && usage.cacheHitTokens > 0) {
+    const cachePercent = Math.round((usage.cacheHitTokens / (usage.cacheHitTokens + (usage.cacheMissTokens || 0))) * 100);
+    return `💰 ${tokens} tokens (~$${usage.costUsd.toFixed(4)}, ${cachePercent}% cache hit)`;
   }
   return `💰 ${tokens} tokens (~$${usage.costUsd.toFixed(4)})`;
 }

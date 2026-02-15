@@ -84,6 +84,28 @@ describe('calculateCost', () => {
     expect(usage.costUsd).toBe(0);
     expect(usage.totalTokens).toBe(0);
   });
+
+  it('applies DeepSeek prefix cache pricing (cache hits at 10% rate)', () => {
+    // dcode = DeepSeek V3.2 Direct, cost $0.28/$0.42
+    // With cache: 800 hit tokens at 10% ($0.028/M), 200 miss tokens at full ($0.28/M)
+    const usage = calculateCost('dcode', 1000, 500, {
+      cacheHitTokens: 800,
+      cacheMissTokens: 200,
+    });
+    // Expected: (800 * 0.028 + 200 * 0.28 + 500 * 0.42) / 1_000_000
+    const expected = (800 * 0.028 + 200 * 0.28 + 500 * 0.42) / 1_000_000;
+    expect(usage.costUsd).toBeCloseTo(expected, 10);
+    expect(usage.cacheHitTokens).toBe(800);
+    expect(usage.cacheMissTokens).toBe(200);
+  });
+
+  it('falls back to standard pricing when no cache info', () => {
+    // Without cache info, uses standard input rate
+    const usage = calculateCost('dcode', 1000, 500);
+    const expected = (1000 * 0.28 + 500 * 0.42) / 1_000_000;
+    expect(usage.costUsd).toBeCloseTo(expected, 10);
+    expect(usage.cacheHitTokens).toBeUndefined();
+  });
 });
 
 describe('recordUsage and getUsage', () => {
@@ -234,6 +256,16 @@ describe('formatCostFooter', () => {
     const footer = formatCostFooter(usage, 'gpt');
     expect(footer).toContain('$0.0025');
     expect(footer).toContain('1,500');
+  });
+
+  it('shows cache hit percentage for DeepSeek models', () => {
+    const usage: TokenUsage = {
+      promptTokens: 1000, completionTokens: 500, totalTokens: 1500, costUsd: 0.001,
+      cacheHitTokens: 800, cacheMissTokens: 200,
+    };
+    const footer = formatCostFooter(usage, 'dcode');
+    expect(footer).toContain('80% cache hit');
+    expect(footer).toContain('$0.0010');
   });
 });
 

@@ -45,6 +45,33 @@ describe('getReasoningParam', () => {
     });
   });
 
+  // DeepSeek V3.2 Direct (dcode) — uses { enabled: boolean }
+  describe('DeepSeek V3.2 Direct (dcode)', () => {
+    it('returns { enabled: false } for off', () => {
+      expect(getReasoningParam('dcode', 'off')).toEqual({ enabled: false });
+    });
+
+    it('returns { enabled: true } for low', () => {
+      expect(getReasoningParam('dcode', 'low')).toEqual({ enabled: true });
+    });
+
+    it('returns { enabled: true } for medium', () => {
+      expect(getReasoningParam('dcode', 'medium')).toEqual({ enabled: true });
+    });
+
+    it('returns { enabled: true } for high', () => {
+      expect(getReasoningParam('dcode', 'high')).toEqual({ enabled: true });
+    });
+  });
+
+  // DeepSeek Reasoner Direct (dreason) — fixed reasoning, not configurable
+  describe('DeepSeek Reasoner Direct (dreason)', () => {
+    it('returns undefined (fixed reasoning, not configurable)', () => {
+      expect(getReasoningParam('dreason', 'high')).toBeUndefined();
+      expect(getReasoningParam('dreason', 'off')).toBeUndefined();
+    });
+  });
+
   // Grok 4.1 — uses { enabled: boolean }
   describe('Grok 4.1 (grok)', () => {
     it('returns { enabled: false } for off', () => {
