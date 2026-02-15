@@ -1,0 +1,102 @@
+#!/bin/bash
+# Start the moltworker for E2E testing (cloud deployment)
+#
+# This script:
+# 1. Runs terraform to create service token + R2 bucket
+# 2. Deploys the worker with wrangler
+# 3. Creates an Access application to protect it
+# 4. Waits for the worker to be ready
+set -e
+
+VERBOSE=false
+if [ "$1" = "-v" ] || [ "$1" = "--verbose" ]; then
+    VERBOSE=true
+fi
+
+log() {
+    if [ "$VERBOSE" = true ]; then
+        echo "[start-server] $(date +%H:%M:%S) $*" >&2
+    fi
+}
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Support running directly (not via cctr) for manual debugging
+if [ -z "$CCTR_TEST_PATH" ]; then
+    E2E_DIR="$(dirname "$SCRIPT_DIR")"
+else
+    E2E_DIR="$CCTR_TEST_PATH"
+fi
+
+if [ -z "$CCTR_FIXTURE_DIR" ]; then
+    CCTR_FIXTURE_DIR="/tmp/e2e-cloud-manual"
+    mkdir -p "$CCTR_FIXTURE_DIR"
+    log "CCTR_FIXTURE_DIR not set, using: $CCTR_FIXTURE_DIR"
+fi
+
+# Source .dev.vars if it exists (for local development)
+if [ -f "$E2E_DIR/.dev.vars" ]; then
+    set -a
+    source "$E2E_DIR/.dev.vars"
+    set +a
+    log "Loaded credentials from $E2E_DIR/.dev.vars"
+fi
+
+# Required environment variables
+: "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required}"
+: "${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is required}"
+: "${WORKERS_SUBDOMAIN:?WORKERS_SUBDOMAIN is required}"
+: "${CF_ACCESS_TEAM_DOMAIN:?CF_ACCESS_TEAM_DOMAIN is required}"
+: "${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is required}"
+: "${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is required}"
+
+# Generate unique test run ID
+E2E_TEST_RUN_ID="${E2E_TEST_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 4)}"
+export E2E_TEST_RUN_ID
+
+# Generate gateway token
+MOLTBOT_GATEWAY_TOKEN="${MOLTBOT_GATEWAY_TOKEN:-e2e-$(openssl rand -hex 16)}"
+
+log "Test run ID: $E2E_TEST_RUN_ID"
+log "Cleaning up stale terraform state..."
+rm -f "$SCRIPT_DIR/terraform.tfstate" "$SCRIPT_DIR/terraform.tfstate.backup"
+
+# Step 1: Terraform
+log "Running terraform-apply..."
+TF_OUTPUT=$("$SCRIPT_DIR/terraform-apply")
+
+# Parse terraform outputs
+WORKER_URL=$(echo "$TF_OUTPUT" | jq -r '.worker_url.value')
+WORKER_NAME=$(echo "$TF_OUTPUT" | jq -r '.worker_name.value')
+SERVICE_TOKEN_ID=$(echo "$TF_OUTPUT" | jq -r '.service_token_id.value')
+CF_ACCESS_CLIENT_ID=$(echo "$TF_OUTPUT" | jq -r '.service_token_client_id.value')
+CF_ACCESS_CLIENT_SECRET=$(echo "$TF_OUTPUT" | jq -r '.service_token_client_secret.value')
+R2_BUCKET_NAME=$(echo "$TF_OUTPUT" | jq -r '.r2_bucket_name.value')
+
+# Save artifacts for teardown and test use
+echo "$WORKER_URL" > "$CCTR_FIXTURE_DIR/worker-url.txt"
+echo "$WORKER_NAME" > "$CCTR_FIXTURE_DIR/worker-name.txt"
+echo "$R2_BUCKET_NAME" > "$CCTR_FIXTURE_DIR/r2-bucket-name.txt"
+echo "$E2E_TEST_RUN_ID" > "$CCTR_FIXTURE_DIR/test-run-id.txt"
+echo "$MOLTBOT_GATEWAY_TOKEN" > "$CCTR_FIXTURE_DIR/gateway-token.txt"
+echo "$CF_ACCESS_CLIENT_ID" > "$CCTR_FIXTURE_DIR/cf-access-client-id.txt"
+echo "$CF_ACCESS_CLIENT_SECRET" > "$CCTR_FIXTURE_DIR/cf-access-client-secret.txt"
+
+# Step 2: Deploy worker
+log "Deploying worker..."
+"$SCRIPT_DIR/deploy" "$TF_OUTPUT"
+
+# Step 3: Create Access application
+log "Creating Access application..."
+ACCESS_OUTPUT=$("$SCRIPT_DIR/create-access-app" "$WORKER_NAME" "$SERVICE_TOKEN_ID")
+ACCESS_APP_ID=$(echo "$ACCESS_OUTPUT" | head -1)
+ACCESS_AUD=$(echo "$ACCESS_OUTPUT" | tail -1)
+echo "$ACCESS_APP_ID" > "$CCTR_FIXTURE_DIR/access-app-id.txt"
+
+# Step 4: Wait for worker to be ready
+log "Waiting for worker to be ready..."
+"$SCRIPT_DIR/wait-ready" "$WORKER_URL" "$MOLTBOT_GATEWAY_TOKEN" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET"
+
+log "Server is ready at $WORKER_URL"
+sleep 0.1
+echo "ready"

@@ -1,0 +1,102 @@
+#!/bin/bash
+# Stop the moltworker and clean up ALL cloud resources
+#
+# This will:
+# 1. Delete the deployed worker
+# 2. Destroy terraform resources (Access app, service token, R2 bucket)
+# 3. Clean up local state files
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Support running directly (not via cctr) for manual debugging
+if [ -z "$CCTR_TEST_PATH" ]; then
+    E2E_DIR="$(dirname "$SCRIPT_DIR")"
+else
+    E2E_DIR="$CCTR_TEST_PATH"
+fi
+
+# Source .dev.vars if it exists
+if [ -f "$E2E_DIR/.dev.vars" ]; then
+    set -a
+    source "$E2E_DIR/.dev.vars"
+    set +a
+fi
+
+# Export for wrangler
+export CLOUDFLARE_ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
+
+if [ -z "$CCTR_FIXTURE_DIR" ]; then
+    CCTR_FIXTURE_DIR="/tmp/e2e-cloud-manual"
+fi
+
+# Read saved state
+WORKER_NAME=$(cat "$CCTR_FIXTURE_DIR/worker-name.txt" 2>/dev/null || echo "")
+R2_BUCKET_NAME=$(cat "$CCTR_FIXTURE_DIR/r2-bucket-name.txt" 2>/dev/null || echo "")
+E2E_TEST_RUN_ID=$(cat "$CCTR_FIXTURE_DIR/test-run-id.txt" 2>/dev/null || echo "")
+ACCESS_APP_ID=$(cat "$CCTR_FIXTURE_DIR/access-app-id.txt" 2>/dev/null || echo "")
+
+# Delete Access application
+if [ -n "$ACCESS_APP_ID" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+    echo "Deleting Access application: $ACCESS_APP_ID" >&2
+    curl -s -X DELETE \
+        "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/apps/$ACCESS_APP_ID" \
+        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+        -H "Content-Type: application/json" >/dev/null 2>&1 || true
+fi
+
+# Delete worker
+if [ -n "$WORKER_NAME" ]; then
+    "$SCRIPT_DIR/delete-worker" "$WORKER_NAME" || true
+fi
+
+# Delete container application
+if [ -n "$WORKER_NAME" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+    echo "Deleting container application..." >&2
+    CONTAINER_APP_ID=$(curl -s \
+        "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/containers/applications" \
+        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | \
+        jq -r ".result[] | select(.name == \"$WORKER_NAME\") | .id // empty" 2>/dev/null)
+    if [ -n "$CONTAINER_APP_ID" ]; then
+        curl -s -X DELETE \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/containers/applications/$CONTAINER_APP_ID" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" >/dev/null 2>&1 || true
+    fi
+fi
+
+# Delete R2 bucket
+if [ -n "$R2_BUCKET_NAME" ]; then
+    echo "Deleting R2 bucket: $R2_BUCKET_NAME" >&2
+    npx wrangler r2 bucket delete "$R2_BUCKET_NAME" 2>&1 || echo "Warning: R2 bucket deletion failed (may need to empty bucket first)" >&2
+fi
+
+# Delete service token
+if [ -n "$E2E_TEST_RUN_ID" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+    echo "Deleting service token..." >&2
+    TOKEN_ID=$(curl -s \
+        "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/service_tokens" \
+        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | \
+        jq -r ".result[] | select(.name == \"moltbot-e2e-$E2E_TEST_RUN_ID\") | .id // empty" 2>/dev/null)
+    if [ -n "$TOKEN_ID" ]; then
+        curl -s -X DELETE \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/service_tokens/$TOKEN_ID" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" >/dev/null 2>&1 || true
+    fi
+fi
+
+# Clean up local files
+rm -f "$CCTR_FIXTURE_DIR/worker-url.txt"
+rm -f "$CCTR_FIXTURE_DIR/worker-name.txt"
+rm -f "$CCTR_FIXTURE_DIR/r2-bucket-name.txt"
+rm -f "$CCTR_FIXTURE_DIR/test-run-id.txt"
+rm -f "$CCTR_FIXTURE_DIR/gateway-token.txt"
+rm -f "$CCTR_FIXTURE_DIR/access-app-id.txt"
+rm -f "$CCTR_FIXTURE_DIR/cf-access-client-id.txt"
+rm -f "$CCTR_FIXTURE_DIR/cf-access-client-secret.txt"
+
+# Clean up terraform state
+rm -f "$SCRIPT_DIR/terraform.tfstate" "$SCRIPT_DIR/terraform.tfstate.backup"
+rm -rf "$SCRIPT_DIR/.terraform" "$SCRIPT_DIR/.terraform.lock.hcl"
+
+echo "stopped"
+sleep 0.1

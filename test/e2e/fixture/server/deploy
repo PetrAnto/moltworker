@@ -1,0 +1,80 @@
+#!/bin/bash
+# Deploy the moltworker to Cloudflare for E2E testing
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Support running directly (not via cctr) for manual debugging
+if [ -z "$CCTR_TEST_PATH" ]; then
+    PROJECT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+else
+    PROJECT_DIR="$(cd "$CCTR_TEST_PATH/../.." && pwd)"
+fi
+
+# Required environment variables
+: "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required}"
+: "${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is required}"
+: "${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is required}"
+: "${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is required}"
+: "${MOLTBOT_GATEWAY_TOKEN:?MOLTBOT_GATEWAY_TOKEN is required}"
+: "${CF_ACCESS_TEAM_DOMAIN:?CF_ACCESS_TEAM_DOMAIN is required}"
+
+# Parse terraform output
+TF_OUTPUT="$1"
+if [ -z "$TF_OUTPUT" ]; then
+    echo "Usage: $0 <terraform-output-json>" >&2
+    exit 1
+fi
+
+WORKER_NAME=$(echo "$TF_OUTPUT" | jq -r '.worker_name.value')
+R2_BUCKET_NAME=$(echo "$TF_OUTPUT" | jq -r '.r2_bucket_name.value')
+
+# Build the project
+cd "$PROJECT_DIR"
+npm run build >&2
+
+# Export for wrangler
+export CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID"
+
+# Create temporary wrangler config with unique worker name
+# This ensures container names are unique across test runs
+sed "s/\"moltbot-sandbox\"/\"$WORKER_NAME\"/" wrangler.jsonc > ".wrangler-e2e-${WORKER_NAME}.jsonc"
+
+echo "Deploying worker: $WORKER_NAME" >&2
+npx wrangler deploy --config ".wrangler-e2e-${WORKER_NAME}.jsonc" >&2
+
+# Clean up temp config
+rm -f ".wrangler-e2e-${WORKER_NAME}.jsonc"
+
+# Set secrets
+echo "$MOLTBOT_GATEWAY_TOKEN" | npx wrangler secret put MOLTBOT_GATEWAY_TOKEN --name "$WORKER_NAME" 2>&1 >&2
+echo "$R2_ACCESS_KEY_ID" | npx wrangler secret put R2_ACCESS_KEY_ID --name "$WORKER_NAME" 2>&1 >&2
+echo "$R2_SECRET_ACCESS_KEY" | npx wrangler secret put R2_SECRET_ACCESS_KEY --name "$WORKER_NAME" 2>&1 >&2
+echo "$R2_BUCKET_NAME" | npx wrangler secret put R2_BUCKET_NAME --name "$WORKER_NAME" 2>&1 >&2
+echo "true" | npx wrangler secret put E2E_TEST_MODE --name "$WORKER_NAME" 2>&1 >&2
+echo "true" | npx wrangler secret put DEBUG_ROUTES --name "$WORKER_NAME" 2>&1 >&2
+
+# Set optional AI provider secrets
+if [ -n "${AI_GATEWAY_API_KEY:-}" ]; then
+    echo "$AI_GATEWAY_API_KEY" | npx wrangler secret put AI_GATEWAY_API_KEY --name "$WORKER_NAME" 2>&1 >&2
+fi
+if [ -n "${AI_GATEWAY_BASE_URL:-}" ]; then
+    echo "$AI_GATEWAY_BASE_URL" | npx wrangler secret put AI_GATEWAY_BASE_URL --name "$WORKER_NAME" 2>&1 >&2
+fi
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "$ANTHROPIC_API_KEY" | npx wrangler secret put ANTHROPIC_API_KEY --name "$WORKER_NAME" 2>&1 >&2
+fi
+if [ -n "${CLOUDFLARE_AI_GATEWAY_API_KEY:-}" ]; then
+    echo "$CLOUDFLARE_AI_GATEWAY_API_KEY" | npx wrangler secret put CLOUDFLARE_AI_GATEWAY_API_KEY --name "$WORKER_NAME" 2>&1 >&2
+fi
+if [ -n "${CF_AI_GATEWAY_ACCOUNT_ID:-}" ]; then
+    echo "$CF_AI_GATEWAY_ACCOUNT_ID" | npx wrangler secret put CF_AI_GATEWAY_ACCOUNT_ID --name "$WORKER_NAME" 2>&1 >&2
+fi
+if [ -n "${CF_AI_GATEWAY_GATEWAY_ID:-}" ]; then
+    echo "$CF_AI_GATEWAY_GATEWAY_ID" | npx wrangler secret put CF_AI_GATEWAY_GATEWAY_ID --name "$WORKER_NAME" 2>&1 >&2
+fi
+if [ -n "${CF_AI_GATEWAY_MODEL:-}" ]; then
+    echo "$CF_AI_GATEWAY_MODEL" | npx wrangler secret put CF_AI_GATEWAY_MODEL --name "$WORKER_NAME" 2>&1 >&2
+fi
+
+echo "Worker deployed: $WORKER_NAME" >&2
