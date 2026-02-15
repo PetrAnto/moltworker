@@ -878,6 +878,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             prompt_tokens: number;
             completion_tokens: number;
             total_tokens: number;
+            /** DeepSeek: tokens served from prefix cache */
+            prompt_cache_hit_tokens?: number;
+            /** DeepSeek: tokens not served from cache */
+            prompt_cache_miss_tokens?: number;
           };
         } | null = null;
         let lastError: Error | null = null;
@@ -946,6 +950,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 }
                 if (request.responseFormat) {
                   requestBody.response_format = request.responseFormat;
+                }
+
+                // Inject reasoning parameter for direct API models (DeepSeek V3.2, etc.)
+                const reasoningLevel = request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
+                const reasoningParam = getReasoningParam(task.modelAlias, reasoningLevel);
+                if (reasoningParam) {
+                  requestBody.reasoning = reasoningParam;
                 }
 
                 const fetchPromise = fetch(providerConfig.baseUrl, {
@@ -1069,17 +1080,29 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // Track token usage and costs
         if (result.usage) {
+          // Extract DeepSeek prefix cache metrics (automatic, no code changes needed to enable)
+          const cacheInfo = (result.usage.prompt_cache_hit_tokens !== undefined)
+            ? {
+                cacheHitTokens: result.usage.prompt_cache_hit_tokens,
+                cacheMissTokens: result.usage.prompt_cache_miss_tokens ?? result.usage.prompt_tokens,
+              }
+            : undefined;
+
           const iterationUsage = recordUsage(
             request.userId,
             task.modelAlias,
             result.usage.prompt_tokens,
-            result.usage.completion_tokens
+            result.usage.completion_tokens,
+            cacheInfo
           );
           totalUsage.promptTokens += iterationUsage.promptTokens;
           totalUsage.completionTokens += iterationUsage.completionTokens;
           totalUsage.totalTokens += iterationUsage.totalTokens;
           totalUsage.costUsd += iterationUsage.costUsd;
-          console.log(`[TaskProcessor] Usage: ${result.usage.prompt_tokens}+${result.usage.completion_tokens} tokens, $${iterationUsage.costUsd.toFixed(4)}`);
+          totalUsage.cacheHitTokens = (totalUsage.cacheHitTokens ?? 0) + (iterationUsage.cacheHitTokens ?? 0);
+          totalUsage.cacheMissTokens = (totalUsage.cacheMissTokens ?? 0) + (iterationUsage.cacheMissTokens ?? 0);
+          const cacheLog = cacheInfo ? `, cache: ${cacheInfo.cacheHitTokens} hit/${cacheInfo.cacheMissTokens} miss` : '';
+          console.log(`[TaskProcessor] Usage: ${result.usage.prompt_tokens}+${result.usage.completion_tokens} tokens, $${iterationUsage.costUsd.toFixed(4)}${cacheLog}`);
         }
 
         const choice = result.choices[0];
