@@ -3,28 +3,27 @@ r2 storage status shows configured
 %require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s "$WORKER_URL/api/admin/storage")
-echo "$result"
+./curl-auth -s "$WORKER_URL/api/admin/storage" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "configured"
-* result contains "true"
+* result.configured == true
 
 ===
 start wrangler tail in background
+%require
 ===
 # Source credentials for wrangler
-if [ -f "$(dirname "$CCTR_FIXTURE_DIR")/.dev.vars" ]; then
+if [ -f "$CCTR_TEST_PATH/.dev.vars" ]; then
     set -a
-    source "$(dirname "$CCTR_FIXTURE_DIR")/.dev.vars"
+    source "$CCTR_TEST_PATH/.dev.vars"
     set +a
 fi
-export CLOUDFLARE_ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
+export CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID"
 WORKER_NAME=$(cat "$CCTR_FIXTURE_DIR/worker-name.txt")
-npx wrangler tail "$WORKER_NAME" --format=pretty > "$CCTR_FIXTURE_DIR/wrangler-tail.log" 2>&1 &
-echo $! > "$CCTR_FIXTURE_DIR/wrangler-tail.pid"
+npx wrangler tail "$WORKER_NAME" --format pretty > "$CCTR_FIXTURE_DIR/wrangler-tail.log" 2>&1 &
+echo $! > "$CCTR_FIXTURE_DIR/wrangler-tail-pid.txt"
 sleep 5
 echo "tail started"
 ---
@@ -35,42 +34,38 @@ where
 
 ===
 manual sync succeeds
-%require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-# Retry loop for transient "Durable Object reset" errors in CI
-for i in 1 2 3; do
-    result=$(./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync")
-    if echo "$result" | jq -e '.success == true' >/dev/null 2>&1; then
-        echo "$result"
-        exit 0
+# Retry on transient "Durable Object reset" errors that occur in CI.
+# Suppress retry output — cctr captures both stdout and stderr.
+LAST_RESULT=""
+for attempt in 1 2 3; do
+    LAST_RESULT=$(./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync")
+    SUCCESS=$(echo "$LAST_RESULT" | jq -r '.success // false' 2>/dev/null)
+    if [ "$SUCCESS" = "true" ]; then
+        break
     fi
-    echo "Attempt $i failed: $result" >&2
     sleep 10
 done
-echo "$result"
+echo "$LAST_RESULT" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "success"
-* result contains "true"
-* result contains "lastSync"
+* result.success == true
+* result.lastSync matches /^\d{4}-\d{2}-\d{2}/
 
 ===
 dump wrangler tail logs
 ===
-if [ -f "$CCTR_FIXTURE_DIR/wrangler-tail.pid" ]; then
-    kill $(cat "$CCTR_FIXTURE_DIR/wrangler-tail.pid") 2>/dev/null || true
+TAIL_PID=$(cat "$CCTR_FIXTURE_DIR/wrangler-tail-pid.txt" 2>/dev/null || echo "")
+if [ -n "$TAIL_PID" ]; then
+    kill "$TAIL_PID" 2>/dev/null || true
     sleep 1
 fi
 echo "=== WRANGLER TAIL OUTPUT ==="
-if [ -f "$CCTR_FIXTURE_DIR/wrangler-tail.log" ]; then
-    # Redact sensitive values
-    GATEWAY_TOKEN=$(cat "$CCTR_FIXTURE_DIR/gateway-token.txt" 2>/dev/null || echo "NONE")
-    cat "$CCTR_FIXTURE_DIR/wrangler-tail.log" | sed "s/$GATEWAY_TOKEN/[REDACTED-TOKEN]/g"
-fi
-echo "=== END WRANGLER TAIL ==="
+sed -E 's/token=[^& "]+/token=REDACTED/g; s/secret=[^& "]+/secret=REDACTED/g' "$CCTR_FIXTURE_DIR/wrangler-tail.log" 2>/dev/null || echo "(empty)"
+echo "=== END ==="
 ---
 {{ output }}
 ---
@@ -79,149 +74,147 @@ where
 
 ===
 second sync also succeeds (idempotent)
+%require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync")
-echo "$result"
+./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "success"
-* result contains "true"
+* result.success == true
+* result.lastSync matches /^\d{4}-\d{2}-\d{2}/
 
 ===
 storage status shows last sync timestamp
+%require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s "$WORKER_URL/api/admin/storage")
-echo "$result"
+./curl-auth -s "$WORKER_URL/api/admin/storage" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "configured"
-* result contains "lastSync"
+* result.configured == true
+* result.lastSync matches /^\d{4}-\d{2}-\d{2}/
 
 ===
 create workspace marker file
 %require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s "$WORKER_URL/debug/cli?cmd=bash+-c+%22echo+e2e-persistence-test+>+/root/clawd/e2e-marker.txt+%26%26+echo+done%22")
-echo "$result"
+./curl-auth -s "$WORKER_URL/debug/cli?cmd=echo+e2e-persistence-test+%3E+/root/clawd/e2e-marker.txt+%26%26+echo+done" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "done"
+* result.stdout contains "done"
 
 ===
 sync workspace with marker file
 %require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync")
-echo "$result"
+./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "success"
-* result contains "true"
+* result.success == true
 
 ===
 verify marker file reached R2
 %require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s "$WORKER_URL/debug/cli?cmd=rclone+ls+r2:$(cat+$CCTR_FIXTURE_DIR/r2-bucket-name.txt)/workspace/+--include+e2e-marker.txt")
-echo "$result"
+BUCKET=$(cat "$CCTR_FIXTURE_DIR/r2-bucket-name.txt" 2>/dev/null || echo "moltbot-data")
+./curl-auth -s "$WORKER_URL/debug/cli?cmd=rclone+ls+r2:${BUCKET}/workspace/e2e-marker.txt" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "e2e-marker.txt"
+* result.stdout contains "e2e-marker.txt"
 
 ===
 verify config reached R2
+%require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s "$WORKER_URL/debug/cli?cmd=rclone+ls+r2:$(cat+$CCTR_FIXTURE_DIR/r2-bucket-name.txt)/config/+--include+openclaw.json")
-echo "$result"
+BUCKET=$(cat "$CCTR_FIXTURE_DIR/r2-bucket-name.txt" 2>/dev/null || echo "moltbot-data")
+./curl-auth -s "$WORKER_URL/debug/cli?cmd=rclone+ls+r2:${BUCKET}/openclaw/openclaw.json" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "openclaw.json"
+* result.stdout contains "openclaw.json"
 
 ===
 stop background sync and delete marker file locally
 %require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s "$WORKER_URL/debug/cli?cmd=bash+-c+%22pkill+-f+%27rclone+sync%27+2>/dev/null;+rm+-f+/root/clawd/e2e-marker.txt+%26%26+echo+deleted%22")
-echo "$result"
+./curl-auth -s "$WORKER_URL/debug/cli?cmd=pkill+-f+r2-sync.sh;+rm+/root/clawd/e2e-marker.txt+%26%26+echo+deleted" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "deleted"
+* result.stdout contains "deleted"
 
 ===
 confirm marker file is gone locally
+%require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s "$WORKER_URL/debug/cli?cmd=bash+-c+%22test+-f+/root/clawd/e2e-marker.txt+%26%26+echo+exists+||+echo+missing%22")
-echo "$result"
+./curl-auth -s "$WORKER_URL/debug/cli?cmd=test+-f+/root/clawd/e2e-marker.txt+%26%26+echo+exists+||+echo+missing" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "missing"
+* result.stdout contains "missing"
 
 ===
 restart gateway to trigger restore from R2
 %require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s -X POST "$WORKER_URL/api/admin/gateway/restart")
-echo "$result"
+./curl-auth -s -X POST "$WORKER_URL/api/admin/gateway/restart" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "success"
+* result.success == true
 
 ===
 verify marker file restored from R2 after restart
+%require
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-# Poll until marker file is restored (gateway needs time to restart + restore from R2)
+# Poll for the marker file — start-openclaw.sh runs rclone restore
+# before starting the gateway, but the Worker responds before the
+# gateway process finishes starting.
 for i in $(seq 1 30); do
-    result=$(./curl-auth -s "$WORKER_URL/debug/cli?cmd=cat+/root/clawd/e2e-marker.txt" 2>/dev/null || echo "")
-    if echo "$result" | jq -r '.stdout // ""' 2>/dev/null | grep -q "e2e-persistence-test"; then
-        echo "$result"
+    RESPONSE=$(./curl-auth -s "$WORKER_URL/debug/cli?cmd=cat+/root/clawd/e2e-marker.txt" 2>/dev/null || echo "")
+    if echo "$RESPONSE" | jq -r '.stdout // empty' 2>/dev/null | grep -q "e2e-persistence-test"; then
+        echo "$RESPONSE" | jq .
         exit 0
     fi
     sleep 5
 done
-echo "$result"
+echo "$RESPONSE" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "e2e-persistence-test"
+* result.stdout contains "e2e-persistence-test"
 
 ===
 sync still works after restore
 ===
 WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
-result=$(./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync")
-echo "$result"
+./curl-auth -s -X POST "$WORKER_URL/api/admin/storage/sync" | jq .
 ---
-{{ result }}
+{{ result: json object }}
 ---
 where
-* result contains "success"
-* result contains "true"
+* result.success == true
+* result.lastSync matches /^\d{4}-\d{2}-\d{2}/

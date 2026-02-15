@@ -15,11 +15,11 @@ CF_ACCESS_CLIENT_ID=$(cat "$CCTR_FIXTURE_DIR/cf-access-client-id.txt" 2>/dev/nul
 CF_ACCESS_CLIENT_SECRET=$(cat "$CCTR_FIXTURE_DIR/cf-access-client-secret.txt" 2>/dev/null || echo "")
 
 if [ -z "$CF_ACCESS_CLIENT_ID" ] || [ -z "$CF_ACCESS_CLIENT_SECRET" ]; then
-    echo "ERROR: Access credentials not found in $CCTR_FIXTURE_DIR" >&2
+    echo "Error: Access credentials not found in $CCTR_FIXTURE_DIR" >&2
     exit 1
 fi
 
-curl \
+exec curl \
     -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
     "$@"
