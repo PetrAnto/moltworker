@@ -45,6 +45,7 @@ import {
   getBlockedAliases,
   detectToolIntent,
   getFreeToolModels,
+  formatOrchestraModelRecs,
   categorizeModel,
   type ModelInfo,
   type ReasoningLevel,
@@ -1412,6 +1413,8 @@ export class TelegramHandler {
       ? `📦 Current repo: ${lockedRepo}\n\n`
       : '📦 No repo set — use /orch set owner/repo first\n\n';
 
+    const modelRecs = formatOrchestraModelRecs();
+
     await this.bot.sendMessage(
       chatId,
       '🎼 Orchestra Mode — AI-Driven Project Execution\n\n' +
@@ -1430,6 +1433,7 @@ export class TelegramHandler {
       '/orch roadmap — View roadmap status\n' +
       '/orch reset <task> — Uncheck task(s) for re-run\n' +
       '/orch redo <task> — Re-implement a failed task\n\n' +
+      modelRecs + '\n\n' +
       '━━━ Workflow ━━━\n' +
       '1. /orch set PetrAnto/myapp\n' +
       '2. /orch init Build a user auth system\n' +

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { detectToolIntent, getModel, getFreeToolModels, categorizeModel } from './models';
+import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs } from './models';
 
 // --- detectToolIntent ---
 
@@ -207,5 +207,72 @@ describe('GLM model tools support', () => {
     const model = getModel('glm47');
     expect(model).toBeDefined();
     expect(model!.supportsTools).toBe(true);
+  });
+});
+
+// --- getOrchestraRecommendations ---
+
+describe('getOrchestraRecommendations', () => {
+  it('returns non-empty free and paid arrays', () => {
+    const recs = getOrchestraRecommendations();
+    expect(recs.free.length).toBeGreaterThan(0);
+    expect(recs.paid.length).toBeGreaterThan(0);
+  });
+
+  it('returns at most 3 free and 3 paid', () => {
+    const recs = getOrchestraRecommendations();
+    expect(recs.free.length).toBeLessThanOrEqual(3);
+    expect(recs.paid.length).toBeLessThanOrEqual(3);
+  });
+
+  it('all recommendations have required fields', () => {
+    const recs = getOrchestraRecommendations();
+    for (const r of [...recs.free, ...recs.paid]) {
+      expect(r.alias).toBeTruthy();
+      expect(r.name).toBeTruthy();
+      expect(r.cost).toBeTruthy();
+      expect(r.why).toBeTruthy();
+    }
+  });
+
+  it('free recommendations are actually free models', () => {
+    const recs = getOrchestraRecommendations();
+    for (const r of recs.free) {
+      expect(r.cost).toBe('FREE');
+    }
+  });
+
+  it('paid recommendations are not free', () => {
+    const recs = getOrchestraRecommendations();
+    for (const r of recs.paid) {
+      expect(r.cost).not.toBe('FREE');
+    }
+  });
+
+  it('all recommendations are tool-supporting models', () => {
+    const recs = getOrchestraRecommendations();
+    for (const r of [...recs.free, ...recs.paid]) {
+      const model = getModel(r.alias);
+      expect(model).toBeDefined();
+      expect(model!.supportsTools).toBe(true);
+    }
+  });
+});
+
+describe('formatOrchestraModelRecs', () => {
+  it('returns a string with section header', () => {
+    const output = formatOrchestraModelRecs();
+    expect(output).toContain('Recommended Models');
+  });
+
+  it('includes free and paid sections', () => {
+    const output = formatOrchestraModelRecs();
+    expect(output).toContain('Free:');
+    expect(output).toContain('Paid');
+  });
+
+  it('includes model switch instruction', () => {
+    const output = formatOrchestraModelRecs();
+    expect(output).toContain('Switch model before /orch run');
   });
 });
