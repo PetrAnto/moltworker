@@ -3,11 +3,13 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-11 (Phase 3.2 complete, pointing to 3.3)
+**Last Updated:** 2026-02-16 (Codex audit plan added; implementation still points to Phase 3.3)
 
 ---
 
 ## Current Task: Phase 3.3 — `/learnings` Telegram Command
+
+> Note: Before or alongside 3.3, review `brainstorming/audit-build-improvement-plan.md` for the new `/dcode` resume + hallucination mitigation roadmap.
 
 ### Goal
 
