@@ -18,7 +18,7 @@ export const PROVIDERS: Record<Provider, ProviderConfig> = {
     envKey: 'OPENROUTER_API_KEY',
   },
   dashscope: {
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions',
     envKey: 'DASHSCOPE_API_KEY',
   },
   moonshot: {
