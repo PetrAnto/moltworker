@@ -322,3 +322,167 @@ Direct API providers (DeepSeek, Moonshot) reject orphaned tool messages. The com
 | `ed67f4d` | fix | Respect Kimi K2.5 fixed temperature requirement |
 | `f953258` | feat | Anti-destructive guardrails for orchestra bot PRs |
 | `a17051f` | fix | Use Singapore regional endpoint for DashScope API |
+
+---
+
+## 11. Orchestra Guardrail System
+
+### 11.1 Architecture
+
+Guardrails operate at three layers:
+
+```
+Layer 1: System Prompt (orchestra.ts)
+  → Instructions to the model about surgical edits, append-only docs, etc.
+  → Model compliance is voluntary — the model can ignore these
+
+Layer 2: Tool-Level Validation (github_create_pr in tools.ts)
+  → Hard blocks that PREVENT the PR from being created
+  → Warnings that flag issues but still allow PR creation
+
+Layer 3: Post-Completion Audit (task-processor.ts)
+  → Scans task result for guardrail signals
+  → Marks task status as failed/completed in orchestra history
+  → Does NOT undo the PR (PR already exists on GitHub)
+```
+
+### 11.2 Guardrails in `github_create_pr` (7 checks)
+
+| # | Guardrail | Type | Trigger | Action |
+|---|-----------|------|---------|--------|
+| 1 | Binary file block | HARD BLOCK | File has binary extension (.png, .jpg, .svg, etc.) | Throw — PR aborted |
+| 2 | Stub/comment-only | HARD BLOCK | Updated code file has only comments, ≤3 non-empty lines | Throw — PR aborted |
+| 3 | Suspiciously small update | WARNING | Code file update ≤5 non-empty lines AND <200 chars | Warning in PR result |
+| 4a | Destructive shrinkage | HARD BLOCK | New file <20% of original size (files >100 bytes) | Throw — PR aborted |
+| 4b | Identifier survival | HARD BLOCK / WARNING | <40% of original exported functions/classes/vars survive = block; 40-60% = warning | Block or warning |
+| 4c | Significant shrinkage | WARNING | New file <50% of original (files >200 bytes) | Warning in PR result |
+| 5 | Incomplete refactor | WARNING | New code files created but NO existing code files updated | Warning (`INCOMPLETE REFACTOR`) |
+| 6 | Net deletion | HARD BLOCK / WARNING | >100 lines deleted AND >40% of original = block; >50 lines AND >20% = warning | Block or warning |
+| 7a | Audit trail (WORK_LOG) | HARD BLOCK | Existing WORK_LOG.md rows missing from updated version | Throw (`AUDIT TRAIL VIOLATION`) |
+| 7b | Roadmap preservation | HARD BLOCK / WARNING | >2 tasks deleted from ROADMAP.md = block; 1-2 = warning | Block or warning |
+
+### 11.3 System Prompt Instructions (orchestra.ts)
+
+The orchestra RUN mode tells models to:
+- Flag files >300 lines / >15KB and split first
+- Make surgical edits only, never regenerate entire files
+- Preserve all existing exports, functions, variables
+- ROADMAP.md: Only change `[ ]` → `[x]` for the completed task
+- WORK_LOG.md: Append-only, never delete existing rows
+- PR should add more lines than it deletes
+- Verify `github_create_pr` result, retry on 422
+
+### 11.4 Post-Completion Audit (task-processor.ts)
+
+After task completion, scans `task.result` for guardrail signals:
+
+| Signal | Task status | Notes |
+|--------|-------------|-------|
+| No valid PR URL (`https://`) | `failed` | Model claimed success but no PR |
+| `INCOMPLETE REFACTOR` | `failed` | Dead code — new files not wired up |
+| `AUDIT TRAIL VIOLATION` | `failed` | Tried to delete work log entries |
+| `ROADMAP TAMPERING` | `failed` | Tried to delete roadmap tasks |
+| `NET DELETION WARNING` | `completed` (flagged) | Significant code removal |
+
+---
+
+## 12. Model Quality Failures — Observed Patterns
+
+### 12.1 The Two Problem Categories
+
+After fixing all infrastructure issues (hangs, loops, content filters, timeouts), the **real blocker** is model output quality. These are fundamentally different:
+
+| Category | Infrastructure Issues | Model Quality Issues |
+|----------|----------------------|---------------------|
+| **Nature** | Plumbing — timeouts, loops, errors | Content — what the model produces |
+| **Fixable by** | Code changes in task-processor/tools | Better prompts, stronger guardrails, or better models |
+| **Examples** | API hangs, same-tool loops, content filter 400 | Dead code, fabricated data, false claims |
+
+### 12.2 Observed Failure Patterns (from 6 rejected PRs)
+
+#### Pattern 1: Dead Code Refactors
+- **What**: Model creates extracted module files but NEVER updates the source file (`App.jsx`)
+- **Frequency**: 3/6 branches (bot/refactor/split-app-complete, bot/refactor/split-app-modules, bot/split-app-jsx-kimidirect)
+- **Why guardrails don't catch it**: The `INCOMPLETE REFACTOR` check (Guardrail 5) fires as a **warning only** — the PR is still created and pushed. The post-completion audit marks it as `failed` in history, but the branch already exists on GitHub.
+- **Root cause**: Models treat "create new files" as the task, not "create new files AND update imports in the source"
+
+#### Pattern 2: Data Fabrication
+- **What**: Models invent destinations that don't exist in the original data (puerto-escondido, buenos-aires, taipei, panama, kualalumpur) and lose real ones
+- **Frequency**: 3/3 refactor branches
+- **Why guardrails don't catch it**: The identifier survival check (Guardrail 4b) only tracks exported function/class/variable names, not data values inside arrays or objects. Destination data in a const array is invisible to it.
+- **Root cause**: Models regenerate entire files from memory instead of reading the original and preserving it
+
+#### Pattern 3: False Completion Claims
+- **What**: Models mark ROADMAP.md tasks as `[x]` complete when no corresponding code was changed
+- **Frequency**: 2/6 branches (bot/add-more-destinations-q3coder-v2, bot/docs/update-roadmap-split2)
+- **Why guardrails don't catch it**: Roadmap guardrail (7b) only checks that tasks aren't DELETED. Changing `[ ]` → `[x]` is not flagged. The system has no way to verify that the code changes actually match the task being marked complete.
+- **Root cause**: Models optimize for "task done" appearance rather than substance
+
+#### Pattern 4: Encoding Corruption
+- **What**: Emojis and em-dashes in ROADMAP.md and WORK_LOG.md become mojibake
+- **Frequency**: 1/6 branches (bot/add-tax-guide-jurisdictions-q3coder)
+- **Why guardrails don't catch it**: No encoding validation exists. The content passes through JSON → GitHub API → base64 encoding, and if any step mishandles UTF-8, the result is corrupted.
+- **Root cause**: Likely the model generates content with encoding assumptions that don't match the pipeline
+
+#### Pattern 5: Fabricated References
+- **What**: Models cite non-existent PRs ("PR #24") and backdate work log entries to 2023
+- **Frequency**: 2/6 branches
+- **Why guardrails don't catch it**: The audit trail check verifies that existing rows aren't deleted, but doesn't verify that NEW rows contain accurate information. No cross-reference validation.
+- **Root cause**: Models confabulate references to appear thorough
+
+#### Pattern 6: Duplicate Branches
+- **What**: Byte-for-byte identical PRs under different branch names
+- **Frequency**: 1 pair (bot/refactor/split-app-complete = bot/refactor/split-app-modules)
+- **Why guardrails don't catch it**: No deduplication check exists across branches
+- **Root cause**: Likely a resume/retry creating the same PR with a different branch name
+
+---
+
+## 13. Guardrail Gap Analysis
+
+### 13.1 Critical Gaps (directly caused observed failures)
+
+| Gap | Observed Failure | Proposed Fix |
+|-----|-----------------|--------------|
+| **Incomplete refactor is WARNING, not BLOCK** | Dead code PRs land on GitHub | Upgrade to HARD BLOCK: if new code files exist but no existing code files are updated, throw |
+| **No `[x]` verification** | False completion claims | When ROADMAP.md changes `[ ]` → `[x]`, verify that the PR also modifies at least one code file |
+| **No data preservation check** | Fabricated destinations | For files being updated, compare data structures (arrays, objects) not just identifier names |
+| **No encoding validation** | Mojibake in markdown files | Validate UTF-8 encoding of all file contents before sending to GitHub API |
+| **No duplicate branch detection** | Identical PRs under different names | Before creating PR, check if the same file changes already exist in another recent bot/ branch |
+
+### 13.2 Structural Gaps (not yet observed in failures but risky)
+
+| Gap | Risk | Notes |
+|-----|------|-------|
+| `sandbox_exec` bypasses all guardrails | Arbitrary commits possible | Sandbox can `git push` directly without any of the 7 guardrails |
+| Identifier survival only for files >50 lines | Small critical files unprotected | Config files, entry points can be fully rewritten |
+| REDO mode not tracked in orchestra history | No audit trail for REDO tasks | `isOrchestra` check misses "Orchestra REDO Mode" |
+| Roadmap task matching uses only first 30 chars | Similar-prefix tasks can be confused | Tasks like "Add tax guide..." and "Add tax calculator..." match |
+| No cross-reference validation for new WORK_LOG entries | Fabricated dates/PRs pass | Model adds rows claiming work done on dates/PRs that don't exist |
+| No verification that PR URL in ORCHESTRA_RESULT is real | Model can fabricate PR URLs | Post-completion audit checks for `https://` but doesn't verify the URL resolves |
+
+### 13.3 Recommendations (prioritized)
+
+**P0 — Would have prevented the 6 rejected PRs:**
+
+1. **Upgrade INCOMPLETE REFACTOR to HARD BLOCK**: If new code files are created but zero existing code files are updated, abort the PR. This single change would have blocked 3 of the 6 bad branches.
+
+2. **Add `[x]` completion verification**: When ROADMAP.md changes a task from `[ ]` to `[x]`, require that the PR also includes changes to at least one non-documentation code file. This would have blocked 2 of the 6 bad branches.
+
+3. **Add content fingerprinting for updates**: When a file is being updated, compare the actual data values (not just identifiers). For example, extract all string literals >10 chars from the original and require that at least 80% are present in the new version. This addresses data fabrication.
+
+**P1 — Important but less urgent:**
+
+4. **Encoding validation**: Run a UTF-8 validation pass on all file contents before submitting to GitHub. Replace or flag invalid byte sequences.
+
+5. **Fix REDO mode tracking**: Add `"Orchestra REDO Mode"` to the `isOrchestra` detection in task-processor.ts.
+
+6. **Progressive model gating**: Some tasks (multi-file refactors involving large files) should require minimum model capability. Free models below a certain tier should get a warning or refusal for complex refactoring tasks.
+
+**P2 — Nice to have:**
+
+7. **PR URL verification**: After `github_create_pr` succeeds, do a `GET /repos/:owner/:repo/pulls/:number` to confirm the PR actually exists.
+
+8. **Duplicate branch detection**: Before creating a PR, list recent `bot/*` branches and compare file change sets.
+
+9. **Cross-reference validation for WORK_LOG**: Verify that dates in new entries are within the current session's timeframe.
