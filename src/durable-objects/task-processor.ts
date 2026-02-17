@@ -949,6 +949,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // Non-OpenRouter providers: use standard fetch (with timeout/heartbeat)
               let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
               let response: Response;
+              const abortController = new AbortController();
+              // 2 minute timeout — actually cancels the connection via AbortController
+              const fetchTimeout = setTimeout(() => abortController.abort(), 120000);
 
               try {
                 // Heartbeat every 10 seconds to keep DO active
@@ -981,20 +984,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   requestBody.reasoning = reasoningParam;
                 }
 
-                const fetchPromise = fetch(providerConfig.baseUrl, {
+                response = await fetch(providerConfig.baseUrl, {
                   method: 'POST',
                   headers,
                   body: JSON.stringify(requestBody),
+                  signal: abortController.signal,
                 });
-
-                // 5 minute timeout per API call
-                const timeoutPromise = new Promise<Response>((_, reject) => {
-                  setTimeout(() => reject(new Error(`${provider} API timeout (5 min)`)), 300000);
-                });
-
-                response = await Promise.race([fetchPromise, timeoutPromise]);
                 console.log(`[TaskProcessor] API call completed with status: ${response.status}`);
+              } catch (fetchError) {
+                clearTimeout(fetchTimeout);
+                if (heartbeatInterval) clearInterval(heartbeatInterval);
+                // Convert AbortError to a clear timeout message
+                if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
+                  throw new Error(`${provider} API timeout (2 min) — connection aborted`);
+                }
+                throw fetchError;
               } finally {
+                clearTimeout(fetchTimeout);
                 if (heartbeatInterval) clearInterval(heartbeatInterval);
               }
 
