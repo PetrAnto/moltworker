@@ -38,7 +38,8 @@ The TaskProcessor is a Cloudflare Durable Object that handles long-running AI ta
 | `COMPRESS_AFTER_TOOLS` | 6 | Compress context every N tool calls |
 | `MAX_CONTEXT_TOKENS` | 60,000 | Force compression threshold (estimated) |
 | `WATCHDOG_INTERVAL_MS` | 90s | Alarm fires every 90s to check for stuck tasks |
-| `STUCK_THRESHOLD_MS` | 60s | Time without update before task is considered stuck |
+| `STUCK_THRESHOLD_FREE_MS` | 60s | Time without update before free model task is considered stuck |
+| `STUCK_THRESHOLD_PAID_MS` | 180s | Time without update before paid model task is considered stuck |
 | `CHECKPOINT_EVERY_N_TOOLS` | 3 | Save R2 checkpoint every N tool calls |
 | `MAX_AUTO_RESUMES_DEFAULT` | 10 | Max auto-resumes for paid models |
 | `MAX_AUTO_RESUMES_FREE` | 15 | Max auto-resumes for free models |
@@ -272,13 +273,27 @@ Direct API providers (DeepSeek, Moonshot) reject orphaned tool messages. The com
 - **Cause**: When resuming from checkpoint, `toolCountAtLastResume` preserved the pre-resume value (e.g., 20) but checkpoint only had 18 tools. `18 - 20 = -2`.
 - **Fix** (commit `85b7224`): Sync `toolCountAtLastResume` to checkpoint's `toolsUsed.length` on resume.
 
+### 8.3 Session: 2026-02-17 — Gemini 3 Pro Watchdog Thrashing
+
+**Problem**: Paid model (Gemini 3 Pro, $2/$12) burned through 9 auto-resumes without completing the task. Each resume got only 2-7 iterations before watchdog killed it.
+
+#### Issue I: Streaming progress updated watchdog too infrequently
+- **Symptom**: 9 consecutive auto-resumes, each with only 2-7 iterations. Checkpoint stuck at 6 iterations (never updated). Model never completed.
+- **Cause**: The `onProgress` callback from SSE streaming called every chunk, but `lastUpdate` was only written to DO storage every **50 chunks** (line 943). For models that generate tokens slowly (1-2 chunks/second during complex code generation), 50 chunks = 25-50 seconds between watchdog updates. With a 60s stuck threshold, any network jitter pushed it over the edge.
+- **Fix**: Reduced progress update interval from 50 to 10 chunks. Separated logging to every 100 chunks to avoid log spam.
+
+#### Issue J: Stuck threshold too aggressive for paid models
+- **Symptom**: Same as Issue I — watchdog declared task stuck during legitimate long generations
+- **Cause**: The 60s `STUCK_THRESHOLD_MS` was a single value for all models. Paid models (Gemini 3 Pro, Claude, GPT-4) generate longer, more complex responses — especially for `github_create_pr` calls that include thousands of tokens of code. A single threshold can't serve both fast free models and slow premium ones.
+- **Fix**: Split into `STUCK_THRESHOLD_FREE_MS` (60s) and `STUCK_THRESHOLD_PAID_MS` (180s). The watchdog now checks `model.isFree` to select the appropriate threshold. Paid models get 3x more time before being considered stuck.
+
 ---
 
 ## 9. Known Remaining Issues & Potential Improvements
 
 ### 9.1 Open Issues
 
-1. **Watchdog preempts AbortController**: The 90s watchdog alarm fires before the 120s AbortController timeout. When the API hangs, the watchdog kills the task and auto-resumes from checkpoint, but the old `fetch()` is still running (orphaned). The AbortController would have killed it cleanly at 120s. Consider: either reduce AbortController timeout to 60s (before watchdog), or make the watchdog aware of in-progress API calls.
+1. **Watchdog preempts AbortController (free models only now)**: For free models, the 90s watchdog alarm still fires before the 120s AbortController timeout. Paid models now have a 180s stuck threshold so the 120s AbortController fires first. For free models, consider reducing AbortController timeout to 45s (before watchdog), or making the watchdog aware of in-progress API calls.
 
 2. **Checkpoint doesn't cancel orphaned processTask**: When watchdog auto-resumes, it calls `processTask()` via `waitUntil()`. But the old `processTask()` invocation may still be running (stuck in a `fetch()` call). This can lead to two concurrent `processTask()` invocations. The old one eventually times out and writes stale state.
 

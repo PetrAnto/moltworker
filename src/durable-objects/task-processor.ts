@@ -166,7 +166,10 @@ interface TaskProcessorEnv {
 // Watchdog alarm interval (90 seconds)
 const WATCHDOG_INTERVAL_MS = 90000;
 // Max time without update before considering task stuck
-const STUCK_THRESHOLD_MS = 60000;
+// Free models: 60s (fast, cheap — don't waste resources)
+// Paid models: 180s (may generate complex code, need more time)
+const STUCK_THRESHOLD_FREE_MS = 60000;
+const STUCK_THRESHOLD_PAID_MS = 180000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max auto-resume attempts before requiring manual intervention
@@ -218,10 +221,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     const timeSinceUpdate = Date.now() - task.lastUpdate;
-    console.log(`[TaskProcessor] Time since last update: ${timeSinceUpdate}ms`);
+    const isPaidModel = getModel(task.modelAlias)?.isFree !== true;
+    const stuckThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
+    console.log(`[TaskProcessor] Time since last update: ${timeSinceUpdate}ms (threshold: ${stuckThreshold / 1000}s, ${isPaidModel ? 'paid' : 'free'})`);
 
     // If task updated recently, it's still running - reschedule watchdog
-    if (timeSinceUpdate < STUCK_THRESHOLD_MS) {
+    if (timeSinceUpdate < stuckThreshold) {
       console.log('[TaskProcessor] Task still active, rescheduling watchdog');
       await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
       return;
@@ -939,11 +944,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   responseFormat: request.responseFormat,
                   onProgress: () => {
                     progressCount++;
-                    // Update watchdog every 50 chunks (~every few seconds)
-                    if (progressCount % 50 === 0) {
-                      console.log(`[TaskProcessor] Streaming progress: ${progressCount} chunks received`);
+                    // Update watchdog every 10 chunks to keep alive during slow generation
+                    // (was 50 — too infrequent for models like Gemini that generate slowly)
+                    if (progressCount % 10 === 0) {
                       task.lastUpdate = Date.now();
                       this.doState.storage.put('task', task).catch(() => {});
+                    }
+                    // Log progress less frequently to avoid log spam
+                    if (progressCount % 100 === 0) {
+                      console.log(`[TaskProcessor] Streaming progress: ${progressCount} chunks received`);
                     }
                   },
                 }
