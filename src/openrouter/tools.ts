@@ -981,7 +981,58 @@ async function githubCreatePr(
           }
         }
 
-        // 4c. Warn on significant shrinkage (20-50% of original)
+        // 4c. Content fingerprinting: detect data fabrication by checking string literal survival.
+        //     Models that regenerate files from memory lose original data values (destinations,
+        //     config entries, URLs) even when the structure looks correct.
+        if (isCodePath && fileData.content && fileData.encoding === 'base64') {
+          const origContent = atob(fileData.content.replace(/\n/g, ''));
+          if (origContent.length > 200) {
+            // Extract meaningful string literals (>10 chars) — these are data fingerprints
+            const extractStringLiterals = (text: string): string[] => {
+              const strings = new Set<string>();
+              // Match single-quoted, double-quoted, and backtick-quoted strings
+              const regex = /(['"`])([^'"`\n]{10,}?)\1/g;
+              let m;
+              while ((m = regex.exec(text)) !== null) {
+                const val = m[2].trim();
+                // Skip common framework boilerplate (import paths, common patterns)
+                if (!val.startsWith('use ') && !val.startsWith('./') && !val.startsWith('../')) {
+                  strings.add(val);
+                }
+              }
+              return [...strings];
+            };
+
+            const originalStrings = extractStringLiterals(origContent);
+            if (originalStrings.length >= 5) {
+              const newContent = change.content;
+              const survivingCount = originalStrings.filter(s => newContent.includes(s)).length;
+              const stringSurvivalRate = survivingCount / originalStrings.length;
+
+              // Hard block if <50% of original data values survive
+              if (stringSurvivalRate < 0.5) {
+                const missing = originalStrings.filter(s => !newContent.includes(s));
+                throw new Error(
+                  `DATA FABRICATION blocked for "${change.path}": only ${survivingCount}/${originalStrings.length} ` +
+                  `original data values survive (${Math.round(stringSurvivalRate * 100)}%). ` +
+                  `Missing values: ${missing.slice(0, 5).map(s => `"${s.substring(0, 40)}"`).join(', ')}` +
+                  `${missing.length > 5 ? ` ... and ${missing.length - 5} more` : ''}. ` +
+                  `Read the ORIGINAL file carefully and preserve existing data. Do NOT regenerate from memory.`
+                );
+              }
+
+              // Warn if 50-80% survive
+              if (stringSurvivalRate < 0.8) {
+                warnings.push(
+                  `⚠️ DATA DRIFT: "${change.path}" preserves only ${Math.round(stringSurvivalRate * 100)}% of original ` +
+                  `data values (${survivingCount}/${originalStrings.length}). Verify no data was fabricated or lost.`
+                );
+              }
+            }
+          }
+        }
+
+        // 4d. Warn on significant shrinkage (20-50% of original)
         if (originalSize > 200 && newSize < originalSize * 0.5) {
           warnings.push(`⚠️ "${change.path}": shrinks from ${originalSize}→${newSize} bytes (${Math.round(newSize / originalSize * 100)}% of original)`);
         }
@@ -991,6 +1042,7 @@ async function githubCreatePr(
         fetchErr.message.startsWith('Destructive update blocked') ||
         fetchErr.message.startsWith('Full-rewrite blocked') ||
         fetchErr.message.startsWith('Rejecting update') ||
+        fetchErr.message.startsWith('DATA FABRICATION') ||
         fetchErr.message.startsWith('NET DELETION') ||
         fetchErr.message.startsWith('AUDIT TRAIL') ||
         fetchErr.message.startsWith('ROADMAP TAMPERING')
@@ -1013,11 +1065,11 @@ async function githubCreatePr(
   );
 
   if (createdCodeFiles.length > 0 && updatedCodeFiles.length === 0) {
-    warnings.push(
-      `⚠️ INCOMPLETE REFACTOR: ${createdCodeFiles.length} new code file(s) created ` +
+    throw new Error(
+      `INCOMPLETE REFACTOR blocked: ${createdCodeFiles.length} new code file(s) created ` +
       `(${createdCodeFiles.map(c => c.path).join(', ')}) but no existing code files were updated. ` +
-      `These modules are likely dead code — nothing imports them. ` +
-      `Did you forget to update the source file to import from the new modules?`
+      `These modules are dead code — nothing imports them. ` +
+      `You MUST update the source file to import from the new modules before creating a PR.`
     );
   }
 
@@ -1171,12 +1223,40 @@ async function githubCreatePr(
                 `${deletedTasks.map(t => `"${t.title.substring(0, 40)}"`).join(', ')}. Verify this is intentional.`
               );
             }
+
+            // 7c. False completion detection: tasks changed from [ ] to [x] must have code backing
+            const newlyCheckedTasks = originalTasks.filter(ot => {
+              if (ot.done) return false; // already was [x]
+              const match = newTasks.find(nt =>
+                nt.title.toLowerCase().replace(/\s+/g, ' ').substring(0, 30) ===
+                ot.title.toLowerCase().replace(/\s+/g, ' ').substring(0, 30)
+              );
+              return match?.done === true; // was [ ] → now [x]
+            });
+
+            if (newlyCheckedTasks.length > 0) {
+              const hasCodeFileChanges = changes.some(c =>
+                (c.action === 'create' || c.action === 'update') &&
+                CODE_EXTENSIONS.test(c.path) &&
+                !NON_CODE_FILES.test(c.path.split('/').pop() || '')
+              );
+
+              if (!hasCodeFileChanges) {
+                throw new Error(
+                  `FALSE COMPLETION blocked: ROADMAP.md marks ${newlyCheckedTasks.length} task(s) as complete ` +
+                  `(${newlyCheckedTasks.map(t => `"${t.title.substring(0, 50)}"`).join(', ')}) ` +
+                  `but this PR contains NO code file changes. ` +
+                  `To mark a task as [x], the PR must include actual code changes that implement the task.`
+                );
+              }
+            }
           }
         }
       } catch (err) {
         if (err instanceof Error && (
           err.message.startsWith('ROADMAP TAMPERING') ||
-          err.message.startsWith('AUDIT TRAIL')
+          err.message.startsWith('AUDIT TRAIL') ||
+          err.message.startsWith('FALSE COMPLETION')
         )) {
           throw err;
         }
