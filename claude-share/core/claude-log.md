@@ -4,6 +4,42 @@
 
 ---
 
+## Session: 2026-02-18 | Phase 2.3 Acontext Observability (Session: 01SE5WrUuc6LWTmZC8WBXKY4)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/implement-p1-guardrails-DcOgI`
+**Status:** Completed
+
+### Summary
+Implemented Phase 2.3 — Acontext Observability Integration. Built a lightweight fetch-based REST client (not using the npm SDK due to zod@4 + Node.js API incompatibilities with Workers), wired it through TaskRequest and all 6 dispatch sites in handler.ts, added session storage at task completion in the Durable Object, and added /sessions Telegram command.
+
+### Changes Made
+1. **`src/acontext/client.ts`** (NEW) — Lightweight Acontext REST client: AcontextClient class (CRUD sessions/messages), createAcontextClient factory, toOpenAIMessages converter (handles ContentPart[]), formatSessionsList for Telegram display
+2. **`src/types.ts`** — Added ACONTEXT_API_KEY and ACONTEXT_BASE_URL to MoltbotEnv
+3. **`src/durable-objects/task-processor.ts`** — Added acontextKey/acontextBaseUrl to TaskRequest, Acontext session storage at task completion (creates session, stores messages, logs metadata)
+4. **`src/telegram/handler.ts`** — Added acontextKey/acontextBaseUrl properties, constructor params, /sessions command, help text entry, all 6 TaskRequest sites updated
+5. **`src/routes/telegram.ts`** — Pass env.ACONTEXT_API_KEY + env.ACONTEXT_BASE_URL to handler factory, added acontext_configured to /info endpoint
+6. **`src/acontext/client.test.ts`** (NEW) — 24 tests covering client methods, factory, toOpenAIMessages, formatSessionsList
+
+### Files Modified
+- `src/acontext/client.ts` (new)
+- `src/acontext/client.test.ts` (new)
+- `src/types.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/telegram/handler.ts`
+- `src/routes/telegram.ts`
+
+### Tests
+- [x] Tests pass (680 total, 0 failures)
+- [x] Typecheck passes
+
+### Notes for Next Session
+- Phase 2.3 is complete — Acontext sessions will be created after each DO task completion
+- Graceful degradation: no API key = no Acontext calls (null client pattern)
+- Next: Phase 2.5.9 (Holiday awareness) or Phase 4.1 (token-budgeted retrieval)
+
+---
+
 ## Session: 2026-02-18 | P1 Guardrails + /learnings Command (Session: 01SE5WrUuc6LWTmZC8WBXKY4)
 
 **AI:** Claude Opus 4.6
