@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs } from './models';
+import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, type RouterCheckpointMeta } from './models';
 
 // --- detectToolIntent ---
 
@@ -274,5 +274,147 @@ describe('formatOrchestraModelRecs', () => {
   it('includes model switch instruction', () => {
     const output = formatOrchestraModelRecs();
     expect(output).toContain('Switch model before /orch run');
+  });
+});
+
+// --- detectTaskIntent ---
+
+describe('detectTaskIntent', () => {
+  it('detects coding intent from keyword "implement"', () => {
+    expect(detectTaskIntent('implement a new feature')).toBe('coding');
+  });
+
+  it('detects coding intent from keyword "fix"', () => {
+    expect(detectTaskIntent('fix the bug in login')).toBe('coding');
+  });
+
+  it('detects coding intent from keyword "pull request"', () => {
+    expect(detectTaskIntent('create a pull request')).toBe('coding');
+  });
+
+  it('detects reasoning intent from keyword "analyze"', () => {
+    expect(detectTaskIntent('analyze this data set')).toBe('reasoning');
+  });
+
+  it('detects reasoning intent from keyword "research"', () => {
+    expect(detectTaskIntent('research the latest trends')).toBe('reasoning');
+  });
+
+  it('returns general for simple messages', () => {
+    expect(detectTaskIntent('hello how are you')).toBe('general');
+  });
+
+  it('returns general for empty string', () => {
+    expect(detectTaskIntent('')).toBe('general');
+  });
+});
+
+// --- resolveTaskModel ---
+
+describe('resolveTaskModel', () => {
+  it('uses explicit override when provided', () => {
+    const result = resolveTaskModel('auto', null, 'deep');
+    expect(result.modelAlias).toBe('deep');
+    expect(result.rationale).toContain('User override');
+    expect(result.escalated).toBe(false);
+  });
+
+  it('ignores invalid override and falls back to user model', () => {
+    const result = resolveTaskModel('auto', null, 'nonexistent_model_xyz');
+    expect(result.modelAlias).toBe('auto');
+  });
+
+  it('uses user model when no checkpoint exists', () => {
+    const result = resolveTaskModel('sonnet', null);
+    expect(result.modelAlias).toBe('sonnet');
+    expect(result.escalated).toBe(false);
+  });
+
+  it('uses user model when checkpoint is completed', () => {
+    const cp: RouterCheckpointMeta = {
+      modelAlias: 'dcode',
+      iterations: 50,
+      toolsUsed: 2,
+      completed: true,
+      taskPrompt: 'implement feature',
+    };
+    const result = resolveTaskModel('auto', cp);
+    expect(result.modelAlias).toBe('auto');
+  });
+
+  it('suggests escalation for stalled coding task on free model', () => {
+    const cp: RouterCheckpointMeta = {
+      modelAlias: 'qwencoderfree',
+      iterations: 10,
+      toolsUsed: 1,
+      completed: false,
+      taskPrompt: 'implement a new API endpoint',
+    };
+    const result = resolveTaskModel('qwencoderfree', cp);
+    // Should suggest escalation (rationale starts with ⚠️)
+    expect(result.rationale).toContain('⚠️');
+    expect(result.rationale).toContain('low progress');
+    expect(result.rationale).toContain('/resume');
+  });
+
+  it('suggests escalation for stalled coding task on /dcode', () => {
+    const cp: RouterCheckpointMeta = {
+      modelAlias: 'dcode',
+      iterations: 10,
+      toolsUsed: 1,
+      completed: false,
+      taskPrompt: 'fix the deployment script',
+    };
+    const result = resolveTaskModel('dcode', cp);
+    expect(result.rationale).toContain('⚠️');
+    expect(result.rationale).toContain('low progress');
+  });
+
+  it('does not suggest escalation for non-coding tasks', () => {
+    const cp: RouterCheckpointMeta = {
+      modelAlias: 'qwencoderfree',
+      iterations: 10,
+      toolsUsed: 1,
+      completed: false,
+      taskPrompt: 'what is the weather in Prague',
+    };
+    const result = resolveTaskModel('qwencoderfree', cp);
+    expect(result.rationale).not.toContain('⚠️');
+  });
+
+  it('does not suggest escalation when tool ratio is healthy', () => {
+    const cp: RouterCheckpointMeta = {
+      modelAlias: 'qwencoderfree',
+      iterations: 10,
+      toolsUsed: 8,
+      completed: false,
+      taskPrompt: 'implement a new feature',
+    };
+    const result = resolveTaskModel('qwencoderfree', cp);
+    expect(result.rationale).not.toContain('⚠️');
+  });
+
+  it('does not suggest escalation for paid non-dcode models', () => {
+    const cp: RouterCheckpointMeta = {
+      modelAlias: 'sonnet',
+      iterations: 10,
+      toolsUsed: 1,
+      completed: false,
+      taskPrompt: 'implement a new feature',
+    };
+    const result = resolveTaskModel('sonnet', cp);
+    expect(result.rationale).not.toContain('⚠️');
+  });
+
+  it('does not escalate when iterations are too few', () => {
+    const cp: RouterCheckpointMeta = {
+      modelAlias: 'qwencoderfree',
+      iterations: 2,
+      toolsUsed: 0,
+      completed: false,
+      taskPrompt: 'implement a feature',
+    };
+    const result = resolveTaskModel('qwencoderfree', cp);
+    expect(result.rationale).not.toContain('⚠️');
   });
 });

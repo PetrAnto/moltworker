@@ -10,6 +10,7 @@ import {
   loadLearnings,
   getRelevantLearnings,
   formatLearningsForPrompt,
+  formatLearningSummary,
   storeLastTaskSummary,
   loadLastTaskSummary,
   formatLastTaskForPrompt,
@@ -1036,5 +1037,152 @@ describe('formatLastTaskForPrompt', () => {
     const match = result.match(/"(A+)"/);
     expect(match).toBeTruthy();
     expect(match![1].length).toBe(100);
+  });
+});
+
+// --- formatLearningSummary ---
+
+describe('formatLearningSummary', () => {
+  const now = Date.now();
+
+  const makeLearning = (overrides: Partial<TaskLearning> = {}): TaskLearning => ({
+    taskId: overrides.taskId ?? `t-${Math.random()}`,
+    timestamp: overrides.timestamp ?? now - 3600000,
+    modelAlias: overrides.modelAlias ?? 'deep',
+    category: overrides.category ?? 'web_search',
+    toolsUsed: overrides.toolsUsed ?? ['fetch_url'],
+    uniqueTools: overrides.uniqueTools ?? ['fetch_url'],
+    iterations: overrides.iterations ?? 3,
+    durationMs: overrides.durationMs ?? 15000,
+    success: overrides.success ?? true,
+    taskSummary: overrides.taskSummary ?? 'Test task',
+  });
+
+  const makeHistory = (learnings: TaskLearning[]): LearningHistory => ({
+    userId: 'user1',
+    learnings,
+    updatedAt: now,
+  });
+
+  it('returns "no history" message for empty learnings', () => {
+    const result = formatLearningSummary(makeHistory([]));
+    expect(result).toContain('No task history');
+  });
+
+  it('shows total tasks and success rate', () => {
+    const history = makeHistory([
+      makeLearning({ success: true }),
+      makeLearning({ success: true }),
+      makeLearning({ success: false }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('Total tasks: 3');
+    expect(result).toContain('Success rate: 67%');
+    expect(result).toContain('2/3');
+  });
+
+  it('shows 100% success rate when all succeed', () => {
+    const history = makeHistory([
+      makeLearning({ success: true }),
+      makeLearning({ success: true }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('Success rate: 100%');
+  });
+
+  it('shows category breakdown', () => {
+    const history = makeHistory([
+      makeLearning({ category: 'github' }),
+      makeLearning({ category: 'github' }),
+      makeLearning({ category: 'web_search' }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('Categories');
+    expect(result).toContain('github: 2');
+    expect(result).toContain('web_search: 1');
+  });
+
+  it('shows top tools', () => {
+    const history = makeHistory([
+      makeLearning({ uniqueTools: ['fetch_url', 'github_read_file'] }),
+      makeLearning({ uniqueTools: ['fetch_url'] }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('Top Tools');
+    expect(result).toContain('fetch_url: 2x');
+    expect(result).toContain('github_read_file: 1x');
+  });
+
+  it('shows top models', () => {
+    const history = makeHistory([
+      makeLearning({ modelAlias: 'deep' }),
+      makeLearning({ modelAlias: 'deep' }),
+      makeLearning({ modelAlias: 'sonnet' }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('Top Models');
+    expect(result).toContain('/deep: 2x');
+    expect(result).toContain('/sonnet: 1x');
+  });
+
+  it('shows recent tasks section', () => {
+    const history = makeHistory([
+      makeLearning({ taskSummary: 'First task', success: true }),
+      makeLearning({ taskSummary: 'Second task', success: false }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('Recent Tasks');
+    expect(result).toContain('First task');
+    expect(result).toContain('Second task');
+  });
+
+  it('limits recent tasks to 5', () => {
+    const learnings = Array.from({ length: 10 }, (_, i) =>
+      makeLearning({ taskSummary: `Task number ${i}` })
+    );
+    const history = makeHistory(learnings);
+    const result = formatLearningSummary(history);
+    // Should show last 5 tasks (indices 5-9)
+    expect(result).toContain('Task number 9');
+    expect(result).toContain('Task number 5');
+    expect(result).not.toContain('Task number 4');
+  });
+
+  it('truncates long task summaries in recent section', () => {
+    const history = makeHistory([
+      makeLearning({ taskSummary: 'A'.repeat(100) }),
+    ]);
+    const result = formatLearningSummary(history);
+    // Recent tasks truncate at 60 chars: "AAA..."
+    const match = result.match(/"(A+)"\.\.\./);
+    expect(match).toBeTruthy();
+    expect(match![1].length).toBe(60);
+  });
+
+  it('shows average duration', () => {
+    const history = makeHistory([
+      makeLearning({ durationMs: 10000 }),
+      makeLearning({ durationMs: 20000 }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('Avg duration: 15s');
+  });
+
+  it('shows category emojis', () => {
+    const history = makeHistory([
+      makeLearning({ category: 'github' }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('🐙');
+  });
+
+  it('handles single learning correctly', () => {
+    const history = makeHistory([
+      makeLearning({ taskSummary: 'Only task', success: true }),
+    ]);
+    const result = formatLearningSummary(history);
+    expect(result).toContain('Total tasks: 1');
+    expect(result).toContain('Success rate: 100%');
+    expect(result).toContain('Only task');
   });
 });

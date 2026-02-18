@@ -7,7 +7,7 @@ import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type Cha
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
 import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
-import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, loadLastTaskSummary, formatLastTaskForPrompt } from '../openrouter/learnings';
+import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, formatLearningSummary, loadLastTaskSummary, formatLastTaskForPrompt } from '../openrouter/learnings';
 import {
   buildInitPrompt,
   buildRunPrompt,
@@ -48,8 +48,10 @@ import {
   getFreeToolModels,
   formatOrchestraModelRecs,
   categorizeModel,
+  resolveTaskModel,
   type ModelInfo,
   type ReasoningLevel,
+  type RouterCheckpointMeta,
 } from '../openrouter/models';
 import type { ResponseFormat } from '../openrouter/client';
 
@@ -782,10 +784,22 @@ export class TelegramHandler {
         await this.bot.sendMessage(
           chatId,
           newAutoResume
-            ? '✓ Auto-resume enabled. Tasks will automatically retry on timeout (10x paid, 15x free models).'
+            ? '✓ Auto-resume enabled. Tasks will automatically retry on timeout (up to 10x paid, 15x free).'
             : '✗ Auto-resume disabled. You will need to manually tap Resume when tasks timeout.'
         );
         break;
+
+      case '/learnings': {
+        // Show task history and learning summary
+        const learningHistory = await loadLearnings(this.r2Bucket, userId);
+        if (!learningHistory || learningHistory.learnings.length === 0) {
+          await this.bot.sendMessage(chatId, '📚 No task history yet. Complete some tasks and check back!');
+          break;
+        }
+        const summary = formatLearningSummary(learningHistory);
+        await this.bot.sendMessage(chatId, summary);
+        break;
+      }
 
       case '/resume':
         // Resume from checkpoint with optional model override
@@ -1865,45 +1879,30 @@ export class TelegramHandler {
     userId: string,
     overrideAlias?: string
   ): Promise<{ modelAlias: string; escalationMsg?: string }> {
-    // If user explicitly specified a model, use it directly
-    if (overrideAlias) {
-      const model = getModel(overrideAlias);
-      if (model) {
-        return { modelAlias: overrideAlias, escalationMsg: `🔄 Resuming with /${overrideAlias} (${model.name})` };
-      }
-    }
-
     // Get the user's current model
     const userModel = await this.storage.getUserModel(userId);
 
-    // Check the last checkpoint for stall signals
+    // Build checkpoint metadata for the Task Router
     const cpInfo = await this.storage.getCheckpointInfo(userId, 'latest');
-    if (!cpInfo || cpInfo.completed) {
-      return { modelAlias: userModel };
-    }
+    const checkpoint: RouterCheckpointMeta | null = cpInfo
+      ? {
+          modelAlias: cpInfo.modelAlias,
+          iterations: cpInfo.iterations,
+          toolsUsed: cpInfo.toolsUsed,
+          completed: cpInfo.completed,
+          taskPrompt: cpInfo.taskPrompt,
+        }
+      : null;
 
-    // Determine if the checkpoint model was a free model
-    const cpModelAlias = cpInfo.modelAlias || userModel;
-    const cpModel = getModel(cpModelAlias);
-    if (!cpModel?.isFree) {
-      return { modelAlias: userModel };
-    }
+    // Delegate to Task Router (single source of truth)
+    const decision = resolveTaskModel(userModel, checkpoint, overrideAlias);
 
-    // Detect if this is a coding task from the checkpoint prompt
-    const prompt = cpInfo.taskPrompt?.toLowerCase() || '';
-    const isCodingTask = /\b(code|implement|debug|fix|refactor|function|class|script|deploy|build|test|pr\b|pull.?request|repo\b|commit|merge|branch)\b/.test(prompt);
+    // If the router provided a rationale with escalation hints, surface it
+    const escalationMsg = decision.rationale.startsWith('⚠️') || decision.rationale.startsWith('User override')
+      ? decision.rationale
+      : undefined;
 
-    // If it's a coding task on a free model with many iterations but few tools, suggest escalation
-    const lowToolRatio = cpInfo.toolsUsed < Math.max(1, cpInfo.iterations / 3);
-    if (isCodingTask && lowToolRatio) {
-      return {
-        modelAlias: userModel,
-        escalationMsg: `💡 Previous run on /${cpModelAlias} (free) had low progress (${cpInfo.iterations} iters, ${cpInfo.toolsUsed} tools). Consider switching to a stronger model:\n` +
-          `  /resume deep — DeepSeek V3.2\n  /resume sonnet — Claude Sonnet\n  /resume grok — Grok\n\nResuming with /${userModel}...`,
-      };
-    }
-
-    return { modelAlias: userModel };
+    return { modelAlias: decision.modelAlias, escalationMsg };
   }
 
   /**
@@ -3248,6 +3247,9 @@ Each /orch next picks up where the last one left off.`;
 
 ━━━ Daily Briefing ━━━
 /briefing — Weather + HN + Reddit + arXiv digest
+
+━━━ Task History ━━━
+/learnings — View task patterns, success rates, top tools
 
 ━━━ Image Generation ━━━
 /img <prompt> — Generate (default: FLUX.2 Pro)
