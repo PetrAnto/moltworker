@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-18 (Phase 2.5.9 Holiday awareness)
+**Last Updated:** 2026-02-18 (Phase 4.1 Token-budgeted context retrieval)
 
 ---
 
@@ -37,6 +37,7 @@
 | 3.3+P1 | P1 guardrails + /learnings command | Claude Opus 4.6 | ✅ Complete | `claude/implement-p1-guardrails-DcOgI` |
 | 2.3 | Acontext observability integration | Claude Opus 4.6 | ✅ Complete | `claude/implement-p1-guardrails-DcOgI` |
 | 2.5.9 | Holiday awareness (Nager.Date) | Claude Opus 4.6 | ✅ Complete | `claude/implement-p1-guardrails-DcOgI` |
+| 4.1 | Token-budgeted context retrieval | Claude Opus 4.6 | ✅ Complete | `claude/implement-p1-guardrails-NF641` |
 
 ---
 
@@ -44,7 +45,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | Phase 2.5.9 Holiday awareness complete | `claude/implement-p1-guardrails-DcOgI` | 2026-02-18 |
+| Claude | Phase 4.1 Token-budgeted context retrieval complete | `claude/implement-p1-guardrails-NF641` | 2026-02-18 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -91,6 +92,7 @@
 | 3.3+P1 | P1 guardrails + /learnings command | Claude Opus 4.6 | 2026-02-18 | `claude/implement-p1-guardrails-DcOgI` |
 | 2.3 | Acontext observability integration | Claude Opus 4.6 | 2026-02-18 | `claude/implement-p1-guardrails-DcOgI` |
 | 2.5.9 | Holiday awareness (Nager.Date) | Claude Opus 4.6 | 2026-02-18 | `claude/implement-p1-guardrails-DcOgI` |
+| 4.1 | Token-budgeted context retrieval | Claude Opus 4.6 | 2026-02-18 | `claude/implement-p1-guardrails-NF641` |
 
 ---
 
@@ -122,8 +124,8 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **Phase 4.1** — Replace compressContext with token-budgeted retrieval
-2. **Phase 2.4** — Acontext dashboard link in admin UI
+1. **Phase 2.4** — Acontext dashboard link in admin UI
+2. **Phase 4.2** — Replace estimateTokens with actual tokenizer
 3. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
 
 ---

@@ -12,6 +12,7 @@ import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/co
 import { extractLearning, storeLearning, storeLastTaskSummary } from '../openrouter/learnings';
 import { parseOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
+import { estimateTokens, estimateMessageTokens, compressContextBudgeted } from './context-budget';
 
 // Task phase type for structured task processing
 export type TaskPhase = 'plan' | 'work' | 'review';
@@ -391,19 +392,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   }
 
   /**
-   * Estimate token count (rough: 1 token ≈ 4 chars)
+   * Estimate token count using the improved heuristic from context-budget module.
+   * Accounts for message overhead, tool call metadata, and code patterns.
    */
   private estimateTokens(messages: ChatMessage[]): number {
-    let totalChars = 0;
-    for (const msg of messages) {
-      if (typeof msg.content === 'string') {
-        totalChars += msg.content.length;
-      }
-      if (msg.tool_calls) {
-        totalChars += JSON.stringify(msg.tool_calls).length;
-      }
-    }
-    return Math.ceil(totalChars / 4);
+    return estimateTokens(messages);
   }
 
   /**
@@ -488,82 +481,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   }
 
   /**
-   * Compress old tool results to save context space
-   * Keeps recent messages intact, summarizes older tool results
-   * IMPORTANT: Must maintain valid tool_call/result pairing for API compatibility
+   * Token-budgeted context compression.
+   *
+   * Replaces the old fixed-window compressContext with a smarter system that:
+   * - Estimates tokens per message (not just chars/4)
+   * - Prioritizes recent messages, tool results, and system/user prompts
+   * - Summarizes evicted messages instead of dropping them silently
+   * - Maintains valid tool_call/result pairing for API compatibility
+   *
+   * @param messages - Full conversation messages
+   * @param keepRecent - Minimum recent messages to always keep (default: 6)
    */
   private compressContext(messages: ChatMessage[], keepRecent: number = 6): ChatMessage[] {
-    if (messages.length <= keepRecent + 2) {
-      return messages; // Not enough to compress
-    }
-
-    // Always keep: system message (first), user message (second), and recent messages
-    const systemMsg = messages[0];
-    const userMsg = messages[1];
-    let recentMessages = messages.slice(-keepRecent);
-    const middleEnd = messages.length - keepRecent;
-
-    // Fix: ensure recentMessages don't start with orphaned tool messages
-    // (tool messages without a preceding assistant+tool_calls message)
-    // Direct APIs (DeepSeek, Moonshot) reject orphaned tool messages.
-    let orphanCount = 0;
-    for (const msg of recentMessages) {
-      if (msg.role === 'tool') {
-        orphanCount++;
-      } else {
-        break;
-      }
-    }
-    if (orphanCount > 0) {
-      // Move orphaned tool messages into the middle (will be summarized)
-      recentMessages = recentMessages.slice(orphanCount);
-    }
-
-    const middleMessages = messages.slice(2, middleEnd + orphanCount);
-
-    // Summarize middle messages into a single assistant message
-    // We can't keep tool messages without their tool_calls, so just summarize everything
-    const summaryParts: string[] = [];
-    let toolCount = 0;
-    let filesMentioned: string[] = [];
-
-    for (const msg of middleMessages) {
-      if (msg.role === 'tool') {
-        toolCount++;
-        // Extract file paths if mentioned
-        const content = typeof msg.content === 'string' ? msg.content : '';
-        const fileMatch = content.match(/(?:file|path|reading|wrote).*?([\/\w\-\.]+\.(ts|js|md|json|tsx|jsx))/gi);
-        if (fileMatch) {
-          filesMentioned.push(...fileMatch.slice(0, 3));
-        }
-      } else if (msg.role === 'assistant' && msg.tool_calls) {
-        // Count tool calls
-        const toolNames = msg.tool_calls.map(tc => tc.function.name);
-        summaryParts.push(`Called: ${toolNames.join(', ')}`);
-      } else if (msg.role === 'assistant' && msg.content) {
-        // Keep first 200 chars of assistant responses
-        const preview = typeof msg.content === 'string'
-          ? msg.content.slice(0, 200).replace(/\n/g, ' ')
-          : '';
-        if (preview) {
-          summaryParts.push(`Response: ${preview}...`);
-        }
-      }
-    }
-
-    // Create a single summary message (no tool messages = no pairing issues)
-    const summary = [
-      `[Previous work: ${toolCount} tool operations]`,
-      summaryParts.length > 0 ? summaryParts.slice(0, 5).join(' | ') : '',
-      filesMentioned.length > 0 ? `Files: ${[...new Set(filesMentioned)].slice(0, 5).join(', ')}` : '',
-    ].filter(Boolean).join('\n');
-
-    const compressedMiddle: ChatMessage[] = summary ? [{
-      role: 'assistant',
-      content: summary,
-    }] : [];
-
-    return [systemMsg, userMsg, ...compressedMiddle, ...recentMessages];
+    return compressContextBudgeted(messages, MAX_CONTEXT_TOKENS, keepRecent);
   }
 
   /**
