@@ -1237,3 +1237,128 @@ export const DEFAULT_MODEL = 'auto';
  * Default image generation model
  */
 export const DEFAULT_IMAGE_MODEL = 'fluxpro';
+
+// === TASK ROUTER ===
+
+/** Escalation targets for coding tasks, ordered by preference (cost-effective first). */
+const CODING_ESCALATION_TARGETS = ['deep', 'grok', 'sonnet'] as const;
+
+/** Task intent categories for routing decisions. */
+export type TaskIntent = 'coding' | 'reasoning' | 'general';
+
+/** Checkpoint metadata used by the router to decide escalation. */
+export interface RouterCheckpointMeta {
+  modelAlias?: string;
+  iterations: number;
+  toolsUsed: number;
+  completed?: boolean;
+  taskPrompt?: string;
+}
+
+/** Result of a routing decision. */
+export interface RoutingDecision {
+  /** The model alias to use. */
+  modelAlias: string;
+  /** Human-readable rationale for the decision (for logs and user messages). */
+  rationale: string;
+  /** Whether the model was escalated from the user's original choice. */
+  escalated: boolean;
+}
+
+/**
+ * Detect task intent from a user message (or task prompt).
+ * Reusable across handler and task processor.
+ */
+export function detectTaskIntent(text: string): TaskIntent {
+  const lower = text.toLowerCase();
+
+  if (/\b(code|implement|debug|fix|refactor|function|class|script|deploy|build|test|coding|programming|pr\b|pull.?request|repository|repo\b|commit|merge|branch)\b/.test(lower)) {
+    return 'coding';
+  }
+  if (/\b(research|analy[sz]e|compare|explain.{0,10}detail|reason|math|calculate|solve|prove|algorithm|investigate|comprehensive)\b/.test(lower)) {
+    return 'reasoning';
+  }
+  return 'general';
+}
+
+/**
+ * Task Router — single source of truth for model selection on resume.
+ *
+ * Policy rules:
+ * 1. If the user explicitly overrides the model, use it directly.
+ * 2. If checkpoint shows a stalled task (low tool ratio) on a weak/free model for a coding task,
+ *    escalate to a stronger coding model.
+ * 3. If the checkpoint model is /dcode (DeepSeek direct) and the task stalled, escalate.
+ * 4. Otherwise, use the user's current model.
+ *
+ * @param userModel - The user's currently-selected model alias
+ * @param checkpoint - Last checkpoint metadata (null if no checkpoint)
+ * @param overrideAlias - Explicit user override (from /resume <model>)
+ * @returns RoutingDecision with model, rationale, and escalation flag
+ */
+export function resolveTaskModel(
+  userModel: string,
+  checkpoint: RouterCheckpointMeta | null,
+  overrideAlias?: string,
+): RoutingDecision {
+  // Rule 1: Explicit override always wins
+  if (overrideAlias) {
+    const model = getModel(overrideAlias);
+    if (model) {
+      return {
+        modelAlias: overrideAlias,
+        rationale: `User override: /${overrideAlias} (${model.name})`,
+        escalated: false,
+      };
+    }
+    // Invalid override — fall through to default
+  }
+
+  // No checkpoint or completed checkpoint — use user's model
+  if (!checkpoint || checkpoint.completed) {
+    return {
+      modelAlias: userModel,
+      rationale: `Using current model: /${userModel}`,
+      escalated: false,
+    };
+  }
+
+  // Rule 2 & 3: Check for stall signals that warrant escalation
+  const cpModelAlias = checkpoint.modelAlias || userModel;
+  const cpModel = getModel(cpModelAlias);
+
+  // Detect task intent from checkpoint prompt
+  const taskPrompt = checkpoint.taskPrompt || '';
+  const intent = detectTaskIntent(taskPrompt);
+
+  // Check if checkpoint model is a weak candidate for escalation:
+  // - Free models (any free model can stall on complex tasks)
+  // - /dcode specifically (the pain point from the audit)
+  const isWeakCandidate = cpModel?.isFree === true || cpModelAlias === 'dcode';
+
+  // Stall heuristic: low tool-to-iteration ratio means the model is spinning
+  const lowToolRatio = checkpoint.toolsUsed < Math.max(1, checkpoint.iterations / 3);
+
+  if (intent === 'coding' && isWeakCandidate && lowToolRatio && checkpoint.iterations >= 3) {
+    // Find the first escalation target that isn't the current model
+    const escalationTarget = CODING_ESCALATION_TARGETS.find(alias => alias !== cpModelAlias && alias !== userModel);
+    const suggestList = CODING_ESCALATION_TARGETS
+      .map(a => `/${a}`)
+      .join(', ');
+
+    return {
+      modelAlias: userModel, // Don't force-switch — suggest instead
+      rationale: `⚠️ Previous run on /${cpModelAlias}${cpModel?.isFree ? ' (free)' : ''} had low progress ` +
+        `(${checkpoint.iterations} iters, ${checkpoint.toolsUsed} tools). ` +
+        `Consider: /resume ${escalationTarget || 'deep'}\n` +
+        `Stronger options: ${suggestList}`,
+      escalated: false, // We suggest, not force
+    };
+  }
+
+  return {
+    modelAlias: userModel,
+    rationale: `Using current model: /${userModel}`,
+    escalated: false,
+  };
+}

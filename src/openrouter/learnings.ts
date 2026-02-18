@@ -326,3 +326,124 @@ export function formatLastTaskForPrompt(summary: LastTaskSummary | null): string
 
   return `\n\n[Previous task (${age}min ago, ${outcome}): "${summary.taskSummary.substring(0, 100)}" — tools: ${tools}]`;
 }
+
+/**
+ * Format a user-facing learning summary for the /learnings Telegram command.
+ * Shows: total tasks, success rate, most-used tools, categories breakdown,
+ * and recent task history.
+ */
+export function formatLearningSummary(history: LearningHistory): string {
+  const { learnings } = history;
+
+  if (learnings.length === 0) {
+    return '📚 No task history yet. Complete some tasks and check back!';
+  }
+
+  // --- Overall stats ---
+  const total = learnings.length;
+  const successful = learnings.filter(l => l.success).length;
+  const successRate = Math.round((successful / total) * 100);
+
+  // --- Category breakdown ---
+  const categoryCounts: Record<string, number> = {};
+  for (const l of learnings) {
+    categoryCounts[l.category] = (categoryCounts[l.category] || 0) + 1;
+  }
+  const sortedCategories = Object.entries(categoryCounts)
+    .sort((a, b) => b[1] - a[1]);
+
+  const categoryEmojis: Record<string, string> = {
+    web_search: '🌐',
+    github: '🐙',
+    data_lookup: '📊',
+    chart_gen: '📈',
+    code_exec: '💻',
+    multi_tool: '🔧',
+    simple_chat: '💬',
+  };
+
+  // --- Most-used tools ---
+  const toolCounts: Record<string, number> = {};
+  for (const l of learnings) {
+    for (const tool of l.uniqueTools) {
+      toolCounts[tool] = (toolCounts[tool] || 0) + 1;
+    }
+  }
+  const topTools = Object.entries(toolCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  // --- Most-used models ---
+  const modelCounts: Record<string, number> = {};
+  for (const l of learnings) {
+    modelCounts[l.modelAlias] = (modelCounts[l.modelAlias] || 0) + 1;
+  }
+  const topModels = Object.entries(modelCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+
+  // --- Average duration ---
+  const totalDurationMs = learnings.reduce((sum, l) => sum + l.durationMs, 0);
+  const avgDurationSec = Math.round(totalDurationMs / total / 1000);
+
+  // --- Build output ---
+  const lines: string[] = [
+    '📚 Task History Summary',
+    '',
+    `Total tasks: ${total}`,
+    `Success rate: ${successRate}% (${successful}/${total})`,
+    `Avg duration: ${avgDurationSec}s`,
+    '',
+    '━━━ Categories ━━━',
+  ];
+
+  for (const [cat, count] of sortedCategories) {
+    const emoji = categoryEmojis[cat] || '•';
+    const pct = Math.round((count / total) * 100);
+    lines.push(`${emoji} ${cat}: ${count} (${pct}%)`);
+  }
+
+  if (topTools.length > 0) {
+    lines.push('');
+    lines.push('━━━ Top Tools ━━━');
+    for (const [tool, count] of topTools) {
+      lines.push(`  ${tool}: ${count}x`);
+    }
+  }
+
+  if (topModels.length > 0) {
+    lines.push('');
+    lines.push('━━━ Top Models ━━━');
+    for (const [model, count] of topModels) {
+      lines.push(`  /${model}: ${count}x`);
+    }
+  }
+
+  // --- Recent tasks (last 5) ---
+  const recent = learnings.slice(-5).reverse();
+  lines.push('');
+  lines.push('━━━ Recent Tasks ━━━');
+  for (const l of recent) {
+    const outcome = l.success ? '✓' : '✗';
+    const age = formatAge(l.timestamp);
+    const tools = l.uniqueTools.length > 0 ? l.uniqueTools.join(', ') : 'no tools';
+    lines.push(`${outcome} ${age} — "${l.taskSummary.substring(0, 60)}"${l.taskSummary.length > 60 ? '...' : ''}`);
+    lines.push(`  /${l.modelAlias} | ${tools}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Format a timestamp as a human-readable relative age string.
+ */
+function formatAge(timestamp: number): string {
+  const diffMs = Date.now() - timestamp;
+  const diffMin = Math.round(diffMs / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}min ago`;
+  const diffHours = Math.round(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.round(diffHours / 24);
+  return `${diffDays}d ago`;
+}

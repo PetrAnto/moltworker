@@ -21,6 +21,16 @@ const REVIEW_PHASE_PROMPT = 'Before delivering your final answer, briefly verify
 const CODING_REVIEW_PROMPT = 'Before delivering your final answer, verify with evidence:\n(1) Did you answer the complete question? Cite specific tool outputs or file contents that support your answer.\n(2) If you made code changes, did you verify them with the relevant tool (github_read_file, web_fetch, etc.)? Do NOT claim changes were made unless a tool confirmed it.\n(3) If you ran commands or created PRs, check the tool result — did it actually succeed? If a tool returned an error, say so.\n(4) For any claim about repository state (files exist, code works, tests pass), you MUST have observed it from a tool output in this session. Do not assert repo state from memory.\n(5) If you could not fully complete the task, say what remains and why — do not claim completion.\nLabel your confidence: High (tool-verified), Medium (partially verified), or Low (inferred without tool confirmation).';
 const ORCHESTRA_REVIEW_PROMPT = 'CRITICAL REVIEW — verify before reporting:\n(1) Did github_create_pr SUCCEED? Check the tool result — if it returned an error (422, 403, etc.), you MUST retry with a different branch name or fix the issue. Do NOT claim success if the PR was not created.\n(2) Does your ORCHESTRA_RESULT block contain a REAL PR URL (https://github.com/...)? If not, the task is NOT complete.\n(3) Did you update ROADMAP.md and WORK_LOG.md in the same PR?\n(4) INCOMPLETE REFACTOR CHECK: If you created new module files (extracted code into separate files), did you ALSO update the SOURCE file to import from the new modules and remove the duplicated code? Creating new files without updating the original is dead code and the task is NOT complete. Check the github_create_pr tool result for "INCOMPLETE REFACTOR" warnings.\nIf any of these fail, fix the issue NOW before reporting.';
 
+// Source-grounding guardrail — injected into coding/github tasks to prevent hallucination.
+// This is a strict instruction that the model MUST NOT fabricate claims about repo state.
+const SOURCE_GROUNDING_PROMPT =
+  '\n\n--- EVIDENCE RULES (mandatory) ---\n' +
+  '• Do NOT assert file contents, repo state, test results, or build status unless you observed them from a tool output in THIS session.\n' +
+  '• If github_create_pr, sandbox_exec, or any git command returned an error, you MUST report the error — do NOT claim success.\n' +
+  '• If you lack evidence for a claim, say "Unverified — I did not confirm this with a tool" rather than stating it as fact.\n' +
+  '• When providing your final answer, include a brief "Evidence" section listing the tool outputs that support your key claims.\n' +
+  '• End with "Confidence: High/Medium/Low" based on how much of your answer is tool-verified vs inferred.';
+
 // Max characters for a single tool result before truncation
 const MAX_TOOL_RESULT_LENGTH = 8000; // ~2K tokens (reduced for CPU)
 // Compress context after this many tool calls
@@ -803,6 +813,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           );
         }
         console.log(`[TaskProcessor] Resumed from checkpoint: ${checkpoint.iterations} iterations`);
+      }
+    }
+
+    // Inject source-grounding guardrail for coding/github tasks into the system message.
+    // This prevents models from hallucinating repo state or claiming success without evidence.
+    if (taskCategory === 'coding' && conversationMessages.length > 0 && conversationMessages[0].role === 'system') {
+      const sysContent = typeof conversationMessages[0].content === 'string' ? conversationMessages[0].content : '';
+      if (!sysContent.includes('EVIDENCE RULES')) {
+        conversationMessages[0] = {
+          ...conversationMessages[0],
+          content: sysContent + SOURCE_GROUNDING_PROMPT,
+        };
+        console.log('[TaskProcessor] Source-grounding guardrail injected for coding task');
       }
     }
 
@@ -1601,6 +1624,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Delete status message
         if (statusMessageId) {
           await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
+        }
+
+        // Append system confidence label for coding tasks if the model didn't include one.
+        // This provides an objective evidence-based confidence signal to the user.
+        if (taskCategory === 'coding' && task.result && !task.result.includes('Confidence:')) {
+          const hasToolEvidence = task.toolsUsed.length >= 2;
+          const hasGitActions = task.toolsUsed.some(t => t.startsWith('github_'));
+          const hadErrors = conversationMessages.some(m =>
+            m.role === 'tool' && typeof m.content === 'string' && /\b(error|failed|404|403|422|500)\b/i.test(m.content)
+          );
+          const confidenceLevel = hasToolEvidence && !hadErrors ? 'High'
+            : hasToolEvidence && hadErrors ? 'Medium'
+            : 'Low';
+          const reason = !hasToolEvidence ? 'few tool verifications'
+            : hadErrors ? 'some tool errors occurred'
+            : hasGitActions ? 'tool-verified with GitHub operations' : 'tool-verified';
+          task.result += `\n\n📊 Confidence: ${confidenceLevel} (${reason})`;
         }
 
         // Build final response

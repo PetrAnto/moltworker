@@ -4,6 +4,43 @@
 
 ---
 
+## Session: 2026-02-18 | P1 Guardrails + /learnings Command (Session: 01SE5WrUuc6LWTmZC8WBXKY4)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/implement-p1-guardrails-DcOgI`
+**Status:** Completed
+
+### Summary
+Implemented P1 guardrails from the audit-build-improvement-plan: Task Router policy function for model routing on resume, source-grounding guardrails to prevent hallucination, automated confidence labeling for coding tasks, and the /learnings Telegram command (Phase 3.3).
+
+### Changes Made
+1. **Task Router policy function** (`resolveTaskModel`) — single source of truth for resume model selection with /dcode and free model stall detection
+2. **`detectTaskIntent()`** — reusable coding/reasoning/general classifier
+3. **Source-grounding guardrail** (`SOURCE_GROUNDING_PROMPT`) — evidence rules injected into system message for coding tasks
+4. **Automated confidence labeling** — High/Medium/Low appended to coding task responses based on tool evidence
+5. **`formatLearningSummary()`** — analytics view with success rate, categories, top tools, top models, recent tasks
+6. **`/learnings` command** — Telegram handler + help text
+7. **Refactored `resolveResumeModel`** — now delegates to Task Router
+
+### Files Modified
+- `src/openrouter/models.ts` — Task Router, detectTaskIntent, RouterCheckpointMeta, RoutingDecision types
+- `src/openrouter/learnings.ts` — formatLearningSummary, formatAge
+- `src/durable-objects/task-processor.ts` — SOURCE_GROUNDING_PROMPT, confidence labeling
+- `src/telegram/handler.ts` — /learnings command, resolveResumeModel refactor, import updates
+- `src/openrouter/models.test.ts` — 16 new tests for resolveTaskModel + detectTaskIntent
+- `src/openrouter/learnings.test.ts` — 14 new tests for formatLearningSummary
+
+### Tests
+- [x] Tests pass (656 total, 0 failures)
+- [x] Typecheck passes
+
+### Notes for Next Session
+- Audit plan Phase 2 (hallucination reduction) quick wins are now implemented
+- Phase 3.3 (/learnings) is complete
+- Next: Phase 2.3 (Acontext integration) or Phase 2.5.9 (Holiday awareness)
+
+---
+
 ## Session: 2026-02-11 | Phase 3.2: Structured Task Phases (Session: 019jH8X9pJabGwP2untYhuYE)
 
 **AI:** Claude Opus 4.6
