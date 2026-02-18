@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-16 (Codex audit/build improvement plan)
+**Last Updated:** 2026-02-18 (P1 guardrails + /learnings command)
 
 ---
 
@@ -34,6 +34,7 @@
 | — | Enhanced R2 skill prompt (Storia identity, model recs) | Claude Opus 4.6 | ✅ Complete | `claude/extract-task-metadata-8lMCM` |
 | — | Briefing fixes: weather location, news links, crypto disambiguation | Claude Opus 4.6 | ✅ Complete | `claude/extract-task-metadata-8lMCM` |
 | 3.2 | Structured task phases (Plan → Work → Review) | Claude Opus 4.6 | ✅ Complete | `claude/add-task-phases-4R9Q6` |
+| 3.3+P1 | P1 guardrails + /learnings command | Claude Opus 4.6 | ✅ Complete | `claude/implement-p1-guardrails-DcOgI` |
 
 ---
 
@@ -41,7 +42,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | Phase 3.2 complete — Structured task phases | `claude/add-task-phases-4R9Q6` | 2026-02-11 |
+| Claude | P1 guardrails + /learnings complete | `claude/implement-p1-guardrails-DcOgI` | 2026-02-18 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -85,6 +86,7 @@
 | — | Enhanced R2 skill prompt (Storia identity, model recs) | Claude Opus 4.6 | 2026-02-11 | `claude/extract-task-metadata-8lMCM` |
 | — | Briefing fixes: weather location, news links, crypto disambiguation | Claude Opus 4.6 | 2026-02-11 | `claude/extract-task-metadata-8lMCM` |
 | 3.2 | Structured task phases (Plan → Work → Review) | Claude Opus 4.6 | 2026-02-11 | `claude/add-task-phases-4R9Q6` |
+| 3.3+P1 | P1 guardrails + /learnings command | Claude Opus 4.6 | 2026-02-18 | `claude/implement-p1-guardrails-DcOgI` |
 
 ---
 
@@ -116,10 +118,10 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **Phase 3.3** — /learnings Telegram command
-2. **Phase 2.3** — Acontext integration (API key now configured)
-3. **Phase 2.5.9** — Holiday awareness (Nager.Date)
-4. **Phase 4.1** — Replace compressContext with token-budgeted retrieval
+1. **Phase 2.3** — Acontext integration (API key now configured)
+2. **Phase 2.5.9** — Holiday awareness (Nager.Date)
+3. **Phase 4.1** — Replace compressContext with token-budgeted retrieval
+4. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
 
 ---
 
@@ -127,4 +129,4 @@
 
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
-| Sprint 1 (current) | 8 | 35 | Phase 0 complete, Phase 1 COMPLETE (1.1-1.5), upstream sync complete, Phase 2.1+2.2 complete, Phase 2.5 COMPLETE (all 8 tools), Phase 3.1+3.2+3.4 complete, ALL 12 bugs fixed, /start redesign + bot menu + briefing fixes, 456 tests total |
+| Sprint 1 (current) | 8 | 36 | Phase 0 complete, Phase 1 COMPLETE (1.1-1.5), upstream sync complete, Phase 2.1+2.2 complete, Phase 2.5 COMPLETE (all 8 tools), Phase 3 COMPLETE (3.1-3.4), P1 guardrails done, ALL 12 bugs fixed, /start redesign + bot menu + briefing fixes, 656 tests total |
