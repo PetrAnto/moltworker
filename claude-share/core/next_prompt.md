@@ -15,23 +15,35 @@
 
 Two P1 guardrail improvements from `docs/task-processor-spec.md` Section 13.3:
 
-1. **Encoding validation** — Run a UTF-8 validation pass on all file contents before submitting to GitHub API. Replace or flag invalid byte sequences. This prevents mojibake in markdown files (observed in 1/6 rejected PRs).
+1. **Encoding validation** — Add a UTF-8 validation pass in `githubCreatePr()` (in `src/openrouter/tools.ts`) before blob creation (~line 1220). Use `TextEncoder`/`TextDecoder` round-trip to detect invalid bytes. For each file in `changes`:
+   - Encode `change.content` with `new TextEncoder().encode(content)`
+   - Decode back with `new TextDecoder('utf-8', { fatal: false })`
+   - If round-trip differs from original, either sanitize (replace bad bytes with `\uFFFD`) and warn, or hard block
+   - This prevents mojibake in markdown files (observed in bot/add-tax-guide-jurisdictions-q3coder)
 
-2. **Fix REDO mode tracking** — Add `"Orchestra REDO Mode"` to the `isOrchestra` detection in `task-processor.ts`. Currently only `"Orchestra"` is matched, so REDO tasks lack audit trail.
+2. **Fix REDO mode tracking** — At `src/durable-objects/task-processor.ts:1527`, the `isOrchestra` check is:
+   ```typescript
+   const isOrchestra = systemContent.includes('Orchestra INIT Mode') || systemContent.includes('Orchestra RUN Mode');
+   ```
+   It's missing `'Orchestra REDO Mode'`. Add it. Note: line 1446 (`isOrchestraTask`) already includes REDO — only line 1527 is broken. This means REDO tasks don't get tracked in orchestra history (no learning extraction, no status recording).
 
 ### Context
 
-- Encoding corruption was observed in bot/add-tax-guide-jurisdictions-q3coder branch
+- Encoding corruption was observed in bot/add-tax-guide-jurisdictions-q3coder branch — emojis/em-dashes became mojibake
 - REDO mode is triggered when orchestra retries a failed task — needs tracking for audit trail
-- See `docs/task-processor-spec.md` Section 13.2 for structural gaps
+- See `docs/task-processor-spec.md` Sections 12, 13 for full gap analysis
+- P0 guardrails (INCOMPLETE REFACTOR hard block, FALSE COMPLETION, DATA FABRICATION) were completed in the prior session
+- `CLAUDE.md` has project rules (auto-read by Claude Code)
+- After completing, follow `claude-share/core/SYNC_CHECKLIST.md` to update all docs
 
 ### Files to Modify
 
-| File | What to change |
-|------|---------------|
-| `src/openrouter/tools.ts` | Add UTF-8 validation in `githubCreatePr()` before blob creation |
-| `src/durable-objects/task-processor.ts` | Add `"Orchestra REDO Mode"` to isOrchestra detection |
-| Tests | Add tests for encoding validation and REDO detection |
+| File | What to change | Where |
+|------|---------------|-------|
+| `src/openrouter/tools.ts` | Add UTF-8 validation in `githubCreatePr()` before blob creation | ~line 1220 (before `for (const change of changes)` loop that creates blobs) |
+| `src/durable-objects/task-processor.ts` | Add `'Orchestra REDO Mode'` to `isOrchestra` on line 1527 | Line 1527 only (line 1446 is already correct) |
+| `src/openrouter/tools.test.ts` | Add test: file with invalid UTF-8 gets sanitized or blocked | New test in `github_create_pr tool` describe block |
+| `src/durable-objects/task-processor.test.ts` | Add test: REDO mode detected as orchestra task | New test in existing test suite |
 
 ### Queue After This Task
 
