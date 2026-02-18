@@ -8,6 +8,7 @@ import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from
 import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
 import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, formatLearningSummary, loadLastTaskSummary, formatLastTaskForPrompt } from '../openrouter/learnings';
+import { createAcontextClient, formatSessionsList } from '../acontext/client';
 import {
   buildInitPrompt,
   buildRunPrompt,
@@ -486,6 +487,9 @@ export class TelegramHandler {
   private dashscopeKey?: string;
   private moonshotKey?: string;
   private deepseekKey?: string;
+  // Acontext observability
+  private acontextKey?: string;
+  private acontextBaseUrl?: string;
   // (sync sessions now persisted in R2 via storage.saveSyncSession)
 
   constructor(
@@ -501,7 +505,9 @@ export class TelegramHandler {
     dashscopeKey?: string, // DashScope API key (Qwen)
     moonshotKey?: string, // Moonshot API key (Kimi)
     deepseekKey?: string, // DeepSeek API key
-    sandbox?: SandboxLike // Sandbox container for code execution
+    sandbox?: SandboxLike, // Sandbox container for code execution
+    acontextKey?: string, // Acontext API key for observability
+    acontextBaseUrl?: string // Acontext API base URL
   ) {
     this.bot = new TelegramBot(telegramToken);
     this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
@@ -518,6 +524,8 @@ export class TelegramHandler {
     this.dashscopeKey = dashscopeKey;
     this.moonshotKey = moonshotKey;
     this.deepseekKey = deepseekKey;
+    this.acontextKey = acontextKey;
+    this.acontextBaseUrl = acontextBaseUrl;
     if (allowedUserIds && allowedUserIds.length > 0) {
       this.allowedUsers = new Set(allowedUserIds);
     }
@@ -798,6 +806,28 @@ export class TelegramHandler {
         }
         const summary = formatLearningSummary(learningHistory);
         await this.bot.sendMessage(chatId, summary);
+        break;
+      }
+
+      case '/sessions': {
+        // Show recent Acontext sessions
+        if (!this.acontextKey) {
+          await this.bot.sendMessage(chatId, '⚠️ Acontext not configured. Set ACONTEXT_API_KEY to enable session tracking.');
+          break;
+        }
+        try {
+          const acontext = createAcontextClient(this.acontextKey, this.acontextBaseUrl);
+          if (!acontext) {
+            await this.bot.sendMessage(chatId, '⚠️ Failed to create Acontext client.');
+            break;
+          }
+          const response = await acontext.listSessions({ user: userId, limit: 10, timeDesc: true });
+          const formatted = formatSessionsList(response.items);
+          await this.bot.sendMessage(chatId, formatted);
+        } catch (err) {
+          console.error('[Telegram] Failed to list Acontext sessions:', err);
+          await this.bot.sendMessage(chatId, '⚠️ Failed to fetch sessions. Try again later.');
+        }
         break;
       }
 
@@ -1593,6 +1623,8 @@ export class TelegramHandler {
       deepseekKey: this.deepseekKey,
       autoResume,
       prompt: `[Orchestra ${modeLabel}] ${repo}: ${(prompt || 'next task').substring(0, 150)}`,
+      acontextKey: this.acontextKey,
+      acontextBaseUrl: this.acontextBaseUrl,
     };
 
     const doId = this.taskProcessor.idFromName(userId);
@@ -1822,6 +1854,8 @@ export class TelegramHandler {
             moonshotKey: this.moonshotKey,
             deepseekKey: this.deepseekKey,
             autoResume,
+            acontextKey: this.acontextKey,
+            acontextBaseUrl: this.acontextBaseUrl,
           };
 
           const doId = this.taskProcessor.idFromName(userId);
@@ -1952,6 +1986,8 @@ export class TelegramHandler {
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
       autoResume,
+      acontextKey: this.acontextKey,
+      acontextBaseUrl: this.acontextBaseUrl,
     };
 
     const doId = this.taskProcessor.idFromName(userId);
@@ -2013,6 +2049,8 @@ export class TelegramHandler {
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
       autoResume,
+      acontextKey: this.acontextKey,
+      acontextBaseUrl: this.acontextBaseUrl,
     };
 
     const doId = this.taskProcessor.idFromName(userId);
@@ -2122,6 +2160,8 @@ export class TelegramHandler {
           autoResume,
           reasoningLevel: reasoningLevel ?? undefined,
           responseFormat,
+          acontextKey: this.acontextKey,
+          acontextBaseUrl: this.acontextBaseUrl,
         };
 
         const doId = this.taskProcessor.idFromName(userId);
@@ -2434,6 +2474,8 @@ export class TelegramHandler {
               moonshotKey: this.moonshotKey,
               deepseekKey: this.deepseekKey,
               autoResume,
+              acontextKey: this.acontextKey,
+              acontextBaseUrl: this.acontextBaseUrl,
             };
 
             const doId = this.taskProcessor.idFromName(userId);
@@ -3250,6 +3292,7 @@ Each /orch next picks up where the last one left off.`;
 
 ━━━ Task History ━━━
 /learnings — View task patterns, success rates, top tools
+/sessions — Recent Acontext sessions (replay & analysis)
 
 ━━━ Image Generation ━━━
 /img <prompt> — Generate (default: FLUX.2 Pro)
@@ -3333,7 +3376,9 @@ export function createTelegramHandler(
   dashscopeKey?: string,
   moonshotKey?: string,
   deepseekKey?: string,
-  sandbox?: SandboxLike
+  sandbox?: SandboxLike,
+  acontextKey?: string,
+  acontextBaseUrl?: string
 ): TelegramHandler {
   return new TelegramHandler(
     telegramToken,
@@ -3348,6 +3393,8 @@ export function createTelegramHandler(
     dashscopeKey,
     moonshotKey,
     deepseekKey,
-    sandbox
+    sandbox,
+    acontextKey,
+    acontextBaseUrl
   );
 }

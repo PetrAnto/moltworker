@@ -68,7 +68,9 @@ telegram.post('/webhook/:token', async (c) => {
       env.DASHSCOPE_API_KEY, // DashScope for Qwen
       env.MOONSHOT_API_KEY, // Moonshot for Kimi
       env.DEEPSEEK_API_KEY, // DeepSeek for DeepSeek Coder
-      sandbox // Sandbox container for sandbox_exec tool
+      sandbox, // Sandbox container for sandbox_exec tool
+      env.ACONTEXT_API_KEY, // Acontext observability
+      env.ACONTEXT_BASE_URL // Acontext API base URL
     );
 
     // Process update asynchronously
@@ -146,6 +148,7 @@ telegram.get('/info', async (c) => {
     dashscope_configured: !!env.DASHSCOPE_API_KEY,
     moonshot_configured: !!env.MOONSHOT_API_KEY,
     deepseek_configured: !!env.DEEPSEEK_API_KEY,
+    acontext_configured: !!env.ACONTEXT_API_KEY,
     webhook_path: '/telegram/webhook/:token',
     setup_path: '/telegram/setup',
   });

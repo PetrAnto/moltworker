@@ -11,6 +11,7 @@ import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { extractLearning, storeLearning, storeLastTaskSummary } from '../openrouter/learnings';
 import { parseOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
+import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 
 // Task phase type for structured task processing
 export type TaskPhase = 'plan' | 'work' | 'review';
@@ -166,6 +167,9 @@ export interface TaskRequest {
   responseFormat?: ResponseFormat;
   // Original user prompt (for checkpoint display)
   prompt?: string;
+  // Acontext observability
+  acontextKey?: string;
+  acontextBaseUrl?: string;
 }
 
 // DO environment with R2 binding
@@ -1536,6 +1540,39 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             console.log(`[TaskProcessor] Learning stored: ${learning.category}, ${learning.uniqueTools.length} unique tools`);
           } catch (learnErr) {
             console.error('[TaskProcessor] Failed to store learning:', learnErr);
+          }
+        }
+
+        // Acontext observability: store task as a session for replay and analysis
+        if (request.acontextKey) {
+          try {
+            const acontext = createAcontextClient(request.acontextKey, request.acontextBaseUrl);
+            if (acontext) {
+              const elapsed = Math.round((Date.now() - task.startTime) / 1000);
+              const session = await acontext.createSession({
+                user: request.userId,
+                configs: {
+                  model: task.modelAlias,
+                  prompt: (request.prompt || '').substring(0, 300),
+                  toolsUsed: task.toolsUsed.length,
+                  uniqueTools: [...new Set(task.toolsUsed)],
+                  iterations: task.iterations,
+                  durationSec: elapsed,
+                  success: true,
+                  phase: task.phase || null,
+                  source: 'moltworker',
+                },
+              });
+              // Store conversation messages (non-blocking partial failures OK)
+              const openaiMessages = toOpenAIMessages(conversationMessages);
+              const { stored, errors } = await acontext.storeMessages(session.id, openaiMessages, {
+                taskId: task.taskId,
+                modelAlias: task.modelAlias,
+              });
+              console.log(`[TaskProcessor] Acontext session ${session.id}: ${stored} msgs stored, ${errors} errors`);
+            }
+          } catch (acErr) {
+            console.error('[TaskProcessor] Failed to store Acontext session:', acErr);
           }
         }
 
