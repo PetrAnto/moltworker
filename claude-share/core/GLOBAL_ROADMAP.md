@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-02-16 (Codex audit/build improvement plan)
+**Last Updated:** 2026-02-18 (P0 guardrail upgrades + TaskProcessor infrastructure fixes)
 
 ---
 
@@ -216,6 +216,14 @@
 | BUG-9 | 2026-02-10 | Runaway auto-resume (no elapsed time limit) | High | ✅ 15min free / 30min paid cap | `task-processor.ts` | ✅ |
 | BUG-10 | 2026-02-10 | No warning when non-tool model gets tool-needing message | Low/UX | ✅ Tool-intent detection + user warning | `handler.ts` | ✅ |
 | BUG-11 | 2026-02-10 | Models with parallelCalls not prompted strongly enough | Low | ✅ Stronger parallel tool-call instruction | `client.ts` | ✅ |
+| BUG-13 | 2026-02-18 | Same-tool loop: model calls identical tool 35+ times | High | ✅ Track last 20 signatures, nudge at 3 repeats | `task-processor.ts` | ✅ |
+| BUG-14 | 2026-02-18 | fetch_url returning raw HTML (contentType unused) | Medium | ✅ HTML stripping using contentType | `tools.ts` | ✅ |
+| BUG-15 | 2026-02-18 | Content filter 400 retried 3 times (deterministic) | Medium | ✅ Fast-fail + model rotation trigger | `task-processor.ts` | ✅ |
+| BUG-16 | 2026-02-18 | Negative tool count on checkpoint resume | Low | ✅ Sync toolCountAtLastResume from checkpoint | `task-processor.ts` | ✅ |
+| BUG-17 | 2026-02-18 | 60s stuck threshold too aggressive for paid models | High | ✅ Split: 60s free / 180s paid | `task-processor.ts` | ✅ |
+| BUG-18 | 2026-02-18 | INCOMPLETE REFACTOR was warning, not block | High | ✅ Upgraded to HARD BLOCK | `tools.ts` | ✅ |
+| BUG-19 | 2026-02-18 | False completion: [x] without code changes | High | ✅ New guardrail 7c (FALSE COMPLETION) | `tools.ts` | ✅ |
+| BUG-20 | 2026-02-18 | Data fabrication: models regenerate files from memory | High | ✅ New guardrail 4c (content fingerprinting) | `tools.ts` | ✅ |
 
 ---
 
@@ -225,6 +233,7 @@
 
 ```
 
+2026-02-18 | Claude Opus 4.6 (Session: 016ahHSwZCrJf5r2TJfwGbnB) | feat(guardrails): P0 upgrades — INCOMPLETE REFACTOR hard block, FALSE COMPLETION check, DATA FABRICATION fingerprinting + infrastructure fixes (loop detection, watchdog, content filter, fetch_url) | src/openrouter/tools.ts, src/durable-objects/task-processor.ts, docs/task-processor-spec.md
 2026-02-16 | Codex (Session: codex-audit-plan-001) | docs(audit): full audit + build improvement plan for /dcode resume loops and hallucination mitigation | brainstorming/audit-build-improvement-plan.md
 2026-02-11 | Claude Opus 4.6 (Session: 019jH8X9pJabGwP2untYhuYE) | feat(task-processor): structured task phases (plan → work → review) — Phase 3.2 complete, 8 new tests, 456 total | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 2026-02-11 | Claude Opus 4.6 (Session: 018gmCDcuBJqs9ffrrDHHBBd) | fix(tools): briefing location (Nominatim), news clickable links (HN/Reddit/arXiv URLs), crypto symbol disambiguation (pick highest mcap), 448 tests | src/openrouter/tools.ts

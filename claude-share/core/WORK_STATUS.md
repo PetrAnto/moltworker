@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-16 (Codex audit/build improvement plan)
+**Last Updated:** 2026-02-18 (P0 guardrail upgrades + TaskProcessor infrastructure fixes)
 
 ---
 
@@ -37,11 +37,20 @@
 
 ---
 
+### Active Tasks
+
+| Task ID | Description | Assignee | Status | Branch |
+|---------|-------------|----------|--------|--------|
+| — | P0 guardrail upgrades (INCOMPLETE REFACTOR, FALSE COMPLETION, DATA FABRICATION) | Claude Opus 4.6 | ✅ Complete | `claude/review-upstream-updates-yzVFk` |
+| — | TaskProcessor infrastructure fixes (loop detection, watchdog, content filter) | Claude Opus 4.6 | ✅ Complete | `claude/review-upstream-updates-yzVFk` |
+
+---
+
 ### Parallel Work Tracking
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | Phase 3.2 complete — Structured task phases | `claude/add-task-phases-4R9Q6` | 2026-02-11 |
+| Claude | P0 guardrail upgrades complete | `claude/review-upstream-updates-yzVFk` | 2026-02-18 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -85,6 +94,8 @@
 | — | Enhanced R2 skill prompt (Storia identity, model recs) | Claude Opus 4.6 | 2026-02-11 | `claude/extract-task-metadata-8lMCM` |
 | — | Briefing fixes: weather location, news links, crypto disambiguation | Claude Opus 4.6 | 2026-02-11 | `claude/extract-task-metadata-8lMCM` |
 | 3.2 | Structured task phases (Plan → Work → Review) | Claude Opus 4.6 | 2026-02-11 | `claude/add-task-phases-4R9Q6` |
+| — | P0 guardrail upgrades (INCOMPLETE REFACTOR block, FALSE COMPLETION, DATA FABRICATION) | Claude Opus 4.6 | 2026-02-18 | `claude/review-upstream-updates-yzVFk` |
+| — | TaskProcessor infra: loop detection, watchdog, content filter, fetch_url, spec doc | Claude Opus 4.6 | 2026-02-18 | `claude/review-upstream-updates-yzVFk` |
 
 ---
 
@@ -116,10 +127,11 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **Phase 3.3** — /learnings Telegram command
-2. **Phase 2.3** — Acontext integration (API key now configured)
-3. **Phase 2.5.9** — Holiday awareness (Nager.Date)
-4. **Phase 4.1** — Replace compressContext with token-budgeted retrieval
+1. **P1 guardrails** — Encoding validation (UTF-8 check before GitHub API) + REDO mode tracking
+2. **Phase 3.3** — /learnings Telegram command
+3. **Phase 2.3** — Acontext integration (API key now configured)
+4. **Phase 2.5.9** — Holiday awareness (Nager.Date)
+5. **Phase 4.1** — Replace compressContext with token-budgeted retrieval
 
 ---
 

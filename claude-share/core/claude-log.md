@@ -4,6 +4,50 @@
 
 ---
 
+## Session: 2026-02-18 | P0 Guardrail Upgrades — Hard Block Dead Code, False Completions, Data Fabrication (Session: 016ahHSwZCrJf5r2TJfwGbnB)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-upstream-updates-yzVFk`
+**Status:** Completed
+
+### Summary
+Implemented all 3 P0 guardrail upgrades identified in the gap analysis (spec doc Section 13.3). These would have prevented all 6 previously rejected bot PRs. Also includes prior session work: same-tool loop detection, fetch_url HTML stripping, content filter fast-fail, model-aware watchdog thresholds, and comprehensive TaskProcessor spec documentation.
+
+### Changes Made
+1. **INCOMPLETE REFACTOR → HARD BLOCK** — Guardrail 5 upgraded from `warnings.push()` to `throw new Error()`. If new code files are created but zero existing code files are updated, the PR is now aborted instead of just flagged. Would have blocked 3/6 bad PRs.
+
+2. **FALSE COMPLETION check (new guardrail 7c)** — When ROADMAP.md tasks change `[ ]` → `[x]`, requires at least one non-doc code file change in the PR. Throws `FALSE COMPLETION blocked`. Would have blocked 2/6 bad PRs.
+
+3. **DATA FABRICATION check (new guardrail 4c)** — Extracts string literals >10 chars from the original file and checks survival rate in the new version. <50% = hard block (`DATA FABRICATION blocked`), 50-80% = warning (`DATA DRIFT`). Addresses data fabrication in 3/6 bad PRs.
+
+4. **Prior session fixes (commits a505379 through bd5a0c5):**
+   - Same-tool loop detection (MAX_SAME_TOOL_REPEATS = 3)
+   - fetch_url HTML stripping using contentType
+   - github_api 50KB tool-level truncation
+   - Content filter 400 fast-fail with model rotation
+   - Negative tool count fix on checkpoint resume
+   - fetch_url cap reduced 50KB → 20KB
+   - Streaming progress interval 50 → 10 chunks
+   - Model-aware stuck threshold (60s free / 180s paid)
+   - TaskProcessor spec doc created and maintained
+
+### Files Modified
+- `src/openrouter/tools.ts` (3 new guardrails + fetch_url HTML strip + github_api truncation)
+- `src/openrouter/tools.test.ts` (tests updated for new hard block behavior)
+- `src/durable-objects/task-processor.ts` (loop detection, watchdog fixes, content filter handling)
+- `docs/task-processor-spec.md` (comprehensive spec + troubleshooting log)
+
+### Tests
+- [x] 627 tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+- P1 items still open: encoding validation, REDO mode tracking
+- Feature roadmap: Phase 3.3 (/learnings command), browser tool, web search
+- Monitor bot PR quality after deploying these guardrails
+
+---
+
 ## Session: 2026-02-11 | Phase 3.2: Structured Task Phases (Session: 019jH8X9pJabGwP2untYhuYE)
 
 **AI:** Claude Opus 4.6
