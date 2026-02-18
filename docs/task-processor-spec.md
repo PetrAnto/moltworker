@@ -38,7 +38,8 @@ The TaskProcessor is a Cloudflare Durable Object that handles long-running AI ta
 | `COMPRESS_AFTER_TOOLS` | 6 | Compress context every N tool calls |
 | `MAX_CONTEXT_TOKENS` | 60,000 | Force compression threshold (estimated) |
 | `WATCHDOG_INTERVAL_MS` | 90s | Alarm fires every 90s to check for stuck tasks |
-| `STUCK_THRESHOLD_MS` | 60s | Time without update before task is considered stuck |
+| `STUCK_THRESHOLD_FREE_MS` | 60s | Time without update before free model task is considered stuck |
+| `STUCK_THRESHOLD_PAID_MS` | 180s | Time without update before paid model task is considered stuck |
 | `CHECKPOINT_EVERY_N_TOOLS` | 3 | Save R2 checkpoint every N tool calls |
 | `MAX_AUTO_RESUMES_DEFAULT` | 10 | Max auto-resumes for paid models |
 | `MAX_AUTO_RESUMES_FREE` | 15 | Max auto-resumes for free models |
@@ -272,13 +273,27 @@ Direct API providers (DeepSeek, Moonshot) reject orphaned tool messages. The com
 - **Cause**: When resuming from checkpoint, `toolCountAtLastResume` preserved the pre-resume value (e.g., 20) but checkpoint only had 18 tools. `18 - 20 = -2`.
 - **Fix** (commit `85b7224`): Sync `toolCountAtLastResume` to checkpoint's `toolsUsed.length` on resume.
 
+### 8.3 Session: 2026-02-17 — Gemini 3 Pro Watchdog Thrashing
+
+**Problem**: Paid model (Gemini 3 Pro, $2/$12) burned through 9 auto-resumes without completing the task. Each resume got only 2-7 iterations before watchdog killed it.
+
+#### Issue I: Streaming progress updated watchdog too infrequently
+- **Symptom**: 9 consecutive auto-resumes, each with only 2-7 iterations. Checkpoint stuck at 6 iterations (never updated). Model never completed.
+- **Cause**: The `onProgress` callback from SSE streaming called every chunk, but `lastUpdate` was only written to DO storage every **50 chunks** (line 943). For models that generate tokens slowly (1-2 chunks/second during complex code generation), 50 chunks = 25-50 seconds between watchdog updates. With a 60s stuck threshold, any network jitter pushed it over the edge.
+- **Fix**: Reduced progress update interval from 50 to 10 chunks. Separated logging to every 100 chunks to avoid log spam.
+
+#### Issue J: Stuck threshold too aggressive for paid models
+- **Symptom**: Same as Issue I — watchdog declared task stuck during legitimate long generations
+- **Cause**: The 60s `STUCK_THRESHOLD_MS` was a single value for all models. Paid models (Gemini 3 Pro, Claude, GPT-4) generate longer, more complex responses — especially for `github_create_pr` calls that include thousands of tokens of code. A single threshold can't serve both fast free models and slow premium ones.
+- **Fix**: Split into `STUCK_THRESHOLD_FREE_MS` (60s) and `STUCK_THRESHOLD_PAID_MS` (180s). The watchdog now checks `model.isFree` to select the appropriate threshold. Paid models get 3x more time before being considered stuck.
+
 ---
 
 ## 9. Known Remaining Issues & Potential Improvements
 
 ### 9.1 Open Issues
 
-1. **Watchdog preempts AbortController**: The 90s watchdog alarm fires before the 120s AbortController timeout. When the API hangs, the watchdog kills the task and auto-resumes from checkpoint, but the old `fetch()` is still running (orphaned). The AbortController would have killed it cleanly at 120s. Consider: either reduce AbortController timeout to 60s (before watchdog), or make the watchdog aware of in-progress API calls.
+1. **Watchdog preempts AbortController (free models only now)**: For free models, the 90s watchdog alarm still fires before the 120s AbortController timeout. Paid models now have a 180s stuck threshold so the 120s AbortController fires first. For free models, consider reducing AbortController timeout to 45s (before watchdog), or making the watchdog aware of in-progress API calls.
 
 2. **Checkpoint doesn't cancel orphaned processTask**: When watchdog auto-resumes, it calls `processTask()` via `waitUntil()`. But the old `processTask()` invocation may still be running (stuck in a `fetch()` call). This can lead to two concurrent `processTask()` invocations. The old one eventually times out and writes stale state.
 
@@ -355,11 +370,13 @@ Layer 3: Post-Completion Audit (task-processor.ts)
 | 3 | Suspiciously small update | WARNING | Code file update ≤5 non-empty lines AND <200 chars | Warning in PR result |
 | 4a | Destructive shrinkage | HARD BLOCK | New file <20% of original size (files >100 bytes) | Throw — PR aborted |
 | 4b | Identifier survival | HARD BLOCK / WARNING | <40% of original exported functions/classes/vars survive = block; 40-60% = warning | Block or warning |
-| 4c | Significant shrinkage | WARNING | New file <50% of original (files >200 bytes) | Warning in PR result |
-| 5 | Incomplete refactor | WARNING | New code files created but NO existing code files updated | Warning (`INCOMPLETE REFACTOR`) |
+| 4c | Content fingerprinting | HARD BLOCK / WARNING | <50% of original string literals (>10 chars) survive = block; 50-80% = warning | Block (`DATA FABRICATION`) or warning (`DATA DRIFT`) |
+| 4d | Significant shrinkage | WARNING | New file <50% of original (files >200 bytes) | Warning in PR result |
+| 5 | Incomplete refactor | **HARD BLOCK** | New code files created but NO existing code files updated | Throw (`INCOMPLETE REFACTOR blocked`) |
 | 6 | Net deletion | HARD BLOCK / WARNING | >100 lines deleted AND >40% of original = block; >50 lines AND >20% = warning | Block or warning |
 | 7a | Audit trail (WORK_LOG) | HARD BLOCK | Existing WORK_LOG.md rows missing from updated version | Throw (`AUDIT TRAIL VIOLATION`) |
 | 7b | Roadmap preservation | HARD BLOCK / WARNING | >2 tasks deleted from ROADMAP.md = block; 1-2 = warning | Block or warning |
+| 7c | False completion | HARD BLOCK | ROADMAP.md tasks changed `[ ]` → `[x]` but PR has NO code file changes | Throw (`FALSE COMPLETION blocked`) |
 
 ### 11.3 System Prompt Instructions (orchestra.ts)
 
@@ -379,10 +396,13 @@ After task completion, scans `task.result` for guardrail signals:
 | Signal | Task status | Notes |
 |--------|-------------|-------|
 | No valid PR URL (`https://`) | `failed` | Model claimed success but no PR |
-| `INCOMPLETE REFACTOR` | `failed` | Dead code — new files not wired up |
+| `INCOMPLETE REFACTOR blocked` | `failed` | Dead code — new files not wired up (HARD BLOCK since v7) |
+| `FALSE COMPLETION blocked` | `failed` | Tasks marked [x] without code changes (added v7) |
+| `DATA FABRICATION blocked` | `failed` | File rewritten with fabricated data values (added v7) |
 | `AUDIT TRAIL VIOLATION` | `failed` | Tried to delete work log entries |
 | `ROADMAP TAMPERING` | `failed` | Tried to delete roadmap tasks |
 | `NET DELETION WARNING` | `completed` (flagged) | Significant code removal |
+| `DATA DRIFT` | `completed` (flagged) | 50-80% of original data values survive — borderline |
 
 ---
 
@@ -442,13 +462,13 @@ After fixing all infrastructure issues (hangs, loops, content filters, timeouts)
 
 ### 13.1 Critical Gaps (directly caused observed failures)
 
-| Gap | Observed Failure | Proposed Fix |
-|-----|-----------------|--------------|
-| **Incomplete refactor is WARNING, not BLOCK** | Dead code PRs land on GitHub | Upgrade to HARD BLOCK: if new code files exist but no existing code files are updated, throw |
-| **No `[x]` verification** | False completion claims | When ROADMAP.md changes `[ ]` → `[x]`, verify that the PR also modifies at least one code file |
-| **No data preservation check** | Fabricated destinations | For files being updated, compare data structures (arrays, objects) not just identifier names |
-| **No encoding validation** | Mojibake in markdown files | Validate UTF-8 encoding of all file contents before sending to GitHub API |
-| **No duplicate branch detection** | Identical PRs under different names | Before creating PR, check if the same file changes already exist in another recent bot/ branch |
+| Gap | Observed Failure | Status |
+|-----|-----------------|--------|
+| **~~Incomplete refactor is WARNING, not BLOCK~~** | Dead code PRs land on GitHub | ✅ FIXED — now HARD BLOCK |
+| **~~No `[x]` verification~~** | False completion claims | ✅ FIXED — guardrail 7c |
+| **~~No data preservation check~~** | Fabricated destinations | ✅ FIXED — guardrail 4c (content fingerprinting) |
+| **No encoding validation** | Mojibake in markdown files | OPEN — validate UTF-8 encoding before GitHub API |
+| **No duplicate branch detection** | Identical PRs under different names | OPEN — compare file changes across recent bot/ branches |
 
 ### 13.2 Structural Gaps (not yet observed in failures but risky)
 
@@ -463,13 +483,13 @@ After fixing all infrastructure issues (hangs, loops, content filters, timeouts)
 
 ### 13.3 Recommendations (prioritized)
 
-**P0 — Would have prevented the 6 rejected PRs:**
+**P0 — IMPLEMENTED (would have prevented the 6 rejected PRs):**
 
-1. **Upgrade INCOMPLETE REFACTOR to HARD BLOCK**: If new code files are created but zero existing code files are updated, abort the PR. This single change would have blocked 3 of the 6 bad branches.
+1. **~~Upgrade INCOMPLETE REFACTOR to HARD BLOCK~~** ✅ (commit TBD): Now throws `INCOMPLETE REFACTOR blocked` instead of warning. Would have blocked 3 of the 6 bad branches.
 
-2. **Add `[x]` completion verification**: When ROADMAP.md changes a task from `[ ]` to `[x]`, require that the PR also includes changes to at least one non-documentation code file. This would have blocked 2 of the 6 bad branches.
+2. **~~Add `[x]` completion verification~~** ✅ (commit TBD): Guardrail 7c — when ROADMAP.md tasks change `[ ]` → `[x]`, requires at least one non-doc code file change in the PR. Throws `FALSE COMPLETION blocked`. Would have blocked 2 of the 6 bad branches.
 
-3. **Add content fingerprinting for updates**: When a file is being updated, compare the actual data values (not just identifiers). For example, extract all string literals >10 chars from the original and require that at least 80% are present in the new version. This addresses data fabrication.
+3. **~~Add content fingerprinting~~** ✅ (commit TBD): Guardrail 4c — extracts string literals >10 chars from original file, checks survival rate. <50% = hard block (`DATA FABRICATION blocked`), 50-80% = warning (`DATA DRIFT`). Addresses data fabrication pattern.
 
 **P1 — Important but less urgent:**
 

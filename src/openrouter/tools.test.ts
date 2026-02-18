@@ -2161,6 +2161,7 @@ describe('github_create_pr tool', () => {
 
     const changes = [
       { path: 'src/new-file.ts', content: 'export const hello = "world";', action: 'create' },
+      { path: 'src/index.ts', content: 'import { hello } from "./new-file";\nconsole.log(hello);\n', action: 'update' },
       { path: 'README.md', content: '# Updated README\n\nThis project does X and Y.\n\n## Getting Started\n\nRun `npm install` to get started.', action: 'update' },
     ];
 
@@ -2185,7 +2186,7 @@ describe('github_create_pr tool', () => {
     expect(result.content).toContain('Pull Request created successfully');
     expect(result.content).toContain('https://github.com/testowner/testrepo/pull/42');
     expect(result.content).toContain('bot/test-branch');
-    expect(result.content).toContain('2 file(s)');
+    expect(result.content).toContain('3 file(s)');
 
     // Verify key API calls were made (URL-based matching, order may vary with guardrail checks)
     const allCalls = mockFetch.mock.calls.map((c: unknown[]) => c[0] as string);
@@ -2263,7 +2264,7 @@ describe('github_create_pr tool', () => {
           repo: 'r',
           title: 'Test',
           branch: 'my-feature',
-          changes: '[{"path":"a.ts","content":"x","action":"create"}]',
+          changes: '[{"path":"data.csv","content":"x","action":"create"}]',
         }),
       },
     }, { githubToken: 'token' });
@@ -2297,7 +2298,7 @@ describe('github_create_pr tool', () => {
           repo: 'r',
           title: 'Test',
           branch: 'bot/already-prefixed',
-          changes: '[{"path":"a.ts","content":"x","action":"create"}]',
+          changes: '[{"path":"data.csv","content":"x","action":"create"}]',
         }),
       },
     }, { githubToken: 'token' });
@@ -2333,7 +2334,7 @@ describe('github_create_pr tool', () => {
           repo: 'r',
           title: 'Test',
           branch: 'b',
-          changes: '[{"path":"a.ts","content":"x","action":"create"}]',
+          changes: '[{"path":"data.csv","content":"x","action":"create"}]',
         }),
       },
     }, { githubToken: 'token' });
@@ -2360,7 +2361,7 @@ describe('github_create_pr tool', () => {
           repo: 'r',
           title: 'Test',
           branch: 'b',
-          changes: '[{"path":"a.ts","content":"x","action":"create"}]',
+          changes: '[{"path":"data.csv","content":"x","action":"create"}]',
         }),
       },
     }, { githubToken: 'token' });
@@ -2972,7 +2973,7 @@ describe('incomplete refactor detection in github_create_pr', () => {
     vi.restoreAllMocks();
   });
 
-  it('should warn when new code files are created but no existing code files are updated', async () => {
+  it('should BLOCK when new code files are created but no existing code files are updated', async () => {
     // Simulate: model creates new modules but never touches the source file
     const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : '';
@@ -3024,11 +3025,11 @@ describe('incomplete refactor detection in github_create_pr', () => {
       },
     }, { githubToken: 'token' });
 
-    // PR should succeed but with an INCOMPLETE REFACTOR warning
-    expect(result.content).toContain('Pull Request created successfully');
-    expect(result.content).toContain('INCOMPLETE REFACTOR');
+    // PR should be BLOCKED (hard block, not just a warning)
+    expect(result.content).toContain('INCOMPLETE REFACTOR blocked');
     expect(result.content).toContain('src/utils.js');
     expect(result.content).toContain('no existing code files were updated');
+    expect(result.content).not.toContain('Pull Request created successfully');
   });
 
   it('should NOT warn when new code files are created alongside code file updates', async () => {
