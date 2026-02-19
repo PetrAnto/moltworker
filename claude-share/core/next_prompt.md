@@ -3,39 +3,36 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-18 (Phase 2.5.9 Holiday awareness complete)
+**Last Updated:** 2026-02-18 (Phase 4.1 Token-budgeted context retrieval complete)
 
 ---
 
-## Current Task: Phase 4.1 — Token-Budgeted Context Retrieval
+## Current Task: Phase 2.4 — Acontext Dashboard Link in Admin UI
 
 ### Goal
 
-Replace the current `compressContext` function with a smarter token-budgeted retrieval system. Instead of blindly trimming messages when context is too long, implement a system that:
-1. Estimates token usage per message
-2. Prioritizes recent messages and tool results
-3. Summarizes older messages instead of dropping them entirely
+Add an Acontext dashboard link/widget to the React admin UI so operators can quickly jump to Acontext session replays from the admin panel.
 
 ### Context
 
-- Current `compressContext` is in `src/durable-objects/task-processor.ts`
-- It currently does aggressive context compression (removes older messages)
-- This causes loss of important context in long-running tasks
-- The new system should keep a token budget and make smarter decisions about what to keep
+- Acontext integration (Phase 2.3) is complete — REST client in `src/acontext/client.ts`
+- Admin dashboard is in `src/client/App.tsx`
+- This is a low-risk, read-only integration (just a link/iframe)
+- Assigned to Codex but any AI can pick it up
 
 ### Files to Modify
 
 | File | What to change |
 |------|---------------|
-| `src/durable-objects/task-processor.ts` | Replace compressContext with token-budgeted retrieval |
-| Tests | Add tests for new context management |
+| `src/client/App.tsx` | Add Acontext dashboard link/section |
+| Tests | Add any necessary tests |
 
 ### Queue After This Task
 
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
-| Current | 4.1: Token-budgeted context retrieval | Medium | Better context management |
-| Next | 2.4: Acontext dashboard link in admin UI | Low | Read-only integration |
+| Current | 2.4: Acontext dashboard link in admin UI | Low | Read-only integration |
+| Next | 4.2: Replace estimateTokens with actual tokenizer | Medium | Use tiktoken or similar |
 | Then | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
 
 ---
@@ -44,6 +41,7 @@ Replace the current `compressContext` function with a smarter token-budgeted ret
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-18 | Phase 4.1: Token-budgeted context retrieval | Claude Opus 4.6 | 018M5goT7Vhaymuo8AxXhUCg |
 | 2026-02-18 | Phase 2.5.9: Holiday awareness (Nager.Date) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-18 | Phase 2.3: Acontext observability (REST client + /sessions) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-18 | P1 guardrails + /learnings command (Phase 3.3 + audit P1) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |

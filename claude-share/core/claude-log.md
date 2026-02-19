@@ -4,6 +4,48 @@
 
 ---
 
+## Session: 2026-02-18 | Phase 4.1 Token-Budgeted Context Retrieval (Session: 018M5goT7Vhaymuo8AxXhUCg)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/implement-p1-guardrails-NF641`
+**Status:** Completed
+
+### Summary
+Implemented Phase 4.1 — Token-Budgeted Context Retrieval. Replaced the naive `compressContext` (keep N recent, drop rest) and `estimateTokens` (chars/4 heuristic) with a smarter system that assigns priority scores to every message, maintains tool_call/result pairing for API compatibility, and summarizes evicted content instead of silently dropping it.
+
+### Changes Made
+1. **`src/durable-objects/context-budget.ts`** (NEW) — Token-budgeted context module:
+   - `estimateStringTokens()` — Refined heuristic with code-pattern overhead detection
+   - `estimateMessageTokens()` — Accounts for message overhead, tool_call metadata, ContentPart arrays, image tokens, reasoning_content
+   - `estimateTokens()` — Sum of all messages + reply priming
+   - `compressContextBudgeted()` — Priority-scored compression: scores messages by role/recency/content-type, builds tool_call pairings, greedily fills token budget from highest priority, summarizes evicted messages with tool names and file paths
+2. **`src/durable-objects/task-processor.ts`** — Wired new module:
+   - `estimateTokens()` method now delegates to `context-budget.estimateTokens()`
+   - `compressContext()` method now delegates to `compressContextBudgeted(messages, MAX_CONTEXT_TOKENS, keepRecent)`
+   - Old inline implementations replaced with clean single-line delegations
+3. **`src/durable-objects/context-budget.test.ts`** (NEW) — 28 comprehensive tests covering:
+   - String token estimation (empty, English, code, large strings)
+   - Message token estimation (simple, tool_calls, ContentPart[], null, reasoning)
+   - Total token estimation (empty, sum, realistic conversation)
+   - Budgeted compression (under budget, too few, always-keep, recent, summary, tool pairing, orphans, large conversations, priority ordering, deduplication, null content, minRecent parameter)
+
+### Files Modified
+- `src/durable-objects/context-budget.ts` (new)
+- `src/durable-objects/context-budget.test.ts` (new)
+- `src/durable-objects/task-processor.ts`
+
+### Tests
+- [x] Tests pass (717 total, 0 failures — 28 new)
+- [x] Typecheck passes
+
+### Notes for Next Session
+- The `estimateTokens` heuristic is still approximate (chars/4 + adjustments). Phase 4.2 will replace it with a real tokenizer.
+- `compressContextBudgeted` is a pure function and can be tested/benchmarked independently.
+- All existing task-processor tests continue to pass — the new compression is backward-compatible.
+- Next: Phase 2.4 (Acontext dashboard link) or Phase 4.2 (actual tokenizer)
+
+---
+
 ## Session: 2026-02-18 | Phase 2.5.9 Holiday Awareness (Session: 01SE5WrUuc6LWTmZC8WBXKY4)
 
 **AI:** Claude Opus 4.6
