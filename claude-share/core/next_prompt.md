@@ -3,36 +3,37 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-18 (Phase 4.1 Token-budgeted context retrieval complete)
+**Last Updated:** 2026-02-19 (Phase 4.1 audit hardening complete)
 
 ---
 
-## Current Task: Phase 2.4 — Acontext Dashboard Link in Admin UI
+## Current Task: Phase 4.2 — Replace estimateTokens with actual tokenizer
 
 ### Goal
 
-Add an Acontext dashboard link/widget to the React admin UI so operators can quickly jump to Acontext session replays from the admin panel.
+Replace heuristic token estimation with a real tokenizer path (preferably `js-tiktoken`) that is compatible with Cloudflare Workers, while keeping a safe fallback.
 
 ### Context
 
-- Acontext integration (Phase 2.3) is complete — REST client in `src/acontext/client.ts`
-- Admin dashboard is in `src/client/App.tsx`
-- This is a low-risk, read-only integration (just a link/iframe)
-- Assigned to Codex but any AI can pick it up
+- Phase 4.1 is complete and now audited/hardened
+- `src/durable-objects/context-budget.ts` currently uses heuristic estimates
+- Audit doc: `brainstorming/phase-4.1-audit.md`
+- Goal is tighter budget correctness with real token counts
 
 ### Files to Modify
 
 | File | What to change |
 |------|---------------|
-| `src/client/App.tsx` | Add Acontext dashboard link/section |
-| Tests | Add any necessary tests |
+| `src/durable-objects/context-budget.ts` | Integrate exact tokenizer-backed counting path |
+| `src/durable-objects/task-processor.ts` | Keep per-model budgeting aligned with exact counts |
+| Tests | Add/adjust tests for tokenizer-backed estimates + fallback behavior |
 
 ### Queue After This Task
 
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
-| Current | 2.4: Acontext dashboard link in admin UI | Low | Read-only integration |
-| Next | 4.2: Replace estimateTokens with actual tokenizer | Medium | Use tiktoken or similar |
+| Current | 4.2: Replace estimateTokens with actual tokenizer | Medium | Prefer `js-tiktoken` if Worker-compatible |
+| Next | 2.4: Acontext dashboard link in admin UI | Low | Read-only integration |
 | Then | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
 
 ---
@@ -41,6 +42,7 @@ Add an Acontext dashboard link/widget to the React admin UI so operators can qui
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-19 | Phase 4.1 Audit: context-budget hardening + edge-case tests | Codex (GPT-5.2-Codex) | codex-phase-4-1-audit-001 |
 | 2026-02-18 | Phase 4.1: Token-budgeted context retrieval | Claude Opus 4.6 | 018M5goT7Vhaymuo8AxXhUCg |
 | 2026-02-18 | Phase 2.5.9: Holiday awareness (Nager.Date) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-18 | Phase 2.3: Acontext observability (REST client + /sessions) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |

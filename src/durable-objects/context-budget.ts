@@ -20,6 +20,8 @@ const MESSAGE_OVERHEAD_TOKENS = 4;
 
 /** Extra tokens for each tool_call entry (id, type, function.name envelope). */
 const TOOL_CALL_OVERHEAD_TOKENS = 12;
+const IMAGE_PART_TOKENS = 425;
+const SUMMARY_RESERVE_TOKENS = 100;
 
 /**
  * Estimate the token count for a string.
@@ -43,6 +45,11 @@ export function estimateStringTokens(text: string): number {
     tokens = Math.ceil(tokens * 1.15);
   }
 
+  // Dense JSON payloads often tokenize worse than prose due to punctuation/quotes.
+  if ((text.startsWith('{') || text.startsWith('[')) && text.includes('":')) {
+    tokens = Math.ceil(tokens * 1.1);
+  }
+
   return tokens;
 }
 
@@ -62,9 +69,9 @@ export function estimateMessageTokens(msg: ChatMessage): number {
         tokens += estimateStringTokens(part.text);
       }
       // image_url parts: ~85 tokens for low-res, ~765 for high-res.
-      // Use conservative mid-range estimate.
+      // Use a conservative mid-high estimate to avoid context overflows.
       if (part.type === 'image_url') {
-        tokens += 300;
+        tokens += IMAGE_PART_TOKENS;
       }
     }
   }
@@ -191,13 +198,15 @@ function buildToolPairings(messages: readonly ChatMessage[]): {
       }
     }
 
-    if (msg.role === 'tool' && msg.tool_call_id) {
-      const assistantIdx = pendingToolCallIds.get(msg.tool_call_id);
+    if (msg.role === 'tool') {
+      const toolCallId = msg.tool_call_id;
+      const assistantIdx = toolCallId ? pendingToolCallIds.get(toolCallId) : undefined;
       if (assistantIdx !== undefined) {
         toolToAssistant.set(i, assistantIdx);
         assistantToTools.get(assistantIdx)?.push(i);
-      } else if (lastAssistantWithToolsIndex >= 0) {
+      } else if (!toolCallId && lastAssistantWithToolsIndex >= 0) {
         // Fallback: pair with the most recent assistant that had tool_calls
+        // only when tool_call_id is absent (malformed message shape).
         toolToAssistant.set(i, lastAssistantWithToolsIndex);
         if (!assistantToTools.has(lastAssistantWithToolsIndex)) {
           assistantToTools.set(lastAssistantWithToolsIndex, []);
@@ -291,6 +300,37 @@ function summarizeEvicted(evicted: ScoredMessage[]): ChatMessage | null {
   };
 }
 
+function expandPairedSet(
+  seedIndices: Iterable<number>,
+  scored: readonly ScoredMessage[],
+): Set<number> {
+  const expanded = new Set<number>(seedIndices);
+  const queue = [...expanded];
+
+  while (queue.length > 0) {
+    const idx = queue.pop();
+    if (idx === undefined) continue;
+
+    const s = scored[idx];
+    if (!s) continue;
+
+    if (s.pairedAssistantIndex !== undefined && !expanded.has(s.pairedAssistantIndex)) {
+      expanded.add(s.pairedAssistantIndex);
+      queue.push(s.pairedAssistantIndex);
+    }
+    if (s.pairedToolIndices) {
+      for (const toolIdx of s.pairedToolIndices) {
+        if (!expanded.has(toolIdx)) {
+          expanded.add(toolIdx);
+          queue.push(toolIdx);
+        }
+      }
+    }
+  }
+
+  return expanded;
+}
+
 /**
  * Token-budgeted context compression.
  *
@@ -376,7 +416,7 @@ export function compressContextBudgeted(
   }
 
   // Reserve tokens for the summary message (~100 tokens)
-  const summaryReserve = 100;
+  const summaryReserve = SUMMARY_RESERVE_TOKENS;
   let remainingBudget = tokenBudget - usedTokens - summaryReserve;
 
   // Step 4: Sort non-always-keep messages by priority (highest first)
@@ -391,21 +431,12 @@ export function compressContextBudgeted(
     if (remainingBudget <= 0) break;
 
     // Calculate full cost including paired messages
-    let groupCost = candidate.tokens;
-    const groupIndices = [candidate.index];
+    const groupIndices = [...expandPairedSet([candidate.index], scored)]
+      .filter(idx => !alwaysKeepIndices.has(idx) && !additionalKeep.has(idx));
 
-    // Include paired messages
-    if (candidate.pairedAssistantIndex !== undefined && !alwaysKeepIndices.has(candidate.pairedAssistantIndex) && !additionalKeep.has(candidate.pairedAssistantIndex)) {
-      groupCost += scored[candidate.pairedAssistantIndex].tokens;
-      groupIndices.push(candidate.pairedAssistantIndex);
-    }
-    if (candidate.pairedToolIndices) {
-      for (const ti of candidate.pairedToolIndices) {
-        if (!alwaysKeepIndices.has(ti) && !additionalKeep.has(ti)) {
-          groupCost += scored[ti].tokens;
-          groupIndices.push(ti);
-        }
-      }
+    let groupCost = 0;
+    for (const idx of groupIndices) {
+      groupCost += scored[idx].tokens;
     }
 
     // Check if the group fits
@@ -418,8 +449,21 @@ export function compressContextBudgeted(
   }
 
   // Step 5: Collect evicted messages for summarization
-  const keepSet = new Set([...alwaysKeepIndices, ...additionalKeep]);
+  const keepSet = expandPairedSet([...alwaysKeepIndices, ...additionalKeep], scored);
   const evicted = scored.filter(s => !keepSet.has(s.index));
+
+  // Graceful degradation for tiny budgets:
+  // if we could keep only the mandatory set and summary, skip summary to save budget.
+  if (usedTokens > tokenBudget && evicted.length > 0) {
+    const minimalResult: ChatMessage[] = [];
+    if (keepSet.has(0)) minimalResult.push(messages[0]);
+    if (keepSet.has(1)) minimalResult.push(messages[1]);
+    const sortedMinimal = [...keepSet].filter(i => i > 1).sort((a, b) => a - b);
+    for (const idx of sortedMinimal) {
+      minimalResult.push(messages[idx]);
+    }
+    return minimalResult;
+  }
 
   // Step 6: Build result in original order
   const result: ChatMessage[] = [];
