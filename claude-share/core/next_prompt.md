@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-18 (Phase 4.1 Token-budgeted context retrieval complete)
+**Last Updated:** 2026-02-19 (Phase 4.1 audit hardening complete)
 
 ---
 
@@ -41,6 +41,7 @@ Add an Acontext dashboard link/widget to the React admin UI so operators can qui
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-19 | Phase 4.1 Audit: Review & harden token-budgeted context retrieval | Codex (GPT-5.2-Codex) | codex-phase41-audit-001 |
 | 2026-02-18 | Phase 4.1: Token-budgeted context retrieval | Claude Opus 4.6 | 018M5goT7Vhaymuo8AxXhUCg |
 | 2026-02-18 | Phase 2.5.9: Holiday awareness (Nager.Date) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-18 | Phase 2.3: Acontext observability (REST client + /sessions) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |

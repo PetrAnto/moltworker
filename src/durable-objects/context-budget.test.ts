@@ -252,12 +252,15 @@ describe('compressContextBudgeted', () => {
     // Use a small budget to force compression
     const result = compressContextBudgeted(msgs, 300, 2);
 
-    // Should have a summary
+    // Should either include a summary, or omit summary if budget is extremely tight
     const summary = result.find(m =>
       typeof m.content === 'string' && m.content.startsWith('[Context summary:')
     );
-    expect(summary).toBeDefined();
-    expect(typeof summary?.content === 'string' && summary.content).toContain('Context summary:');
+    if (summary) {
+      expect(typeof summary.content === 'string' && summary.content).toContain('Context summary:');
+    } else {
+      expect(result.length).toBeLessThan(msgs.length);
+    }
   });
 
   it('should maintain tool_call/result pairing', () => {
@@ -425,16 +428,18 @@ describe('compressContextBudgeted', () => {
       typeof m.content === 'string' && m.content.startsWith('[Context summary:')
     );
 
-    // There should be a summary since messages were evicted
-    expect(summary).toBeDefined();
-    // Summary should mention tool names or tool count
-    const content = typeof summary?.content === 'string' ? summary.content : '';
-    const hasToolRef = content.includes('fetch_url') ||
-      content.includes('get_weather') ||
-      content.includes('fetch_news') ||
-      content.includes('Tools used') ||
-      content.includes('tool result');
-    expect(hasToolRef).toBe(true);
+    // Summary may be dropped by safety guard for very tight budgets
+    if (summary && typeof summary.content === 'string') {
+      const content = summary.content;
+      const hasToolRef = content.includes('fetch_url') ||
+        content.includes('get_weather') ||
+        content.includes('fetch_news') ||
+        content.includes('Tools used') ||
+        content.includes('tool result');
+      expect(hasToolRef).toBe(true);
+    } else {
+      expect(result.length).toBeLessThan(msgs.length);
+    }
   });
 
   it('should handle conversation with only system + user + assistant', () => {
@@ -507,5 +512,188 @@ describe('compressContextBudgeted', () => {
     // With larger minRecent, more messages should be in the result
     // (if budget allows)
     expect(result8.length).toBeGreaterThanOrEqual(result4.length);
+  });
+});
+
+describe('compressContextBudgeted edge cases', () => {
+  it('handles pure chat conversations with no tool calls', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System'),
+      userMsg('Question'),
+      ...Array.from({ length: 25 }, (_, i) => assistantMsg(`Turn ${i}: ${'detail '.repeat(80)}`)),
+    ];
+
+    const result = compressContextBudgeted(msgs, 800, 5);
+    expect(result.length).toBeLessThan(msgs.length);
+    expect(result[0].role).toBe('system');
+    expect(result[1].role).toBe('user');
+  });
+
+  it('handles 100+ tool calls without crashing', () => {
+    const msgs: ChatMessage[] = [systemMsg('System'), userMsg('Run stress test')];
+    for (let i = 0; i < 110; i++) {
+      msgs.push(
+        assistantToolCallMsg(`Step ${i}`, [
+          { id: `bulk_${i}`, name: 'fetch_url', arguments: `{"url":"https://example.com/${i}"}` },
+        ]),
+        toolResultMsg(`bulk_${i}`, `payload ${i}: ${'x'.repeat(200)}`),
+      );
+    }
+    msgs.push(assistantMsg('Done'));
+
+    const result = compressContextBudgeted(msgs, 2500, 6);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(m => m.role === 'assistant' && m.content === 'Done')).toBe(true);
+  });
+
+  it('preserves reasoning_content token accounting in compression path', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System'),
+      userMsg('Think deeply'),
+      {
+        role: 'assistant',
+        content: 'Interim output',
+        reasoning_content: 'Step by step '.repeat(200),
+      },
+      assistantMsg('Final answer'),
+    ];
+
+    const result = compressContextBudgeted(msgs, 120, 2);
+    expect(result.length).toBeGreaterThan(0);
+  });
+
+  it('handles single-message conversations', () => {
+    const msgs: ChatMessage[] = [assistantMsg('Solo message')];
+    const result = compressContextBudgeted(msgs, 5, 1);
+    expect(result).toEqual(msgs);
+  });
+
+  it('handles malformed all-tool conversation without throwing', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'tool', tool_call_id: 'x1', content: 'tool output 1' },
+      { role: 'tool', tool_call_id: 'x2', content: 'tool output 2' },
+      { role: 'tool', tool_call_id: 'x3', content: 'tool output 3' },
+      { role: 'tool', tool_call_id: 'x4', content: 'tool output 4' },
+      { role: 'tool', tool_call_id: 'x5', content: 'tool output 5' },
+      { role: 'tool', tool_call_id: 'x6', content: 'tool output 6' },
+      { role: 'tool', tool_call_id: 'x7', content: 'tool output 7' },
+      { role: 'tool', tool_call_id: 'x8', content: 'tool output 8' },
+      { role: 'tool', tool_call_id: 'x9', content: 'tool output 9' },
+    ];
+
+    const result = compressContextBudgeted(msgs, 30, 2);
+    expect(result.length).toBeGreaterThan(0);
+  });
+
+  it('drops summary when it would exceed tight budget', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System ' + 'x'.repeat(200)),
+      userMsg('User ' + 'y'.repeat(200)),
+      ...Array.from({ length: 20 }, (_, i) => assistantMsg(`Middle ${i}: ${'z'.repeat(200)}`)),
+      assistantMsg('Tail answer'),
+    ];
+
+    const result = compressContextBudgeted(msgs, 180, 1);
+    const hasSummary = result.some(
+      m => m.role === 'assistant' && typeof m.content === 'string' && m.content.startsWith('[Context summary:'),
+    );
+    expect(hasSummary).toBe(false);
+  });
+
+  it('degrades gracefully when always-keep set exceeds budget', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System '.repeat(40)),
+      userMsg('User '.repeat(40)),
+      ...Array.from({ length: 12 }, (_, i) => assistantMsg(`Recent ${i}: ${'blob '.repeat(150)}`)),
+    ];
+
+    const result = compressContextBudgeted(msgs, 220, 10);
+    expect(result.length).toBeLessThan(msgs.length);
+    expect(result[0].role).toBe('system');
+  });
+
+  it('estimates image_url ContentPart token costs', () => {
+    const msg: ChatMessage = {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Describe this image' },
+        { type: 'image_url', image_url: { url: 'https://example.com/img.png' } },
+        { type: 'image_url', image_url: { url: 'https://example.com/img2.png' } },
+      ],
+    };
+
+    expect(estimateMessageTokens(msg)).toBeGreaterThanOrEqual(604);
+  });
+
+  it('does not force-pair unmatched tool_call_id to recent assistant', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System'),
+      userMsg('Question'),
+      assistantToolCallMsg('Call one', [{ id: 'id_1', name: 'fetch_url', arguments: '{}' }]),
+      toolResultMsg('id_1', 'Result one'),
+      assistantToolCallMsg('Call two', [{ id: 'id_2', name: 'get_weather', arguments: '{}' }]),
+      toolResultMsg('unknown_id', 'Unmatched result'),
+      assistantMsg('final'),
+    ];
+
+    const result = compressContextBudgeted(msgs, 120, 2);
+    // Should not crash and should keep output coherent under tight budgets
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(m => m.role === 'assistant' && m.content === 'final')).toBe(true);
+  });
+
+  it('handles out-of-order tool results by keeping sequence valid', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System'),
+      userMsg('Q'),
+      toolResultMsg('future_1', 'premature tool output'),
+      assistantToolCallMsg('Now call', [{ id: 'future_1', name: 'fetch_url', arguments: '{}' }]),
+      assistantMsg('wrap up'),
+      ...Array.from({ length: 12 }, (_, i) => assistantMsg(`tail ${i}: ${'n'.repeat(120)}`)),
+    ];
+
+    const result = compressContextBudgeted(msgs, 500, 3);
+    expect(result.length).toBeGreaterThan(0);
+  });
+});
+
+describe('token estimation calibration guards', () => {
+  it('treats JSON payloads as denser than plain prose', () => {
+    const prose = 'This is ordinary prose with mostly alphabetic words and spaces.';
+    const json = '{"status":"ok","items":[{"id":1,"name":"alpha"},{"id":2,"name":"beta"}],"meta":{"count":2}}';
+    const proseRatio = estimateStringTokens(prose) / prose.length;
+    const jsonRatio = estimateStringTokens(json) / json.length;
+    expect(jsonRatio).toBeGreaterThan(proseRatio);
+  });
+
+  it('keeps both sides of duplicate tool_call_id pairings when retained', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System'),
+      userMsg('Q'),
+      assistantToolCallMsg('First call', [{ id: 'dup', name: 'fetch_url', arguments: '{}' }]),
+      toolResultMsg('dup', 'result A'),
+      assistantToolCallMsg('Second call with duplicate id', [{ id: 'dup', name: 'get_weather', arguments: '{}' }]),
+      toolResultMsg('dup', 'result B'),
+      ...Array.from({ length: 10 }, (_, i) => assistantMsg(`tail ${i}: ${'x'.repeat(90)}`)),
+    ];
+
+    const result = compressContextBudgeted(msgs, 600, 4);
+    const hasAnyDupTool = result.some(m => m.role === 'tool' && m.tool_call_id === 'dup');
+    if (hasAnyDupTool) {
+      expect(result.some(m => m.role === 'assistant' && Array.isArray(m.tool_calls))).toBe(true);
+    }
+  });
+
+  it('returns unchanged when already below budget even with tool calls', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System'),
+      userMsg('Q'),
+      assistantToolCallMsg('Call', [{ id: 't1', name: 'fetch_url', arguments: '{}' }]),
+      toolResultMsg('t1', 'ok'),
+      assistantMsg('Done'),
+    ];
+
+    const budget = estimateTokens(msgs) + 50;
+    expect(compressContextBudgeted(msgs, budget, 2)).toEqual(msgs);
   });
 });

@@ -144,7 +144,7 @@ function scorePriority(
   // Role-based base scores
   if (msg.role === 'tool') {
     // Tool results — evidence for claims
-    return 40 + positionScore;
+    return 55 + positionScore;
   }
 
   if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
@@ -154,7 +154,12 @@ function scorePriority(
 
   if (msg.role === 'assistant') {
     // Plain assistant text — intermediate reasoning
-    return 20 + positionScore;
+    return 18 + positionScore;
+  }
+
+  if (msg.role === 'system') {
+    // Injected system notices/prompts should survive better than plain assistant text
+    return 45 + positionScore;
   }
 
   if (msg.role === 'user') {
@@ -177,14 +182,12 @@ function buildToolPairings(messages: readonly ChatMessage[]): {
   const toolToAssistant = new Map<number, number>();
   const assistantToTools = new Map<number, number[]>();
 
-  let lastAssistantWithToolsIndex = -1;
   const pendingToolCallIds = new Map<string, number>(); // tool_call_id → assistant index
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
 
     if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
-      lastAssistantWithToolsIndex = i;
       assistantToTools.set(i, []);
       for (const tc of msg.tool_calls) {
         pendingToolCallIds.set(tc.id, i);
@@ -196,13 +199,6 @@ function buildToolPairings(messages: readonly ChatMessage[]): {
       if (assistantIdx !== undefined) {
         toolToAssistant.set(i, assistantIdx);
         assistantToTools.get(assistantIdx)?.push(i);
-      } else if (lastAssistantWithToolsIndex >= 0) {
-        // Fallback: pair with the most recent assistant that had tool_calls
-        toolToAssistant.set(i, lastAssistantWithToolsIndex);
-        if (!assistantToTools.has(lastAssistantWithToolsIndex)) {
-          assistantToTools.set(lastAssistantWithToolsIndex, []);
-        }
-        assistantToTools.get(lastAssistantWithToolsIndex)?.push(i);
       }
     }
   }
@@ -375,6 +371,45 @@ export function compressContextBudgeted(
     usedTokens += scored[idx].tokens;
   }
 
+  // If the always-keep set already exceeds budget, degrade gracefully by dropping
+  // the oldest optional messages (never index 0/1) until we fit or only hard-keep remains.
+  if (usedTokens + 3 > tokenBudget) {
+    const optionalSorted = [...alwaysKeepIndices]
+      .filter(idx => idx > 1)
+      .sort((a, b) => {
+        const pa = scored[a].priority;
+        const pb = scored[b].priority;
+        if (pa !== pb) return pa - pb;
+        return a - b;
+      });
+
+    for (const idx of optionalSorted) {
+      if (usedTokens + 3 <= tokenBudget) break;
+      if (!alwaysKeepIndices.has(idx)) continue;
+
+      const group = new Set<number>([idx]);
+      const pairedAssistant = scored[idx].pairedAssistantIndex;
+      if (pairedAssistant !== undefined && pairedAssistant > 1) {
+        group.add(pairedAssistant);
+      }
+      if (scored[idx].pairedToolIndices) {
+        for (const ti of scored[idx].pairedToolIndices) {
+          if (ti > 1) group.add(ti);
+        }
+      }
+
+      // Don't remove groups that would drop all recent context if avoidable.
+      if (alwaysKeepIndices.size - group.size < 2) continue;
+
+      for (const g of group) {
+        if (alwaysKeepIndices.has(g)) {
+          alwaysKeepIndices.delete(g);
+          usedTokens -= scored[g].tokens;
+        }
+      }
+    }
+  }
+
   // Reserve tokens for the summary message (~100 tokens)
   const summaryReserve = 100;
   let remainingBudget = tokenBudget - usedTokens - summaryReserve;
@@ -444,6 +479,14 @@ export function compressContextBudgeted(
   const sortedKept = [...keepSet].filter(i => i > 1).sort((a, b) => a - b);
   for (const idx of sortedKept) {
     result.push(messages[idx]);
+  }
+
+  // Final safety check: if summary pushes us over budget, drop it.
+  if (summary && estimateTokens(result) > tokenBudget) {
+    const summaryIndex = result.findIndex(m => m === summary);
+    if (summaryIndex >= 0) {
+      result.splice(summaryIndex, 1);
+    }
   }
 
   return result;

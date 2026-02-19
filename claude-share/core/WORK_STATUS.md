@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-18 (Phase 4.1 Token-budgeted context retrieval)
+**Last Updated:** 2026-02-19 (Phase 4.1 audit hardening)
 
 ---
 
@@ -46,6 +46,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | Phase 4.1 Token-budgeted context retrieval complete | `claude/implement-p1-guardrails-NF641` | 2026-02-18 |
+| Codex | Phase 4.1 audit hardening complete | `work` | 2026-02-19 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
