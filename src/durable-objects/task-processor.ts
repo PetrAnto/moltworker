@@ -13,6 +13,7 @@ import { extractLearning, storeLearning, storeLastTaskSummary } from '../openrou
 import { parseOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted } from './context-budget';
+import { checkPhaseBudget, PhaseBudgetExceededError } from './phase-budget';
 
 // Task phase type for structured task processing
 export type TaskPhase = 'plan' | 'work' | 'review';
@@ -718,6 +719,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const maxIterations = 100; // Very high limit for complex tasks
     let lastProgressUpdate = Date.now();
     let lastCheckpoint = Date.now();
+    // Phase budget circuit breaker: track when the current phase started
+    let phaseStartTime = Date.now();
 
     // Try to resume from checkpoint if available
     let resumedFromCheckpoint = false;
@@ -735,6 +738,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Restore phase from checkpoint, or default to 'work' (plan is already done)
         task.phase = checkpoint.phase || 'work';
         task.phaseStartIteration = 0;
+        phaseStartTime = Date.now(); // Reset phase budget clock for resumed phase
         // Sync stall tracking to checkpoint state — prevents negative tool counts
         // when checkpoint has fewer tools than the pre-resume toolCountAtLastResume
         task.toolCountAtLastResume = checkpoint.toolsUsed.length;
@@ -863,6 +867,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Check if current model supports tools (conditional injection)
         const currentModel = getModel(task.modelAlias);
         const useTools = currentModel?.supportsTools === true;
+
+        // Phase budget circuit breaker: check before API call
+        if (task.phase) {
+          checkPhaseBudget(task.phase, phaseStartTime);
+        }
 
         // Retry loop for API calls
         const MAX_API_RETRIES = 3;
@@ -1160,6 +1169,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         if (task.phase === 'plan') {
           task.phase = 'work';
           task.phaseStartIteration = task.iterations;
+          phaseStartTime = Date.now(); // Reset phase budget clock
           await this.doState.storage.put('task', task);
           console.log(`[TaskProcessor] Phase transition: plan → work (iteration ${task.iterations})`);
         }
@@ -1179,7 +1189,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           }
           conversationMessages.push(assistantMsg);
 
-          // Execute all tools in parallel for faster execution
+          // Phase budget circuit breaker: check before tool execution
+          if (task.phase) {
+            checkPhaseBudget(task.phase, phaseStartTime);
+          }
+
           const toolNames = choice.message.tool_calls.map(tc => tc.function.name);
           task.toolsUsed.push(...toolNames);
 
@@ -1204,11 +1218,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               }
 
               console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
-              return { toolName, toolResult };
-            })
-          );
-
-          console.log(`[TaskProcessor] ${toolResults.length} tools executed in parallel in ${Date.now() - parallelStart}ms`);
+              toolResults.push({ toolName, toolResult });
+            }
+            console.log(`[TaskProcessor] ${toolResults.length} tools executed sequentially in ${Date.now() - parallelStart}ms`);
+          }
 
           // Add all tool results to conversation (preserving order, with truncation)
           for (const { toolName, toolResult } of toolResults) {
@@ -1405,6 +1418,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         if (hasContent && task.phase === 'work' && task.toolsUsed.length > 0) {
           task.phase = 'review';
           task.phaseStartIteration = task.iterations;
+          phaseStartTime = Date.now(); // Reset phase budget clock
           await this.doState.storage.put('task', task);
           console.log(`[TaskProcessor] Phase transition: work → review (iteration ${task.iterations})`);
 
@@ -1679,6 +1693,33 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       );
 
     } catch (error) {
+      // Phase budget circuit breaker: save checkpoint and let watchdog auto-resume
+      if (error instanceof PhaseBudgetExceededError) {
+        console.log(`[TaskProcessor] Phase budget exceeded: ${error.phase} (${error.elapsedMs}ms > ${error.budgetMs}ms)`);
+        task.autoResumeCount = (task.autoResumeCount ?? 0) + 1;
+        task.lastUpdate = Date.now();
+        await this.doState.storage.put('task', task);
+
+        // Save checkpoint so alarm handler can resume from here
+        if (this.r2) {
+          await this.saveCheckpoint(
+            this.r2,
+            request.userId,
+            request.taskId,
+            conversationMessages,
+            task.toolsUsed,
+            task.iterations,
+            request.prompt,
+            'latest',
+            false,
+            task.phase,
+            task.modelAlias
+          );
+        }
+        // Let the watchdog alarm handle auto-resume — just return
+        return;
+      }
+
       task.status = 'failed';
       task.error = error instanceof Error ? error.message : String(error);
       await this.doState.storage.put('task', task);
