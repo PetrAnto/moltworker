@@ -1020,8 +1020,8 @@ describe('Phase 2.5.8 — Geolocation Tool', () => {
 // ============================================================================
 
 describe('Test 18 — /help and /start message verification', () => {
-  it('should have exactly 14 tools in AVAILABLE_TOOLS', () => {
-    expect(AVAILABLE_TOOLS.length).toBe(14);
+  it('should have exactly 15 tools in AVAILABLE_TOOLS', () => {
+    expect(AVAILABLE_TOOLS.length).toBe(15);
   });
 
   it('should list all expected tools', () => {
@@ -1038,6 +1038,7 @@ describe('Test 18 — /help and /start message verification', () => {
       'convert_currency',
       'get_crypto',
       'geolocate_ip',
+      'web_search',
       'browse_url',
       'github_create_pr',
       'sandbox_exec',
