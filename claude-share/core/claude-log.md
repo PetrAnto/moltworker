@@ -4,6 +4,37 @@
 
 ---
 
+## Session: 2026-02-20 | Phase 4.2 — Real Tokenizer (gpt-tokenizer cl100k_base) (Session: session_01SE5WrUuc6LWTmZC8WBXKY4)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/implement-p1-guardrails-DcOgI`
+**Task:** Replace heuristic `estimateStringTokens` with real BPE tokenizer
+
+### Changes
+- **New:** `src/utils/tokenizer.ts` — wrapper around `gpt-tokenizer/encoding/cl100k_base`
+  - `countTokens(text)` — exact BPE token count with heuristic fallback
+  - `estimateTokensHeuristic(text)` — original chars/4 heuristic (fallback)
+  - `isTokenizerAvailable()` / `resetTokenizerState()` — diagnostics + testing
+- **Modified:** `src/durable-objects/context-budget.ts` — `estimateStringTokens()` now delegates to `countTokens()` from tokenizer module
+- **New export:** `estimateStringTokensHeuristic()` for comparison/testing
+- **New:** `src/utils/tokenizer.test.ts` — 18 tests covering exact counts, fallback, comparison
+- **Adjusted:** `context-budget.test.ts` — relaxed bounds for real tokenizer accuracy
+- **Adjusted:** `context-budget.edge.test.ts` — relaxed reasoning_content bound
+- **New dependency:** `gpt-tokenizer` (pure JS, no WASM)
+
+### Design Decisions
+- **cl100k_base encoding** — best universal approximation across multi-provider models (GPT-4, Claude ~70% overlap, Llama 3+, DeepSeek, Gemini)
+- **gpt-tokenizer over js-tiktoken** — pure JS (no WASM cold start), compact binary BPE ranks, per-encoding tree-shakeable imports
+- **Heuristic fallback** — if tokenizer throws, flag disables it for process lifetime and falls back to chars/4 heuristic
+- **Bundle impact:** worker entry +1.1 MB (1,388 → 2,490 KB uncompressed) — within CF Workers 10 MB limit
+
+### Test Results
+- 772 tests total (10 net new from tokenizer module)
+- Typecheck clean
+- Build succeeds
+
+---
+
 ## Session: 2026-02-20 | Sprint 48h — Phase Budget Circuit Breakers + Parallel Tools Upgrade (Session: session_01AtnWsZSprM6Gjr9vjTm1xp)
 
 **AI:** Claude Opus 4.6

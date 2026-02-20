@@ -3,39 +3,40 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-20 (Sprint 48h complete — phase budgets + parallel tools upgrade)
+**Last Updated:** 2026-02-20 (Phase 4.2 complete — real tokenizer via gpt-tokenizer)
 
 ---
 
-## Current Task: Phase 4.2 — Replace estimateTokens with actual tokenizer
+## Current Task: Phase 2.4 — Acontext Dashboard Link in Admin UI
 
 ### Goal
 
-Replace heuristic token estimation with a real tokenizer path (preferably `js-tiktoken`) that is compatible with Cloudflare Workers, while keeping a safe fallback.
+Add a read-only "Acontext Sessions" section to the React admin dashboard showing recent AI task sessions with links to the Acontext dashboard.
 
 ### Context
 
-- Phase 4.1 is complete and now audited/hardened
-- Sprint 48h (Feb 20) shipped phase budget circuit breakers + parallel tools allSettled upgrade
-- `src/durable-objects/context-budget.ts` currently uses heuristic estimates
-- `src/durable-objects/phase-budget.ts` is the new phase budget module
-- Audit doc: `brainstorming/phase-4.1-audit.md`
-- Goal is tighter budget correctness with real token counts
+- Phase 4.2 just completed: real tokenizer (gpt-tokenizer cl100k_base) integrated
+- Acontext REST client already exists: `src/acontext/client.ts`
+- Admin UI: React 19 + Vite 6, `src/client/pages/AdminPage.tsx`
+- Admin API: `src/client/api.ts` (calls `/api/admin/*`)
+- Env binding: `ACONTEXT_API_KEY` already configured in Cloudflare
+- This is a Codex-assigned task (frontend + simple API endpoint)
 
 ### Files to Modify
 
 | File | What to change |
 |------|---------------|
-| `src/durable-objects/context-budget.ts` | Integrate exact tokenizer-backed counting path |
-| `src/durable-objects/task-processor.ts` | Keep per-model budgeting aligned with exact counts |
-| Tests | Add/adjust tests for tokenizer-backed estimates + fallback behavior |
+| Admin routes | Add `GET /api/admin/acontext/sessions` endpoint |
+| `src/client/api.ts` | Add `getAcontextSessions()` client function |
+| `src/client/pages/AdminPage.tsx` | Add Acontext sessions section |
+| `src/client/pages/AdminPage.css` | Styling for new section |
 
 ### Queue After This Task
 
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
-| Current | 4.2: Replace estimateTokens with actual tokenizer | Medium | Prefer `js-tiktoken` if Worker-compatible |
-| Next | 2.4: Acontext dashboard link in admin UI | Low | Read-only integration |
+| Current | 2.4: Acontext dashboard link in admin UI | Low | Read-only integration (Codex) |
+| Next | 4.3: Tool result caching | Medium | Cache identical tool calls (Codex) |
 | Then | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
 
 ---
@@ -44,6 +45,7 @@ Replace heuristic token estimation with a real tokenizer path (preferably `js-ti
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-20 | Phase 4.2: Real tokenizer (gpt-tokenizer cl100k_base, heuristic fallback) | Claude Opus 4.6 | session_01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-20 | Sprint 48h: Phase budget circuit breakers (plan=8s, work=18s, review=3s) | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |
 | 2026-02-20 | Sprint 48h: Parallel tools allSettled + PARALLEL_SAFE_TOOLS whitelist | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |
 | 2026-02-19 | Phase 4.1 Audit: context-budget hardening + edge-case tests | Codex (GPT-5.2-Codex) | codex-phase-4-1-audit-001 |
