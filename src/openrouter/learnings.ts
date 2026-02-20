@@ -39,6 +39,7 @@ export interface LearningHistory {
 // Brief summary of last completed task (for cross-task context)
 export interface LastTaskSummary {
   taskSummary: string;     // First 200 chars of user message
+  resultSummary?: string;  // First 500 chars of model's final response
   category: TaskCategory;
   toolsUsed: string[];
   success: boolean;
@@ -46,10 +47,33 @@ export interface LastTaskSummary {
   completedAt: number;
 }
 
+// Session summary for cross-session context continuity (Phase 4.4)
+export interface SessionSummary {
+  sessionId: string;       // taskId serves as sessionId
+  timestamp: number;
+  topic: string;           // First 200 chars of user message
+  resultSummary: string;   // First 500 chars of model's final response
+  category: TaskCategory;
+  toolsUsed: string[];
+  success: boolean;
+  modelAlias: string;
+}
+
+// Ring buffer of session summaries per user
+export interface SessionHistory {
+  userId: string;
+  sessions: SessionSummary[];
+  updatedAt: number;
+}
+
 // Max learnings to keep per user
 const MAX_LEARNINGS = 50;
 // Max learnings to inject into prompt
 const MAX_PROMPT_LEARNINGS = 5;
+// Max sessions to keep in ring buffer
+const MAX_SESSIONS = 20;
+// Max sessions to inject into prompt
+const MAX_PROMPT_SESSIONS = 3;
 
 // Tool-to-category mapping
 const TOOL_CATEGORIES: Record<string, string> = {
@@ -278,10 +302,12 @@ export function formatLearningsForPrompt(learnings: TaskLearning[]): string {
 export async function storeLastTaskSummary(
   r2: R2Bucket,
   userId: string,
-  learning: TaskLearning
+  learning: TaskLearning,
+  resultSummary?: string
 ): Promise<void> {
   const summary: LastTaskSummary = {
     taskSummary: learning.taskSummary,
+    resultSummary: resultSummary?.substring(0, 500),
     category: learning.category,
     toolsUsed: learning.uniqueTools,
     success: learning.success,
@@ -305,8 +331,8 @@ export async function loadLastTaskSummary(
     const obj = await r2.get(key);
     if (!obj) return null;
     const summary = await obj.json() as LastTaskSummary;
-    // Skip if older than 1 hour (stale context)
-    if (Date.now() - summary.completedAt > 3600000) return null;
+    // Skip if older than 24 hours (stale context — Phase 4.4 extended from 1h)
+    if (Date.now() - summary.completedAt > 86400000) return null;
     return summary;
   } catch {
     return null;
@@ -324,7 +350,14 @@ export function formatLastTaskForPrompt(summary: LastTaskSummary | null): string
   const outcome = summary.success ? 'completed' : 'failed';
   const age = Math.round((Date.now() - summary.completedAt) / 60000);
 
-  return `\n\n[Previous task (${age}min ago, ${outcome}): "${summary.taskSummary.substring(0, 100)}" — tools: ${tools}]`;
+  let hint = `\n\n[Previous task (${age}min ago, ${outcome}): "${summary.taskSummary.substring(0, 100)}" — tools: ${tools}]`;
+
+  if (summary.resultSummary) {
+    const snippet = summary.resultSummary.substring(0, 150).replace(/\n/g, ' ');
+    hint += `\n[Result: ${snippet}]`;
+  }
+
+  return hint;
 }
 
 /**
@@ -430,6 +463,151 @@ export function formatLearningSummary(history: LearningHistory): string {
     lines.push(`${outcome} ${age} — "${l.taskSummary.substring(0, 60)}"${l.taskSummary.length > 60 ? '...' : ''}`);
     lines.push(`  /${l.modelAlias} | ${tools}`);
   }
+
+  return lines.join('\n');
+}
+
+// --- Cross-session context continuity (Phase 4.4) ---
+
+/**
+ * Store a session summary to R2 ring buffer.
+ * Keeps the most recent MAX_SESSIONS entries per user.
+ */
+export async function storeSessionSummary(
+  r2: R2Bucket,
+  userId: string,
+  summary: SessionSummary
+): Promise<void> {
+  const key = `learnings/${userId}/sessions.json`;
+
+  let history: SessionHistory;
+  try {
+    const obj = await r2.get(key);
+    if (obj) {
+      history = await obj.json() as SessionHistory;
+    } else {
+      history = { userId, sessions: [], updatedAt: Date.now() };
+    }
+  } catch {
+    history = { userId, sessions: [], updatedAt: Date.now() };
+  }
+
+  history.sessions.push(summary);
+
+  if (history.sessions.length > MAX_SESSIONS) {
+    history.sessions = history.sessions.slice(-MAX_SESSIONS);
+  }
+
+  history.updatedAt = Date.now();
+  await r2.put(key, JSON.stringify(history));
+}
+
+/**
+ * Load session history from R2.
+ * Returns null if no sessions stored or on error.
+ */
+export async function loadSessionHistory(
+  r2: R2Bucket,
+  userId: string
+): Promise<SessionHistory | null> {
+  const key = `learnings/${userId}/sessions.json`;
+  try {
+    const obj = await r2.get(key);
+    if (!obj) return null;
+    return await obj.json() as SessionHistory;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find relevant past sessions for cross-session context.
+ * Scores by keyword overlap (topic + result), category match, recency, and success.
+ */
+export function getRelevantSessions(
+  history: SessionHistory | null,
+  userMessage: string,
+  limit: number = MAX_PROMPT_SESSIONS
+): SessionSummary[] {
+  if (!history || history.sessions.length === 0) return [];
+
+  const messageLower = userMessage.toLowerCase();
+  const messageWords = new Set(
+    messageLower.split(/\s+/).filter(w => w.length > 3)
+  );
+
+  const scored = history.sessions.map(session => {
+    let baseScore = 0;
+
+    // Keyword overlap: topic
+    const topicWords = session.topic
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 3);
+
+    for (const word of topicWords) {
+      if (messageWords.has(word)) baseScore += 2;
+      else if (messageLower.includes(word)) baseScore += 1;
+    }
+
+    // Keyword overlap: result (weaker signal)
+    const resultWords = session.resultSummary
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 3);
+
+    for (const word of resultWords) {
+      if (messageWords.has(word)) baseScore += 1;
+    }
+
+    // Category prediction
+    for (const [cat, hints] of Object.entries(CATEGORY_HINTS)) {
+      if (hints.some(h => messageLower.includes(h)) && session.category === cat) {
+        baseScore += 3;
+      }
+    }
+
+    let score = baseScore;
+    if (baseScore > 0) {
+      const ageHours = (Date.now() - session.timestamp) / (1000 * 60 * 60);
+      if (ageHours < 24) score += 2;
+      else if (ageHours < 168) score += 1;
+
+      if (session.success) score += 1;
+    }
+
+    return { session, score };
+  });
+
+  return scored
+    .filter(s => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(s => s.session);
+}
+
+/**
+ * Format relevant sessions for system prompt injection.
+ * Provides cross-session continuity context.
+ */
+export function formatSessionsForPrompt(sessions: SessionSummary[]): string {
+  if (sessions.length === 0) return '';
+
+  const lines: string[] = [
+    '\n\n--- Recent session context (for continuity) ---',
+  ];
+
+  for (const s of sessions) {
+    const age = formatAge(s.timestamp);
+    const outcome = s.success ? 'OK' : 'FAILED';
+    const result = s.resultSummary.substring(0, 150).replace(/\n/g, ' ');
+
+    lines.push(
+      `- [${age}, ${outcome}] "${s.topic.substring(0, 80)}" => ${result}`
+    );
+  }
+
+  lines.push('If the user is continuing a previous topic, leverage this context.');
 
   return lines.join('\n');
 }

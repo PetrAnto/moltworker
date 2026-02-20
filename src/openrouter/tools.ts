@@ -2519,12 +2519,13 @@ export async function generateDailyBriefing(
   }
 
   // Fetch all sections in parallel (holiday lookup is non-blocking alongside others)
-  const [weatherResult, hnResult, redditResult, arxivResult, holidayResult] = await Promise.allSettled([
+  const [weatherResult, hnResult, redditResult, arxivResult, holidayResult, quoteResult] = await Promise.allSettled([
     fetchBriefingWeather(latitude, longitude),
     fetchBriefingHN(),
     fetchBriefingReddit(subreddit),
     fetchBriefingArxiv(arxivCategory),
     fetchBriefingHolidays(latitude, longitude),
+    fetchBriefingQuote(),
   ]);
 
   const sections: BriefingSection[] = [
@@ -2556,6 +2557,11 @@ export async function generateDailyBriefing(
     } else {
       output += `⚠️ Unavailable: ${section.content}\n\n`;
     }
+  }
+
+  // Append quote at the end (non-critical, silently skip if unavailable)
+  if (quoteResult.status === 'fulfilled' && quoteResult.value) {
+    output += `${quoteResult.value}\n\n`;
   }
 
   output += '\uD83D\uDD04 Updates every 15 minutes';
@@ -2701,6 +2707,56 @@ async function fetchBriefingArxiv(category: string): Promise<string> {
   }
 
   return entries.length > 0 ? entries.join('\n') : 'No recent papers found';
+}
+
+/**
+ * Fetch a random quote from the Quotable API.
+ */
+async function fetchRandomQuote(): Promise<{ content: string; author: string }> {
+  const response = await fetch('https://api.quotable.io/quotes/random', {
+    headers: { 'User-Agent': 'MoltworkerBot/1.0' },
+  });
+  if (!response.ok) throw new Error(`Quotable API HTTP ${response.status}`);
+
+  const data = await response.json() as Array<{ content: string; author: string }>;
+  if (!data || data.length === 0) throw new Error('No quote returned');
+
+  return { content: data[0].content, author: data[0].author };
+}
+
+/**
+ * Fetch random advice from the Advice Slip API.
+ */
+async function fetchRandomAdvice(): Promise<string> {
+  const response = await fetch('https://api.adviceslip.com/advice', {
+    headers: { 'User-Agent': 'MoltworkerBot/1.0' },
+  });
+  if (!response.ok) throw new Error(`Advice Slip API HTTP ${response.status}`);
+
+  const data = await response.json() as { slip: { advice: string } };
+  if (!data?.slip?.advice) throw new Error('No advice returned');
+
+  return data.slip.advice;
+}
+
+/**
+ * Fetch an inspirational quote for the daily briefing.
+ * Tries Quotable API first, falls back to Advice Slip API.
+ */
+export async function fetchBriefingQuote(): Promise<string> {
+  try {
+    const quote = await fetchRandomQuote();
+    return `\u{1F4AD} "${quote.content}" \u2014 ${quote.author}`;
+  } catch {
+    // Quotable failed, try advice fallback
+  }
+
+  try {
+    const advice = await fetchRandomAdvice();
+    return `\u{1F4AD} "${advice}"`;
+  } catch {
+    return '';
+  }
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, extractCodeIdentifiers, fetchBriefingHolidays, type SandboxLike, type SandboxProcess } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, type SandboxLike, type SandboxProcess } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -1027,6 +1027,14 @@ describe('generateDailyBriefing', () => {
       if (url.includes('arxiv.org')) {
         return Promise.resolve({ ok: true, text: () => Promise.resolve(mockArxivXml) });
       }
+      // Quotable API (for quotes)
+      if (url.includes('quotable.io')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ content: 'Test quote for briefing', author: 'Test Author' }]) });
+      }
+      // Advice Slip API (fallback for quotes)
+      if (url.includes('adviceslip.com')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ slip: { advice: 'Test advice' } }) });
+      }
       return Promise.resolve({ ok: false, status: 404 });
     });
     vi.stubGlobal('fetch', mockFetch);
@@ -1462,6 +1470,147 @@ describe('generateDailyBriefing holiday integration', () => {
     const result = await generateDailyBriefing('50.08', '14.44');
     expect(result).toContain('Daily Briefing');
     expect(result).not.toContain('🎉');
+  });
+});
+
+// --- Phase 2.5.10: Quotes & personality ---
+
+describe('fetchBriefingQuote', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should return formatted quote from Quotable API', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve([{ content: 'Be the change.', author: 'Gandhi' }]),
+    }));
+
+    const result = await fetchBriefingQuote();
+    expect(result).toContain('Be the change.');
+    expect(result).toContain('Gandhi');
+    expect(result).toContain('\u{1F4AD}');
+  });
+
+  it('should fall back to Advice Slip when Quotable fails', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ slip: { advice: 'Always be kind.' } }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await fetchBriefingQuote();
+    expect(result).toContain('Always be kind.');
+    expect(result).toContain('\u{1F4AD}');
+    expect(result).not.toContain('\u2014'); // no em-dash author for advice
+  });
+
+  it('should return empty string when both APIs fail', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+
+    const result = await fetchBriefingQuote();
+    expect(result).toBe('');
+  });
+
+  it('should handle empty Quotable response and fall back', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ slip: { advice: 'Smile more.' } }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await fetchBriefingQuote();
+    expect(result).toContain('Smile more.');
+  });
+
+  it('should handle network errors gracefully', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
+
+    const result = await fetchBriefingQuote();
+    expect(result).toBe('');
+  });
+});
+
+describe('generateDailyBriefing quote integration', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    clearBriefingCache();
+  });
+
+  it('should include quote in briefing when available', async () => {
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('open-meteo.com')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            current_weather: { temperature: 20, windspeed: 10, weathercode: 0, time: '2026-02-20T14:00' },
+            daily: { time: ['2026-02-20'], temperature_2m_max: [22], temperature_2m_min: [16], weathercode: [0] },
+          }),
+        });
+      }
+      if (url.includes('topstories.json')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('reddit.com')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: { children: [] } }) });
+      }
+      if (url.includes('arxiv.org')) {
+        return Promise.resolve({ ok: true, text: () => Promise.resolve('<feed></feed>') });
+      }
+      if (url.includes('quotable.io')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ content: 'Stay hungry, stay foolish.', author: 'Steve Jobs' }]),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await generateDailyBriefing();
+    expect(result).toContain('Stay hungry, stay foolish.');
+    expect(result).toContain('Steve Jobs');
+    // Quote should appear before the "Updates" footer
+    const quoteIdx = result.indexOf('Stay hungry');
+    const updatesIdx = result.indexOf('Updates every');
+    expect(quoteIdx).toBeLessThan(updatesIdx);
+  });
+
+  it('should produce valid briefing when quote APIs fail', async () => {
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('open-meteo.com')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            current_weather: { temperature: 20, windspeed: 10, weathercode: 0, time: '2026-02-20T14:00' },
+            daily: { time: ['2026-02-20'], temperature_2m_max: [22], temperature_2m_min: [16], weathercode: [0] },
+          }),
+        });
+      }
+      if (url.includes('topstories.json')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('reddit.com')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: { children: [] } }) });
+      }
+      if (url.includes('arxiv.org')) {
+        return Promise.resolve({ ok: true, text: () => Promise.resolve('<feed></feed>') });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await generateDailyBriefing();
+    expect(result).toContain('Daily Briefing');
+    expect(result).toContain('Updates every 15 minutes');
+    expect(result).not.toContain('\u{1F4AD}');
   });
 });
 

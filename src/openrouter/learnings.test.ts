@@ -14,10 +14,16 @@ import {
   storeLastTaskSummary,
   loadLastTaskSummary,
   formatLastTaskForPrompt,
+  storeSessionSummary,
+  loadSessionHistory,
+  getRelevantSessions,
+  formatSessionsForPrompt,
   type TaskLearning,
   type LearningHistory,
   type TaskCategory,
   type LastTaskSummary,
+  type SessionSummary,
+  type SessionHistory,
 } from './learnings';
 
 // --- categorizeTask ---
@@ -927,14 +933,14 @@ describe('loadLastTaskSummary', () => {
     expect(result!.taskSummary).toBe('Fetch homepage');
   });
 
-  it('returns null when summary is stale (> 1 hour)', async () => {
+  it('returns null when summary is stale (> 24 hours)', async () => {
     const summary: LastTaskSummary = {
       taskSummary: 'Old task',
       category: 'simple_chat',
       toolsUsed: [],
       success: true,
       modelAlias: 'gpt',
-      completedAt: Date.now() - 2 * 3600000, // 2 hours ago
+      completedAt: Date.now() - 25 * 3600000, // 25 hours ago
     };
     const mockBucket = {
       get: vi.fn().mockResolvedValue({
@@ -1184,5 +1190,349 @@ describe('formatLearningSummary', () => {
     expect(result).toContain('Total tasks: 1');
     expect(result).toContain('Success rate: 100%');
     expect(result).toContain('Only task');
+  });
+});
+
+// --- Phase 4.4: Cross-session context continuity ---
+
+// Helper to create session summaries
+const makeSession = (overrides: Partial<SessionSummary> = {}): SessionSummary => ({
+  sessionId: overrides.sessionId ?? `s-${Math.random()}`,
+  timestamp: overrides.timestamp ?? Date.now() - 3600000,
+  topic: overrides.topic ?? 'Test session topic',
+  resultSummary: overrides.resultSummary ?? 'The result of the task was successful.',
+  category: overrides.category ?? 'web_search',
+  toolsUsed: overrides.toolsUsed ?? ['fetch_url'],
+  success: overrides.success ?? true,
+  modelAlias: overrides.modelAlias ?? 'deep',
+});
+
+// --- storeSessionSummary ---
+
+describe('storeSessionSummary', () => {
+  it('creates new session history when none exists', async () => {
+    const mockBucket = {
+      get: vi.fn().mockResolvedValue(null),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await storeSessionSummary(mockBucket as unknown as R2Bucket, 'user1', makeSession());
+
+    expect(mockBucket.put).toHaveBeenCalledWith(
+      'learnings/user1/sessions.json',
+      expect.any(String)
+    );
+    const stored = JSON.parse(mockBucket.put.mock.calls[0][1]);
+    expect(stored.sessions).toHaveLength(1);
+    expect(stored.userId).toBe('user1');
+  });
+
+  it('appends to existing session history', async () => {
+    const existing: SessionHistory = {
+      userId: 'user1',
+      sessions: [makeSession({ sessionId: 's1' })],
+      updatedAt: Date.now(),
+    };
+    const mockBucket = {
+      get: vi.fn().mockResolvedValue({ json: () => Promise.resolve(existing) }),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await storeSessionSummary(mockBucket as unknown as R2Bucket, 'user1', makeSession({ sessionId: 's2' }));
+
+    const stored = JSON.parse(mockBucket.put.mock.calls[0][1]);
+    expect(stored.sessions).toHaveLength(2);
+    expect(stored.sessions[1].sessionId).toBe('s2');
+  });
+
+  it('trims ring buffer to 20 entries', async () => {
+    const existing: SessionHistory = {
+      userId: 'user1',
+      sessions: Array.from({ length: 20 }, (_, i) => makeSession({ sessionId: `s-${i}` })),
+      updatedAt: Date.now(),
+    };
+    const mockBucket = {
+      get: vi.fn().mockResolvedValue({ json: () => Promise.resolve(existing) }),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await storeSessionSummary(mockBucket as unknown as R2Bucket, 'user1', makeSession({ sessionId: 's-new' }));
+
+    const stored = JSON.parse(mockBucket.put.mock.calls[0][1]);
+    expect(stored.sessions).toHaveLength(20);
+    expect(stored.sessions[19].sessionId).toBe('s-new');
+    expect(stored.sessions[0].sessionId).toBe('s-1'); // s-0 was evicted
+  });
+
+  it('handles R2 read error gracefully', async () => {
+    const mockBucket = {
+      get: vi.fn().mockRejectedValue(new Error('R2 down')),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await storeSessionSummary(mockBucket as unknown as R2Bucket, 'user1', makeSession());
+
+    const stored = JSON.parse(mockBucket.put.mock.calls[0][1]);
+    expect(stored.sessions).toHaveLength(1);
+  });
+});
+
+// --- loadSessionHistory ---
+
+describe('loadSessionHistory', () => {
+  it('returns null when no history exists', async () => {
+    const mockBucket = { get: vi.fn().mockResolvedValue(null) };
+    const result = await loadSessionHistory(mockBucket as unknown as R2Bucket, 'user1');
+    expect(result).toBeNull();
+  });
+
+  it('returns session history when exists', async () => {
+    const history: SessionHistory = {
+      userId: 'user1',
+      sessions: [makeSession()],
+      updatedAt: Date.now(),
+    };
+    const mockBucket = {
+      get: vi.fn().mockResolvedValue({ json: () => Promise.resolve(history) }),
+    };
+
+    const result = await loadSessionHistory(mockBucket as unknown as R2Bucket, 'user1');
+    expect(result).not.toBeNull();
+    expect(result!.sessions).toHaveLength(1);
+  });
+
+  it('returns null on R2 error', async () => {
+    const mockBucket = { get: vi.fn().mockRejectedValue(new Error('R2 down')) };
+    const result = await loadSessionHistory(mockBucket as unknown as R2Bucket, 'user1');
+    expect(result).toBeNull();
+  });
+});
+
+// --- getRelevantSessions ---
+
+describe('getRelevantSessions', () => {
+  it('returns empty array for null history', () => {
+    expect(getRelevantSessions(null, 'test')).toEqual([]);
+  });
+
+  it('returns empty array for empty sessions', () => {
+    const history: SessionHistory = { userId: 'u1', sessions: [], updatedAt: Date.now() };
+    expect(getRelevantSessions(history, 'test')).toEqual([]);
+  });
+
+  it('matches sessions by topic keyword overlap', () => {
+    const history: SessionHistory = {
+      userId: 'u1',
+      sessions: [
+        makeSession({ topic: 'Analyze the GitHub repository structure', category: 'github' }),
+        makeSession({ topic: 'Check the weather forecast for Prague', category: 'data_lookup' }),
+      ],
+      updatedAt: Date.now(),
+    };
+
+    const result = getRelevantSessions(history, 'Show me the GitHub repository');
+    expect(result).toHaveLength(1);
+    expect(result[0].topic).toContain('GitHub');
+  });
+
+  it('matches sessions by result keyword overlap', () => {
+    const history: SessionHistory = {
+      userId: 'u1',
+      sessions: [
+        makeSession({
+          topic: 'Some generic task',
+          resultSummary: 'Found 15 TypeScript files in the repository with authentication logic',
+        }),
+      ],
+      updatedAt: Date.now(),
+    };
+
+    const result = getRelevantSessions(history, 'Show me the authentication files');
+    expect(result).toHaveLength(1);
+  });
+
+  it('boosts recent sessions over older ones', () => {
+    const history: SessionHistory = {
+      userId: 'u1',
+      sessions: [
+        makeSession({ topic: 'Check the weather in Prague', timestamp: Date.now() - 7 * 86400000, category: 'data_lookup' }),
+        makeSession({ topic: 'Check the weather in Berlin', timestamp: Date.now() - 3600000, category: 'data_lookup' }),
+      ],
+      updatedAt: Date.now(),
+    };
+
+    const result = getRelevantSessions(history, 'What is the weather like?');
+    expect(result).toHaveLength(2);
+    expect(result[0].topic).toContain('Berlin'); // More recent, higher score
+  });
+
+  it('respects limit parameter', () => {
+    const history: SessionHistory = {
+      userId: 'u1',
+      sessions: [
+        makeSession({ topic: 'GitHub repo analysis one' }),
+        makeSession({ topic: 'GitHub repo analysis two' }),
+        makeSession({ topic: 'GitHub repo analysis three' }),
+        makeSession({ topic: 'GitHub repo analysis four' }),
+      ],
+      updatedAt: Date.now(),
+    };
+
+    const result = getRelevantSessions(history, 'GitHub repo analysis', 2);
+    expect(result).toHaveLength(2);
+  });
+
+  it('filters out irrelevant sessions (score 0)', () => {
+    const history: SessionHistory = {
+      userId: 'u1',
+      sessions: [
+        makeSession({ topic: 'Check the weather', resultSummary: 'Sunny 25C' }),
+      ],
+      updatedAt: Date.now(),
+    };
+
+    const result = getRelevantSessions(history, 'Explain quantum computing');
+    expect(result).toHaveLength(0);
+  });
+});
+
+// --- formatSessionsForPrompt ---
+
+describe('formatSessionsForPrompt', () => {
+  it('returns empty string for empty sessions', () => {
+    expect(formatSessionsForPrompt([])).toBe('');
+  });
+
+  it('formats sessions with header and continuity hint', () => {
+    const sessions = [makeSession({
+      topic: 'Analyze the GitHub repo',
+      resultSummary: 'Found 10 files with bugs',
+      success: true,
+      timestamp: Date.now() - 5 * 60000,
+    })];
+
+    const result = formatSessionsForPrompt(sessions);
+    expect(result).toContain('Recent session context');
+    expect(result).toContain('Analyze the GitHub repo');
+    expect(result).toContain('Found 10 files');
+    expect(result).toContain('OK');
+    expect(result).toContain('leverage this context');
+  });
+
+  it('shows FAILED for unsuccessful sessions', () => {
+    const sessions = [makeSession({ success: false })];
+    const result = formatSessionsForPrompt(sessions);
+    expect(result).toContain('FAILED');
+  });
+
+  it('truncates long result summaries to 150 chars', () => {
+    const sessions = [makeSession({ resultSummary: 'A'.repeat(300) })];
+    const result = formatSessionsForPrompt(sessions);
+    // The result substring should be 150 chars max
+    const match = result.match(/=> (A+)/);
+    expect(match).toBeTruthy();
+    expect(match![1].length).toBe(150);
+  });
+});
+
+// --- Updated storeLastTaskSummary with resultSummary ---
+
+describe('storeLastTaskSummary with resultSummary', () => {
+  it('stores resultSummary when provided', async () => {
+    const mockBucket = { put: vi.fn().mockResolvedValue(undefined) };
+    const learning: TaskLearning = {
+      taskId: 't1',
+      timestamp: Date.now(),
+      modelAlias: 'deep',
+      category: 'github',
+      toolsUsed: ['github_read_file'],
+      uniqueTools: ['github_read_file'],
+      iterations: 3,
+      durationMs: 10000,
+      success: true,
+      taskSummary: 'Test task',
+    };
+
+    await storeLastTaskSummary(mockBucket as unknown as R2Bucket, 'user1', learning, 'Here is the result of the task');
+
+    const stored = JSON.parse(mockBucket.put.mock.calls[0][1]);
+    expect(stored.resultSummary).toBe('Here is the result of the task');
+  });
+
+  it('truncates resultSummary to 500 chars', async () => {
+    const mockBucket = { put: vi.fn().mockResolvedValue(undefined) };
+    const learning: TaskLearning = {
+      taskId: 't1',
+      timestamp: Date.now(),
+      modelAlias: 'deep',
+      category: 'github',
+      toolsUsed: [],
+      uniqueTools: [],
+      iterations: 1,
+      durationMs: 5000,
+      success: true,
+      taskSummary: 'Test',
+    };
+
+    await storeLastTaskSummary(mockBucket as unknown as R2Bucket, 'user1', learning, 'R'.repeat(1000));
+
+    const stored = JSON.parse(mockBucket.put.mock.calls[0][1]);
+    expect(stored.resultSummary.length).toBe(500);
+  });
+
+  it('stores undefined resultSummary when not provided', async () => {
+    const mockBucket = { put: vi.fn().mockResolvedValue(undefined) };
+    const learning: TaskLearning = {
+      taskId: 't1',
+      timestamp: Date.now(),
+      modelAlias: 'deep',
+      category: 'simple_chat',
+      toolsUsed: [],
+      uniqueTools: [],
+      iterations: 1,
+      durationMs: 5000,
+      success: true,
+      taskSummary: 'Test',
+    };
+
+    await storeLastTaskSummary(mockBucket as unknown as R2Bucket, 'user1', learning);
+
+    const stored = JSON.parse(mockBucket.put.mock.calls[0][1]);
+    expect(stored.resultSummary).toBeUndefined();
+  });
+});
+
+// --- Updated formatLastTaskForPrompt with resultSummary ---
+
+describe('formatLastTaskForPrompt with resultSummary', () => {
+  it('includes result snippet when resultSummary is present', () => {
+    const summary: LastTaskSummary = {
+      taskSummary: 'Analyze repo',
+      resultSummary: 'Found 5 critical issues in the codebase',
+      category: 'github',
+      toolsUsed: ['github_read_file'],
+      success: true,
+      modelAlias: 'deep',
+      completedAt: Date.now() - 5 * 60000,
+    };
+
+    const result = formatLastTaskForPrompt(summary);
+    expect(result).toContain('Previous task');
+    expect(result).toContain('Result: Found 5 critical issues');
+  });
+
+  it('omits result line when resultSummary is absent', () => {
+    const summary: LastTaskSummary = {
+      taskSummary: 'Simple chat',
+      category: 'simple_chat',
+      toolsUsed: [],
+      success: true,
+      modelAlias: 'gpt',
+      completedAt: Date.now() - 5 * 60000,
+    };
+
+    const result = formatLastTaskForPrompt(summary);
+    expect(result).toContain('Previous task');
+    expect(result).not.toContain('Result:');
   });
 });
