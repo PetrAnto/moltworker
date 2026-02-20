@@ -1048,17 +1048,18 @@ describe('Test 18 — /help and /start message verification', () => {
     }
   });
 
-  // Verify the /help message lists all 14 tools by name
+  // Verify the /help message lists all 15 tools by name
   it('should list each tool individually in the new /help format', () => {
     // The new help message lists each tool as a bullet point
     const helpToolSection = [
       'get_weather', 'get_crypto', 'convert_currency', 'fetch_news',
+      'web_search',
       'fetch_url', 'browse_url', 'url_metadata', 'generate_chart',
       'geolocate_ip', 'github_read_file', 'github_list_files', 'github_api',
       'github_create_pr', 'sandbox_exec',
     ];
-    // All 14 are individually named
-    expect(helpToolSection.length).toBe(14);
+    // All 15 are individually named
+    expect(helpToolSection.length).toBe(15);
   });
 
   // Verify /help mentions key features

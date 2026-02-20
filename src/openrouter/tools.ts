@@ -261,6 +261,27 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'web_search',
+      description: 'Search the web for current information. Returns titles, URLs, and snippets from top results.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search query to look up on the web',
+          },
+          num_results: {
+            type: 'string',
+            description: 'Number of results to return (default: 5, max: 10)',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'convert_currency',
       description: 'Convert between currencies using live exchange rates. Supports 150+ currencies including USD, EUR, GBP, CZK, JPY, etc.',
       parameters: {
@@ -319,27 +340,6 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
           },
         },
         required: ['ip'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'web_search',
-      description: 'Search the web for current information. Returns titles, URLs, and snippets from top results.',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'Search query to look up on the web',
-          },
-          num_results: {
-            type: 'string',
-            description: 'Number of results to return (default: 5, max: 10)',
-          },
-        },
-        required: ['query'],
       },
     },
   },
@@ -483,6 +483,9 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
       case 'fetch_news':
         result = await fetchNews(args.source, args.topic);
         break;
+      case 'web_search':
+        result = await webSearch(args.query, args.num_results, context?.braveSearchKey);
+        break;
       case 'convert_currency':
         result = await convertCurrency(args.from, args.to, args.amount);
         break;
@@ -491,9 +494,6 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         break;
       case 'geolocate_ip':
         result = await geolocateIp(args.ip);
-        break;
-      case 'web_search':
-        result = await webSearch(args.query, args.num_results, context?.braveSearchKey);
         break;
       case 'browse_url':
         result = await browseUrl(args.url, args.action as 'extract_text' | 'screenshot' | 'pdf' | undefined, args.wait_for, context?.browser);

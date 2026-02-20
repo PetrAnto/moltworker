@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, type SandboxLike, type SandboxProcess } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, type SandboxLike, type SandboxProcess } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -2397,14 +2397,12 @@ describe('web_search tool', () => {
   });
 
   it('should invalidate cache after TTL', async () => {
+    vi.useFakeTimers();
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ web: { results: [{ title: 'TTL', url: 'https://example.com/ttl', description: 'ttl snippet' }] } }),
     });
     vi.stubGlobal('fetch', mockFetch);
-
-    const nowSpy = vi.spyOn(Date, 'now');
-    nowSpy.mockReturnValue(1000);
 
     await executeTool({
       id: 'web_7a',
@@ -2415,7 +2413,7 @@ describe('web_search tool', () => {
       },
     }, { braveSearchKey: 'brave-key' });
 
-    nowSpy.mockReturnValue(1000 + 5 * 60 * 1000 + 1);
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 
     await executeTool({
       id: 'web_7b',
@@ -2427,6 +2425,7 @@ describe('web_search tool', () => {
     }, { braveSearchKey: 'brave-key' });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });
 
