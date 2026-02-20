@@ -334,6 +334,83 @@
   filter: brightness(1.1);
 }
 
+
+/* Acontext section */
+.acontext-section {
+  border-left: 3px solid #6366f1;
+}
+
+.acontext-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.acontext-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(120px, 1fr) 2fr auto auto;
+  gap: 0.75rem;
+  align-items: center;
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: 0.625rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.status-chip.success {
+  background: rgba(74, 222, 128, 0.2);
+  color: var(--success-color);
+}
+
+.status-chip.failure {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--error-color);
+}
+
+.status-chip.unknown {
+  background: rgba(148, 163, 184, 0.2);
+  color: var(--text-muted);
+}
+
+.session-age,
+.session-model,
+.session-tools {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.session-model,
+.session-prompt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-prompt {
+  color: var(--text-primary);
+}
+
+.session-link {
+  color: var(--primary-color);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.session-link:hover {
+  text-decoration: underline;
+}
+
 /* Responsive adjustments */
 @media (max-width: 640px) {
   .devices-section {
@@ -348,4 +425,20 @@
   .devices-grid {
     grid-template-columns: 1fr;
   }
+
+  .acontext-row {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "status age link"
+      "model model model"
+      "prompt prompt prompt"
+      "tools tools tools";
+  }
+
+  .acontext-row .status-chip { grid-area: status; }
+  .acontext-row .session-age { grid-area: age; }
+  .acontext-row .session-link { grid-area: link; justify-self: end; }
+  .acontext-row .session-model { grid-area: model; }
+  .acontext-row .session-prompt { grid-area: prompt; }
+  .acontext-row .session-tools { grid-area: tools; }
 }

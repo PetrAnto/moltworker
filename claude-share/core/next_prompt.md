@@ -3,38 +3,38 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-19 (Phase 4.1 audit hardening complete)
+**Last Updated:** 2026-02-20 (Phase 2.4 Acontext dashboard section complete)
 
 ---
 
-## Current Task: Phase 4.2 — Replace estimateTokens with actual tokenizer
+## Current Task: Audit Phase 2 — P2 guardrails (multi-agent review + tool result validation)
 
 ### Goal
 
-Replace heuristic token estimation with a real tokenizer path (preferably `js-tiktoken`) that is compatible with Cloudflare Workers, while keeping a safe fallback.
+Audit and harden Phase 2 guardrails around tool result validation, with a focus on preventing malformed/unsafe tool outputs from polluting task state across agents.
 
 ### Context
 
-- Phase 4.1 is complete and now audited/hardened
-- `src/durable-objects/context-budget.ts` currently uses heuristic estimates
-- Audit doc: `brainstorming/phase-4.1-audit.md`
-- Goal is tighter budget correctness with real token counts
+- Phase 2.4 (Acontext admin dashboard section) is now complete
+- Observability + costs are in place; next step is hardening P2 guardrails
+- Emphasize multi-agent safety and deterministic validation behavior
+- Keep behavior Worker-compatible and fully test-covered
 
 ### Files to Modify
 
 | File | What to change |
 |------|---------------|
-| `src/durable-objects/context-budget.ts` | Integrate exact tokenizer-backed counting path |
-| `src/durable-objects/task-processor.ts` | Keep per-model budgeting aligned with exact counts |
-| Tests | Add/adjust tests for tokenizer-backed estimates + fallback behavior |
+| `src/openrouter/tools.ts` | Tighten tool output validation and sanitization paths |
+| `src/durable-objects/task-processor.ts` | Enforce stricter tool-result handling in DO flow |
+| Tests | Add/adjust tests for malformed, oversized, and unsafe tool result cases |
 
 ### Queue After This Task
 
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
-| Current | 4.2: Replace estimateTokens with actual tokenizer | Medium | Prefer `js-tiktoken` if Worker-compatible |
-| Next | 2.4: Acontext dashboard link in admin UI | Low | Read-only integration |
-| Then | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
+| Current | Audit Phase 2: P2 guardrails | Medium | Multi-agent review + tool result validation |
+| Next | 4.2: Replace estimateTokens with actual tokenizer | Medium | Prefer `js-tiktoken` if Worker-compatible |
+| Then | Phase 5.1: Multi-agent review enhancements | Medium | Dependent on P2 outcomes |
 
 ---
 
@@ -42,6 +42,7 @@ Replace heuristic token estimation with a real tokenizer path (preferably `js-ti
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-20 | Phase 2.4: Acontext dashboard link in admin UI | Codex (GPT-5.2-Codex) | codex-phase-2-4-acontext-001 |
 | 2026-02-19 | Phase 4.1 Audit: context-budget hardening + edge-case tests | Codex (GPT-5.2-Codex) | codex-phase-4-1-audit-001 |
 | 2026-02-18 | Phase 4.1: Token-budgeted context retrieval | Claude Opus 4.6 | 018M5goT7Vhaymuo8AxXhUCg |
 | 2026-02-18 | Phase 2.5.9: Holiday awareness (Nager.Date) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |
