@@ -24,6 +24,7 @@ export interface MoltbotEnv {
   // Legacy direct provider configuration (fallback)
   ANTHROPIC_API_KEY?: string;
   OPENROUTER_API_KEY?: string;
+  BRAVE_SEARCH_KEY?: string;
   ANTHROPIC_BASE_URL?: string;
   OPENAI_API_KEY?: string;
   MOLTBOT_GATEWAY_TOKEN?: string; // Gateway token (mapped to OPENCLAW_GATEWAY_TOKEN for container)

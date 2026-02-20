@@ -61,6 +61,7 @@ export interface SandboxLike {
  */
 export interface ToolContext {
   githubToken?: string;
+  braveSearchKey?: string;
   browser?: Fetcher; // Cloudflare Browser Rendering binding
   sandbox?: SandboxLike; // Sandbox container for code execution
 }
@@ -254,6 +255,27 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
           },
         },
         required: ['source'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the web for current information. Returns titles, URLs, and snippets from top results.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search query to look up on the web',
+          },
+          num_results: {
+            type: 'string',
+            description: 'Optional number of results to return (default: 5, max: 10)',
+          },
+        },
+        required: ['query'],
       },
     },
   },
@@ -460,6 +482,9 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         break;
       case 'fetch_news':
         result = await fetchNews(args.source, args.topic);
+        break;
+      case 'web_search':
+        result = await webSearch(args.query, args.num_results, context?.braveSearchKey);
         break;
       case 'convert_currency':
         result = await convertCurrency(args.from, args.to, args.amount);
@@ -1902,6 +1927,74 @@ async function fetchArxiv(category: string): Promise<string> {
 interface ExchangeRateCache {
   rates: Record<string, number>;
   timestamp: number;
+}
+
+interface WebSearchCache {
+  data: string;
+  timestamp: number;
+}
+
+const WEB_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const webSearchCache: Map<string, WebSearchCache> = new Map();
+
+export function clearWebSearchCache(): void {
+  webSearchCache.clear();
+}
+
+async function webSearch(query: string, numResults = '5', apiKey?: string): Promise<string> {
+  if (!apiKey) {
+    return 'Web search requires a Brave Search API key. Set BRAVE_SEARCH_KEY in worker secrets.';
+  }
+
+  const parsedCount = parseInt(numResults || '5', 10);
+  const count = Number.isNaN(parsedCount) ? 5 : Math.min(Math.max(parsedCount, 1), 10);
+  const cacheKey = `${query}:${count}`;
+  const cached = webSearchCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < WEB_SEARCH_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const endpoint = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
+  const response = await fetch(endpoint, {
+    headers: {
+      'Accept': 'application/json',
+      'Accept-Encoding': 'gzip',
+      'X-Subscription-Token': apiKey,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    return errorText || `Brave Search API error: HTTP ${response.status}`;
+  }
+
+  const data = await response.json() as {
+    web?: {
+      results?: Array<{
+        title?: string;
+        url?: string;
+        description?: string;
+      }>;
+    };
+  };
+
+  const results = data.web?.results ?? [];
+  let output: string;
+
+  if (results.length === 0) {
+    output = `No web search results found for query: ${query}`;
+  } else {
+    output = results
+      .map((result, index) => `${index + 1}. **${result.title || 'Untitled'}** (${result.url || 'No URL'})\n${result.description || 'No description available'}\n`)
+      .join('\n');
+  }
+
+  if (output.length > 20000) {
+    output = output.slice(0, 20000) + '\n\n[Content truncated - exceeded 20KB]';
+  }
+
+  webSearchCache.set(cacheKey, { data: output, timestamp: Date.now() });
+  return output;
 }
 
 const EXCHANGE_RATE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes

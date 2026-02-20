@@ -5,6 +5,44 @@
 ---
 
 
+
+## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Added a Brave Search-powered `web_search` tool with caching and wired Brave API key flow through Telegram → TaskProcessor → tool execution.
+
+### Changes Made
+- Added `web_search` tool definition and execution with 5-minute cache + 20KB truncation
+- Extended task/request context with `braveSearchKey` and enabled `web_search` for parallel-safe execution
+- Added Telegram/env plumbing for `BRAVE_SEARCH_KEY`
+- Added comprehensive web_search tests and updated tool-count expectations
+
+### Files Modified
+- `src/openrouter/tools.ts`
+- `src/openrouter/tools.test.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/telegram/handler.ts`
+- `src/routes/telegram.ts`
+- `src/types.ts`
+- `src/openrouter/briefing-aggregator.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Proceed with Phase 4.3 cache improvements or add web_search mention to user-facing docs if desired.
+
+---
+
 ## Session: 2026-02-19 | Phase 4.1 context-budget audit hardening (Session: codex-phase-4-1-audit-001)
 
 **AI:** Codex (GPT-5.2-Codex)

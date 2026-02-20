@@ -57,6 +57,7 @@ export const PARALLEL_SAFE_TOOLS = new Set([
   'github_read_file',
   'github_list_files',
   'fetch_news',
+  'web_search',
   'convert_currency',
   'geolocate_ip',
   'url_metadata',
@@ -145,6 +146,7 @@ interface TaskState {
   statusMessageId?: number;
   telegramToken?: string; // Store for cancel
   openrouterKey?: string; // Store for alarm recovery
+  braveSearchKey?: string; // Store for alarm recovery
   githubToken?: string; // Store for alarm recovery
   // Direct provider API keys for alarm recovery
   dashscopeKey?: string;
@@ -174,6 +176,7 @@ export interface TaskRequest {
   messages: ChatMessage[];
   telegramToken: string;
   openrouterKey: string;
+  braveSearchKey?: string;
   githubToken?: string;
   // Direct API keys (optional)
   dashscopeKey?: string;   // For Qwen (DashScope/Alibaba)
@@ -430,6 +433,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         messages: task.messages,
         telegramToken: task.telegramToken,
         openrouterKey: task.openrouterKey,
+        braveSearchKey: task.braveSearchKey,
         githubToken: task.githubToken,
         // Include direct provider API keys for resume
         dashscopeKey: task.dashscopeKey,
@@ -752,6 +756,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Store credentials for cancel and alarm recovery
     task.telegramToken = request.telegramToken;
     task.openrouterKey = request.openrouterKey;
+    task.braveSearchKey = request.braveSearchKey;
     task.githubToken = request.githubToken;
     // Store direct provider API keys for alarm recovery
     task.dashscopeKey = request.dashscopeKey;
@@ -792,7 +797,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     await this.doState.storage.put('task', task);
 
     const client = createOpenRouterClient(request.openrouterKey);
-    const toolContext: ToolContext = { githubToken: request.githubToken };
+    const toolContext: ToolContext = {
+      githubToken: request.githubToken,
+      braveSearchKey: request.braveSearchKey,
+    };
 
     // Capability-aware free model rotation: prioritize models matching the task type
     const freeModels = getFreeToolModels();

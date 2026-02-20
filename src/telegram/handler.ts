@@ -480,6 +480,7 @@ export class TelegramHandler {
   private githubToken?: string; // GitHub token for tool calls
   private telegramToken: string; // Store for DO
   private openrouterKey: string; // Store for DO
+  private braveSearchKey: string; // Store for DO
   private taskProcessor?: DurableObjectNamespace<TaskProcessor>; // For long-running tasks
   private browser?: Fetcher; // Browser binding for browse_url tool
   private sandbox?: SandboxLike; // Sandbox container for sandbox_exec tool
@@ -495,6 +496,7 @@ export class TelegramHandler {
   constructor(
     telegramToken: string,
     openrouterKey: string,
+    braveSearchKey: string,
     r2Bucket: R2Bucket,
     workerUrl?: string,
     defaultSkill: string = 'storia-orchestrator',
@@ -518,6 +520,7 @@ export class TelegramHandler {
     this.githubToken = githubToken;
     this.telegramToken = telegramToken;
     this.openrouterKey = openrouterKey;
+    this.braveSearchKey = braveSearchKey;
     this.taskProcessor = taskProcessor;
     this.browser = browser;
     this.sandbox = sandbox;
@@ -1617,6 +1620,7 @@ export class TelegramHandler {
       messages,
       telegramToken: this.telegramToken,
       openrouterKey: this.openrouterKey,
+      braveSearchKey: this.braveSearchKey,
       githubToken: this.githubToken,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
@@ -1849,6 +1853,7 @@ export class TelegramHandler {
             messages,
             telegramToken: this.telegramToken,
             openrouterKey: this.openrouterKey,
+            braveSearchKey: this.braveSearchKey,
             githubToken: this.githubToken,
             dashscopeKey: this.dashscopeKey,
             moonshotKey: this.moonshotKey,
@@ -1981,6 +1986,7 @@ export class TelegramHandler {
       messages,
       telegramToken: this.telegramToken,
       openrouterKey: this.openrouterKey,
+      braveSearchKey: this.braveSearchKey,
       githubToken: this.githubToken,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
@@ -2044,6 +2050,7 @@ export class TelegramHandler {
       messages,
       telegramToken: this.telegramToken,
       openrouterKey: this.openrouterKey,
+      braveSearchKey: this.braveSearchKey,
       githubToken: this.githubToken,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
@@ -2153,6 +2160,7 @@ export class TelegramHandler {
           messages,
           telegramToken: this.telegramToken,
           openrouterKey: this.openrouterKey,
+          braveSearchKey: this.braveSearchKey,
           githubToken: this.githubToken,
           dashscopeKey: this.dashscopeKey,
           moonshotKey: this.moonshotKey,
@@ -2469,6 +2477,7 @@ export class TelegramHandler {
               messages,
               telegramToken: this.telegramToken,
               openrouterKey: this.openrouterKey,
+              braveSearchKey: this.braveSearchKey,
               githubToken: this.githubToken,
               dashscopeKey: this.dashscopeKey,
               moonshotKey: this.moonshotKey,
@@ -3366,6 +3375,7 @@ Models with vision: gpt, sonnet, haiku, flash, geminipro, kimi, kimidirect`;
 export function createTelegramHandler(
   telegramToken: string,
   openrouterKey: string,
+  braveSearchKey: string,
   r2Bucket: R2Bucket,
   workerUrl?: string,
   defaultSkill?: string,
@@ -3383,6 +3393,7 @@ export function createTelegramHandler(
   return new TelegramHandler(
     telegramToken,
     openrouterKey,
+    braveSearchKey,
     r2Bucket,
     workerUrl,
     defaultSkill,

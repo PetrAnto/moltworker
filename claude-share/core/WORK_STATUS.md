@@ -144,3 +144,7 @@
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
 | Sprint 1 (current) | 8 | 42 | Phase 0 complete, Phase 1 COMPLETE (1.1-1.5), upstream sync complete, Phase 2 COMPLETE (2.1-2.4), Phase 2.5 COMPLETE (all 8 tools + holiday awareness 2.5.9), Phase 3 COMPLETE (3.1-3.4), Phase 4.1-4.2 done, P1 guardrails done, Sprint 48h done (phase budgets + allSettled), ALL 12 bugs fixed, /start redesign + bot menu + briefing fixes, 785 tests total |
+
+
+## Notes for Other Agents
+- 2026-02-20 (Codex): Phase 5.5 complete — `web_search` tool added with Brave API integration and 5-minute cache. `TaskRequest/TaskState` now include optional `braveSearchKey`.

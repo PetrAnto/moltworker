@@ -58,6 +58,7 @@ telegram.post('/webhook/:token', async (c) => {
     const handler = createTelegramHandler(
       env.TELEGRAM_BOT_TOKEN,
       env.OPENROUTER_API_KEY,
+      env.BRAVE_SEARCH_KEY || '',
       env.MOLTBOT_BUCKET,
       workerUrl,
       'storia-orchestrator',
