@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-18 (Phase 4.1 Token-budgeted context retrieval)
+**Last Updated:** 2026-02-20 (Phase 2.4 Acontext dashboard section)
 
 ---
 
@@ -46,7 +46,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | Phase 4.1 Token-budgeted context retrieval complete | `claude/implement-p1-guardrails-NF641` | 2026-02-18 |
-| Codex | — | — | — |
+| Codex | Phase 2.4 Acontext dashboard section | `codex/acontext-dashboard-link-p24` | 2026-02-20 |
 | Other | — | — | — |
 
 ---
@@ -55,6 +55,7 @@
 
 | Task ID | Description | Completed By | Date | Branch |
 |---------|-------------|-------------|------|--------|
+| 2.4 | Acontext dashboard link in admin UI | Codex (GPT-5.2-Codex) | 2026-02-20 | `codex/acontext-dashboard-link-p24` |
 | 0.1 | Enable Gemini Flash tool support | Previous PR | 2026-02-06 | main |
 | 0.2 | Add GPT-OSS-120B model | Claude Opus 4.6 | 2026-02-07 | `claude/analyze-tool-calling-5ee5w` |
 | 0.3 | Add GLM 4.7 model | Claude Opus 4.6 | 2026-02-07 | `claude/analyze-tool-calling-5ee5w` |
@@ -126,8 +127,8 @@
 > Ordered by priority. Next AI session should pick the top item.
 
 1. **Phase 4.2** — Replace estimateTokens with actual tokenizer
-2. **Phase 2.4** — Acontext dashboard link in admin UI
-3. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+2. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+3. **Phase 5.1** — Multi-agent review enhancements (if P2 unlocks)
 
 ---
 

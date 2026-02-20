@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { createAccessMiddleware } from '../auth';
+import { createAcontextClient } from '../acontext/client';
 import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2, waitForProcess } from '../gateway';
 
 // CLI commands can take 10-15 seconds to complete due to WebSocket connection overhead
@@ -209,6 +210,35 @@ adminApi.get('/storage', async (c) => {
       ? 'R2 storage is configured. Your data will persist across container restarts.'
       : 'R2 storage is not configured. Paired devices and conversations will be lost when the container restarts.',
   });
+});
+
+// GET /api/admin/acontext/sessions - List recent Acontext sessions
+adminApi.get('/acontext/sessions', async (c) => {
+  const acontext = createAcontextClient(c.env.ACONTEXT_API_KEY);
+
+  if (!acontext) {
+    return c.json({ items: [], configured: false });
+  }
+
+  try {
+    const response = await acontext.listSessions({ limit: 10, timeDesc: true });
+    const items = response.items.map((session) => {
+      const configs = session.configs || {};
+      return {
+        id: session.id,
+        model: typeof configs.model === 'string' ? configs.model : 'unknown',
+        prompt: typeof configs.prompt === 'string' ? configs.prompt : '',
+        toolsUsed: typeof configs.toolsUsed === 'number' ? configs.toolsUsed : 0,
+        success: typeof configs.success === 'boolean' ? configs.success : null,
+        createdAt: session.created_at,
+      };
+    });
+
+    return c.json({ items, configured: true });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: errorMessage }, 500);
+  }
 });
 
 // POST /api/admin/storage/sync - Trigger a manual sync to R2
