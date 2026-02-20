@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-02-20 (Phase budget circuit breakers + parallel tools upgrade)
+**Last Updated:** 2026-02-20 (Phase 2.4 Acontext admin dashboard section complete)
 
 ---
 
@@ -85,7 +85,7 @@
 | 2.1 | Add token/cost tracking per request | ✅ | Claude | `costs.ts` — pricing parser, per-user daily accumulation, cost footer on responses |
 | 2.2 | Add `/costs` Telegram command | ✅ | Claude | `/costs` today + `/costs week` 7-day breakdown, integrated with Phase 2.1 |
 | 2.3 | Integrate Acontext observability (Phase 1) | ✅ | Claude | Lightweight REST client, session storage at task completion, /sessions command |
-| 2.4 | Add Acontext dashboard link to admin UI | 🔲 | Codex | Low-risk, read-only integration |
+| 2.4 | Add Acontext dashboard link to admin UI | ✅ | Codex | Read-only sessions section + admin API endpoint + tests |
 
 > 🧑 HUMAN CHECK 2.5: Set up Acontext account and configure API key — ✅ DONE (2026-02-11)
 > 🧑 HUMAN CHECK 2.6: Review cost tracking accuracy against OpenRouter billing — ⏳ PENDING
@@ -221,6 +221,7 @@
 
 ## Changelog
 
+2026-02-20 | Codex (GPT-5.2-Codex) (Session: codex-phase-2-4-acontext-001) | feat(admin): add Acontext sessions dashboard section with admin API + UI styling + tests | src/routes/api.ts, src/routes/api.acontext.test.ts, src/client/api.ts, src/client/pages/AdminPage.tsx, src/client/pages/AdminPage.css, src/admin-page-acontext.test.ts
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```

@@ -5,6 +5,42 @@
 ---
 
 
+## Session: 2026-02-20 | Phase 2.4 Acontext dashboard section (Session: codex-phase-2-4-acontext-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** codex/acontext-dashboard-link-p24
+**Status:** Completed
+
+### Summary
+Added a read-only Acontext Sessions section to the admin dashboard with backend API support and tests.
+
+### Changes Made
+- Added `GET /api/admin/acontext/sessions` endpoint with graceful fallback when Acontext is not configured
+- Added admin client types + fetch function for Acontext sessions
+- Added dashboard UI section, status badges, prompt truncation, and external session links
+- Added route and UI-focused tests for the new functionality
+
+### Files Modified
+- `src/routes/api.ts`
+- `src/routes/api.acontext.test.ts`
+- `src/client/api.ts`
+- `src/client/pages/AdminPage.tsx`
+- `src/client/pages/AdminPage.css`
+- `src/admin-page-acontext.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Return to Phase 4.2 (tokenizer-backed context budgeting) as top priority; Phase 2.4 is now complete.
+
+---
+
 ## Session: 2026-02-19 | Phase 4.1 context-budget audit hardening (Session: codex-phase-4-1-audit-001)
 
 **AI:** Codex (GPT-5.2-Codex)

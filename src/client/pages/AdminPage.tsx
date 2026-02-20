@@ -6,23 +6,34 @@ import {
   restartGateway,
   getStorageStatus,
   triggerSync,
+  getAcontextSessions,
   AuthError,
   type PendingDevice,
   type PairedDevice,
   type DeviceListResponse,
   type StorageStatusResponse,
+  type AcontextSessionInfo,
+  type AcontextSessionsResponse,
 } from '../api'
 import './AdminPage.css'
+
+const ACONTEXT_DASHBOARD_BASE_URL = 'https://platform.acontext.com/sessions'
 
 // Small inline spinner for buttons
 function ButtonSpinner() {
   return <span className="btn-spinner" />
 }
 
+function formatPrompt(prompt: string, maxLength = 60): string {
+  if (prompt.length <= maxLength) return prompt
+  return `${prompt.slice(0, maxLength).trimEnd()}…`
+}
+
 export default function AdminPage() {
   const [pending, setPending] = useState<PendingDevice[]>([])
   const [paired, setPaired] = useState<PairedDevice[]>([])
   const [storageStatus, setStorageStatus] = useState<StorageStatusResponse | null>(null)
+  const [acontextSessions, setAcontextSessions] = useState<AcontextSessionsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
@@ -35,7 +46,7 @@ export default function AdminPage() {
       const data: DeviceListResponse = await listDevices()
       setPending(data.pending || [])
       setPaired(data.paired || [])
-      
+
       if (data.error) {
         setError(data.error)
       } else if (data.parseError) {
@@ -62,10 +73,20 @@ export default function AdminPage() {
     }
   }, [])
 
+  const fetchAcontextSessions = useCallback(async () => {
+    try {
+      const sessions = await getAcontextSessions()
+      setAcontextSessions(sessions)
+    } catch (err) {
+      console.error('Failed to fetch Acontext sessions:', err)
+    }
+  }, [])
+
   useEffect(() => {
     fetchDevices()
     fetchStorageStatus()
-  }, [fetchDevices, fetchStorageStatus])
+    fetchAcontextSessions()
+  }, [fetchDevices, fetchStorageStatus, fetchAcontextSessions])
 
   const handleApprove = async (requestId: string) => {
     setActionInProgress(requestId)
@@ -86,7 +107,7 @@ export default function AdminPage() {
 
   const handleApproveAll = async () => {
     if (pending.length === 0) return
-    
+
     setActionInProgress('all')
     try {
       const result = await approveAllDevices()
@@ -106,7 +127,7 @@ export default function AdminPage() {
     if (!confirm('Are you sure you want to restart the gateway? This will disconnect all clients temporarily.')) {
       return
     }
-    
+
     setRestartInProgress(true)
     try {
       const result = await restartGateway()
@@ -166,6 +187,24 @@ export default function AdminPage() {
     if (hours < 24) return `${hours}h ago`
     const days = Math.floor(hours / 24)
     return `${days}d ago`
+  }
+
+  const formatSessionAge = (createdAt: string) => {
+    const ts = Date.parse(createdAt)
+    if (Number.isNaN(ts)) return createdAt
+    return formatTimeAgo(ts)
+  }
+
+  const renderSessionStatus = (session: AcontextSessionInfo) => {
+    if (session.success === true) {
+      return <span className="session-status success">✓</span>
+    }
+
+    if (session.success === false) {
+      return <span className="session-status failure">✗</span>
+    }
+
+    return <span className="session-status unknown">?</span>
   }
 
   return (
@@ -236,6 +275,44 @@ export default function AdminPage() {
         </p>
       </section>
 
+      <section className="devices-section acontext-section">
+        <div className="section-header">
+          <h2>Acontext Sessions</h2>
+        </div>
+
+        {acontextSessions?.configured === false && (
+          <p className="hint">Acontext not configured — add ACONTEXT_API_KEY</p>
+        )}
+
+        {acontextSessions?.configured && acontextSessions.items.length === 0 && (
+          <div className="empty-state">
+            <p>No recent sessions</p>
+          </div>
+        )}
+
+        {acontextSessions?.configured && acontextSessions.items.length > 0 && (
+          <div className="acontext-list">
+            {acontextSessions.items.map((session) => (
+              <div className="acontext-item" key={session.id}>
+                <span className="acontext-cell status">{renderSessionStatus(session)}</span>
+                <span className="acontext-cell age" title={session.createdAt}>{formatSessionAge(session.createdAt)}</span>
+                <span className="acontext-cell model" title={session.model}>{session.model}</span>
+                <span className="acontext-cell prompt" title={session.prompt}>{formatPrompt(session.prompt || '(no prompt)')}</span>
+                <span className="acontext-cell tools">{session.toolsUsed} tools</span>
+                <a
+                  className="acontext-cell link"
+                  href={`${ACONTEXT_DASHBOARD_BASE_URL}/${session.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open
+                </a>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {loading ? (
         <div className="loading">
           <div className="spinner"></div>
@@ -244,154 +321,156 @@ export default function AdminPage() {
       ) : (
         <>
           <section className="devices-section">
-        <div className="section-header">
-          <h2>Pending Pairing Requests</h2>
-          <div className="header-actions">
-            {pending.length > 0 && (
-              <button
-                className="btn btn-primary"
-                onClick={handleApproveAll}
-                disabled={actionInProgress !== null}
-              >
-                {actionInProgress === 'all' && <ButtonSpinner />}
-                {actionInProgress === 'all' ? 'Approving...' : `Approve All (${pending.length})`}
-              </button>
-            )}
-            <button className="btn btn-secondary" onClick={fetchDevices} disabled={loading}>
-              Refresh
-            </button>
-          </div>
-        </div>
-
-        {pending.length === 0 ? (
-          <div className="empty-state">
-            <p>No pending pairing requests</p>
-            <p className="hint">
-              Devices will appear here when they attempt to connect without being paired.
-            </p>
-          </div>
-        ) : (
-          <div className="devices-grid">
-            {pending.map((device) => (
-              <div key={device.requestId} className="device-card pending">
-                <div className="device-header">
-                  <span className="device-name">
-                    {device.displayName || device.deviceId || 'Unknown Device'}
-                  </span>
-                  <span className="device-badge pending">Pending</span>
-                </div>
-                <div className="device-details">
-                  {device.platform && (
-                    <div className="detail-row">
-                      <span className="label">Platform:</span>
-                      <span className="value">{device.platform}</span>
-                    </div>
-                  )}
-                  {device.clientId && (
-                    <div className="detail-row">
-                      <span className="label">Client:</span>
-                      <span className="value">{device.clientId}</span>
-                    </div>
-                  )}
-                  {device.clientMode && (
-                    <div className="detail-row">
-                      <span className="label">Mode:</span>
-                      <span className="value">{device.clientMode}</span>
-                    </div>
-                  )}
-                  {device.role && (
-                    <div className="detail-row">
-                      <span className="label">Role:</span>
-                      <span className="value">{device.role}</span>
-                    </div>
-                  )}
-                  {device.remoteIp && (
-                    <div className="detail-row">
-                      <span className="label">IP:</span>
-                      <span className="value">{device.remoteIp}</span>
-                    </div>
-                  )}
-                  <div className="detail-row">
-                    <span className="label">Requested:</span>
-                    <span className="value" title={formatTimestamp(device.ts)}>
-                      {formatTimeAgo(device.ts)}
-                    </span>
-                  </div>
-                </div>
-                <div className="device-actions">
+            <div className="section-header">
+              <h2>Pending Pairing Requests</h2>
+              <div className="header-actions">
+                {pending.length > 0 && (
                   <button
-                    className="btn btn-success"
-                    onClick={() => handleApprove(device.requestId)}
+                    className="btn btn-primary"
+                    onClick={handleApproveAll}
                     disabled={actionInProgress !== null}
                   >
-                    {actionInProgress === device.requestId && <ButtonSpinner />}
-                    {actionInProgress === device.requestId ? 'Approving...' : 'Approve'}
+                    {actionInProgress === 'all' && <ButtonSpinner />}
+                    {actionInProgress === 'all' ? 'Approving...' : `Approve All (${pending.length})`}
                   </button>
-                </div>
+                )}
+                <button className="btn btn-secondary" onClick={fetchDevices} disabled={loading}>
+                  Refresh
+                </button>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+            </div>
 
-      <section className="devices-section">
-        <div className="section-header">
-          <h2>Paired Devices</h2>
-        </div>
-
-        {paired.length === 0 ? (
-          <div className="empty-state">
-            <p>No paired devices</p>
-          </div>
-        ) : (
-          <div className="devices-grid">
-            {paired.map((device, index) => (
-              <div key={device.deviceId || index} className="device-card paired">
-                <div className="device-header">
-                  <span className="device-name">
-                    {device.displayName || device.deviceId || 'Unknown Device'}
-                  </span>
-                  <span className="device-badge paired">Paired</span>
-                </div>
-                <div className="device-details">
-                  {device.platform && (
-                    <div className="detail-row">
-                      <span className="label">Platform:</span>
-                      <span className="value">{device.platform}</span>
+            {pending.length === 0 ? (
+              <div className="empty-state">
+                <p>No pending pairing requests</p>
+                <p className="hint">
+                  Devices will appear here when they attempt to connect without being paired.
+                </p>
+              </div>
+            ) : (
+              <div className="devices-grid">
+                {pending.map((device) => (
+                  <div key={device.requestId} className="device-card pending">
+                    <div className="device-header">
+                      <span className="device-name">
+                        {device.displayName || device.deviceId || 'Unknown Device'}
+                      </span>
+                      <span className="device-badge pending">Pending</span>
                     </div>
-                  )}
-                  {device.clientId && (
-                    <div className="detail-row">
-                      <span className="label">Client:</span>
-                      <span className="value">{device.clientId}</span>
+                    <div className="device-details">
+                      {device.platform && (
+                        <div className="detail-row">
+                          <span className="label">Platform:</span>
+                          <span className="value">{device.platform}</span>
+                        </div>
+                      )}
+                      {device.clientId && (
+                        <div className="detail-row">
+                          <span className="label">Client:</span>
+                          <span className="value">{device.clientId}</span>
+                        </div>
+                      )}
+                      {device.clientMode && (
+                        <div className="detail-row">
+                          <span className="label">Mode:</span>
+                          <span className="value">{device.clientMode}</span>
+                        </div>
+                      )}
+                      {device.role && (
+                        <div className="detail-row">
+                          <span className="label">Role:</span>
+                          <span className="value">{device.role}</span>
+                        </div>
+                      )}
+                      {device.remoteIp && (
+                        <div className="detail-row">
+                          <span className="label">IP:</span>
+                          <span className="value">{device.remoteIp}</span>
+                        </div>
+                      )}
+                      <div className="detail-row">
+                        <span className="label">Requested:</span>
+                        <span className="value" title={formatTimestamp(device.ts)}>
+                          {formatTimeAgo(device.ts)}
+                        </span>
+                      </div>
                     </div>
-                  )}
-                  {device.clientMode && (
-                    <div className="detail-row">
-                      <span className="label">Mode:</span>
-                      <span className="value">{device.clientMode}</span>
+                    <div className="device-actions">
+                      <button
+                        className="btn btn-success"
+                        onClick={() => handleApprove(device.requestId)}
+                        disabled={actionInProgress !== null}
+                      >
+                        {actionInProgress === device.requestId && <ButtonSpinner />}
+                        {actionInProgress === device.requestId ? 'Approving...' : 'Approve'}
+                      </button>
                     </div>
-                  )}
-                  {device.role && (
-                    <div className="detail-row">
-                      <span className="label">Role:</span>
-                      <span className="value">{device.role}</span>
-                    </div>
-                  )}
-                  <div className="detail-row">
-                    <span className="label">Paired:</span>
-                    <span className="value" title={formatTimestamp(device.approvedAtMs)}>
-                      {formatTimeAgo(device.approvedAtMs)}
-                    </span>
                   </div>
-                </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+            )}
+          </section>
+
+          <section className="devices-section">
+            <div className="section-header">
+              <h2>Paired Devices</h2>
+            </div>
+
+            {paired.length === 0 ? (
+              <div className="empty-state">
+                <p>No paired devices</p>
+              </div>
+            ) : (
+              <div className="devices-grid">
+                {paired.map((device, index) => (
+                  <div key={device.deviceId || index} className="device-card paired">
+                    <div className="device-header">
+                      <span className="device-name">
+                        {device.displayName || device.deviceId || 'Unknown Device'}
+                      </span>
+                      <span className="device-badge paired">Paired</span>
+                    </div>
+                    <div className="device-details">
+                      {device.platform && (
+                        <div className="detail-row">
+                          <span className="label">Platform:</span>
+                          <span className="value">{device.platform}</span>
+                        </div>
+                      )}
+                      {device.clientId && (
+                        <div className="detail-row">
+                          <span className="label">Client:</span>
+                          <span className="value">{device.clientId}</span>
+                        </div>
+                      )}
+                      {device.clientMode && (
+                        <div className="detail-row">
+                          <span className="label">Mode:</span>
+                          <span className="value">{device.clientMode}</span>
+                        </div>
+                      )}
+                      {device.role && (
+                        <div className="detail-row">
+                          <span className="label">Role:</span>
+                          <span className="value">{device.role}</span>
+                        </div>
+                      )}
+                      <div className="detail-row">
+                        <span className="label">Paired:</span>
+                        <span className="value" title={formatTimestamp(device.approvedAtMs)}>
+                          {formatTimeAgo(device.approvedAtMs)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </>
       )}
     </div>
   )
 }
+
+export { formatPrompt }

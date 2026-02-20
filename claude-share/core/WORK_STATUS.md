@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-18 (Phase 4.1 Token-budgeted context retrieval)
+**Last Updated:** 2026-02-20 (Phase 2.4 Acontext dashboard link complete)
 
 ---
 
@@ -46,7 +46,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | Phase 4.1 Token-budgeted context retrieval complete | `claude/implement-p1-guardrails-NF641` | 2026-02-18 |
-| Codex | — | — | — |
+| Codex | Phase 2.4 complete: Acontext admin dashboard section | `codex/acontext-dashboard-link-p24` | 2026-02-20 |
 | Other | — | — | — |
 
 ---
@@ -94,6 +94,7 @@
 | 2.5.9 | Holiday awareness (Nager.Date) | Claude Opus 4.6 | 2026-02-18 | `claude/implement-p1-guardrails-DcOgI` |
 | 4.1 | Token-budgeted context retrieval | Claude Opus 4.6 | 2026-02-18 | `claude/implement-p1-guardrails-NF641` |
 | 4.1 Audit | Review & harden token-budgeted retrieval | Codex (GPT-5.2-Codex) | 2026-02-19 | `work` |
+| 2.4 | Acontext dashboard link in admin UI | Codex (GPT-5.2-Codex) | 2026-02-20 | `codex/acontext-dashboard-link-p24` |
 
 ---
 
@@ -126,8 +127,8 @@
 > Ordered by priority. Next AI session should pick the top item.
 
 1. **Phase 4.2** — Replace estimateTokens with actual tokenizer
-2. **Phase 2.4** — Acontext dashboard link in admin UI
-3. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+2. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+3. **Phase 2.5.10** — Quotes & personality APIs (Quotable + Advice Slip)
 
 ---
 
@@ -135,4 +136,4 @@
 
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
-| Sprint 1 (current) | 8 | 38 | Phase 0 complete, Phase 1 COMPLETE (1.1-1.5), upstream sync complete, Phase 2.1-2.3 complete, Phase 2.5 COMPLETE (all 8 tools + holiday awareness 2.5.9), Phase 3 COMPLETE (3.1-3.4), P1 guardrails done, Acontext observability done, ALL 12 bugs fixed, /start redesign + bot menu + briefing fixes, 689 tests total |
+| Sprint 1 (current) | 8 | 39 | Phase 0 complete, Phase 1 COMPLETE (1.1-1.5), upstream sync complete, Phase 2.1-2.4 complete, Phase 2.5 COMPLETE (all 8 tools + holiday awareness 2.5.9), Phase 3 COMPLETE (3.1-3.4), P1 guardrails done, Acontext observability + admin dashboard done, ALL 12 bugs fixed, /start redesign + bot menu + briefing fixes, 758 tests total |
