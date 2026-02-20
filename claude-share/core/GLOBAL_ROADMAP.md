@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-02-20 (Phase 4.2: real tokenizer + parallel tools upgrade)
+**Last Updated:** 2026-02-20 (Phase 4.3: tool result caching complete)
 
 ---
 
@@ -147,7 +147,7 @@
 |----|------|--------|-------|-------|
 | 4.1 | Replace `compressContext()` with token-budgeted retrieval | ✅ | Claude | Priority-scored messages, tool pairing, summarization — 28 tests |
 | 4.2 | Replace `estimateTokens()` with actual tokenizer | ✅ | Claude | `gpt-tokenizer` cl100k_base encoding, heuristic fallback — 18 tests (772 total) |
-| 4.3 | Add tool result caching | 🔲 | Codex | Cache identical tool calls (same GitHub file, etc.) |
+| 4.3 | Add tool result caching | ✅ | Codex | In-memory per-DO cache for read-only tool results keyed by tool+args, with hit/miss stats + tests |
 | 4.4 | Implement cross-session context continuity | 🔲 | Claude | Resume complex tasks days later with full context |
 
 > 🧑 HUMAN CHECK 4.5: Validate context quality with Acontext vs. current compression — ⏳ PENDING
@@ -236,6 +236,7 @@
 
 ```
 
+2026-02-20 | Codex (Session: codex-phase-4-3-cache-001) | feat(task-processor): Phase 4.3 tool result caching — add per-session in-memory cache for read-only tools, skip executeTool() on cache hit, expose cache stats, and add cache hit/miss/bypass/error tests | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 2026-02-20 | Codex+Claude (Session: session_01SE5WrUuc6LWTmZC8WBXKY4) | feat(admin): Phase 2.4 Acontext sessions dashboard — backend route, React section, CSS, 13 new tests (785 total). Best-of-5 Codex outputs reviewed and merged by Claude | src/routes/api.ts, src/routes/api.test.ts, src/routes/admin-acontext.test.tsx, src/client/api.ts, src/client/pages/AdminPage.tsx, src/client/pages/AdminPage.css, vitest.config.ts
 2026-02-20 | Claude Opus 4.6 (Session: session_01SE5WrUuc6LWTmZC8WBXKY4) | feat(context-budget): Phase 4.2 real tokenizer — gpt-tokenizer cl100k_base BPE encoding replaces heuristic estimateStringTokens, heuristic fallback, 18 new tests (772 total) | src/utils/tokenizer.ts, src/utils/tokenizer.test.ts, src/durable-objects/context-budget.ts, src/durable-objects/context-budget.test.ts, src/durable-objects/context-budget.edge.test.ts, package.json
 2026-02-20 | Claude Opus 4.6 (Session: session_01AtnWsZSprM6Gjr9vjTm1xp) | feat(task-processor): parallel tools Promise.allSettled + safety whitelist — PARALLEL_SAFE_TOOLS set (11 read-only tools), mutation tools sequential, allSettled isolation, 8 new tests (762 total) | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts

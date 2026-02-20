@@ -5,6 +5,40 @@
 ---
 
 
+
+## Session: 2026-02-20 | Phase 4.3 tool result caching (Session: codex-phase-4-3-cache-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** codex/tool-result-caching-4-3
+**Status:** Completed
+
+### Summary
+Implemented per-task-session tool result caching in TaskProcessor for read-only tools and added coverage tests.
+
+### Changes Made
+- Added in-memory cache (`Map`) and hit/miss counters in `TaskProcessor`
+- Wrapped tool execution with cache checks for both parallel and sequential paths
+- Added `getToolCacheStats()` for observability and tests
+- Ensured mutation tools bypass cache and error-shaped results are not cached
+- Added test block covering cache hit/miss, mutation bypass, error bypass, and stats
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [ ] Tests pass (blocked by missing `gpt-tokenizer` package in this environment)
+- [ ] Typecheck passes (blocked by missing `gpt-tokenizer` package in this environment)
+
+### Notes for Next Session
+Environment currently cannot download `gpt-tokenizer@3.4.0` (npm registry returns 403), which causes `npm test`, `npm run typecheck`, and `npm run build` to fail before/while importing `src/utils/tokenizer.ts`.
+
+---
+
 ## Session: 2026-02-19 | Phase 4.1 context-budget audit hardening (Session: codex-phase-4-1-audit-001)
 
 **AI:** Codex (GPT-5.2-Codex)

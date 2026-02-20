@@ -228,11 +228,57 @@ function getAutoResumeLimit(modelAlias: string): number {
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
   private r2?: R2Bucket;
+  private toolResultCache = new Map<string, string>();
+  private toolCacheHits = 0;
+  private toolCacheMisses = 0;
 
   constructor(state: DurableObjectState, env: TaskProcessorEnv) {
     super(state, env);
     this.doState = state;
     this.r2 = env.MOLTBOT_BUCKET;
+  }
+
+  getToolCacheStats(): { hits: number; misses: number; size: number } {
+    return {
+      hits: this.toolCacheHits,
+      misses: this.toolCacheMisses,
+      size: this.toolResultCache.size,
+    };
+  }
+
+  private shouldCacheToolResult(content: string): boolean {
+    return !/^error(?: executing)?/i.test(content);
+  }
+
+  private async executeToolWithCache(
+    toolCall: ToolCall,
+    toolContext: ToolContext
+  ): Promise<{ tool_call_id: string; role: 'tool'; content: string }> {
+    const toolName = toolCall.function.name;
+    const cacheKey = `${toolName}:${toolCall.function.arguments}`;
+
+    if (PARALLEL_SAFE_TOOLS.has(toolName)) {
+      const cachedResult = this.toolResultCache.get(cacheKey);
+      if (cachedResult !== undefined) {
+        this.toolCacheHits++;
+        console.log(`[TaskProcessor] Tool cache HIT: ${toolName} (${this.toolResultCache.size} entries)`);
+        return {
+          tool_call_id: toolCall.id,
+          role: 'tool',
+          content: cachedResult,
+        };
+      }
+    }
+
+    const toolResult = await executeTool(toolCall, toolContext);
+
+    if (PARALLEL_SAFE_TOOLS.has(toolName) && this.shouldCacheToolResult(toolResult.content)) {
+      this.toolResultCache.set(cacheKey, toolResult.content);
+      this.toolCacheMisses++;
+      console.log(`[TaskProcessor] Tool cache MISS: ${toolName} → stored (${this.toolResultCache.size} entries)`);
+    }
+
+    return toolResult;
   }
 
   /**
@@ -1230,7 +1276,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 const toolStartTime = Date.now();
                 const toolName = toolCall.function.name;
 
-                const toolPromise = executeTool(toolCall, toolContext);
+                const toolPromise = this.executeToolWithCache(toolCall, toolContext);
                 const toolTimeoutPromise = new Promise<never>((_, reject) => {
                   setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
                 });
@@ -1266,7 +1312,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               let toolResult;
               try {
-                const toolPromise = executeTool(toolCall, toolContext);
+                const toolPromise = this.executeToolWithCache(toolCall, toolContext);
                 const toolTimeoutPromise = new Promise<never>((_, reject) => {
                   setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
                 });
