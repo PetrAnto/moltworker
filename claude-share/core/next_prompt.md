@@ -3,15 +3,15 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-20 (Phase 2.4 complete — Acontext dashboard in admin UI)
+**Last Updated:** 2026-02-20 (Phase 4.3 complete — Tool result caching)
 
 ---
 
-## Current Task: Phase 4.3 — Tool Result Caching
+## Current Task: Phase 4.4 — Cross-Session Context Continuity
 
 ### Goal
 
-Cache identical tool call results (same function + arguments) within a task session to avoid redundant API calls. For example, if `get_weather` is called twice with the same lat/lon, return the cached result on the second call.
+Implement context continuity so long-running tasks can resume across sessions/days with preserved relevant state and summaries.
 
 ### Context
 
@@ -34,9 +34,8 @@ Cache identical tool call results (same function + arguments) within a task sess
 
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
-| Current | 4.3: Tool result caching | Medium | Cache identical tool calls (Codex) |
-| Next | 4.4: Cross-session context continuity | Medium | Resume tasks days later (Claude) |
-| Then | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
+| Current | 4.4: Cross-session context continuity | Medium | Resume tasks days later with preserved state (Claude) |
+| Next | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
 
 ---
 
@@ -44,6 +43,7 @@ Cache identical tool call results (same function + arguments) within a task sess
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-20 | Phase 4.3: Tool result caching in TaskProcessor | Codex (GPT-5.2-Codex) | codex-phase-4-3-cache-001 |
 | 2026-02-20 | Phase 4.2: Real tokenizer (gpt-tokenizer cl100k_base, heuristic fallback) | Claude Opus 4.6 | session_01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-20 | Sprint 48h: Phase budget circuit breakers (plan=8s, work=18s, review=3s) | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |
 | 2026-02-20 | Sprint 48h: Parallel tools allSettled + PARALLEL_SAFE_TOOLS whitelist | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |

@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-20 (Phase 4.2: real tokenizer via gpt-tokenizer cl100k_base)
+**Last Updated:** 2026-02-20 (Phase 4.3: tool result caching complete)
 
 ---
 
@@ -50,7 +50,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | — (awaiting next task) | — | — |
-| Codex | — | — | — |
+| Codex | 4.3 tool result caching | `codex/tool-result-caching-p43` | 2026-02-20 |
 | Other | — | — | — |
 
 ---

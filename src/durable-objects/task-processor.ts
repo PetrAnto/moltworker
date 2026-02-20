@@ -228,11 +228,61 @@ function getAutoResumeLimit(modelAlias: string): number {
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
   private r2?: R2Bucket;
+  private toolResultCache = new Map<string, string>();
+  private toolCacheHits = 0;
+  private toolCacheMisses = 0;
 
   constructor(state: DurableObjectState, env: TaskProcessorEnv) {
     super(state, env);
     this.doState = state;
     this.r2 = env.MOLTBOT_BUCKET;
+  }
+
+  getToolCacheStats(): { hits: number; misses: number; size: number } {
+    return {
+      hits: this.toolCacheHits,
+      misses: this.toolCacheMisses,
+      size: this.toolResultCache.size,
+    };
+  }
+
+  private tryGetCachedToolResult(toolCall: ToolCall): { tool_call_id: string; role: 'tool'; content: string } | null {
+    const toolName = toolCall.function.name;
+    if (!PARALLEL_SAFE_TOOLS.has(toolName)) {
+      return null;
+    }
+
+    const cacheKey = `${toolName}:${toolCall.function.arguments}`;
+    const cachedContent = this.toolResultCache.get(cacheKey);
+    if (cachedContent === undefined) {
+      return null;
+    }
+
+    this.toolCacheHits++;
+    console.log(`[TaskProcessor] Tool cache HIT: ${toolName} (${this.toolResultCache.size} entries)`);
+    return {
+      tool_call_id: toolCall.id,
+      role: 'tool',
+      content: cachedContent,
+    };
+  }
+
+  private maybeStoreCachedToolResult(toolCall: ToolCall, toolResult: { content: string }): void {
+    const toolName = toolCall.function.name;
+    if (!PARALLEL_SAFE_TOOLS.has(toolName)) {
+      return;
+    }
+
+    const content = toolResult.content.trimStart();
+    if (content.startsWith('Error executing') || content.startsWith('Error')) {
+      console.log(`[TaskProcessor] Tool cache SKIP (error): ${toolName}`);
+      return;
+    }
+
+    const cacheKey = `${toolName}:${toolCall.function.arguments}`;
+    this.toolResultCache.set(cacheKey, toolResult.content);
+    this.toolCacheMisses++;
+    console.log(`[TaskProcessor] Tool cache MISS: ${toolName} → stored (${this.toolResultCache.size} entries)`);
   }
 
   /**
@@ -1230,11 +1280,18 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 const toolStartTime = Date.now();
                 const toolName = toolCall.function.name;
 
+                const cachedToolResult = this.tryGetCachedToolResult(toolCall);
+                if (cachedToolResult) {
+                  console.log(`[TaskProcessor] Tool ${toolName} served from cache in ${Date.now() - toolStartTime}ms, result size: ${cachedToolResult.content.length} chars`);
+                  return { toolName, toolResult: cachedToolResult };
+                }
+
                 const toolPromise = executeTool(toolCall, toolContext);
                 const toolTimeoutPromise = new Promise<never>((_, reject) => {
                   setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
                 });
                 const toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
+                this.maybeStoreCachedToolResult(toolCall, toolResult);
 
                 console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
                 return { toolName, toolResult };
@@ -1265,12 +1322,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               const toolName = toolCall.function.name;
 
               let toolResult;
+              const cachedToolResult = this.tryGetCachedToolResult(toolCall);
+              if (cachedToolResult) {
+                toolResult = cachedToolResult;
+              }
+
               try {
-                const toolPromise = executeTool(toolCall, toolContext);
-                const toolTimeoutPromise = new Promise<never>((_, reject) => {
-                  setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
-                });
-                toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
+                if (!toolResult) {
+                  const toolPromise = executeTool(toolCall, toolContext);
+                  const toolTimeoutPromise = new Promise<never>((_, reject) => {
+                    setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
+                  });
+                  toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
+                  this.maybeStoreCachedToolResult(toolCall, toolResult);
+                }
               } catch (toolError) {
                 toolResult = {
                   tool_call_id: toolCall.id,

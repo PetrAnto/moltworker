@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-02-20 (Phase 4.2: real tokenizer + parallel tools upgrade)
+**Last Updated:** 2026-02-20 (Phase 4.3: tool result caching)
 
 ---
 
@@ -147,7 +147,7 @@
 |----|------|--------|-------|-------|
 | 4.1 | Replace `compressContext()` with token-budgeted retrieval | ✅ | Claude | Priority-scored messages, tool pairing, summarization — 28 tests |
 | 4.2 | Replace `estimateTokens()` with actual tokenizer | ✅ | Claude | `gpt-tokenizer` cl100k_base encoding, heuristic fallback — 18 tests (772 total) |
-| 4.3 | Add tool result caching | 🔲 | Codex | Cache identical tool calls (same GitHub file, etc.) |
+| 4.3 | Add tool result caching | ✅ | Codex | Added per-task in-memory cache for PARALLEL_SAFE_TOOLS with hit/miss stats + tests |
 | 4.4 | Implement cross-session context continuity | 🔲 | Claude | Resume complex tasks days later with full context |
 
 > 🧑 HUMAN CHECK 4.5: Validate context quality with Acontext vs. current compression — ⏳ PENDING
@@ -231,6 +231,8 @@
 ---
 
 ## Changelog
+
+2026-02-20 | Codex (Session: codex-phase-4-3-cache-001) | feat(task-processor): Phase 4.3 tool result caching — in-memory cache keyed by tool+args for read-only tools, cache hit/miss logging + stats API, tests for hit/miss/bypass/error paths | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 

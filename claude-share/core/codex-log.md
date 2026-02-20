@@ -5,6 +5,40 @@
 ---
 
 
+
+## Session: 2026-02-20 | Phase 4.3 tool result caching (Session: codex-phase-4-3-cache-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** codex/tool-result-caching-p43
+**Status:** Completed
+
+### Summary
+Implemented Durable Object in-memory tool result caching for read-only tools with cache stats and tests.
+
+### Changes Made
+- Added per-instance `toolResultCache` map with hit/miss counters in `TaskProcessor`
+- Added cache lookup/store wrappers around `executeTool()` in both parallel and sequential tool execution paths
+- Skipped caching for mutation tools and for error-like tool outputs
+- Added `getToolCacheStats()` and test coverage for hit/miss/bypass/error/stat tracking behavior
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [ ] Tests pass (blocked: missing `gpt-tokenizer` package fetch in this environment)
+- [ ] Typecheck passes (blocked: missing `gpt-tokenizer` package fetch in this environment)
+
+### Notes for Next Session
+Phase 4.3 is implemented; next task should continue with Phase 4.4 cross-session context continuity.
+
+---
+
+
 ## Session: 2026-02-19 | Phase 4.1 context-budget audit hardening (Session: codex-phase-4-1-audit-001)
 
 **AI:** Codex (GPT-5.2-Codex)
