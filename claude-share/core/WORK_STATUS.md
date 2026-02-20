@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-20 (Phase 4.2: real tokenizer via gpt-tokenizer cl100k_base)
+**Last Updated:** 2026-02-20 (Phase 5.5 complete: web_search tool via Brave Search API)
 
 ---
 
@@ -73,6 +73,7 @@
 | 2.5.2 | Chart image generation (QuickChart) | Claude Opus 4.6 | 2026-02-08 | `claude/review-moltworker-roadmap-q5aqD` |
 | 2.5.3 | Weather tool (Open-Meteo) | Claude Opus 4.6 | 2026-02-08 | `claude/review-moltworker-roadmap-q5aqD` |
 | 2.5.5 | News feeds (HN/Reddit/arXiv) | Claude Opus 4.6 | 2026-02-08 | `claude/review-moltworker-roadmap-q5aqD` |
+| 5.5 | Web search tool (Brave Search API) | Codex (GPT-5.2-Codex) | 2026-02-20 | `work` |
 | 1.3 | Configurable reasoning per model | Claude Opus 4.6 | 2026-02-08 | `claude/review-moltworker-roadmap-q5aqD` |
 | 2.5.7 | Daily briefing aggregator | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |
 | BUG-3 | think: override DO passthrough fix | Claude Opus 4.6 | 2026-02-08 | `claude/daily-briefing-aggregator-NfHhi` |

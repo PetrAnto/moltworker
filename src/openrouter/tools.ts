@@ -61,6 +61,7 @@ export interface SandboxLike {
  */
 export interface ToolContext {
   githubToken?: string;
+  braveSearchKey?: string;
   browser?: Fetcher; // Cloudflare Browser Rendering binding
   sandbox?: SandboxLike; // Sandbox container for code execution
 }
@@ -324,6 +325,27 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'web_search',
+      description: 'Search the web for current information. Returns titles, URLs, and snippets from top results.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search query to look up on the web',
+          },
+          num_results: {
+            type: 'string',
+            description: 'Number of results to return (default: 5, max: 10)',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'browse_url',
       description: 'Browse a URL using a real browser. Use this for JavaScript-rendered pages, screenshots, or when fetch_url fails. Returns text content by default, or a screenshot/PDF.',
       parameters: {
@@ -469,6 +491,9 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         break;
       case 'geolocate_ip':
         result = await geolocateIp(args.ip);
+        break;
+      case 'web_search':
+        result = await webSearch(args.query, args.num_results, context?.braveSearchKey);
         break;
       case 'browse_url':
         result = await browseUrl(args.url, args.action as 'extract_text' | 'screenshot' | 'pdf' | undefined, args.wait_for, context?.browser);
@@ -1973,6 +1998,11 @@ interface CryptoCache {
   timestamp: number;
 }
 
+interface WebSearchCache {
+  data: string;
+  timestamp: number;
+}
+
 const CRYPTO_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const cryptoCache: Map<string, CryptoCache> = new Map();
 
@@ -2197,11 +2227,21 @@ async function getCryptoDex(query: string): Promise<string> {
 const GEO_CACHE_TTL_MS = 15 * 60 * 1000;
 const geoCache: Map<string, CryptoCache> = new Map(); // reuse CryptoCache shape
 
+const WEB_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const webSearchCache: Map<string, WebSearchCache> = new Map();
+
 /**
  * Clear geolocation cache (for testing)
  */
 export function clearGeoCache(): void {
   geoCache.clear();
+}
+
+/**
+ * Clear web search cache (for testing)
+ */
+export function clearWebSearchCache(): void {
+  webSearchCache.clear();
 }
 
 /**
@@ -2251,6 +2291,73 @@ async function geolocateIp(ip: string): Promise<string> {
   const result = lines.join('\n');
   geoCache.set(trimmed, { data: result, timestamp: Date.now() });
   return result;
+}
+
+/**
+ * Search the web via Brave Search API
+ */
+async function webSearch(query: string, numResults = '5', apiKey?: string): Promise<string> {
+  if (!apiKey) {
+    return 'Web search requires a Brave Search API key. Set BRAVE_SEARCH_KEY in worker secrets.';
+  }
+
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) {
+    throw new Error('Search query cannot be empty.');
+  }
+
+  const parsedCount = Number.parseInt(numResults, 10);
+  const count = Number.isNaN(parsedCount) ? 5 : Math.min(Math.max(parsedCount, 1), 10);
+  const cacheKey = `${trimmedQuery}:${count}`;
+  const cached = webSearchCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < WEB_SEARCH_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const response = await fetch(
+    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(trimmedQuery)}&count=${count}`,
+    {
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip',
+        'X-Subscription-Token': apiKey,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    return `Brave Search API error ${response.status}: ${errorText || response.statusText}`;
+  }
+
+  const data = await response.json() as {
+    web?: {
+      results?: Array<{
+        title?: string;
+        url?: string;
+        description?: string;
+      }>;
+    };
+  };
+
+  const results = data.web?.results || [];
+  if (results.length === 0) {
+    return `No web results found for "${trimmedQuery}".`;
+  }
+
+  let output = results.map((result, index) => {
+    const title = result.title || 'Untitled';
+    const url = result.url || 'No URL';
+    const description = result.description || 'No description available.';
+    return `${index + 1}. **${title}** (${url})\n${description}`;
+  }).join('\n\n');
+
+  if (output.length > 20000) {
+    output = output.slice(0, 20000) + '\n\n[Content truncated - exceeded 20KB]';
+  }
+
+  webSearchCache.set(cacheKey, { data: output, timestamp: Date.now() });
+  return output;
 }
 
 /**

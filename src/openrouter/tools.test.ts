@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, extractCodeIdentifiers, fetchBriefingHolidays, type SandboxLike, type SandboxProcess } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, type SandboxLike, type SandboxProcess } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -2104,6 +2104,180 @@ describe('geolocate_ip tool', () => {
 
     expect(result.content).toContain('2001:4860:4860::8888');
     expect(result.content).toContain('Mountain View');
+  });
+});
+
+
+
+describe('web_search tool', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    clearWebSearchCache();
+  });
+
+  it('should be included in AVAILABLE_TOOLS', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'web_search');
+    expect(tool).toBeDefined();
+    expect(tool!.function.parameters.required).toEqual(['query']);
+  });
+
+  it('should return formatted results on success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        web: {
+          results: [
+            { title: 'Result One', url: 'https://example.com/1', description: 'First snippet' },
+            { title: 'Result Two', url: 'https://example.com/2', description: 'Second snippet' },
+          ],
+        },
+      }),
+    }));
+
+    const result = await executeTool({
+      id: 'web_1',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'latest ai news' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    expect(result.content).toContain('1. **Result One** (https://example.com/1)');
+    expect(result.content).toContain('First snippet');
+    expect(result.content).toContain('2. **Result Two** (https://example.com/2)');
+  });
+
+  it('should return error when API key is missing', async () => {
+    const result = await executeTool({
+      id: 'web_2',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'open source llm' }),
+      },
+    });
+
+    expect(result.content).toContain('Web search requires a Brave Search API key');
+  });
+
+  it('should handle API error response gracefully', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 429,
+      statusText: 'Too Many Requests',
+      text: () => Promise.resolve('rate limit exceeded'),
+    }));
+
+    const result = await executeTool({
+      id: 'web_3',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'breaking news' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    expect(result.content).toContain('Brave Search API error 429');
+    expect(result.content).toContain('rate limit exceeded');
+  });
+
+  it('should handle empty results', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ web: { results: [] } }),
+    }));
+
+    const result = await executeTool({
+      id: 'web_4',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'query with no matches' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    expect(result.content).toContain('No web results found');
+  });
+
+  it('should respect num_results parameter', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ web: { results: [{ title: 'Only', url: 'https://example.com', description: 'one' }] } }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await executeTool({
+      id: 'web_5',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'cloudflare workers', num_results: '9' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    expect(String(mockFetch.mock.calls[0][0])).toContain('count=9');
+  });
+
+  it('should cache results for 5 minutes', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ web: { results: [{ title: 'Cached', url: 'https://example.com/cached', description: 'cached snippet' }] } }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await executeTool({
+      id: 'web_6a',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'cache me', num_results: '3' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    await executeTool({
+      id: 'web_6b',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'cache me', num_results: '3' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('should invalidate cache after TTL', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ web: { results: [{ title: 'TTL', url: 'https://example.com/ttl', description: 'ttl snippet' }] } }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1000);
+
+    await executeTool({
+      id: 'web_7a',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'ttl query', num_results: '2' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    nowSpy.mockReturnValue(1000 + 5 * 60 * 1000 + 1);
+
+    await executeTool({
+      id: 'web_7b',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'ttl query', num_results: '2' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
 

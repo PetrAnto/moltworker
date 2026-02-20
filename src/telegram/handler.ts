@@ -480,6 +480,7 @@ export class TelegramHandler {
   private githubToken?: string; // GitHub token for tool calls
   private telegramToken: string; // Store for DO
   private openrouterKey: string; // Store for DO
+  private braveSearchKey?: string; // Brave Search API key for web_search tool
   private taskProcessor?: DurableObjectNamespace<TaskProcessor>; // For long-running tasks
   private browser?: Fetcher; // Browser binding for browse_url tool
   private sandbox?: SandboxLike; // Sandbox container for sandbox_exec tool
@@ -500,6 +501,7 @@ export class TelegramHandler {
     defaultSkill: string = 'storia-orchestrator',
     allowedUserIds?: string[], // Pass user IDs to restrict access
     githubToken?: string, // GitHub token for tool authentication
+    braveSearchKey?: string, // Brave Search API key
     taskProcessor?: DurableObjectNamespace<TaskProcessor>, // DO for long tasks
     browser?: Fetcher, // Browser binding for browse_url tool
     dashscopeKey?: string, // DashScope API key (Qwen)
@@ -518,6 +520,7 @@ export class TelegramHandler {
     this.githubToken = githubToken;
     this.telegramToken = telegramToken;
     this.openrouterKey = openrouterKey;
+    this.braveSearchKey = braveSearchKey;
     this.taskProcessor = taskProcessor;
     this.browser = browser;
     this.sandbox = sandbox;
@@ -1618,6 +1621,7 @@ export class TelegramHandler {
       telegramToken: this.telegramToken,
       openrouterKey: this.openrouterKey,
       githubToken: this.githubToken,
+      braveSearchKey: this.braveSearchKey,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
@@ -1850,6 +1854,7 @@ export class TelegramHandler {
             telegramToken: this.telegramToken,
             openrouterKey: this.openrouterKey,
             githubToken: this.githubToken,
+            braveSearchKey: this.braveSearchKey,
             dashscopeKey: this.dashscopeKey,
             moonshotKey: this.moonshotKey,
             deepseekKey: this.deepseekKey,
@@ -1874,7 +1879,7 @@ export class TelegramHandler {
           modelAlias, messages, {
             maxToolCalls: 10,
             maxTimeMs: 120000,
-            toolContext: { githubToken: this.githubToken, browser: this.browser, sandbox: this.sandbox },
+            toolContext: { githubToken: this.githubToken, braveSearchKey: this.braveSearchKey, browser: this.browser, sandbox: this.sandbox },
           }
         );
 
@@ -1982,6 +1987,7 @@ export class TelegramHandler {
       telegramToken: this.telegramToken,
       openrouterKey: this.openrouterKey,
       githubToken: this.githubToken,
+      braveSearchKey: this.braveSearchKey,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
@@ -2045,6 +2051,7 @@ export class TelegramHandler {
       telegramToken: this.telegramToken,
       openrouterKey: this.openrouterKey,
       githubToken: this.githubToken,
+      braveSearchKey: this.braveSearchKey,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
@@ -2154,6 +2161,7 @@ export class TelegramHandler {
           telegramToken: this.telegramToken,
           openrouterKey: this.openrouterKey,
           githubToken: this.githubToken,
+          braveSearchKey: this.braveSearchKey,
           dashscopeKey: this.dashscopeKey,
           moonshotKey: this.moonshotKey,
           deepseekKey: this.deepseekKey,
@@ -2470,6 +2478,7 @@ export class TelegramHandler {
               telegramToken: this.telegramToken,
               openrouterKey: this.openrouterKey,
               githubToken: this.githubToken,
+              braveSearchKey: this.braveSearchKey,
               dashscopeKey: this.dashscopeKey,
               moonshotKey: this.moonshotKey,
               deepseekKey: this.deepseekKey,
@@ -3371,6 +3380,7 @@ export function createTelegramHandler(
   defaultSkill?: string,
   allowedUserIds?: string[],
   githubToken?: string,
+  braveSearchKey?: string,
   taskProcessor?: DurableObjectNamespace<TaskProcessor>,
   browser?: Fetcher,
   dashscopeKey?: string,
@@ -3388,6 +3398,7 @@ export function createTelegramHandler(
     defaultSkill,
     allowedUserIds,
     githubToken,
+    braveSearchKey,
     taskProcessor,
     browser,
     dashscopeKey,
