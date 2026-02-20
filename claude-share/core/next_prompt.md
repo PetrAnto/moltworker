@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-20 (Phase 2.4 complete — Acontext dashboard in admin UI)
+**Last Updated:** 2026-02-20 (Phase 5.5 complete — web_search tool added)
 
 ---
 
@@ -18,7 +18,7 @@ Cache identical tool call results (same function + arguments) within a task sess
 - Phase 4.2 complete: real tokenizer integrated
 - Phase 2.4 complete: Acontext dashboard in admin UI
 - Tool execution happens in `src/durable-objects/task-processor.ts` and `src/openrouter/tools.ts`
-- 14 tools total, 11 are read-only (safe to cache), 3 are mutation tools (should not cache)
+- 15 tools total (including web_search), 12 are read-only (safe to cache), 3 are mutation tools (should not cache)
 - `PARALLEL_SAFE_TOOLS` whitelist already identifies which tools are read-only
 - This is a Codex-assigned task
 
@@ -44,6 +44,7 @@ Cache identical tool call results (same function + arguments) within a task sess
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-20 | Phase 5.5: Web search tool (Brave Search API, cache, key plumbing, tests) | Codex (GPT-5.2-Codex) | codex-phase-5-5-web-search-001 |
 | 2026-02-20 | Phase 4.2: Real tokenizer (gpt-tokenizer cl100k_base, heuristic fallback) | Claude Opus 4.6 | session_01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-20 | Sprint 48h: Phase budget circuit breakers (plan=8s, work=18s, review=3s) | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |
 | 2026-02-20 | Sprint 48h: Parallel tools allSettled + PARALLEL_SAFE_TOOLS whitelist | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |

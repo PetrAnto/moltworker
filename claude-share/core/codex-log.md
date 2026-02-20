@@ -5,6 +5,44 @@
 ---
 
 
+## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Added Brave Search-powered `web_search` tool end-to-end (tool registry, execution, DO/Telegram key plumbing, cache, and tests).
+
+### Changes Made
+- Added `web_search` tool definition and execution path with 5-minute cache + 20KB truncation
+- Added Brave Search key plumbing via `ToolContext`, `TaskRequest`/`TaskState`, and Telegram DO dispatch
+- Added parallel-safety whitelist entry for `web_search`
+- Added 8 dedicated `web_search` tests and updated tool count assertions
+
+### Files Modified
+- `src/openrouter/tools.ts`
+- `src/openrouter/tools.test.ts`
+- `src/openrouter/briefing-aggregator.test.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/telegram/handler.ts`
+- `src/routes/telegram.ts`
+- `src/types.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Targeted tests pass (`tools.test.ts`, `briefing-aggregator.test.ts`)
+- [ ] Full test suite pass (blocked by missing `gpt-tokenizer/encoding/cl100k_base` module in environment)
+- [ ] Typecheck pass (blocked by missing `gpt-tokenizer/encoding/cl100k_base` module in environment)
+
+### Notes for Next Session
+Install/fix `gpt-tokenizer` package resolution in this environment, then rerun full `npm test` and `npm run typecheck`.
+
+---
+
 ## Session: 2026-02-19 | Phase 4.1 context-budget audit hardening (Session: codex-phase-4-1-audit-001)
 
 **AI:** Codex (GPT-5.2-Codex)

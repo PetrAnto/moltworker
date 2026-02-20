@@ -63,6 +63,7 @@ telegram.post('/webhook/:token', async (c) => {
       'storia-orchestrator',
       allowedUsers,
       env.GITHUB_TOKEN, // Pass GitHub token for tool authentication
+      env.BRAVE_SEARCH_KEY, // Brave Search key for web_search tool
       env.TASK_PROCESSOR, // Pass TaskProcessor DO for long-running tasks
       env.BROWSER, // Pass browser binding for browse_url tool
       env.DASHSCOPE_API_KEY, // DashScope for Qwen
