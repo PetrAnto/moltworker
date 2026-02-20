@@ -133,9 +133,9 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **Phase 4.3** — Tool result caching (Codex)
-2. **Phase 4.4** — Cross-session context continuity
-3. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+1. **Phase 4.4** — Cross-session context continuity
+2. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+3. **Phase 4.3 follow-up** — Validate tokenizer dependency resolution in CI/runtime environment
 
 ---
 

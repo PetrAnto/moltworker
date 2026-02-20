@@ -228,11 +228,22 @@ function getAutoResumeLimit(modelAlias: string): number {
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
   private r2?: R2Bucket;
+  private toolResultCache = new Map<string, string>();
+  private toolCacheHits = 0;
+  private toolCacheMisses = 0;
 
   constructor(state: DurableObjectState, env: TaskProcessorEnv) {
     super(state, env);
     this.doState = state;
     this.r2 = env.MOLTBOT_BUCKET;
+  }
+
+  getToolCacheStats(): { hits: number; misses: number; size: number } {
+    return {
+      hits: this.toolCacheHits,
+      misses: this.toolCacheMisses,
+      size: this.toolResultCache.size,
+    };
   }
 
   /**
@@ -1229,12 +1240,35 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               choice.message.tool_calls.map(async (toolCall) => {
                 const toolStartTime = Date.now();
                 const toolName = toolCall.function.name;
+                const isCacheableTool = PARALLEL_SAFE_TOOLS.has(toolName);
+                const cacheKey = `${toolName}:${toolCall.function.arguments}`;
+
+                if (isCacheableTool) {
+                  const cachedToolResult = this.toolResultCache.get(cacheKey);
+                  if (cachedToolResult !== undefined) {
+                    this.toolCacheHits++;
+                    console.log(`[TaskProcessor] Tool cache HIT: ${toolName} (${this.toolResultCache.size} entries)`);
+                    return {
+                      toolName,
+                      toolResult: {
+                        tool_call_id: toolCall.id,
+                        content: cachedToolResult,
+                      },
+                    };
+                  }
+                }
 
                 const toolPromise = executeTool(toolCall, toolContext);
                 const toolTimeoutPromise = new Promise<never>((_, reject) => {
                   setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
                 });
                 const toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
+
+                if (isCacheableTool && !toolResult.content.startsWith('Error')) {
+                  this.toolResultCache.set(cacheKey, toolResult.content);
+                  this.toolCacheMisses++;
+                  console.log(`[TaskProcessor] Tool cache MISS: ${toolName} → stored (${this.toolResultCache.size} entries)`);
+                }
 
                 console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
                 return { toolName, toolResult };
@@ -1263,6 +1297,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             for (const toolCall of choice.message.tool_calls) {
               const toolStartTime = Date.now();
               const toolName = toolCall.function.name;
+              const isCacheableTool = PARALLEL_SAFE_TOOLS.has(toolName);
+              const cacheKey = `${toolName}:${toolCall.function.arguments}`;
+
+              if (isCacheableTool) {
+                const cachedToolResult = this.toolResultCache.get(cacheKey);
+                if (cachedToolResult !== undefined) {
+                  this.toolCacheHits++;
+                  console.log(`[TaskProcessor] Tool cache HIT: ${toolName} (${this.toolResultCache.size} entries)`);
+                  const toolResult = {
+                    tool_call_id: toolCall.id,
+                    content: cachedToolResult,
+                  };
+                  console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
+                  toolResults.push({ toolName, toolResult });
+                  continue;
+                }
+              }
 
               let toolResult;
               try {
@@ -1276,6 +1327,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   tool_call_id: toolCall.id,
                   content: `Error: ${toolError instanceof Error ? toolError.message : String(toolError)}`,
                 };
+              }
+
+              if (isCacheableTool && !toolResult.content.startsWith('Error')) {
+                this.toolResultCache.set(cacheKey, toolResult.content);
+                this.toolCacheMisses++;
+                console.log(`[TaskProcessor] Tool cache MISS: ${toolName} → stored (${this.toolResultCache.size} entries)`);
               }
 
               console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
