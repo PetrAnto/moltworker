@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-19 (Phase 4.1 audit hardening complete)
+**Last Updated:** 2026-02-20 (Phase 2.4 complete)
 
 ---
 
@@ -33,8 +33,8 @@ Replace heuristic token estimation with a real tokenizer path (preferably `js-ti
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
 | Current | 4.2: Replace estimateTokens with actual tokenizer | Medium | Prefer `js-tiktoken` if Worker-compatible |
-| Next | 2.4: Acontext dashboard link in admin UI | Low | Read-only integration |
-| Then | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
+| Next | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
+| Then | Phase 5 planning | Medium | Prioritize advanced capabilities |
 
 ---
 
@@ -42,6 +42,7 @@ Replace heuristic token estimation with a real tokenizer path (preferably `js-ti
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-20 | Phase 2.4: Acontext admin dashboard sessions section | Codex (GPT-5.2-Codex) | codex-phase-2-4-001 |
 | 2026-02-19 | Phase 4.1 Audit: context-budget hardening + edge-case tests | Codex (GPT-5.2-Codex) | codex-phase-4-1-audit-001 |
 | 2026-02-18 | Phase 4.1: Token-budgeted context retrieval | Claude Opus 4.6 | 018M5goT7Vhaymuo8AxXhUCg |
 | 2026-02-18 | Phase 2.5.9: Holiday awareness (Nager.Date) | Claude Opus 4.6 | 01SE5WrUuc6LWTmZC8WBXKY4 |

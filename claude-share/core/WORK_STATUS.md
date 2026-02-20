@@ -126,8 +126,8 @@
 > Ordered by priority. Next AI session should pick the top item.
 
 1. **Phase 4.2** — Replace estimateTokens with actual tokenizer
-2. **Phase 2.4** — Acontext dashboard link in admin UI
-3. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+2. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+3. **Phase 5 planning** — advanced capabilities sequencing
 
 ---
 

@@ -349,3 +349,107 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Acontext section */
+.acontext-section {
+  border-left: 3px solid #7c3aed;
+}
+
+.acontext-section .hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.acontext-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.acontext-item {
+  display: grid;
+  grid-template-columns: 28px 90px 180px minmax(220px, 1fr) 90px auto;
+  align-items: center;
+  gap: 0.75rem;
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: 0.625rem 0.75rem;
+  font-size: 0.825rem;
+}
+
+.session-status {
+  font-weight: 700;
+  text-align: center;
+}
+
+.session-status.success {
+  color: var(--success-color);
+}
+
+.session-status.failure {
+  color: var(--error-color);
+}
+
+.session-status.unknown {
+  color: var(--text-muted);
+}
+
+.session-age,
+.session-model,
+.session-prompt,
+.session-tools {
+  color: var(--text-secondary);
+}
+
+.session-model,
+.session-prompt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-link {
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.session-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 860px) {
+  .acontext-item {
+    grid-template-columns: 28px 80px 1fr auto;
+    grid-template-areas:
+      'status age model link'
+      'status prompt prompt link'
+      'status tools tools link';
+  }
+
+  .session-status {
+    grid-area: status;
+  }
+
+  .session-age {
+    grid-area: age;
+  }
+
+  .session-model {
+    grid-area: model;
+  }
+
+  .session-prompt {
+    grid-area: prompt;
+  }
+
+  .session-tools {
+    grid-area: tools;
+  }
+
+  .session-link {
+    grid-area: link;
+  }
+}

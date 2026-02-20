@@ -7,6 +7,8 @@
 
 ---
 
+- 2026-02-20 | Codex (GPT-5.2-Codex) | feat(admin): add Acontext sessions dashboard section — Phase 2.4 complete | src/routes/api.ts, src/client/api.ts, src/client/pages/AdminPage.tsx, src/client/pages/AcontextSessionsSection.tsx
+
 ## Project Overview
 
 **Moltworker** is a multi-platform AI assistant gateway deployed on Cloudflare Workers. It provides:
