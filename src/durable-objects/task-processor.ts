@@ -9,7 +9,7 @@ import { createOpenRouterClient, type ChatMessage, type ResponseFormat } from '.
 import { executeTool, AVAILABLE_TOOLS, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER } from '../openrouter/tools';
 import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
-import { extractLearning, storeLearning, storeLastTaskSummary } from '../openrouter/learnings';
+import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSummary, type SessionSummary } from '../openrouter/learnings';
 import { parseOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted } from './context-budget';
@@ -1626,9 +1626,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               success: true,
               userMessage,
             });
+            const resultSummary = (task.result || '').substring(0, 500);
             await storeLearning(this.r2, task.userId, learning);
-            await storeLastTaskSummary(this.r2, task.userId, learning);
-            console.log(`[TaskProcessor] Learning stored: ${learning.category}, ${learning.uniqueTools.length} unique tools`);
+            await storeLastTaskSummary(this.r2, task.userId, learning, resultSummary);
+
+            // Store session summary for cross-session continuity (Phase 4.4)
+            const sessionSummary: SessionSummary = {
+              sessionId: task.taskId,
+              timestamp: learning.timestamp,
+              topic: learning.taskSummary,
+              resultSummary,
+              category: learning.category,
+              toolsUsed: learning.uniqueTools,
+              success: true,
+              modelAlias: task.modelAlias,
+            };
+            await storeSessionSummary(this.r2, task.userId, sessionSummary);
+            console.log(`[TaskProcessor] Learning + session stored: ${learning.category}, ${learning.uniqueTools.length} unique tools`);
           } catch (learnErr) {
             console.error('[TaskProcessor] Failed to store learning:', learnErr);
           }
@@ -1877,8 +1891,22 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             success: false,
             userMessage,
           });
+          const failResultSummary = (task.error || task.result || '').substring(0, 500);
           await storeLearning(this.r2, task.userId, learning);
-          console.log(`[TaskProcessor] Failure learning stored: ${learning.category}`);
+
+          // Store failed session for cross-session continuity (Phase 4.4)
+          const failSessionSummary: SessionSummary = {
+            sessionId: task.taskId,
+            timestamp: learning.timestamp,
+            topic: learning.taskSummary,
+            resultSummary: failResultSummary,
+            category: learning.category,
+            toolsUsed: learning.uniqueTools,
+            success: false,
+            modelAlias: task.modelAlias,
+          };
+          await storeSessionSummary(this.r2, task.userId, failSessionSummary);
+          console.log(`[TaskProcessor] Failure learning + session stored: ${learning.category}`);
         } catch (learnErr) {
           console.error('[TaskProcessor] Failed to store failure learning:', learnErr);
         }

@@ -68,6 +68,7 @@ vi.mock('../openrouter/learnings', () => ({
   })),
   storeLearning: vi.fn(),
   storeLastTaskSummary: vi.fn(),
+  storeSessionSummary: vi.fn(),
 }));
 
 // --- Helpers ---

@@ -7,7 +7,7 @@ import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type Cha
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
 import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
-import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, formatLearningSummary, loadLastTaskSummary, formatLastTaskForPrompt } from '../openrouter/learnings';
+import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, formatLearningSummary, loadLastTaskSummary, formatLastTaskForPrompt, loadSessionHistory, getRelevantSessions, formatSessionsForPrompt } from '../openrouter/learnings';
 import { createAcontextClient, formatSessionsList } from '../acontext/client';
 import {
   buildInitPrompt,
@@ -605,6 +605,21 @@ export class TelegramHandler {
     try {
       const summary = await loadLastTaskSummary(this.r2Bucket, userId);
       return formatLastTaskForPrompt(summary);
+    } catch {
+      return ''; // Non-fatal: skip on error
+    }
+  }
+
+  /**
+   * Get relevant session history for cross-session context continuity.
+   * Returns empty string if no relevant sessions or on error.
+   */
+  private async getSessionContext(userId: string, userMessage: string): Promise<string> {
+    try {
+      const history = await loadSessionHistory(this.r2Bucket, userId);
+      if (!history) return '';
+      const relevant = getRelevantSessions(history, userMessage);
+      return formatSessionsForPrompt(relevant);
     } catch {
       return ''; // Non-fatal: skip on error
     }
@@ -1563,6 +1578,7 @@ export class TelegramHandler {
     const contextPrompt = prompt || (mode === 'init' ? 'Create roadmap' : 'Execute next roadmap task');
     const learningsHint = await this.getLearningsHint(userId, contextPrompt);
     const lastTaskHint = await this.getLastTaskHint(userId);
+    const sessionContext = await this.getSessionContext(userId, contextPrompt);
 
     const toolHint = modelInfo.parallelCalls
       ? '\n\nCall multiple tools in parallel when possible (e.g., read multiple files at once).'
@@ -1577,7 +1593,7 @@ export class TelegramHandler {
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: orchestraSystemPrompt + toolHint + learningsHint + lastTaskHint,
+        content: orchestraSystemPrompt + toolHint + learningsHint + lastTaskHint + sessionContext,
       },
       { role: 'user', content: userMessage },
     ];
@@ -1827,9 +1843,10 @@ export class TelegramHandler {
         const toolHint = `\n\nYou have access to tools (web browsing, GitHub, weather, news, currency conversion, charts, code execution, etc). Use them proactively — don't guess when you can look up real data.${visionParallelHint} Tools are fast and free; prefer using them over making assumptions.`;
         const learningsHint = await this.getLearningsHint(userId, caption);
         const lastTaskHint = await this.getLastTaskHint(userId);
+        const sessionCtx = await this.getSessionContext(userId, caption);
 
         const messages: ChatMessage[] = [
-          { role: 'system', content: systemPrompt + toolHint + learningsHint + lastTaskHint },
+          { role: 'system', content: systemPrompt + toolHint + learningsHint + lastTaskHint + sessionCtx },
           ...history.map(msg => ({
             role: msg.role as 'user' | 'assistant',
             content: msg.content,
@@ -2118,12 +2135,14 @@ export class TelegramHandler {
     const learningsHint = await this.getLearningsHint(userId, messageText);
     // Inject last completed task summary for cross-task context
     const lastTaskHint = await this.getLastTaskHint(userId);
+    // Inject relevant session history for cross-session continuity (Phase 4.4)
+    const sessionContext = await this.getSessionContext(userId, messageText);
 
     // Build messages array
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: systemPrompt + toolHint + learningsHint + lastTaskHint,
+        content: systemPrompt + toolHint + learningsHint + lastTaskHint + sessionContext,
       },
       ...history.map(msg => ({
         role: msg.role as 'user' | 'assistant',
