@@ -228,11 +228,95 @@ function getAutoResumeLimit(modelAlias: string): number {
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
   private r2?: R2Bucket;
+  private toolResultCache = new Map<string, string>();
+  private toolInFlightCache = new Map<string, Promise<{ tool_call_id: string; content: string }>>();
+  private toolCacheHits = 0;
+  private toolCacheMisses = 0;
 
   constructor(state: DurableObjectState, env: TaskProcessorEnv) {
     super(state, env);
     this.doState = state;
     this.r2 = env.MOLTBOT_BUCKET;
+  }
+
+  getToolCacheStats(): { hits: number; misses: number; size: number } {
+    return {
+      hits: this.toolCacheHits,
+      misses: this.toolCacheMisses,
+      size: this.toolResultCache.size,
+    };
+  }
+
+  private shouldCacheToolResult(content: string): boolean {
+    const normalized = content.trim().toLowerCase();
+    return !normalized.startsWith('error') && !normalized.startsWith('error executing');
+  }
+
+  private async executeToolWithCache(
+    toolCall: ToolCall,
+    toolContext: ToolContext
+  ): Promise<{ tool_call_id: string; content: string }> {
+    const toolName = toolCall.function.name;
+    const cacheKey = `${toolName}:${toolCall.function.arguments}`;
+    const isCacheableTool = PARALLEL_SAFE_TOOLS.has(toolName);
+
+    if (isCacheableTool) {
+      const cached = this.toolResultCache.get(cacheKey);
+      if (cached !== undefined) {
+        this.toolCacheHits++;
+        console.log(`[TaskProcessor] Tool cache HIT: ${toolName} (${this.toolResultCache.size} entries)`);
+        return {
+          tool_call_id: toolCall.id,
+          content: cached,
+        };
+      }
+
+      const inFlight = this.toolInFlightCache.get(cacheKey);
+      if (inFlight) {
+        this.toolCacheHits++;
+        console.log(`[TaskProcessor] Tool cache HIT (in-flight): ${toolName} (${this.toolResultCache.size} entries)`);
+        const sharedResult = await inFlight;
+        return {
+          tool_call_id: toolCall.id,
+          content: sharedResult.content,
+        };
+      }
+    }
+
+    const executionPromise = (async (): Promise<{ tool_call_id: string; content: string }> => {
+      const toolPromise = executeTool(toolCall, toolContext);
+      const toolTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
+      });
+      const toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
+
+      if (isCacheableTool && this.shouldCacheToolResult(toolResult.content)) {
+        this.toolResultCache.set(cacheKey, toolResult.content);
+        this.toolCacheMisses++;
+        console.log(`[TaskProcessor] Tool cache MISS: ${toolName} → stored (${this.toolResultCache.size} entries)`);
+      }
+
+      return {
+        tool_call_id: toolResult.tool_call_id,
+        content: toolResult.content,
+      };
+    })();
+
+    if (isCacheableTool) {
+      this.toolInFlightCache.set(cacheKey, executionPromise);
+    }
+
+    try {
+      const toolResult = await executionPromise;
+      return {
+        tool_call_id: toolResult.tool_call_id,
+        content: toolResult.content,
+      };
+    } finally {
+      if (isCacheableTool) {
+        this.toolInFlightCache.delete(cacheKey);
+      }
+    }
   }
 
   /**
@@ -661,6 +745,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * Process the AI task with unlimited time
    */
   private async processTask(request: TaskRequest): Promise<void> {
+    // Cache is scoped to a single task session.
+    this.toolResultCache.clear();
+    this.toolInFlightCache.clear();
+    this.toolCacheHits = 0;
+    this.toolCacheMisses = 0;
+
     const task: TaskState = {
       taskId: request.taskId,
       chatId: request.chatId,
@@ -1230,11 +1320,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 const toolStartTime = Date.now();
                 const toolName = toolCall.function.name;
 
-                const toolPromise = executeTool(toolCall, toolContext);
-                const toolTimeoutPromise = new Promise<never>((_, reject) => {
-                  setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
-                });
-                const toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
+                const toolResult = await this.executeToolWithCache(toolCall, toolContext);
 
                 console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
                 return { toolName, toolResult };
@@ -1266,11 +1352,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               let toolResult;
               try {
-                const toolPromise = executeTool(toolCall, toolContext);
-                const toolTimeoutPromise = new Promise<never>((_, reject) => {
-                  setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
-                });
-                toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
+                toolResult = await this.executeToolWithCache(toolCall, toolContext);
               } catch (toolError) {
                 toolResult = {
                   tool_call_id: toolCall.id,

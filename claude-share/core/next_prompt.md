@@ -3,40 +3,40 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-20 (Phase 2.4 complete — Acontext dashboard in admin UI)
+**Last Updated:** 2026-02-20 (Phase 4.3 complete — Tool result caching)
 
 ---
 
-## Current Task: Phase 4.3 — Tool Result Caching
+## Current Task: Phase 4.4 — Cross-Session Context Continuity
 
 ### Goal
 
-Cache identical tool call results (same function + arguments) within a task session to avoid redundant API calls. For example, if `get_weather` is called twice with the same lat/lon, return the cached result on the second call.
+Persist and restore condensed task context across sessions so long-running or resumed tasks can continue coherently even after Durable Object eviction/restart.
 
 ### Context
 
 - Phase 4.2 complete: real tokenizer integrated
 - Phase 2.4 complete: Acontext dashboard in admin UI
-- Tool execution happens in `src/durable-objects/task-processor.ts` and `src/openrouter/tools.ts`
-- 14 tools total, 11 are read-only (safe to cache), 3 are mutation tools (should not cache)
-- `PARALLEL_SAFE_TOOLS` whitelist already identifies which tools are read-only
-- This is a Codex-assigned task
+- Phase 4.3 complete: TaskProcessor now caches read-only tool results per task session
+- Need cross-session continuity beyond in-memory lifetime
+- Existing checkpointing in `src/durable-objects/task-processor.ts` and R2 can be extended
+- Ensure resume flow avoids stale or duplicated context artifacts
 
 ### Files to Modify
 
 | File | What to change |
 |------|---------------|
-| `src/durable-objects/task-processor.ts` | Add in-memory cache keyed by tool name + arguments hash |
-| `src/openrouter/tools.ts` | Consider cache-hit path in tool execution |
-| Tests | Add tests for cache hit, cache miss, mutation tool bypass |
+| `src/durable-objects/task-processor.ts` | Add persistence/restore hooks for cross-session context continuity |
+| `src/durable-objects/context-budget.ts` | Ensure resumed context still respects token budgets |
+| Tests | Add coverage for resume continuity and stale-context handling |
 
 ### Queue After This Task
 
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
-| Current | 4.3: Tool result caching | Medium | Cache identical tool calls (Codex) |
-| Next | 4.4: Cross-session context continuity | Medium | Resume tasks days later (Claude) |
-| Then | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
+| Current | 4.4: Cross-session context continuity | Medium | Resume tasks days later (Claude) |
+| Next | Audit Phase 2: P2 guardrails | Medium | Multi-agent review, tool result validation |
+| Then | Phase 5.1: Tool result quality scoring | Medium | Add confidence/validation scoring |
 
 ---
 
@@ -44,6 +44,7 @@ Cache identical tool call results (same function + arguments) within a task sess
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-20 | Phase 4.3: Tool result caching (per-session cache + tests) | Codex (GPT-5.2-Codex) | codex-phase-4-3-cache-001 |
 | 2026-02-20 | Phase 4.2: Real tokenizer (gpt-tokenizer cl100k_base, heuristic fallback) | Claude Opus 4.6 | session_01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-20 | Sprint 48h: Phase budget circuit breakers (plan=8s, work=18s, review=3s) | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |
 | 2026-02-20 | Sprint 48h: Parallel tools allSettled + PARALLEL_SAFE_TOOLS whitelist | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |
