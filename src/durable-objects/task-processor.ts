@@ -12,7 +12,7 @@ import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/co
 import { extractLearning, storeLearning, storeLastTaskSummary } from '../openrouter/learnings';
 import { parseOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
-import { estimateTokens, estimateMessageTokens, compressContextBudgeted } from './context-budget';
+import { estimateTokens, compressContextBudgeted } from './context-budget';
 
 // Task phase type for structured task processing
 export type TaskPhase = 'plan' | 'work' | 'review';
@@ -37,8 +37,8 @@ const SOURCE_GROUNDING_PROMPT =
 const MAX_TOOL_RESULT_LENGTH = 8000; // ~2K tokens (reduced for CPU)
 // Compress context after this many tool calls
 const COMPRESS_AFTER_TOOLS = 6; // Compress more frequently
-// Max estimated tokens before forcing compression
-const MAX_CONTEXT_TOKENS = 60000; // Lower threshold
+// Safety fallback for aliases without metadata
+const DEFAULT_CONTEXT_BUDGET = 60000;
 
 // Emergency core: highly reliable models that are tried last when all rotation fails.
 // These are hardcoded and only changed by code deploy — the unhackable fallback.
@@ -399,6 +399,17 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     return estimateTokens(messages);
   }
 
+  private getContextBudget(modelAlias?: string): number {
+    const modelContext = modelAlias ? getModel(modelAlias)?.maxContext : undefined;
+    if (!modelContext || modelContext <= 0) {
+      return DEFAULT_CONTEXT_BUDGET;
+    }
+
+    // Reserve room for completion + overhead to avoid hitting hard context limits.
+    const budget = Math.floor(modelContext * 0.75);
+    return Math.max(16000, budget);
+  }
+
   /**
    * Save checkpoint to R2
    * @param slotName - Optional slot name (default: 'latest')
@@ -492,8 +503,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * @param messages - Full conversation messages
    * @param keepRecent - Minimum recent messages to always keep (default: 6)
    */
-  private compressContext(messages: ChatMessage[], keepRecent: number = 6): ChatMessage[] {
-    return compressContextBudgeted(messages, MAX_CONTEXT_TOKENS, keepRecent);
+  private compressContext(messages: ChatMessage[], modelAlias: string, keepRecent: number = 6): ChatMessage[] {
+    return compressContextBudgeted(messages, this.getContextBudget(modelAlias), keepRecent);
   }
 
   /**
@@ -1131,7 +1142,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           if (validToolCalls.length === 0) {
             // All tool_calls truncated — compress and retry with nudge
             console.log(`[TaskProcessor] All tool_calls truncated (finish_reason: length) — compressing and retrying`);
-            const compressed = this.compressContext(conversationMessages, 4);
+            const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
             conversationMessages.push({
@@ -1237,13 +1248,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           const estimatedTokens = this.estimateTokens(conversationMessages);
           if (task.toolsUsed.length > 0 && task.toolsUsed.length % COMPRESS_AFTER_TOOLS === 0) {
             const beforeCount = conversationMessages.length;
-            const compressed = this.compressContext(conversationMessages);
+            const compressed = this.compressContext(conversationMessages, task.modelAlias);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
             console.log(`[TaskProcessor] Compressed context: ${beforeCount} -> ${compressed.length} messages`);
-          } else if (estimatedTokens > MAX_CONTEXT_TOKENS) {
+          } else if (estimatedTokens > this.getContextBudget(task.modelAlias)) {
             // Force compression if tokens too high
-            const compressed = this.compressContext(conversationMessages, 4);
+            const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
             console.log(`[TaskProcessor] Force compressed due to ${estimatedTokens} estimated tokens`);
@@ -1338,7 +1349,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             console.log(`[TaskProcessor] Empty content after ${task.toolsUsed.length} tools — retry ${emptyContentRetries}/${MAX_EMPTY_RETRIES}`);
 
             // Aggressively compress context before retry — keep only 2 recent messages
-            const compressed = this.compressContext(conversationMessages, 2);
+            const compressed = this.compressContext(conversationMessages, task.modelAlias, 2);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
             console.log(`[TaskProcessor] Aggressive compression before retry: ${conversationMessages.length} messages`);
@@ -1374,7 +1385,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             }
 
             // Compress for the new model
-            const compressed = this.compressContext(conversationMessages, 2);
+            const compressed = this.compressContext(conversationMessages, task.modelAlias, 2);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
 
