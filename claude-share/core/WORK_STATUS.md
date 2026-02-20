@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-18 (Phase 4.1 Token-budgeted context retrieval)
+**Last Updated:** 2026-02-20 (Phase 2.4 Acontext admin dashboard section complete)
 
 ---
 
@@ -46,7 +46,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | Phase 4.1 Token-budgeted context retrieval complete | `claude/implement-p1-guardrails-NF641` | 2026-02-18 |
-| Codex | — | — | — |
+| Codex | Phase 2.4 Acontext dashboard link in admin UI ✅ complete | `codex/acontext-admin-2p4-001` | 2026-02-20 |
 | Other | — | — | — |
 
 ---
@@ -125,9 +125,9 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **Phase 4.2** — Replace estimateTokens with actual tokenizer
-2. **Phase 2.4** — Acontext dashboard link in admin UI
-3. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+1. **Audit Phase 2** — P2 guardrails (multi-agent review, tool result validation)
+2. **Phase 4.2** — Replace estimateTokens with actual tokenizer
+3. **Phase 5.x** — MCP integrations and secure execution review
 
 ---
 

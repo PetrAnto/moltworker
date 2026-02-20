@@ -5,6 +5,42 @@
 ---
 
 
+## Session: 2026-02-20 | Phase 2.4 Acontext admin dashboard section (Session: codex-acontext-admin-2p4-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** codex/acontext-admin-2p4-001
+**Status:** Completed
+
+### Summary
+Added a read-only Acontext Sessions section to the admin UI with backend API support and tests.
+
+### Changes Made
+- Added `GET /api/admin/acontext/sessions` with graceful `configured: false` fallback when no API key is set
+- Added client API types + `getAcontextSessions()` helper
+- Added Admin UI Acontext section with status icon, age, prompt truncation, tools count, and dashboard link
+- Added route test and Admin section render/helper tests
+
+### Files Modified
+- `src/routes/api.ts`
+- `src/routes/api.test.ts`
+- `src/client/api.ts`
+- `src/client/pages/AdminPage.tsx`
+- `src/client/pages/AdminPage.css`
+- `src/admin-page-acontext.test.tsx`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Proceed with Audit Phase 2 (P2 guardrails) now that Phase 2.4 is complete.
+
+---
+
 ## Session: 2026-02-19 | Phase 4.1 context-budget audit hardening (Session: codex-phase-4-1-audit-001)
 
 **AI:** Codex (GPT-5.2-Codex)
