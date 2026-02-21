@@ -3,59 +3,47 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-21 (Dream Machine Build stage complete — DM.1-DM.3 done, P2 guardrails audit complete)
+**Last Updated:** 2026-02-21 (DM.4 complete — AI code generation wired into Dream Build)
 
 ---
 
-## Current Task: DM.4 — Wire Real Code Generation into Dream Build
+## Current Task: DM.5 — Add /dream-build/:jobId/approve Endpoint
 
 ### Goal
 
-Replace the TODO stub files that `executeBuild()` currently generates with actual AI-generated code. Right now the dream-build pipeline creates a branch, writes placeholder files (`// TODO: Implement ...`), and opens a PR — but no real code generation happens. The MCP client (`CloudflareMcpClient`) is already imported in `build-processor.ts` but never called.
+Add an approval endpoint that resumes paused Dream Build jobs. When `checkDestructiveOps()` flags destructive SQL or commands, the job status is set to `'paused'` and a callback is sent. A human reviewer needs a way to approve the build to resume processing.
 
 ### Context
 
-- Dream Machine pipeline is live and deployed (DM.1-DM.3 complete)
-- `POST /dream-build` → DreamBuildProcessor DO → `executeBuild()` → GitHub PR
-- `executeBuild()` calls `buildWorkPlan()` which generates stub files with TODOs
-- `CloudflareMcpClient` is imported but never used in the build flow
-- OpenRouter client is available for AI code generation
-- The spec parser extracts: title, overview, requirements, apiRoutes, dbChanges, uiComponents
-- Budget/cost tracking fields exist (`tokensUsed`, `costEstimate`) but are always 0
+- DM.1-DM.4 are complete — Dream Machine generates real AI code via OpenRouter
+- When destructive ops are detected, `executeBuild()` sets `status: 'paused'` and returns
+- There is no endpoint to resume a paused job — the DO just stays paused forever
+- The `alarm()` handler skips paused jobs (only processes `'queued'` and `'running'`)
 
 ### What Needs to Happen
 
-1. **For each WorkItem** in the plan, call OpenRouter (or Cloudflare MCP where appropriate) to generate actual implementation code based on the parsed spec
-2. **Track token usage** — increment `tokensUsed` and `costEstimate` after each AI call
-3. **Use budget checks** — call `checkBudget()` with real values so the budget cap actually works
-4. **Generate meaningful code** — routes should have real Hono handlers, components should have real React JSX, migrations should have real SQL
-5. **Use spec context** — pass the full parsed spec (requirements, related routes, related components) as context to the AI for each file
+1. **Add `POST /dream-build/:jobId/approve`** route in `src/routes/dream.ts`
+2. **Add `resumeJob()` method** to `DreamBuildProcessor` DO that:
+   - Validates the job is currently `'paused'`
+   - Changes status to `'queued'`
+   - Sets a new alarm to trigger re-processing
+3. **Auth**: Same Bearer token auth as other dream routes
+4. **Tests**: Add route + DO method tests
 
 ### Files to Modify
 
 | File | What to change |
 |------|---------------|
-| `src/dream/build-processor.ts` | Wire OpenRouter/MCP calls into `executeBuild()` loop, replace stub content with AI-generated code, track tokens/cost |
-| `src/openrouter/client.ts` | May need a simpler `generateCode()` helper for single-file code generation |
-| `src/dream/types.ts` | May need to add fields for generation config (model, temperature, etc.) |
-| Tests | Add tests for AI code generation path (mock OpenRouter responses) |
-
-### Key Constraints
-
-- Each generated file must be self-contained and syntactically valid
-- Budget must be enforced — stop generating if cost exceeds `job.budget`
-- Use a capable model (e.g., Claude Sonnet 4.5 or GPT-4o) for code generation
-- Keep callback lifecycle: `writing(item.path)` should fire before each file generation
-- Maintain the existing safety gates (destructive op detection, branch protection)
+| `src/routes/dream.ts` | Add POST `/:jobId/approve` route |
+| `src/dream/build-processor.ts` | Add `resumeJob()` public method |
+| Tests | Route + DO integration tests |
 
 ### Queue After This Task
 
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
-| Current | DM.4: Wire real code generation | High | Replace TODO stubs with AI-generated code |
-| Next | DM.5: Add /dream-build/:jobId/approve endpoint | Medium | Resume paused jobs after human approval |
-| Then | DM.6: Token/cost tracking in build pipeline | Low | Already partially done if DM.4 tracks tokens |
-| Then | DM.7: Enforce checkTrustLevel() | Low | One-line addition to route |
+| Current | DM.5: Add /dream-build/:jobId/approve endpoint | Medium | Resume paused jobs after human approval |
+| Next | DM.7: Enforce checkTrustLevel() | Low | One-line addition to route |
 | Then | Phase 5.1: Multi-agent review | High | Route results through reviewer model |
 
 ---
@@ -64,6 +52,7 @@ Replace the TODO stub files that `executeBuild()` currently generates with actua
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-21 | DM.4: Wire real AI code generation into Dream Build (993 tests) | Claude Opus 4.6 | session_01NzU1oFRadZHdJJkiKi2sY8 |
 | 2026-02-21 | Audit Phase 2: P2 guardrails — tool result validation + No Fake Success enforcement | Claude Opus 4.6 | session_01NzU1oFRadZHdJJkiKi2sY8 |
 | 2026-02-21 | DM.1-DM.3: Dream Machine Build stage + auth + route fix (935 tests) | Claude Opus 4.6 | session_01QETPeWbuAmbGASZr8mqoYm |
 | 2026-02-20 | Phase 5.2: MCP integration — Cloudflare Code Mode MCP (38 tests, 872 total) | Claude Opus 4.6 | session_01QETPeWbuAmbGASZr8mqoYm |

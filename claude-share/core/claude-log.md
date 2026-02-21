@@ -4,6 +4,36 @@
 
 ---
 
+## Session: 2026-02-21 | DM.4 — Wire Real AI Code Generation into Dream Build (Session: session_01NzU1oFRadZHdJJkiKi2sY8)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-Wh6Cx`
+**Task:** Replace TODO stub files with AI-generated code in the Dream Machine Build pipeline
+
+### Approach
+- DM.4 was the next task per `next_prompt.md` after P2 guardrails completion
+- Used OpenRouter `chatCompletion()` with Claude Sonnet 4.5 (`sonnet` alias) for code generation
+- Type-aware system prompts: Hono route handlers, React functional components, SQL D1 migrations, generic TypeScript
+- Full spec context passed to each generation: overview, requirements, API routes, DB changes, UI components
+- Moved `extractCodeFromResponse` and cost utilities to `types.ts` to keep them testable (build-processor.ts imports `cloudflare:workers`)
+
+### Changes
+- **Modified:** `src/dream/build-processor.ts` — added `generateFileCode()` method (calls OpenRouter per work item), `buildSystemPrompt()` (type-aware framework instructions), `buildUserPrompt()` (spec context injection), token/cost tracking after each AI call, graceful fallback on AI failure, `OPENROUTER_API_KEY` in `DreamBuildEnv`
+- **Modified:** `src/dream/types.ts` — added `MODEL_COST_RATES` (5 models: Sonnet 4.5, Opus 4.5, GPT-4o, GPT-4o-mini, Gemini 2.5 Pro), `estimateCost()`, `extractCodeFromResponse()`, `DREAM_CODE_MODEL_ALIAS`/`DREAM_CODE_MODEL_ID`
+- **New:** `src/dream/build-processor.test.ts` — 20 tests: extractCodeFromResponse (9 tests for fence stripping), estimateCost (5 tests), MODEL_COST_RATES (2 tests), integration patterns (4 tests for budget enforcement and cost accumulation)
+
+### Design Decisions
+- **OpenRouter over MCP**: Used `chatCompletion()` directly rather than MCP — simpler, no tool-calling loop needed for single-file generation, and the MCP client is designed for Cloudflare API calls not code generation
+- **Graceful degradation**: If AI generation fails (API error, timeout), the stub content is kept and the build continues — partial code is better than a failed PR
+- **No OPENROUTER_API_KEY = stub mode**: Falls back to TODO stubs when no key is configured, maintaining backward compatibility
+- **DM.6 (token tracking) done implicitly**: The cost tracking was integral to DM.4, so DM.6 is now marked complete in the roadmap
+- **Temperature 0.3**: Low temperature for more deterministic, syntactically correct code generation
+
+### Test Results
+- 993 tests passing (20 new), typecheck clean
+
+---
+
 ## Session: 2026-02-21 | Audit Phase 2 — P2 Guardrails: Tool Result Validation + No Fake Success (Session: session_01NzU1oFRadZHdJJkiKi2sY8)
 
 **AI:** Claude Opus 4.6
