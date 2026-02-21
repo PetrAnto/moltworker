@@ -27,7 +27,7 @@ import type { AppEnv, MoltbotEnv } from './types';
 import { MOLTBOT_PORT } from './config';
 import { createAccessMiddleware } from './auth';
 import { ensureMoltbotGateway, findExistingMoltbotProcess } from './gateway';
-import { publicRoutes, api, adminUi, debug, cdp, telegram, discord } from './routes';
+import { publicRoutes, api, adminUi, debug, cdp, telegram, discord, dream } from './routes';
 import { redactSensitiveParams } from './utils/logging';
 import loadingPageHtml from './assets/loading.html';
 import configErrorHtml from './assets/config-error.html';
@@ -50,6 +50,7 @@ function transformErrorMessage(message: string, host: string): string {
 
 export { Sandbox };
 export { TaskProcessor } from './durable-objects/task-processor';
+export { DreamBuildProcessor } from './dream/build-processor';
 
 /**
  * Validate required environment variables.
@@ -155,6 +156,9 @@ app.route('/discord', discord);
 // Mount CDP routes (uses shared secret auth via query param, not CF Access)
 app.route('/cdp', cdp);
 
+// Mount Dream Machine Build routes (uses Bearer token auth, not CF Access)
+app.route('/api/dream-build', dream);
+
 // =============================================================================
 // PROTECTED ROUTES: Cloudflare Access authentication required
 // =============================================================================
@@ -170,6 +174,11 @@ app.use('*', async (c, next) => {
 
   // Skip validation for telegram routes (uses its own auth)
   if (url.pathname.startsWith('/telegram')) {
+    return next();
+  }
+
+  // Skip validation for dream-build routes (uses Bearer token auth)
+  if (url.pathname.startsWith('/api/dream-build')) {
     return next();
   }
 
@@ -207,6 +216,11 @@ app.use('*', async (c, next) => {
 
   // Skip auth for telegram routes (uses token-based auth)
   if (url.pathname.startsWith('/telegram')) {
+    return next();
+  }
+
+  // Skip auth for dream-build routes (uses Bearer token auth)
+  if (url.pathname.startsWith('/api/dream-build')) {
     return next();
   }
 
@@ -483,7 +497,46 @@ async function scheduled(
   }
 }
 
+/**
+ * Queue consumer handler for Dream Machine batch builds.
+ * Processes jobs from the dream-build-queue.
+ */
+async function queue(
+  batch: MessageBatch<unknown>,
+  env: MoltbotEnv,
+  _ctx: ExecutionContext
+): Promise<void> {
+  for (const message of batch.messages) {
+    const job = message.body as import('./dream/types').DreamBuildJob;
+    console.log(`[DreamQueue] Processing job ${job.jobId}`);
+
+    if (!env.DREAM_BUILD_PROCESSOR) {
+      console.error('[DreamQueue] DREAM_BUILD_PROCESSOR not configured');
+      message.retry();
+      continue;
+    }
+
+    try {
+      const id = env.DREAM_BUILD_PROCESSOR.idFromName(job.jobId);
+      const stub = env.DREAM_BUILD_PROCESSOR.get(id);
+      const result = await stub.startJob(job);
+
+      if (result.ok) {
+        message.ack();
+        console.log(`[DreamQueue] Job ${job.jobId} started successfully`);
+      } else {
+        console.error(`[DreamQueue] Job ${job.jobId} rejected: ${result.error}`);
+        message.ack(); // Don't retry invalid jobs
+      }
+    } catch (error) {
+      console.error(`[DreamQueue] Failed to process job ${job.jobId}:`, error);
+      message.retry();
+    }
+  }
+}
+
 export default {
   fetch: app.fetch,
   scheduled,
+  queue,
 };

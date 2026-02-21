@@ -1,5 +1,6 @@
 import type { Sandbox } from '@cloudflare/sandbox';
 import type { TaskProcessor } from './durable-objects/task-processor';
+import type { DreamBuildProcessor } from './dream/build-processor';
 
 /**
  * Environment bindings for the Moltbot Worker.
@@ -42,6 +43,10 @@ export interface MoltbotEnv {
   MOONSHOT_API_KEY?: string; // Moonshot (Kimi models)
   DEEPSEEK_API_KEY?: string; // DeepSeek (DeepSeek Coder)
   CLOUDFLARE_API_TOKEN?: string; // Cloudflare API token for Code Mode MCP
+  // Dream Machine Build bindings
+  DREAM_BUILD_PROCESSOR?: DurableObjectNamespace<DreamBuildProcessor>;
+  STORIA_MOLTWORKER_SECRET?: string; // Shared secret for Storia → Moltworker auth
+  DREAM_BUILD_QUEUE?: Queue; // Cloudflare Queue for overnight batch builds
   DISCORD_BOT_TOKEN?: string;
   DISCORD_DM_POLICY?: string;
   DISCORD_ANNOUNCEMENT_CHANNELS?: string; // Comma-separated channel IDs to monitor
