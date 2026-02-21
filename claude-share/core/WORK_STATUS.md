@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-21 (P2 guardrails audit complete + Dream Machine Build stage + MCP + route fix)
+**Last Updated:** 2026-02-21 (DM.4 AI code generation complete + P2 guardrails audit + Dream Machine Build)
 
 ---
 
@@ -48,6 +48,7 @@
 | DM.1 | Dream Machine Build stage (DO, queue, callbacks, safety) | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.2 | Dream-build bearer token auth | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.3 | Route fix — /dream-build bypasses CF Access | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
+| DM.4 | Wire real AI code generation into Dream Build (993 tests) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-Wh6Cx` |
 
 ---
 
