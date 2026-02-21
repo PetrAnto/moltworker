@@ -4,6 +4,28 @@
 
 ---
 
+## Session: 2026-02-21 | DM.5 — Add /dream-build/:jobId/approve Endpoint (Session: session_01NzU1oFRadZHdJJkiKi2sY8)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-Wh6Cx`
+**Task:** Add approval endpoint to resume paused Dream Build jobs after human review
+
+### Changes
+- **Modified:** `src/dream/build-processor.ts` — added `resumeJob()` public method (validates paused state, sets `approved` flag, re-queues, triggers alarm), modified `executeBuild()` to skip destructive ops check when `approved` is true
+- **Modified:** `src/dream/types.ts` — added `approved?: boolean` field to `DreamJobState`
+- **Modified:** `src/routes/dream.ts` — added `POST /dream-build/:jobId/approve` route with same Bearer auth, returns 400 for non-paused jobs
+- **New:** `src/routes/dream.test.ts` — 8 tests: approve paused job, reject non-paused/complete/failed/missing jobs, handle DO errors, verify state transitions (approved flag + status change)
+
+### Design Decisions
+- **Approved flag approach**: Rather than storing which items were flagged and which need re-checking, the `approved` flag simply skips the entire destructive ops check on re-run. The human has already reviewed and approved all flagged items.
+- **Re-execution from scratch**: A resumed job re-runs `executeBuild()` completely — re-parsing spec, re-building plan. This is safe because no files have been written yet (the pause happens before GitHub writes).
+- **Idempotent resume**: Multiple calls to `/approve` on an already-queued job return an error (not paused), preventing accidental double-starts.
+
+### Test Results
+- 1001 tests passing (8 new), typecheck clean
+
+---
+
 ## Session: 2026-02-21 | DM.4 — Wire Real AI Code Generation into Dream Build (Session: session_01NzU1oFRadZHdJJkiKi2sY8)
 
 **AI:** Claude Opus 4.6
