@@ -1,8 +1,8 @@
 /**
  * Dream Machine Build routes.
  *
- * POST /api/dream-build — Accept a build job from Storia
- * GET  /api/dream-build/:jobId — Check job status
+ * POST /dream-build — Accept a build job from Storia
+ * GET  /dream-build/:jobId — Check job status
  *
  * Auth: Bearer token (STORIA_MOLTWORKER_SECRET shared secret)
  */
@@ -47,7 +47,7 @@ dream.use('*', async (c, next) => {
 });
 
 /**
- * POST /api/dream-build — Submit a build job.
+ * POST /dream-build — Submit a build job.
  *
  * Immediate mode (no queueName): starts processing now via Durable Object.
  * Queue mode (queueName set): enqueues for deferred processing.
@@ -115,7 +115,7 @@ dream.post('/', async (c) => {
 });
 
 /**
- * GET /api/dream-build/:jobId — Check job status.
+ * GET /dream-build/:jobId — Check job status.
  */
 dream.get('/:jobId', async (c) => {
   const jobId = c.req.param('jobId');

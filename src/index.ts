@@ -157,7 +157,8 @@ app.route('/discord', discord);
 app.route('/cdp', cdp);
 
 // Mount Dream Machine Build routes (uses Bearer token auth, not CF Access)
-app.route('/api/dream-build', dream);
+// Mounted outside /api/ to avoid Cloudflare Access edge interception
+app.route('/dream-build', dream);
 
 // =============================================================================
 // PROTECTED ROUTES: Cloudflare Access authentication required
@@ -178,7 +179,7 @@ app.use('*', async (c, next) => {
   }
 
   // Skip validation for dream-build routes (uses Bearer token auth)
-  if (url.pathname.startsWith('/api/dream-build')) {
+  if (url.pathname.startsWith('/dream-build')) {
     return next();
   }
 
@@ -220,7 +221,7 @@ app.use('*', async (c, next) => {
   }
 
   // Skip auth for dream-build routes (uses Bearer token auth)
-  if (url.pathname.startsWith('/api/dream-build')) {
+  if (url.pathname.startsWith('/dream-build')) {
     return next();
   }
 
