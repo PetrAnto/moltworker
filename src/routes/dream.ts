@@ -1,0 +1,153 @@
+/**
+ * Dream Machine Build routes.
+ *
+ * POST /api/dream-build — Accept a build job from Storia
+ * GET  /api/dream-build/:jobId — Check job status
+ *
+ * Auth: Bearer token (STORIA_MOLTWORKER_SECRET shared secret)
+ */
+
+import { Hono } from 'hono';
+import type { AppEnv } from '../types';
+import type { DreamBuildJob } from '../dream/types';
+import type { DreamBuildProcessor } from '../dream/build-processor';
+import { verifyDreamSecret } from '../dream/auth';
+import { validateJob } from '../dream/safety';
+
+// Extend AppEnv to include Dream Machine bindings
+type DreamEnv = AppEnv & {
+  Bindings: AppEnv['Bindings'] & {
+    DREAM_BUILD_PROCESSOR?: DurableObjectNamespace<DreamBuildProcessor>;
+    STORIA_MOLTWORKER_SECRET?: string;
+    DREAM_BUILD_QUEUE?: Queue;
+  };
+};
+
+const dream = new Hono<DreamEnv>();
+
+/**
+ * Auth middleware — verify shared secret on all dream routes.
+ */
+dream.use('*', async (c, next) => {
+  // Skip auth in dev mode
+  if (c.env.DEV_MODE === 'true') {
+    return next();
+  }
+
+  const authResult = verifyDreamSecret(
+    c.req.header('Authorization'),
+    c.env.STORIA_MOLTWORKER_SECRET
+  );
+
+  if (!authResult.ok) {
+    return c.json({ error: authResult.error }, 401);
+  }
+
+  return next();
+});
+
+/**
+ * POST /api/dream-build — Submit a build job.
+ *
+ * Immediate mode (no queueName): starts processing now via Durable Object.
+ * Queue mode (queueName set): enqueues for deferred processing.
+ */
+dream.post('/', async (c) => {
+  let job: DreamBuildJob;
+
+  try {
+    job = await c.req.json<DreamBuildJob>();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  // Validate the job payload
+  const validation = validateJob(job);
+  if (!validation.allowed) {
+    return c.json({ error: validation.reason }, 400);
+  }
+
+  // Queue mode — enqueue for deferred processing
+  if (job.queueName) {
+    if (!c.env.DREAM_BUILD_QUEUE) {
+      return c.json({ error: 'Queue not configured (DREAM_BUILD_QUEUE binding missing)' }, 503);
+    }
+
+    try {
+      await c.env.DREAM_BUILD_QUEUE.send(job);
+      return c.json({
+        ok: true,
+        jobId: job.jobId,
+        mode: 'queued',
+        message: `Job ${job.jobId} queued for deferred processing`,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return c.json({ error: `Failed to enqueue job: ${msg}` }, 500);
+    }
+  }
+
+  // Immediate mode — start via Durable Object
+  if (!c.env.DREAM_BUILD_PROCESSOR) {
+    return c.json({ error: 'Dream Build processor not configured (DREAM_BUILD_PROCESSOR binding missing)' }, 503);
+  }
+
+  try {
+    const id = c.env.DREAM_BUILD_PROCESSOR.idFromName(job.jobId);
+    const stub = c.env.DREAM_BUILD_PROCESSOR.get(id);
+    const result = await stub.startJob(job);
+
+    if (!result.ok) {
+      return c.json({ error: result.error }, 400);
+    }
+
+    return c.json({
+      ok: true,
+      jobId: job.jobId,
+      mode: 'immediate',
+      message: `Job ${job.jobId} started`,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error('[DreamBuild] Failed to start job:', msg);
+    return c.json({ error: `Failed to start job: ${msg}` }, 500);
+  }
+});
+
+/**
+ * GET /api/dream-build/:jobId — Check job status.
+ */
+dream.get('/:jobId', async (c) => {
+  const jobId = c.req.param('jobId');
+
+  if (!c.env.DREAM_BUILD_PROCESSOR) {
+    return c.json({ error: 'Dream Build processor not configured' }, 503);
+  }
+
+  try {
+    const id = c.env.DREAM_BUILD_PROCESSOR.idFromName(jobId);
+    const stub = c.env.DREAM_BUILD_PROCESSOR.get(id);
+    const status = await stub.getStatus();
+
+    if (!status) {
+      return c.json({ error: 'Job not found' }, 404);
+    }
+
+    return c.json({
+      jobId: status.jobId,
+      status: status.status,
+      completedItems: status.completedItems,
+      prUrl: status.prUrl,
+      error: status.error,
+      tokensUsed: status.tokensUsed,
+      costEstimate: status.costEstimate,
+      startedAt: status.startedAt,
+      updatedAt: status.updatedAt,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return c.json({ error: msg }, 500);
+  }
+});
+
+export { dream };

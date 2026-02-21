@@ -32,6 +32,10 @@
       {
         "class_name": "TaskProcessor",
         "name": "TASK_PROCESSOR"
+      },
+      {
+        "class_name": "DreamBuildProcessor",
+        "name": "DREAM_BUILD_PROCESSOR"
       }
     ]
   },
@@ -43,8 +47,28 @@
     {
       "new_classes": ["TaskProcessor"],
       "tag": "v2"
+    },
+    {
+      "new_classes": ["DreamBuildProcessor"],
+      "tag": "v3"
     }
   ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "DREAM_BUILD_QUEUE",
+        "queue": "dream-build-queue"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "dream-build-queue",
+        "max_retries": 3,
+        "max_batch_size": 1,
+        "max_batch_timeout": 30
+      }
+    ]
+  },
   "r2_buckets": [
     {
       "binding": "MOLTBOT_BUCKET",

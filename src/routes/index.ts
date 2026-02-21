@@ -5,3 +5,4 @@ export { debug } from './debug';
 export { cdp } from './cdp';
 export { telegram } from './telegram';
 export { discord } from './discord';
+export { dream } from './dream';
