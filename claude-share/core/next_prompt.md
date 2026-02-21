@@ -3,44 +3,39 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-21 (DM.8 complete — pre-PR code validation step)
+**Last Updated:** 2026-02-21 (DM.10-DM.14 all completed)
 
 ---
 
-## Current Task: Phase 5.1 — Multi-Agent Review
+## Current Task: Phase 5.1 — Multi-Agent Review for Complex Tasks
 
 ### Goal
 
-Add a review step to the Dream Build pipeline where a second AI model reviews the generated code before or after PR creation. This catches logical errors, security issues, and style violations that static checks can't.
+Route generated code (from Dream builds or task processor) through a secondary AI reviewer model before finalizing. This adds a safety net where a different model reviews code quality, security, and correctness.
 
 ### Context
 
-- DM.1-DM.8 are complete — full Dream Machine pipeline with AI code generation, validation, budget enforcement, human approval, and trust level enforcement
-- DM.8 added lightweight in-memory validation (bracket balancing, eval/any checks, stub detection)
-- The next level is having a reviewer model analyze the generated code for correctness and security
-- Options: (a) review before PR creation (blocks), (b) review after PR creation (adds as PR comment), (c) both
+- DM.10-DM.14 are now complete — full Dream Machine pipeline with queue consumer, JWT auth, GitHubClient, shipper deploy, and Vex review
+- Vex review (DM.14) handles risky pattern detection but doesn't do full code review
+- Phase 5.1 would add a second model pass (e.g., Claude reviewing GPT output or vice versa) for complex tasks
+- Referenced in GLOBAL_ROADMAP.md as Phase 5.1
 
 ### What Needs to Happen
 
-1. **Design review flow** — when does review happen, what model, what's the output format
-2. **Add review step** to `executeBuild()` — call reviewer model on generated files
-3. **Output review** — either block PR or add review comments to PR body
-4. **Tests**: Mock the reviewer model response
-
-### Files to Modify
-
-| File | What to change |
-|------|---------------|
-| `src/dream/build-processor.ts` | Add review step |
-| New `src/dream/reviewer.ts` | Review prompt builder + response parser |
-| Tests | Review step tests |
+1. **Design review protocol** — which tasks trigger review, which model reviews
+2. **Implement reviewer** in `src/openrouter/reviewer.ts` — takes generated code + spec, returns review assessment
+3. **Wire into task processor** — for tasks flagged as complex, add review phase
+4. **Wire into Dream builds** — optionally review generated files before PR creation
+5. **Tests**: Mock reviewer responses, test integration
 
 ### Queue After This Task
 
 | Priority | Task | Effort | Notes |
 |----------|------|--------|-------|
-| Current | Phase 5.1: Multi-agent review | High | Second AI reviews generated code |
-| Next | DM.9: Security review checkpoint | Medium | Human security review step |
+| Next | Phase 5.3: Acontext Sandbox for code execution | Medium | Replaces roadmap Priority 3.2 |
+| Next | Phase 5.4: Acontext Disk for file management | Medium | Replaces roadmap Priority 3.3 |
+| Later | Phase 6.2: Response streaming (Telegram) | Medium | Progressive message updates |
+| Later | Code Mode MCP Sprint A: storia-agent skill | High | See CODE_MODE_MCP_STORIA_SPEC.md |
 
 ---
 
@@ -48,6 +43,7 @@ Add a review step to the Dream Build pipeline where a second AI model reviews th
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-02-21 | DM.10-DM.14: Queue consumer, GitHubClient, JWT auth, shipper deploy, Vex review (1084 tests) | Claude Opus 4.6 | session_01NzU1oFRadZHdJJkiKi2sY8 |
 | 2026-02-21 | DM.8: Pre-PR code validation step (1031 tests) | Claude Opus 4.6 | session_01NzU1oFRadZHdJJkiKi2sY8 |
 | 2026-02-21 | DM.7: Enforce checkTrustLevel() at route layer (1007 tests) | Claude Opus 4.6 | session_01NzU1oFRadZHdJJkiKi2sY8 |
 | 2026-02-21 | DM.5: Add /dream-build/:jobId/approve endpoint (1001 tests) | Claude Opus 4.6 | session_01NzU1oFRadZHdJJkiKi2sY8 |
@@ -58,6 +54,3 @@ Add a review step to the Dream Build pipeline where a second AI model reviews th
 | 2026-02-20 | Phase 5.5: Web search tool (Brave Search API, cache, key plumbing, tests) | Codex (GPT-5.2-Codex) | codex-phase-5-5-web-search-001 |
 | 2026-02-20 | Phase 4.4: Cross-session context continuity (SessionSummary ring buffer) | Claude Opus 4.6 | session_01SE5WrUuc6LWTmZC8WBXKY4 |
 | 2026-02-20 | Phase 4.3: Tool result caching with in-flight dedup | Codex+Claude | session_01SE5WrUuc6LWTmZC8WBXKY4 |
-| 2026-02-20 | Phase 4.2: Real tokenizer (gpt-tokenizer cl100k_base) | Claude Opus 4.6 | session_01SE5WrUuc6LWTmZC8WBXKY4 |
-| 2026-02-20 | Phase 2.4: Acontext sessions dashboard in admin UI | Codex+Claude | session_01SE5WrUuc6LWTmZC8WBXKY4 |
-| 2026-02-20 | Sprint 48h: Phase budget circuit breakers + parallel tools allSettled | Claude Opus 4.6 | session_01AtnWsZSprM6Gjr9vjTm1xp |
