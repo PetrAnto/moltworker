@@ -7,8 +7,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import { createOpenRouterClient, parseSSEStream, type ChatMessage, type ResponseFormat } from '../openrouter/client';
 import { executeTool, AVAILABLE_TOOLS, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER } from '../openrouter/tools';
-import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
+import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
+import { injectCacheControl } from '../openrouter/prompt-cache';
 import { markdownToTelegramHtml } from '../utils/telegram-format';
 import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSummary, type SessionSummary } from '../openrouter/learnings';
 import { UserStorage } from '../openrouter/storage';
@@ -1141,9 +1142,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               const abortController = new AbortController();
               const fetchTimeout = setTimeout(() => abortController.abort(), 120000);
 
+              // Inject cache_control on system messages for Anthropic models (prompt caching)
+              const sanitized = sanitizeMessages(conversationMessages);
+              const finalMessages = isAnthropicModel(task.modelAlias) ? injectCacheControl(sanitized) : sanitized;
+
               const requestBody: Record<string, unknown> = {
                 model: getModelId(task.modelAlias),
-                messages: sanitizeMessages(conversationMessages),
+                messages: finalMessages,
                 max_tokens: clampMaxTokens(task.modelAlias, 16384),
                 temperature: getTemperature(task.modelAlias),
                 stream: true,

@@ -3,8 +3,9 @@
  * Direct integration with OpenRouter API using OpenAI-compatible format
  */
 
-import { getModelId, isImageGenModel, DEFAULT_IMAGE_MODEL, getReasoningParam, detectReasoningLevel, type ReasoningLevel, type ReasoningParam } from './models';
+import { getModelId, isImageGenModel, DEFAULT_IMAGE_MODEL, getReasoningParam, detectReasoningLevel, isAnthropicModel, type ReasoningLevel, type ReasoningParam } from './models';
 import { AVAILABLE_TOOLS, executeTool, type ToolDefinition, type ToolCall, type ToolResult, type ToolContext } from './tools';
+import { injectCacheControl } from './prompt-cache';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -23,6 +24,8 @@ export interface ContentPart {
   image_url?: {
     url: string; // base64 data URL or regular URL
   };
+  /** Anthropic prompt caching — set on the last content block of system messages */
+  cache_control?: { type: 'ephemeral' };
 }
 
 export interface ChatCompletionRequest {
@@ -270,9 +273,12 @@ export class OpenRouterClient {
   ): Promise<ChatCompletionResponse> {
     const modelId = getModelId(modelAlias);
 
+    // Inject cache_control on system messages for Anthropic models (prompt caching)
+    const cachedMessages = isAnthropicModel(modelAlias) ? injectCacheControl(messages) : messages;
+
     const request: ChatCompletionRequest = {
       model: modelId,
-      messages,
+      messages: cachedMessages,
       max_tokens: options?.maxTokens || 4096,
       temperature: options?.temperature ?? 0.7,
       transforms: [],
@@ -653,9 +659,12 @@ export class OpenRouterClient {
       const level = options?.reasoningLevel ?? detectReasoningLevel(messages);
       const reasoning = getReasoningParam(modelAlias, level);
 
+      // Inject cache_control on system messages for Anthropic models (prompt caching)
+      const cachedMessages = isAnthropicModel(modelAlias) ? injectCacheControl(messages) : messages;
+
       const requestBody: Record<string, unknown> = {
         model: modelId,
-        messages,
+        messages: cachedMessages,
         max_tokens: options?.maxTokens || 4096,
         temperature: options?.temperature ?? 0.7,
         tools: options?.tools,

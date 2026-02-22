@@ -677,6 +677,15 @@ export function getModel(alias: string): ModelInfo | undefined {
 }
 
 /**
+ * Check if a model routes to Anthropic (model ID starts with 'anthropic/')
+ */
+export function isAnthropicModel(alias: string): boolean {
+  const model = getModel(alias);
+  if (!model) return false;
+  return model.id.startsWith('anthropic/');
+}
+
+/**
  * Get model ID for API
  */
 export function getModelId(alias: string): string {
