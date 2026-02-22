@@ -50,7 +50,12 @@ vi.mock('../openrouter/models', () => ({
   categorizeModel: vi.fn(() => 'general'),
   clampMaxTokens: vi.fn((_, requested: number) => Math.min(requested, 8192)),
   getTemperature: vi.fn(() => 0.7),
+  isAnthropicModel: vi.fn(() => false),
   modelSupportsTools: vi.fn(() => true),
+}));
+
+vi.mock('../openrouter/prompt-cache', () => ({
+  injectCacheControl: vi.fn((messages: unknown[]) => messages),
 }));
 
 vi.mock('../openrouter/costs', () => ({
