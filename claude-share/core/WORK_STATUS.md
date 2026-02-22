@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-22 (7A.2 + 7A.3 + 7A.5 COMPLETE — 1175 tests)
+**Last Updated:** 2026-02-22 (Codex docs: model catalog sync design memo added)
 
 ---
 
@@ -127,6 +127,7 @@
 | 4.2 | Real tokenizer (gpt-tokenizer cl100k_base) | Claude Opus 4.6 | 2026-02-20 | `claude/implement-p1-guardrails-DcOgI` |
 | 2.4 | Acontext sessions dashboard in admin UI | Codex+Claude | 2026-02-20 | `claude/implement-p1-guardrails-DcOgI` |
 | P2 | Audit Phase 2: P2 guardrails (tool validation + No Fake Success + enhanced confidence) | Claude Opus 4.6 | 2026-02-21 | `claude/execute-next-prompt-Wh6Cx` |
+| DOC-MODELS | OpenRouter full-catalog sync design memo (capability inference, deprecation lifecycle, aliasing, pricing tiers) | Codex (GPT-5.2-Codex) | 2026-02-22 | `work` |
 | 7A.2 | Smart Context Loading — skip R2 reads for simple queries (1133 tests) | Claude Opus 4.6 | 2026-02-22 | `claude/execute-next-prompt-psdEX` |
 | 7A.3 | Destructive Op Guard — block risky tool calls (1158 tests) | Claude Opus 4.6 | 2026-02-22 | `claude/execute-next-prompt-psdEX` |
 | 7A.5 | Prompt Caching — cache_control for Anthropic models (1175 tests) | Claude Opus 4.6 | 2026-02-22 | `claude/execute-next-prompt-psdEX` |

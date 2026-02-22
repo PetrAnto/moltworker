@@ -336,6 +336,7 @@
 
 ## Changelog
 
+2026-02-22 | Codex (GPT-5.2-Codex) (Session: codex-model-sync-20260222) | docs(models): add concrete OpenRouter full-catalog sync design (capability inference, deprecation lifecycle, alias strategy, pricing tiers, direct-provider ingestion) for multi-model gateway planning | docs/openrouter-model-sync-design.md
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
