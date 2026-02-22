@@ -107,3 +107,33 @@ Implement Phase 1 first: add centralized task router policy and resume model esc
 
 ---
 
+
+
+## Session: 2026-02-22 | Model catalog sync strategy brief (Session: codex-model-sync-20260222)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Created a concrete technical design doc for full OpenRouter model-catalog automation (all models, capability detection, curation, deprecations, cron cadence, and direct-provider adapter strategy).
+
+### Changes Made
+- Added a new design doc under `docs/` with concrete endpoint usage, normalization mappings, alias strategy, deprecation lifecycle, and rollout checklist.
+- Documented a hybrid curated+dynamic model catalog approach with R2 object layout and scoring rubric.
+
+### Files Modified
+- `docs/model-catalog-sync-design-2026-02.md`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Implement the design by extracting `/syncmodels` logic into dedicated `src/openrouter/model-sync/*` modules and adding cron-driven refresh jobs + normalization tests.
+
+---
