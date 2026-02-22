@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-22 (7A.2 + 7A.3 + 7A.5 COMPLETE — 1175 tests)
+**Last Updated:** 2026-02-22 (Codex model catalog sync memo added)
 
 ---
 
@@ -69,7 +69,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | 7A.5 Prompt Caching ✅ | `claude/execute-next-prompt-psdEX` | 2026-02-22 |
-| Codex | — | — | — |
+| Codex | Model catalog sync automation memo ✅ | `work` | 2026-02-22 |
 | Other | — | — | — |
 
 ---
@@ -93,6 +93,7 @@
 | 2.5.3 | Weather tool (Open-Meteo) | Claude Opus 4.6 | 2026-02-08 | `claude/review-moltworker-roadmap-q5aqD` |
 | 2.5.5 | News feeds (HN/Reddit/arXiv) | Claude Opus 4.6 | 2026-02-08 | `claude/review-moltworker-roadmap-q5aqD` |
 | 5.5 | Web search tool (Brave Search API) | Codex (GPT-5.2-Codex) | 2026-02-20 | `work` |
+| — | Model catalog sync design memo (OpenRouter full sync + curation tiers) | Codex (GPT-5.2-Codex) | 2026-02-22 | `work` |
 | 5.2 | MCP integration (Cloudflare Code Mode) | Claude Opus 4.6 | 2026-02-20 | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.1 | Dream Machine Build stage (DO, queue, callbacks, safety) | Claude Opus 4.6 | 2026-02-21 | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.2 | Dream-build bearer token auth | Claude Opus 4.6 | 2026-02-21 | `claude/code-mode-mcp-integration-yDHLz` |
