@@ -2181,8 +2181,12 @@ export class TelegramHandler {
     const parallelHint = modelInfo?.parallelCalls
       ? ' Call multiple tools in parallel when possible (e.g., read multiple files at once, fetch multiple URLs simultaneously).'
       : '';
+    const toolIntent = detectToolIntent(messageText);
+    // Only encourage proactive tool use when the message clearly needs tools
     const toolHint = hasTools
-      ? `\n\nYou have access to tools (web browsing, GitHub, weather, news, currency conversion, charts, code execution, etc). Use them proactively — don't guess when you can look up real data.${parallelHint} Tools are fast and free; prefer using them over making assumptions.`
+      ? toolIntent.needsTools
+        ? `\n\nYou have access to tools (web browsing, GitHub, weather, news, currency conversion, charts, code execution, etc). Use them proactively — don't guess when you can look up real data.${parallelHint} Tools are fast and free; prefer using them over making assumptions.`
+        : `\n\nYou have access to tools (web browsing, GitHub, weather, news, currency conversion, charts, code execution, etc). Use them ONLY when the user asks for specific data or actions — do NOT call tools for greetings, capability questions, or general conversation.${parallelHint}`
       : '';
 
     // Warn user if message needs tools but model doesn't support them
