@@ -107,3 +107,27 @@ Implement Phase 1 first: add centralized task router policy and resume model esc
 
 ---
 
+
+## Session: 2026-02-22 | Model catalog sync strategy memo (Session: codex-model-sync-2026-02-22)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Produced a concrete design memo for full-catalog OpenRouter model sync, capability inference, alias stability, deprecation handling, and curation tiers.
+
+### Changes Made
+- Added a Feb 2026 model landscape + automation design document
+- Included migration plan from current free-only `/syncmodels` flow to all-model sync with R2 snapshots/tombstones
+
+### Files Modified
+- `brainstorming/model-catalog-sync-design-2026-02.md`
+- `claude-share/core/codex-log.md`
+
+### Tests
+- [x] Tests pass (`npm test`)
+- [x] Typecheck passes (`npm run typecheck`)
+
+### Notes for Next Session
+If implementing this design, start by extracting `/syncmodels` fetch/normalize logic from `src/telegram/handler.ts` into `src/openrouter/model-sync.ts` with unit tests for capability inference.
