@@ -20,26 +20,26 @@ describe('Phase Budget Circuit Breakers', () => {
     });
 
     it('should have correct budget values', () => {
-      expect(PHASE_BUDGETS.plan).toBe(8_000);
-      expect(PHASE_BUDGETS.work).toBe(18_000);
-      expect(PHASE_BUDGETS.review).toBe(3_000);
+      expect(PHASE_BUDGETS.plan).toBe(120_000);
+      expect(PHASE_BUDGETS.work).toBe(240_000);
+      expect(PHASE_BUDGETS.review).toBe(60_000);
     });
   });
 
   describe('PhaseBudgetExceededError', () => {
     it('should contain phase, elapsed, and budget info', () => {
-      const error = new PhaseBudgetExceededError('work', 20000, 18000);
+      const error = new PhaseBudgetExceededError('work', 250000, 240000);
       expect(error.phase).toBe('work');
-      expect(error.elapsedMs).toBe(20000);
-      expect(error.budgetMs).toBe(18000);
+      expect(error.elapsedMs).toBe(250000);
+      expect(error.budgetMs).toBe(240000);
       expect(error.name).toBe('PhaseBudgetExceededError');
       expect(error.message).toContain('work');
-      expect(error.message).toContain('20000');
-      expect(error.message).toContain('18000');
+      expect(error.message).toContain('250000');
+      expect(error.message).toContain('240000');
     });
 
     it('should be an instance of Error', () => {
-      const error = new PhaseBudgetExceededError('plan', 9000, 8000);
+      const error = new PhaseBudgetExceededError('plan', 130000, 120000);
       expect(error).toBeInstanceOf(Error);
     });
   });
@@ -52,33 +52,33 @@ describe('Phase Budget Circuit Breakers', () => {
     });
 
     it('should throw PhaseBudgetExceededError when over budget', () => {
-      // Phase started 20s ago → exceeds work budget of 18s
-      const phaseStartTime = Date.now() - 20_000;
+      // Phase started 5min ago → exceeds work budget of 4min
+      const phaseStartTime = Date.now() - 300_000;
       expect(() => checkPhaseBudget('work', phaseStartTime)).toThrow(PhaseBudgetExceededError);
     });
 
-    it('should throw for plan phase after 8s', () => {
-      const phaseStartTime = Date.now() - 9_000;
+    it('should throw for plan phase after 2min', () => {
+      const phaseStartTime = Date.now() - 130_000;
       expect(() => checkPhaseBudget('plan', phaseStartTime)).toThrow(PhaseBudgetExceededError);
     });
 
-    it('should not throw for plan phase within 8s', () => {
-      const phaseStartTime = Date.now() - 5_000;
+    it('should not throw for plan phase within 2min', () => {
+      const phaseStartTime = Date.now() - 60_000;
       expect(() => checkPhaseBudget('plan', phaseStartTime)).not.toThrow();
     });
 
-    it('should throw for review phase after 3s', () => {
-      const phaseStartTime = Date.now() - 4_000;
+    it('should throw for review phase after 1min', () => {
+      const phaseStartTime = Date.now() - 70_000;
       expect(() => checkPhaseBudget('review', phaseStartTime)).toThrow(PhaseBudgetExceededError);
     });
 
-    it('should not throw for review phase within 3s', () => {
-      const phaseStartTime = Date.now() - 2_000;
+    it('should not throw for review phase within 1min', () => {
+      const phaseStartTime = Date.now() - 30_000;
       expect(() => checkPhaseBudget('review', phaseStartTime)).not.toThrow();
     });
 
     it('should include correct phase in the thrown error', () => {
-      const phaseStartTime = Date.now() - 10_000;
+      const phaseStartTime = Date.now() - 130_000;
       try {
         checkPhaseBudget('plan', phaseStartTime);
         expect.unreachable('should have thrown');
@@ -86,20 +86,20 @@ describe('Phase Budget Circuit Breakers', () => {
         expect(e).toBeInstanceOf(PhaseBudgetExceededError);
         const err = e as PhaseBudgetExceededError;
         expect(err.phase).toBe('plan');
-        expect(err.budgetMs).toBe(8_000);
-        expect(err.elapsedMs).toBeGreaterThanOrEqual(10_000);
+        expect(err.budgetMs).toBe(120_000);
+        expect(err.elapsedMs).toBeGreaterThanOrEqual(130_000);
       }
     });
   });
 
-  describe('integration: autoResumeCount increment on budget exceeded', () => {
-    it('should trigger autoResumeCount increment (conceptual)', () => {
-      // This verifies the error type that task-processor catches to increment autoResumeCount
-      const error = new PhaseBudgetExceededError('work', 19000, 18000);
+  describe('integration: alarm handler owns autoResumeCount', () => {
+    it('should be caught by task-processor to save checkpoint (no double-counting)', () => {
+      // This verifies the error type that task-processor catches.
+      // The PhaseBudgetExceededError handler saves a checkpoint but does NOT
+      // increment autoResumeCount — only the alarm handler does that to avoid
+      // double-counting (each resume cycle was previously burning 2 slots).
+      const error = new PhaseBudgetExceededError('work', 250000, 240000);
       expect(error).toBeInstanceOf(PhaseBudgetExceededError);
-      // The task-processor catch block checks: error instanceof PhaseBudgetExceededError
-      // and then does: task.autoResumeCount = (task.autoResumeCount ?? 0) + 1
-      // This is verified in the task-processor integration tests
     });
   });
 
@@ -107,7 +107,7 @@ describe('Phase Budget Circuit Breakers', () => {
     it('checkPhaseBudget throws before execution can proceed', () => {
       // When checkPhaseBudget throws, the calling code in processTask() never reaches
       // the API call or tool execution. The catch block saves the checkpoint.
-      const phaseStartTime = Date.now() - 20_000;
+      const phaseStartTime = Date.now() - 300_000;
       let apiCallReached = false;
       try {
         checkPhaseBudget('work', phaseStartTime);
