@@ -8,11 +8,22 @@
 
 import type { TaskPhase } from './task-processor';
 
-/** Per-phase CPU time budgets in milliseconds. plan < work, review < plan. */
+/**
+ * Per-phase wall-clock time budgets in milliseconds.
+ *
+ * These prevent Cloudflare's 30s CPU hard-kill, but since Date.now()
+ * measures wall-clock time (not CPU time), and most time is spent in
+ * I/O waiting for LLM API responses (~10-30s per call), the budgets
+ * must be much larger than the 30s CPU limit itself.
+ *
+ * Actual CPU usage per iteration is ~50-100ms (parsing, formatting).
+ * A 4-minute wall-clock budget allows ~10-15 slow-model iterations
+ * while staying well under the 30s CPU limit.
+ */
 export const PHASE_BUDGETS: Record<TaskPhase, number> = {
-  plan: 8_000,
-  work: 18_000,
-  review: 3_000,
+  plan: 120_000,  // 2 min — planning needs a few LLM round-trips
+  work: 240_000,  // 4 min — main work phase, multiple tool-calling iterations
+  review: 60_000, // 1 min — review/summary is quick but needs ≥1 API call
 };
 
 /**

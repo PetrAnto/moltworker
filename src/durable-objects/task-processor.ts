@@ -1987,7 +1987,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Phase budget circuit breaker: save checkpoint and let watchdog auto-resume
       if (error instanceof PhaseBudgetExceededError) {
         console.log(`[TaskProcessor] Phase budget exceeded: ${error.phase} (${error.elapsedMs}ms > ${error.budgetMs}ms)`);
-        task.autoResumeCount = (task.autoResumeCount ?? 0) + 1;
+        // Do NOT increment autoResumeCount here — the alarm handler owns that counter.
+        // Previously both incremented it, causing double-counting (each cycle burned 2 slots).
         task.lastUpdate = Date.now();
         await this.doState.storage.put('task', task);
 
