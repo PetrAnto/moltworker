@@ -495,3 +495,58 @@ export function compressContextBudgeted(
 
   return result;
 }
+
+/**
+ * Sanitize tool message pairs to ensure API validity.
+ *
+ * OpenAI-compatible APIs require that every assistant message with `tool_calls`
+ * is immediately followed by `tool` role messages for each `tool_call_id`.
+ * This function strips orphaned `tool_calls` from assistant messages that
+ * are not followed by matching tool results (e.g., due to phase budget
+ * interruption between assistant response and tool execution).
+ *
+ * Also removes orphaned `tool` messages that reference non-existent tool_call_ids.
+ */
+export function sanitizeToolPairs(messages: ChatMessage[]): ChatMessage[] {
+  // Build a set of tool_call_ids that have matching tool result messages
+  const answeredToolCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === 'tool' && msg.tool_call_id) {
+      answeredToolCallIds.add(msg.tool_call_id);
+    }
+  }
+
+  // Build a set of tool_call_ids defined by assistant messages
+  const definedToolCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        definedToolCallIds.add(tc.id);
+      }
+    }
+  }
+
+  const result: ChatMessage[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      // Filter to only tool_calls that have matching tool results
+      const validCalls = msg.tool_calls.filter(tc => answeredToolCallIds.has(tc.id));
+      if (validCalls.length === 0) {
+        // No valid tool_calls — push as plain assistant message (strip tool_calls)
+        result.push({ role: 'assistant', content: msg.content || '' });
+      } else if (validCalls.length < msg.tool_calls.length) {
+        // Some tool_calls orphaned — keep only valid ones
+        result.push({ ...msg, tool_calls: validCalls });
+      } else {
+        result.push(msg);
+      }
+    } else if (msg.role === 'tool' && msg.tool_call_id && !definedToolCallIds.has(msg.tool_call_id)) {
+      // Orphaned tool result — skip it
+      continue;
+    } else {
+      result.push(msg);
+    }
+  }
+
+  return result;
+}

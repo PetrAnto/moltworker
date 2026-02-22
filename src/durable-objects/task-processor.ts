@@ -13,7 +13,7 @@ import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSumma
 import { UserStorage } from '../openrouter/storage';
 import { parseOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
-import { estimateTokens, compressContextBudgeted } from './context-budget';
+import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError } from './phase-budget';
 import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, type ToolErrorTracker } from '../guardrails/tool-validator';
 
@@ -651,7 +651,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * @param keepRecent - Minimum recent messages to always keep (default: 6)
    */
   private compressContext(messages: ChatMessage[], modelAlias: string, keepRecent: number = 6): ChatMessage[] {
-    return compressContextBudgeted(messages, this.getContextBudget(modelAlias), keepRecent);
+    const compressed = compressContextBudgeted(messages, this.getContextBudget(modelAlias), keepRecent);
+    // Ensure tool message pairs remain valid after compression
+    return sanitizeToolPairs(compressed);
   }
 
   /**
@@ -891,8 +893,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (this.r2) {
       const checkpoint = await this.loadCheckpoint(this.r2, request.userId);
       if (checkpoint && checkpoint.iterations > 0) {
-        // Resume from checkpoint
-        conversationMessages = checkpoint.messages;
+        // Resume from checkpoint — sanitize to fix any orphaned tool_calls from interrupted checkpoints
+        conversationMessages = sanitizeToolPairs(checkpoint.messages);
         task.toolsUsed = checkpoint.toolsUsed;
         // Reset iteration counter to 0 — give a fresh budget of maxIterations.
         // The checkpoint preserves conversation state and tool results, so work
@@ -1985,12 +1987,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         await this.doState.storage.put('task', task);
 
         // Save checkpoint so alarm handler can resume from here
+        // Sanitize messages to fix orphaned tool_calls from budget interruption
         if (this.r2) {
           await this.saveCheckpoint(
             this.r2,
             request.userId,
             request.taskId,
-            conversationMessages,
+            sanitizeToolPairs(conversationMessages),
             task.toolsUsed,
             task.iterations,
             request.prompt,
