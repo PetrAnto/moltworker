@@ -2,8 +2,10 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-22 (7A.2 + 7A.3 + 7A.5 COMPLETE — 1175 tests)
+**Last Updated:** 2026-02-22 (Codex model sync strategy doc added)
 
+
+> Note (Codex): Added `docs/model-catalog-sync-strategy-2026-02.md` with concrete design for full OpenRouter + direct-provider catalog sync, capability inference heuristics, deprecation lifecycle, and curated-vs-dynamic approach.
 ---
 
 ## Current Sprint: Foundation & Quick Wins

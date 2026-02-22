@@ -5,6 +5,35 @@
 ---
 
 
+## Session: 2026-02-22 | Model catalog sync strategy doc (Session: codex-model-sync-strategy-20260222)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Documented a concrete, implementation-ready strategy for full OpenRouter model sync (all models), capability detection, aliasing, deprecations, curation, and provider adapters.
+
+### Changes Made
+- Added a detailed design doc covering sync architecture, field mappings, confidence-based capability inference, polling/deprecation policy, and API surface recommendations
+- Included concrete module layout and Cloudflare Cron/R2 operational plan
+
+### Files Modified
+- `docs/model-catalog-sync-strategy-2026-02.md`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] `npm test` passes
+- [x] `npm run typecheck` passes
+
+### Notes for Next Session
+Implement the proposed `src/openrouter/model-sync/*` modules and wire `/syncmodels --all` with R2-backed alias/deprecation state.
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)
