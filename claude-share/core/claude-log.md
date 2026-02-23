@@ -4,6 +4,36 @@
 
 ---
 
+## Session: 2026-02-23 | wagmi: Add 5 Destinations (Session: session_01LkmvQ6oZn9xJK2ss4UNSCD)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/orch-next-Kklcn`
+**Status:** Completed
+
+### Summary
+Created clean destination patch for PetrAnto/wagmi App.jsx after PR #28 bot review identified critical issues (duplicate Dubai, encoding corruption, code placed in WORK_LOG.md instead of App.jsx).
+
+### What Was Done
+- Created `claude-share/patches/wagmi-add-destinations.jsx` with 5 new destinations
+- Destinations: El Salvador, Zurich, Tallinn, Mexico City, Panama
+- Dubai excluded (already exists in App.jsx at line 92)
+- All fields follow existing INITIAL_DESTS structure with plausible data
+- No encoding corruption (clean ASCII)
+
+### PR #28 Issues Addressed
+1. **Dubai duplicate** — removed (bot used same id:'dubai' that already exists)
+2. **Encoding corruption** — avoided (no mojibake on emojis/em-dashes)
+3. **Wrong file location** — patch file in `claude-share/patches/`, not WORK_LOG.md
+4. **Data conflicts** — no conflicting values with existing entries
+
+### Files Created
+- `claude-share/patches/wagmi-add-destinations.jsx` (5 destination entries)
+
+### Notes for Next Session
+Patch needs to be manually applied to wagmi's `src/App.jsx` INITIAL_DESTS array. The wagmi repo is private and not accessible via the moltworker git proxy.
+
+---
+
 ## Session: 2026-02-22 | 7A.5 Prompt Caching (Session: session_01V82ZPEL4WPcLtvGC6szgt5)
 
 **AI:** Claude Opus 4.6
