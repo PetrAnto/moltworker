@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-01 (Phase 8 Operational Hardening + /simulate endpoint — 1526 tests)
+**Last Updated:** 2026-03-01 (Merged with MOLTWORKER_ROADMAP-claude_review.md — milestone gates, future phases, cross-repo deps, metrics — 1526 tests)
 
 ---
 
@@ -32,6 +32,19 @@
 | 🔲 | Not Started |
 | ⏸️ | Blocked |
 | 🧪 | Needs Testing |
+
+---
+
+## Milestone Gates
+
+| Gate | Description | Depends On | Status |
+|------|------------|-----------|--------|
+| **M0 — "Stable"** | Circuit breakers, cost tracking, context fix, parallel tools | Nothing | ✅ Achieved (Phase 0-2, Sprint 48h) |
+| **M1 — "Smart"** | Compound learning, MCP tools, performance engine, verification | M0 | ✅ Achieved (Phase 3-5, 7) |
+| **M2 — "Connected"** | ai-hub integration, Dream Machine build stage | M1 + ai-hub M1 | 🔄 Partial (DM done, ai-hub feeds pending) |
+| **M3 — "Autonomous"** | Private fork (storia-agent), multi-transport, overnight builds | M2 | 🔲 Future |
+
+> **Source:** `MOLTWORKER_ROADMAP-claude_review.md` — strategic gate definitions
 
 ---
 
@@ -373,6 +386,35 @@
 
 ---
 
+### Future: Ecosystem Integration (M2 Gate)
+
+> **Goal**: Connect moltworker to ai-hub and become the build engine for Dream Machine.
+> **Status**: Dream Machine build stage is DONE (DM.1-DM.14). Remaining items need ai-hub M1.
+> **Source**: `MOLTWORKER_ROADMAP-claude_review.md` Phase 2
+
+| ID | Task | Status | Effort | Notes |
+|----|------|--------|--------|-------|
+| F.1 | ai-hub data feeds — RSS, market, proactive notifications | ⏸️ Blocked | 6-8h | Depends on ai-hub `/api/situation/*` endpoints |
+| F.2 | Browser tool enhancement (CDP) — a11y tree, click/fill/scroll | 🔲 | 4-6h | `BROWSER` binding exists but underused. Peekaboo pattern. |
+| F.3 | Code execution sandbox (Acontext or Piston) | 🔲 | 8-12h | Maps to Phase 5.3 |
+| F.4 | File management tools (R2 or Acontext Disk) | 🔲 | 4-6h | Maps to Phase 5.4 |
+| F.5 | Observability dashboard enhancement | 🔲 | 4-6h | Acontext session replay, success rates (extends Phase 2.3-2.4) |
+
+### Future: Platform Evolution (M3 Gate)
+
+> **Goal**: Transform moltworker from personal bot into Storia's agent runtime.
+> **Status**: Not started. Requires M2 gate + user base.
+> **Source**: `MOLTWORKER_ROADMAP-claude_review.md` Phase 3
+
+| ID | Task | Status | Effort | Notes |
+|----|------|--------|--------|-------|
+| F.6 | Fork to `storia-agent` (private) | 🔲 | 2h fork + 8-12h refactor | Extract shared `agent-loop.ts`, add HTTP/SSE transport, per-user sandbox |
+| F.7 | Discord full integration (read-only → two-way) | 🔲 | 12-16h | Phase 1: forward announcements. Phase 2: respond to DMs |
+| F.8 | Long-term memory (MEMORY.md + fact extraction) | 🔲 | 8-12h | Extends Phase 3.1 learnings + Phase 4.4 sessions |
+| F.9 | BYOK key passthrough for IDE users | 🔲 | 4-6h | Depends on byok-cloud DNS + npm publish |
+
+---
+
 ## AI Task Ownership
 
 | AI Agent | Primary Responsibilities | Strengths |
@@ -601,16 +643,104 @@ graph TD
     P1_2 --> P2
     P7 --> P8[Phase 8: Operational Hardening ✅]
     P5 --> P8
+    P8 --> F_ECO[Future: Ecosystem Integration]
+    P8 --> F_PLAT[Future: Platform Evolution]
+    DM --> F_ECO
+    F_ECO --> F_PLAT
 ```
+
+---
+
+## Cross-Repository Dependencies
+
+```
+moltworker ──────────────────────────────────────────────────────
+    │
+    ├──► ai-hub (storia.digital)
+    │    ├── /api/situation/* data feeds         (F.1) ⏸️
+    │    ├── /api/code/chat Code Mode            (5.2) ✅
+    │    ├── Dream Machine Capture → Build       (DM)  ✅
+    │    └── Agent Mode Phase B (HTTP/SSE)       (F.6) 🔲
+    │
+    ├──► byok-cloud (byok.cloud)
+    │    └── Key retrieval for BYOK IDE users    (F.9) 🔲
+    │
+    └──► Shared Cloudflare Infrastructure
+         ├── R2: moltbot-data (checkpoints, skills, learnings)
+         ├── Durable Objects: TaskProcessor, TaskStateDO
+         ├── Secrets: OPENROUTER_API_KEY, GITHUB_TOKEN
+         └── CF Queue: dream-build-queue (DM.10)
+```
+
+### Dependency Chain
+
+```
+byok-cloud DNS + npm publish (3h)
+    └─► ai-hub BYOK vault integration (8-12h)
+        └─► ai-hub M1 achieved
+            └─► ai-hub Dream Machine Capture (28h)
+                └─► moltworker Dream Machine Build ✅ (DM.1-DM.14)
+
+ai-hub Code Mode MCP Sprint A ✅
+    └─► moltworker Code Mode integration ✅ (Phase 5.2)
+
+ai-hub /api/situation/* endpoints 🔲
+    └─► moltworker data feeds (F.1) ⏸️
+```
+
+---
+
+## Technical Debt
+
+| Item | Priority | Effort | Status |
+|------|---------|--------|--------|
+| Unit tests for tools | MEDIUM | 4h | ✅ 100+ tool tests exist |
+| Integration tests for Telegram handler | MEDIUM | 4h | ⚠️ Partial (/simulate covers some) |
+| Error tracking (Sentry/PostHog) | LOW | 2h | 🔲 |
+| Request logging/analytics | LOW | 2h | ⚠️ Partial (Acontext Phase 2.3) |
+| Cache frequent API responses | LOW | 3h | ✅ Tool result cache (Phase 4.3) |
+| Optimize token usage (shorter system prompts) | LOW | 2h | ✅ Smart context loading (7A.2) |
+| Rate limiting per user | MEDIUM | 3h | 🔲 |
+| Input sanitization for tools | MEDIUM | 2h | ✅ Destructive op guard (7A.3) |
+| Audit logging for sensitive operations | LOW | 3h | ⚠️ Partial (Acontext sessions) |
+
+> Source: `future-integrations.md` §Technical Debt — updated with current status
+
+---
+
+## Key Metrics
+
+| Metric | Current (Mar 2026) | M2 Target | M3 Target |
+|--------|-------------------|-----------|-----------|
+| Tools available | 16 | 20+ (MCP) | 30+ |
+| Models with tool support | 30+ (curated + auto-sync) | Same | Same |
+| Avg iterations per task | Tracked (progress-aware) | <10 for common tasks | <5 optimized |
+| Cost visibility | Per-conversation + /costs | Per-task + daily | Budget alerts |
+| Task success rate | Tracked (CoVe verification) | >85% | >95% |
+| Context compression | Token-budgeted + summarized | Same | Adaptive |
+| Cross-session learning | Active (R2 learnings + sessions) | Pattern library | Autonomous improvement |
+| Tests | 1526 | 1600+ | 2000+ |
+
+---
+
+## ⚠️ Pre-Deployment Reminder
+
+Before ANY moltbot deployment, **always delete R2 bucket contents first**:
+https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/moltbot-data
 
 ---
 
 ## References
 
-- [Tool-Calling Analysis](../../brainstorming/tool-calling-analysis.md) — Full analysis with 10 gaps and 13 recommendations
-- [Agent Skills Engine Spec](../../brainstorming/AGENT_SKILLS_ENGINE_SPEC.md) — Full spec (Phase 7 extracts high-ROI pieces only)
-- [Free APIs Catalog](storia-free-apis-catalog.md) — 25+ free APIs for zero-cost feature expansion
-- [Future Integrations](../../brainstorming/future-integrations.md) — Original roadmap (pre-analysis)
-- [README](../../README.md) — User-facing documentation
-- [AGENTS.md](../../AGENTS.md) — Developer/AI agent instructions
-- [CLAUDE.md](../../CLAUDE.md) — Claude Code project instructions
+| Spec | Location | Covers |
+|------|----------|--------|
+| **tool-calling-analysis.md** | `brainstorming/` | R1-R13 recommendations, gap analysis, model landscape |
+| **AGENT_SKILLS_ENGINE_SPEC.md** | `brainstorming/` | Full spec (Phase 7 extracts high-ROI pieces only) |
+| **storia-free-apis-catalog.md** | `brainstorming/` | 25+ free API integrations ($0/month) |
+| **future-integrations.md** | `brainstorming/` | Priority 1-5 feature roadmap, technical debt |
+| **dream-machine-moltworker-brief.md** | `brainstorming/` | Dream Machine build skill spec (v1.2, Grok-reviewed) |
+| **CODE_MODE_MCP_STORIA_SPEC.md** | `claude-share/brainstorming/wave5/` | Code Mode MCP Sprint A/B/C |
+| **MOLTWORKER_ROADMAP-claude_review.md** | `claude-share/core/` | Strategic roadmap review (Feb 28) — merged into this file |
+| **README.md** | project root | User-facing documentation |
+| **AGENTS.md** | project root | Developer/AI agent instructions |
+| **CLAUDE.md** | project root | Claude Code project instructions |
