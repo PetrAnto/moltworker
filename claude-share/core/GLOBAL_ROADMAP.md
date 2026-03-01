@@ -3,15 +3,16 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-02-23 (7B.1 Speculative Tool Execution complete — 1411 tests — all Phase 7 done!)
+**Last Updated:** 2026-03-01 (Phase 8 Operational Hardening + /simulate endpoint — 1526 tests)
 
 ---
 
 ## Project Overview
 
 **Moltworker** is a multi-platform AI assistant gateway deployed on Cloudflare Workers. It provides:
-- 30+ curated AI models + automated full-catalog sync from OpenRouter (with capability metadata)
+- 30+ curated AI models + automated full-catalog sync from OpenRouter (with capability metadata, fuzzy alias matching)
 - 16 tools (fetch_url, github_read_file, github_list_files, github_api, github_create_pr, url_metadata, generate_chart, get_weather, fetch_news, convert_currency, get_crypto, geolocate_ip, browse_url, sandbox_exec, web_search, cloudflare_api) — parallel execution with safety whitelist
+- `/simulate` endpoint for bot testing without Telegram (chat + command simulation)
 - Durable Objects for unlimited-time task execution
 - Multi-platform chat (Telegram, Discord, Slack)
 - Image generation (FLUX.2 models)
@@ -176,7 +177,7 @@
 | 5.3 | Acontext Sandbox for code execution | 🔲 | Codex | Replaces roadmap Priority 3.2 |
 | 5.4 | Acontext Disk for file management | 🔲 | Codex | Replaces roadmap Priority 3.3 |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
-| 5.6 | Multi-agent orchestration | 🔲 | Claude | Leverage Claude Sonnet 4.5 speculative execution |
+| 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
 
 > 🧑 HUMAN CHECK 5.7: Evaluate MCP server hosting options (Sandbox vs. external) — ⏳ PENDING
 > 🧑 HUMAN CHECK 5.8: Security review of code execution sandbox — ⏳ PENDING
@@ -284,6 +285,78 @@
 | MS.4 | `/syncall` Telegram command + admin API | ✅ | Claude | Manual trigger via Telegram, `POST /api/admin/models/sync`, `GET /api/admin/models/catalog` |
 | MS.5 | Dynamic `/pick` model picker | ✅ | Claude | Scores models by SWE-Bench + capabilities, shows top 3 per tier (free/value/premium) |
 | MS.6 | `/syncall` in Telegram bot menu + `/start` sync button | ✅ | Claude | `setMyCommands` + inline keyboard button |
+| MS.7 | `/synccheck` command — curated model health check | ✅ | Claude | Compares curated vs. live OpenRouter prices, detects missing/new models, actionable buttons |
+| MS.8 | `/modelupdate` command — hot-patch models without deploy | ✅ | Claude | Patch alias/id/name/cost/score fields, revert, list overrides. R2-persisted |
+| MS.9 | Fuzzy model alias matching | ✅ | Claude | Strips hyphens/dots, tries suffix/prefix/model-ID match. Resolves auto-synced aliases |
+| MS.10 | `/syncall` top 20 recommendations with quick-use buttons | ✅ | Claude | Score-ranked, category-grouped (coding/reasoning/fast/general), inline keyboard |
+| MS.11 | Fix hyphenated aliases not clickable in Telegram | ✅ | Claude | `sanitizeAlias()` strips non-alphanumeric from R2 aliasMap, self-heals on next sync |
+| MS.12 | `/syncall` HTML display + compact layout | ✅ | Claude | HTML parseMode, 1-line-per-model, bold names, model name in buttons |
+
+---
+
+### Phase 8: Operational Hardening (Feb 23 – Mar 1, 2026)
+
+> **Goal:** Fix production bugs from real-world usage, harden DO task processing,
+> and add the `/simulate` endpoint for testing without Telegram.
+
+#### 8A: Task Processor Hardening
+
+| ID | Task | Status | Owner | Notes |
+|----|------|--------|-------|-------|
+| 8A.1 | Phantom PR detection — 3-layer defense against hallucinated PR claims | ✅ | Claude | Detects uncorroborated PR URLs, github_create_pr without matching result |
+| 8A.2 | Runaway task prevention — elapsed-time + tool-limit fixes | ✅ | Claude | 3 fixes in one commit: limit iteration + tool + elapsed guards |
+| 8A.3 | Resume spinning prevention for simple queries | ✅ | Claude | Skip resume for non-tool simple queries that auto-resume forever |
+| 8A.4 | Execution lock + heartbeat guard + signature dedup | ✅ | Claude | Prevents concurrent DO execution, deduplicates tool call signatures |
+| 8A.5 | Heartbeat + cancellation + DO retry fixes | ✅ | Claude | Better keepalive, graceful cancel, `fetchDOWithRetry` hardening |
+| 8A.6 | Dynamic tool truncation + alarm error boundary | ✅ | Claude | Auto-truncate large tool results, catch alarm handler crashes |
+| 8A.7 | Tool pruning, `/steer` command, tool-level 429 retry | ✅ | Claude | Reverted tool pruning; kept `/steer` for mid-task injection + per-tool retry |
+| 8A.8 | Batch-aware tool truncation + lower resume limits | ✅ | Claude | Smarter truncation accounting for batch sizes |
+| 8A.9 | Reduce auto-resume degradation across resumes | ✅ | Claude | Better resume context continuity |
+| 8A.10 | Scale idle timeout + force-compress on resume | ✅ | Claude | Prevents SSE stream drops on slow models |
+| 8A.11 | Increase streaming idle timeouts + fix heartbeat frequency | ✅ | Claude | Higher tolerances for slow providers (DeepSeek, Moonshot) |
+| 8A.12 | Progress-aware time cap + smarter resume context | ✅ | Claude | Tasks making progress get more time, context isn't thrown away on resume |
+| 8A.13 | Remove elapsed time limits (15min/30min caps) | ✅ | Claude | Replaced with progress-aware approach from 8A.12 |
+| 8A.14 | Reviewer uses latest question, routing ignores conv length | ✅ | Claude | Multi-agent review now picks latest user question, not first |
+| 8A.15 | Orchestra: defer premature work→review for multi-step tasks | ✅ | Claude | Requires ≥3 work iterations before review when content looks incomplete |
+| 8A.16 | Security: strip secrets from DO `/status` API | ✅ | Claude | Defense-in-depth: destructure at DO level + allowlist at simulate route |
+
+#### 8B: Model & UX Improvements
+
+| ID | Task | Status | Owner | Notes |
+|----|------|--------|-------|-------|
+| 8B.1 | Full `/start` button interface with sub-menus | ✅ | Claude | Every command accessible via inline keyboard, organized by category |
+| 8B.2 | Fix model picker + full model ID support | ✅ | Claude | Direct OpenRouter model IDs work in `/use` (e.g. `openai/gpt-4o`) |
+| 8B.3 | `supportsTools` for auto model + harden fallback chain | ✅ | Claude | Auto model always gets tools; fallback to flash→free on 404 |
+| 8B.4 | Await dynamic models from R2 before declaring unavailable | ✅ | Claude | Race condition fix: R2 load completes before model lookup |
+| 8B.5 | Fall back to free model instead of expensive `/auto` | ✅ | Claude | When user's model disappears, pick cheapest free alternative |
+| 8B.6 | MiniMax M2.5 reasoning marked as fixed (mandatory) | ✅ | Claude | Reasoning field can't be toggled off for this model |
+| 8B.7 | Smart file guards for `github_read_file` | ✅ | Claude | Skip binary files, large files, rate limit handling |
+| 8B.8 | Optimize top-files query — plan phase, repo overview | ✅ | Claude | Reduced GitHub API calls during plan phase |
+
+#### 8C: /simulate Endpoint (Bot Testing Without Telegram)
+
+| ID | Task | Status | Owner | Notes |
+|----|------|--------|-------|-------|
+| 8C.1 | `/simulate/chat` — full DO pipeline with real models + tools | ✅ | Claude | HTTP endpoint, model selection, timeout, systemPrompt |
+| 8C.2 | `/simulate/command` — test bot commands via CapturingBot | ✅ | Claude | Captures all bot messages, polls DO for async results |
+| 8C.3 | `/simulate/status/:taskId` — check timed-out simulations | ✅ | Claude | Query DO status after simulation timeout |
+| 8C.4 | Fix Access denied bug (userId mismatch in allowlist) | ✅ | Claude | Simulation userId now matches admin allowlist |
+| 8C.5 | Add timeout param to `/simulate/command` for DO polling | ✅ | Claude | Polls DO status until task completes or timeout |
+| 8C.6 | `/simulate/health` health check endpoint | ✅ | Claude | Quick sanity check for deployment verification |
+| 8C.7 | DO integration tests for lifecycle endpoints | ✅ | Claude | Test start/status/cancel/steer DO flows |
+| 8C.8 | `/test` Telegram command for DO smoke tests | ✅ | Claude | Quick in-chat verification of DO pipeline health |
+
+#### 8D: Infrastructure
+
+| ID | Task | Status | Owner | Notes |
+|----|------|--------|-------|-------|
+| 8D.1 | Upstream sync — bump OpenClaw, WS redaction, R2 sync lock | ✅ | Claude | Keep in sync with upstream OpenClaw changes |
+| 8D.2 | Upstream: pass --token to device CLI | ✅ | Claude | Fix authentication for CLI commands |
+| 8D.3 | Auto-synced highlights in `/models`, condensed `/synccheck` | ✅ | Claude | Show auto-synced model count, compact synccheck output |
+| 8D.4 | Phase 7B.6 latency benchmark protocol | ✅ | Claude | Documented benchmark procedure for measuring speed improvements |
+
+> **Phase 8 Summary:** 38 tasks completed. Test count: 1411 → 1526 (+115 tests).
+> Focused on production stability after Phase 7 shipped features at speed.
 
 ---
 
@@ -327,6 +400,8 @@
 | 5.8 | Security review of code execution | ⏳ PENDING |
 | 7A.6 | Review CoVe verification results after 10+ tasks | ⏳ PENDING |
 | 7B.6 | Benchmark before/after — measure latency on 5 representative tasks | ⏳ PENDING |
+| 8.1 | Review DO security fix (secret stripping from /status) | ✅ VERIFIED (PR #217) |
+| 8.2 | Test /simulate endpoint with production models | ⏳ PENDING |
 
 ---
 
@@ -346,6 +421,16 @@
 | BUG-9 | 2026-02-10 | Runaway auto-resume (no elapsed time limit) | High | ✅ 15min free / 30min paid cap | `task-processor.ts` | ✅ |
 | BUG-10 | 2026-02-10 | No warning when non-tool model gets tool-needing message | Low/UX | ✅ Tool-intent detection + user warning | `handler.ts` | ✅ |
 | BUG-11 | 2026-02-10 | Models with parallelCalls not prompted strongly enough | Low | ✅ Stronger parallel tool-call instruction | `client.ts` | ✅ |
+| BUG-13 | 2026-02-24 | Phantom PR hallucinations — model claims PR created without calling tool | High | ✅ 3-layer defense: detect uncorroborated URLs, verify tool results, flag in review | `task-processor.ts` | ✅ |
+| BUG-14 | 2026-02-24 | Runaway tasks — no hard iteration/elapsed limits | High | ✅ 3 fixes: iteration cap, tool count cap, elapsed guard | `task-processor.ts` | ✅ |
+| BUG-15 | 2026-02-25 | Resume spinning on simple queries (weather, greetings) | Medium | ✅ Skip resume for non-tool simple queries | `task-processor.ts` | ✅ |
+| BUG-16 | 2026-02-26 | Concurrent DO execution — two alarms process same task | High | ✅ Execution lock + heartbeat guard | `task-processor.ts` | ✅ |
+| BUG-17 | 2026-02-27 | SSE stream drops on slow providers (DeepSeek, Moonshot) | Medium | ✅ Higher idle timeouts + heartbeat frequency | `task-processor.ts`, `client.ts` | ✅ |
+| BUG-18 | 2026-02-27 | `/simulate` Access denied — userId mismatch in allowlist | Medium | ✅ Use admin userId for simulated requests | `simulate.ts` | ✅ |
+| BUG-19 | 2026-02-28 | Model disappears after sync → expensive /auto fallback | Medium | ✅ Fall back to free model, not /auto | `models.ts` | ✅ |
+| BUG-20 | 2026-02-28 | R2 dynamic models not loaded before model lookup | Medium | ✅ Await R2 load before declaring unavailable | `models.ts`, `handler.ts` | ✅ |
+| BUG-21 | 2026-03-01 | DO `/status` API leaks all API keys in response | Critical | ✅ Destructure out secrets + allowlist in simulate route | `task-processor.ts`, `simulate.ts` | ✅ |
+| BUG-22 | 2026-03-01 | Hyphenated aliases not clickable in Telegram | Low/UX | ✅ `sanitizeAlias()` strips non-alphanumeric from R2 aliasMap | `alias.ts` | ✅ |
 
 ---
 
@@ -354,6 +439,48 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-01 | Claude Opus 4.6 (Session: session_019DBbA1BWV4dbdZZrrDzrK5) | fix(syncall): sanitize hyphenated aliases + improve display — sanitizeAlias() strips non-alphanumeric from R2 aliasMap (self-heals), HTML parseMode, compact 1-line layout, model name in buttons, escapeHtml export | src/openrouter/model-sync/alias.ts, src/openrouter/model-sync/alias.test.ts, src/telegram/handler.ts, src/utils/telegram-format.ts
+2026-03-01 | PetrAnto | fix(security,task-processor): strip secrets from DO /status API — defense-in-depth (destructure at DO + allowlist at simulate), defer premature orchestra review (≥3 iterations) | src/durable-objects/task-processor.ts, src/routes/simulate.ts
+2026-02-28 | Claude | feat(simulate): add timeout param to /simulate/command for DO task polling | src/routes/simulate.ts, CLAUDE.md
+2026-02-28 | Claude | fix(simulate): fix Access denied bug — userId mismatch in allowlist | src/routes/simulate.ts
+2026-02-28 | Claude | docs(CLAUDE.md): add Bot Testing section for /simulate endpoint | CLAUDE.md
+2026-02-28 | Claude | feat(simulate): add /simulate endpoint for testing bot without Telegram — chat, command, status, health | src/routes/simulate.ts, src/telegram/capturing-bot.ts, src/index.ts
+2026-02-28 | Claude | fix(telegram): fix model picker and add full model ID support | src/telegram/handler.ts, src/openrouter/models.ts
+2026-02-28 | Claude | fix(models): add supportsTools to auto model + harden fallback chain | src/openrouter/models.ts
+2026-02-27 | Claude | fix(task-processor): remove elapsed time limits (15min/30min) — replaced with progress-aware approach | src/durable-objects/task-processor.ts
+2026-02-27 | Claude | fix(models): await dynamic models from R2 before declaring unavailable | src/openrouter/models.ts, src/telegram/handler.ts
+2026-02-27 | Claude | fix(models): fall back to free model instead of expensive /auto | src/openrouter/models.ts
+2026-02-27 | Claude | feat(start): full button interface with sub-menus for every command | src/telegram/handler.ts
+2026-02-27 | Claude | feat(syncall): add top 20 model recommendations with quick-use buttons | src/telegram/handler.ts
+2026-02-26 | Claude | fix(task-processor): progress-aware time cap + smarter resume context | src/durable-objects/task-processor.ts
+2026-02-26 | Claude | fix(upstream): pass --token to device CLI + bump OpenClaw | start-moltbot.sh, Dockerfile
+2026-02-26 | Claude | fix(tests): fix 14 broken tests in models.test.ts and sync.test.ts | src/openrouter/models.test.ts, src/openrouter/model-sync/sync.test.ts
+2026-02-26 | Claude | fix(streaming): increase idle timeouts and fix heartbeat frequency | src/durable-objects/task-processor.ts, src/openrouter/client.ts
+2026-02-26 | Claude | fix(task-processor): scale idle timeout + force-compress on resume | src/durable-objects/task-processor.ts
+2026-02-26 | Claude | feat(models): add /modelupdate command and actionable /synccheck | src/telegram/handler.ts, src/openrouter/models.ts
+2026-02-25 | Claude | fix(task-processor): reduce auto-resume degradation across resumes | src/durable-objects/task-processor.ts
+2026-02-25 | Claude | perf(tools): optimize top-files query — plan phase, repo overview, read budget | src/openrouter/tools.ts, src/durable-objects/task-processor.ts
+2026-02-25 | Claude | fix(tools): smart file guards for github_read_file | src/openrouter/tools.ts
+2026-02-25 | Claude | fix(task-processor): revert tool pruning, add retry jitter, fix steer priority | src/durable-objects/task-processor.ts
+2026-02-25 | Claude | feat(telegram): add /test command for DO smoke tests | src/telegram/handler.ts, src/telegram/smoke-tests.ts
+2026-02-25 | Claude | test(task-processor): integration tests for DO lifecycle endpoints | src/durable-objects/task-processor.test.ts
+2026-02-25 | Claude | fix(task-processor): batch-aware tool truncation, lower resume limits | src/durable-objects/task-processor.ts
+2026-02-24 | Claude | feat(task-processor): tool pruning, /steer command, tool-level 429 retry | src/durable-objects/task-processor.ts, src/telegram/handler.ts
+2026-02-24 | Claude | feat(task-processor): dynamic tool truncation, alarm error boundary | src/durable-objects/task-processor.ts
+2026-02-24 | Claude | fix(task-processor,do-retry): heartbeat, cancellation, and retry fixes | src/durable-objects/task-processor.ts, src/utils/do-retry.ts
+2026-02-24 | Claude | fix(task-processor): execution lock, heartbeat guard, and signature dedup | src/durable-objects/task-processor.ts
+2026-02-24 | Claude | fix(task-processor): prevent resume spinning on simple tool queries | src/durable-objects/task-processor.ts
+2026-02-24 | Claude | fix(task-processor): prevent runaway tasks with 3 elapsed-time and tool-limit fixes | src/durable-objects/task-processor.ts
+2026-02-24 | Claude | fix(review+routing): reviewer uses latest user question, routing ignores conv length | src/durable-objects/task-processor.ts, src/openrouter/model-router.ts
+2026-02-23 | Claude | docs(test): add Phase 7B.6 latency benchmark protocol | brainstorming/phase-7b6-benchmark.md
+2026-02-23 | Claude | fix(orchestra): detect phantom PRs — 3-layer defense against hallucinated PR claims | src/durable-objects/task-processor.ts
+2026-02-23 | Claude | fix(models): mark MiniMax M2.5 reasoning as fixed (mandatory) | src/openrouter/models.ts
+2026-02-23 | Claude | fix(infra): upstream sync — bump OpenClaw, add WS redaction, R2 sync lock | src/index.ts, wrangler.jsonc
+2026-02-23 | Claude | feat(models): show auto-synced highlights in /models, condense /synccheck | src/telegram/handler.ts
+2026-02-23 | Claude | fix(models): add fuzzy matching to getModel() for auto-synced aliases | src/openrouter/models.ts
+2026-02-23 | Claude | feat(sync): add /synccheck command — curated model health check | src/telegram/handler.ts, src/openrouter/model-sync/synccheck.ts
+2026-02-23 | Claude | docs: update roadmap + status for 5.1 Multi-Agent Review (1458 tests) | claude-share/core/GLOBAL_ROADMAP.md
+2026-02-23 | Claude | feat(ai): 5.1 Multi-Agent Review — independent model reviews work output | src/durable-objects/task-processor.ts, src/openrouter/models.ts
 2026-02-23 | Claude Opus 4.6 (Session: session_01V82ZPEL4WPcLtvGC6szgt5) | feat(perf): 7B.1 Speculative Tool Execution — onToolCallReady callback in parseSSEStream fires when tool_call complete during streaming, createSpeculativeExecutor() starts PARALLEL_SAFE tools immediately, task-processor checks speculative cache before executing, fires on new index (previous done) and finish_reason='tool_calls' (all done), safety: only PARALLEL_SAFE_TOOLS + max 5 + 30s timeout, 19 new tests (1411 total) | src/openrouter/client.ts, src/openrouter/client.test.ts, src/durable-objects/speculative-tools.ts, src/durable-objects/speculative-tools.test.ts, src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 2026-02-23 | Claude Opus 4.6 (Session: session_01V82ZPEL4WPcLtvGC6szgt5) | feat(ux): 7B.5 Streaming User Feedback — formatProgressMessage() with phase-aware emoji labels (📋/🔨/🔍/🔄), tool-level granularity (humanizeToolName + extractToolContext), plan step progress (step N/M), shouldSendUpdate() 15s throttle, wired into task-processor iteration loop, sendProgressUpdate() helper for forced updates on tool start, 44 new tests (1392 total) | src/durable-objects/progress-formatter.ts, src/durable-objects/progress-formatter.test.ts, src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 2026-02-23 | Claude Opus 4.6 (Session: session_01V82ZPEL4WPcLtvGC6szgt5) | fix(orchestra+tools): Improve tool descriptions + partial failure handling — github_create_pr description now explains read-modify-write update workflow and append pattern, github_read_file mentions 50KB limit, LARGE_FILE_THRESHOLD raised (300→500 lines, 15→30KB), orchestra run/redo prompts get "How to Update Existing Files" section and "Step 4.5: HANDLE PARTIAL FAILURES" for logging blocked/partial tasks, 12 new tests (1348 total) | src/openrouter/tools.ts, src/orchestra/orchestra.ts, src/openrouter/tools.test.ts, src/orchestra/orchestra.test.ts
@@ -469,9 +596,11 @@ graph TD
         P1_5[1.5 Structured output ✅]
     end
 
-    P1_1 --> P5_1[5.1 Multi-agent review]
+    P1_1 --> P5_1[5.1 Multi-agent review ✅]
     P1_2 --> P1_3
     P1_2 --> P2
+    P7 --> P8[Phase 8: Operational Hardening ✅]
+    P5 --> P8
 ```
 
 ---
