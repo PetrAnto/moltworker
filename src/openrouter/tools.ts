@@ -462,6 +462,34 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * Attempt to repair malformed JSON arguments from models (especially DeepSeek).
+ * Common issues: trailing commas, single quotes, unquoted keys, JS comments.
+ * Returns parsed object on success, null on failure.
+ */
+function repairJsonArgs(raw: string): Record<string, string> | null {
+  if (!raw || typeof raw !== 'string') return null;
+
+  let fixed = raw.trim();
+  // Strip JS-style comments (// and /* */)
+  fixed = fixed.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  // Replace single quotes with double quotes (but not inside double-quoted strings)
+  fixed = fixed.replace(/'/g, '"');
+  // Remove trailing commas before } or ]
+  fixed = fixed.replace(/,\s*([}\]])/g, '$1');
+  // Quote unquoted keys: { key: "val" } → { "key": "val" }
+  fixed = fixed.replace(/{\s*(\w+)\s*:/g, '{"$1":').replace(/,\s*(\w+)\s*:/g, ',"$1":');
+
+  try {
+    const parsed = JSON.parse(fixed);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      console.log(`[Tools] Repaired malformed JSON args: ${raw.substring(0, 80)}`);
+      return parsed;
+    }
+  } catch { /* repair failed */ }
+  return null;
+}
+
+/**
  * Execute a tool call and return the result
  * @param toolCall The tool call from the model
  * @param context Optional context containing secrets like GitHub token
@@ -473,11 +501,17 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
   try {
     args = JSON.parse(argsString);
   } catch {
-    return {
-      tool_call_id: toolCall.id,
-      role: 'tool',
-      content: `Error: Invalid JSON arguments: ${argsString}`,
-    };
+    // Attempt common JSON repairs before giving up
+    const repaired = repairJsonArgs(argsString);
+    if (repaired !== null) {
+      args = repaired;
+    } else {
+      return {
+        tool_call_id: toolCall.id,
+        role: 'tool',
+        content: `Error: Invalid JSON arguments: ${argsString}`,
+      };
+    }
   }
 
   // Use GitHub token from context (automatic auth)
