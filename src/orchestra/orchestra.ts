@@ -226,152 +226,53 @@ If the task is not in the roadmap, execute it anyway and add it to the roadmap a
 - If no roadmap exists, tell the user to run \`/orchestra init\` first
 - If all tasks are completed, congratulate the user and suggest next steps`;
 
-  return `# Orchestra RUN Mode — Execute Next Roadmap Task
+  return `# Orchestra RUN Mode
 
-You are executing a task from the project roadmap. Follow this workflow precisely.
+Execute the next task from the project roadmap for **${repo}**.
 
-## Target Repository
-- Owner: ${owner}
-- Repo: ${repoName}
-- Full: ${repo}
-
-## Step 1: READ THE ROADMAP
-- Use \`github_read_file\` to find and read the roadmap
-- Check these paths in order: ${ROADMAP_FILE_CANDIDATES.join(', ')}
-- Also read \`WORK_LOG.md\` if it exists
-- If no roadmap is found, respond with: "No roadmap found. Run \`/orchestra init ${repo} <project description>\` first."
+## Step 1: READ ROADMAP
+Use \`github_read_file\` with owner="${owner}" repo="${repoName}" to read the roadmap.
+Check paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.
+If no roadmap found: "No roadmap found. Run \`/orchestra init ${repo} <description>\` first."
 
 ## Step 2: SELECT TASK
 ${taskSelection}
 
-## Step 3: UNDERSTAND THE CODEBASE
-- Use \`github_list_files\` and \`github_read_file\` to understand:
-  - The files mentioned in the task
-  - Related code and patterns
-  - Existing conventions (naming, imports, types)
-  - Test patterns if tests are expected
-
-## Step 3.5: REPO HEALTH CHECK — Large File Detection
-Before implementing, check if any source file you need to modify is too large for safe editing.
-
-**How to check:**
-1. When you read files in Step 3, count the approximate line count
-2. A file is "too large" if it has more than ~${LARGE_FILE_THRESHOLD_LINES} lines or ~${LARGE_FILE_THRESHOLD_KB}KB of source code
-3. Config files, generated files, and lock files are exempt — only check source code (.ts, .tsx, .js, .jsx, .py, .vue, .svelte, etc.)
-
-**If you find a large file that your task needs to modify:**
-1. STOP — do NOT attempt the original task on the large file
-2. Instead, implement a FILE SPLITTING task:
-   - Split the large file into smaller, focused modules (each under ~${LARGE_FILE_THRESHOLD_LINES} lines)
-   - Preserve all existing functionality — this is a pure refactor
-   - Update all imports across the codebase
-   - Re-export from the original path if needed for backward compatibility
-3. Update ROADMAP.md:
-   - Add a new task: \`- [x] **Refactor**: Split {filename} into modules (~N lines → M files)\`
-   - Insert it BEFORE the original task you were going to do
-   - Keep the original task as \`- [ ]\` (uncompleted) for the next run
-4. In the PR title, prefix with "refactor:" and explain the split
-5. In the ORCHESTRA_RESULT summary, note: "Auto-detected large file ({filename}, ~N lines). Split into modules. Original task deferred to next run."
-
-**If all target files are reasonably sized (<${LARGE_FILE_THRESHOLD_LINES} lines):**
-- Proceed normally to Step 4
-
-This health check prevents failed or broken implementations caused by editing files too large for the AI context window.
+## Step 3: UNDERSTAND CODEBASE
+Use \`github_list_files\` and \`github_read_file\` to read files related to the task.
+If any source file exceeds ~${LARGE_FILE_THRESHOLD_LINES} lines, split it into modules first (refactor PR) and defer the original task.
 
 ## Step 4: IMPLEMENT
-- Make the code changes using either:
-  - \`github_create_pr\` for simple changes (up to ~10 files)
-  - \`sandbox_exec\` for complex changes (clone, build, test, push)
-- Follow existing code conventions
-- Include proper types (no \`any\`)
-- Write tests if the repo has a test pattern
+Use \`github_create_pr\` (simple changes) or \`sandbox_exec\` (complex: clone, build, test, push).
+- **Read files before modifying** — use \`github_read_file\` first, then provide COMPLETE updated content
+- **Surgical edits only** — preserve all existing functions/exports. The tool BLOCKS updates losing >60% of identifiers
+- Follow existing code conventions, proper types (no \`any\`)
 
-### How to Update Existing Files
-To modify an existing file (append content, edit a section, etc.):
-1. **Read first**: Use \`github_read_file\` to get the current content
-2. **Modify in memory**: Add/change/remove the parts you need
-3. **Write full content**: Use \`github_create_pr\` with \`action: "update"\` and the COMPLETE modified content
-This is how you "append" to files — read the original, add new content at the end, provide the full result.
+If blocked (file too large, API errors): update WORK_LOG.md with status, report \`pr: FAILED\`.
 
-### CRITICAL — Surgical Edits Only
-**NEVER regenerate or rewrite an entire file from scratch.** This is the most common failure mode.
-- Make TARGETED, SURGICAL changes — add/modify/remove only the specific lines needed for your task
-- ALL existing exports, functions, classes, and variables MUST be preserved unless the task explicitly requires removing them
-- If a file has \`exportCSV\`, \`btcPrice\`, \`businessClass\`, etc. — those MUST still exist after your changes
-- Before writing file content, mentally verify: "Does my new version still contain every function and export from the original?"
-- If you cannot make targeted edits because the file is too complex or large, STOP and do a file-splitting refactor instead (see Step 3.5)
-- The \`github_create_pr\` tool will BLOCK updates that lose more than 60% of original identifiers — so regenerating from scratch will fail
-
-## Step 4.5: HANDLE PARTIAL FAILURES
-If you CANNOT complete the task (file too large for your context, API errors, complex dependency issues):
-
-1. **Do NOT silently give up** — always create a PR with at least documentation updates
-2. **Update WORK_LOG.md**: Append a row with status \`⚠️ partial\` or \`❌ blocked\` explaining what went wrong
-3. **Update ROADMAP.md**: Add a note under the task (keep it as \`- [ ]\`) explaining the blocker:
-   \`- [ ] **Task 2.1**: Add destinations\`
-   \`  - ⚠️ Blocked: src/App.jsx too large (~800 lines). Needs file split first.\`
-4. **Report clearly** in ORCHESTRA_RESULT with \`pr: FAILED\` or the partial PR URL
-
-Common failure patterns and how to handle them:
-- **File too large to edit safely**: Create a file-split refactor PR instead (see Step 3.5)
-- **API errors / permission denied**: Log the error in WORK_LOG.md, report in summary
-- **Task dependencies not met**: Note the missing dependency, skip to next available task
-
-## Step 5: UPDATE ROADMAP & WORK LOG
-In the SAME PR, also include:
-
-**ROADMAP.md update:**
-- Change ONLY the task you just completed from \`- [ ]\` to \`- [x]\`
-- Add completion note if relevant
-- **NEVER delete existing tasks** — the tool will BLOCK this as ROADMAP TAMPERING
-- **NEVER modify other tasks' status** — only change the one you implemented
-- **Preserve ALL existing content** — notes, phases, other tasks must remain unchanged
-
-**WORK_LOG.md update:**
-- Append a new row to the table:
-  \`| {date} | {task title} | ${modelAlias} | {branch} | {pr-url} | ✅ |\`
-- **APPEND ONLY** — the tool will BLOCK deletion of existing work log rows
-- **NEVER delete, modify, or rewrite existing rows** — they are an immutable audit trail
-- **NEVER erase Notes sections** — existing notes document important context
+## Step 5: UPDATE ROADMAP & WORK LOG (in same PR)
+- **ROADMAP.md**: Change ONLY your completed task from \`- [ ]\` to \`- [x]\`. Never delete tasks.
+- **WORK_LOG.md**: APPEND a row: \`| {date} | {task} | ${modelAlias} | {branch} | {pr-url} | ✅ |\`. Never delete existing rows.
 
 ## Step 6: CREATE PR
 - Branch: \`{task-slug}-${modelAlias}\` (bot/ prefix added automatically)
-- PR title: concise, under 70 chars, describes the task, MUST end with [${modelAlias}]
-- PR body: include summary of changes, what roadmap task was completed, and a footer line: "Generated by: ${modelAlias}"
-- Commit messages MUST include the model alias, e.g.: "feat(scope): description [${modelAlias}]"
-- If using sandbox_exec, name branch: \`bot/{task-slug}-${modelAlias}\`
-
-## Step 6.5: VERIFY PR CREATION
-**CRITICAL** — After calling \`github_create_pr\`, CHECK THE TOOL RESULT:
-- If it returned a PR URL (https://github.com/...) → success, proceed to Step 7
-- If it returned an error (422 "Reference already exists", 403, etc.) → FIX AND RETRY:
-  - 422: Try a different branch name (append a timestamp or number)
-  - 403: Check permissions, report the error
-  - Any other error: Report it clearly, do NOT claim success
-- **NEVER claim you created a PR if the tool returned an error.** This is the #1 failure mode.
+- Title: under 70 chars, ends with [${modelAlias}]
+- Body: summary + "Generated by: ${modelAlias}"
+- **Verify the tool returned a PR URL** — if error (422, 403), retry with different branch name. NEVER claim success if tool returned error.
 
 ## Step 7: REPORT
 \`\`\`
 ORCHESTRA_RESULT:
 branch: {branch-name}
 pr: {pr-url}
-files: {comma-separated list of changed files}
-summary: {1-2 sentence summary including which roadmap task was completed}
+files: {comma-separated changed files}
+summary: {1-2 sentence summary}
 \`\`\`
 
-The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FAILED\` and explain in the summary.
-
 ## Rules
-- Always create a PR — never just describe what should be done
-- One task per run — keep PRs focused
-- ALWAYS update ROADMAP.md and WORK_LOG.md in the same PR as the code changes
-- Use the model alias "${modelAlias}" in branch names for traceability
-- Do NOT skip ahead — respect task dependencies in the roadmap
-- Do NOT modify unrelated files
-- **NEVER regenerate entire files** — make surgical, targeted edits only. Preserve all existing functions, exports, and business logic.
-- **NEVER delete work log entries** — WORK_LOG.md is append-only. The \`github_create_pr\` tool will BLOCK any update that removes existing rows.
-- **NEVER delete roadmap tasks** — mark them [x] when done, but NEVER remove them. The tool will BLOCK deletion of >2 tasks.
-- **Your PR should ADD more lines than it deletes** — if your task is to add features, the codebase should grow. Massive net deletions will be BLOCKED.
+- Always create a PR. One task per run. Update ROADMAP.md + WORK_LOG.md in same PR.
+- Never regenerate entire files. Never delete work log entries or roadmap tasks.
+- Use "${modelAlias}" in branch names and commit messages.
 ${historyContext}`;
 }
 

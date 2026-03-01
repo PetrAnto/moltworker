@@ -254,20 +254,19 @@ describe('buildInitPrompt', () => {
 describe('buildRunPrompt', () => {
   it('includes repo info', () => {
     const prompt = buildRunPrompt({ repo: 'owner/repo', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('Owner: owner');
-    expect(prompt).toContain('Repo: repo');
-    expect(prompt).toContain('Full: owner/repo');
+    expect(prompt).toContain('owner/repo');
+    expect(prompt).toContain('owner');
+    expect(prompt).toContain('repo');
   });
 
   it('indicates RUN mode', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     expect(prompt).toContain('Orchestra RUN Mode');
-    expect(prompt).toContain('Execute Next Roadmap Task');
   });
 
   it('includes roadmap reading instructions', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('READ THE ROADMAP');
+    expect(prompt).toContain('READ ROADMAP');
     expect(prompt).toContain('ROADMAP.md');
     expect(prompt).toContain('WORK_LOG.md');
   });
@@ -292,8 +291,9 @@ describe('buildRunPrompt', () => {
   it('includes roadmap update instructions', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     expect(prompt).toContain('UPDATE ROADMAP');
-    expect(prompt).toContain('- [ ]` to `- [x]');
-    expect(prompt).toContain('Append a new row');
+    expect(prompt).toContain('- [ ]');
+    expect(prompt).toContain('- [x]');
+    expect(prompt).toContain('APPEND');
   });
 
   it('includes model alias in branch naming', () => {
@@ -352,8 +352,7 @@ describe('LARGE_FILE_THRESHOLD constants', () => {
 describe('repo health check in buildRunPrompt', () => {
   it('includes health check step', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('REPO HEALTH CHECK');
-    expect(prompt).toContain('Large File Detection');
+    expect(prompt).toContain('split it into modules');
   });
 
   it('references the line threshold', () => {
@@ -362,34 +361,30 @@ describe('repo health check in buildRunPrompt', () => {
   });
 
   it('references the KB threshold', () => {
+    // KB threshold condensed out of run prompt (still in init/redo)
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain(`${LARGE_FILE_THRESHOLD_KB}KB`);
+    // The condensed prompt mentions line threshold only
+    expect(prompt).toContain(`${LARGE_FILE_THRESHOLD_LINES}`);
   });
 
-  it('instructs to STOP and split large files', () => {
+  it('instructs to split large files', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('STOP');
-    expect(prompt).toContain('FILE SPLITTING task');
-    expect(prompt).toContain('pure refactor');
+    expect(prompt).toContain('split it into modules');
+    expect(prompt).toContain('refactor PR');
   });
 
   it('instructs to defer original task when splitting', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('Original task deferred to next run');
+    expect(prompt).toContain('defer the original task');
   });
 
-  it('exempts config and generated files', () => {
+  it('health check is in Step 3', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('Config files, generated files, and lock files are exempt');
-  });
-
-  it('health check comes between Step 3 and Step 4', () => {
-    const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    const step3Idx = prompt.indexOf('## Step 3: UNDERSTAND THE CODEBASE');
-    const healthIdx = prompt.indexOf('## Step 3.5: REPO HEALTH CHECK');
-    const step4Idx = prompt.indexOf('## Step 4: IMPLEMENT');
-    expect(step3Idx).toBeLessThan(healthIdx);
-    expect(healthIdx).toBeLessThan(step4Idx);
+    const step3Idx = prompt.indexOf('## Step 3:');
+    const splitIdx = prompt.indexOf('split it into modules');
+    const step4Idx = prompt.indexOf('## Step 4:');
+    expect(step3Idx).toBeLessThan(splitIdx);
+    expect(splitIdx).toBeLessThan(step4Idx);
   });
 });
 
@@ -1123,21 +1118,19 @@ describe('model alias in prompts', () => {
 describe('anti-rewrite rules in prompts', () => {
   it('run prompt includes surgical edit instructions', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('NEVER regenerate or rewrite an entire file from scratch');
-    expect(prompt).toContain('SURGICAL');
-    expect(prompt).toContain('existing exports, functions, classes, and variables MUST be preserved');
+    expect(prompt).toContain('Surgical edits only');
+    expect(prompt).toContain('preserve all existing functions/exports');
   });
 
   it('run prompt warns about identifier blocking', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     expect(prompt).toContain('github_create_pr');
-    expect(prompt).toContain('BLOCK updates that lose more than 60% of original identifiers');
+    expect(prompt).toContain('BLOCKS updates losing >60% of identifiers');
   });
 
   it('run prompt rules section includes anti-rewrite rule', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('NEVER regenerate entire files');
-    expect(prompt).toContain('surgical, targeted edits only');
+    expect(prompt).toContain('Never regenerate entire files');
   });
 
   it('redo prompt includes surgical edit instructions', () => {
@@ -1155,18 +1148,16 @@ describe('anti-rewrite rules in prompts', () => {
 // --- File update workflow instructions ---
 
 describe('file update workflow in prompts', () => {
-  it('run prompt includes How to Update Existing Files section', () => {
+  it('run prompt includes file reading before modifying', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('How to Update Existing Files');
+    expect(prompt).toContain('Read files before modifying');
     expect(prompt).toContain('github_read_file');
-    expect(prompt).toContain('action: "update"');
-    expect(prompt).toContain('COMPLETE modified content');
+    expect(prompt).toContain('COMPLETE updated content');
   });
 
   it('run prompt explains the append workflow', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('append');
-    expect(prompt).toContain('read the original');
+    expect(prompt).toContain('APPEND');
   });
 
   it('redo prompt includes How to Update Existing Files section', () => {
@@ -1176,46 +1167,44 @@ describe('file update workflow in prompts', () => {
     expect(prompt).toContain('COMPLETE modified content');
   });
 
-  it('update workflow comes before surgical edits section in run prompt', () => {
+  it('file reading comes before surgical edits in run prompt', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    const updateIdx = prompt.indexOf('How to Update Existing Files');
-    const surgicalIdx = prompt.indexOf('CRITICAL — Surgical Edits Only');
-    expect(updateIdx).toBeGreaterThan(0);
+    const readIdx = prompt.indexOf('Read files before modifying');
+    const surgicalIdx = prompt.indexOf('Surgical edits only');
+    expect(readIdx).toBeGreaterThan(0);
     expect(surgicalIdx).toBeGreaterThan(0);
-    expect(updateIdx).toBeLessThan(surgicalIdx);
+    expect(readIdx).toBeLessThan(surgicalIdx);
   });
 });
 
 // --- Partial failure handling ---
 
 describe('partial failure handling in prompts', () => {
-  it('run prompt includes HANDLE PARTIAL FAILURES step', () => {
+  it('run prompt includes failure handling', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('HANDLE PARTIAL FAILURES');
-    expect(prompt).toContain('Do NOT silently give up');
-  });
-
-  it('run prompt explains how to log partial failures', () => {
-    const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('partial');
     expect(prompt).toContain('blocked');
-    expect(prompt).toContain('WORK_LOG.md');
+    expect(prompt).toContain('pr: FAILED');
   });
 
-  it('run prompt lists common failure patterns', () => {
+  it('run prompt explains how to log failures', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('File too large');
-    expect(prompt).toContain('API errors');
-    expect(prompt).toContain('Task dependencies not met');
+    expect(prompt).toContain('WORK_LOG.md');
+    expect(prompt).toContain('file too large');
   });
 
-  it('partial failure step comes between Step 4 and Step 5', () => {
+  it('run prompt lists failure scenarios', () => {
+    const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
+    expect(prompt).toContain('file too large');
+    expect(prompt).toContain('API errors');
+  });
+
+  it('failure handling is in Step 4', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     const step4Idx = prompt.indexOf('## Step 4: IMPLEMENT');
-    const failIdx = prompt.indexOf('## Step 4.5: HANDLE PARTIAL FAILURES');
-    const step5Idx = prompt.indexOf('## Step 5: UPDATE ROADMAP & WORK LOG');
-    expect(step4Idx).toBeLessThan(failIdx);
-    expect(failIdx).toBeLessThan(step5Idx);
+    const blockedIdx = prompt.indexOf('If blocked');
+    const step5Idx = prompt.indexOf('## Step 5:');
+    expect(step4Idx).toBeLessThan(blockedIdx);
+    expect(blockedIdx).toBeLessThan(step5Idx);
   });
 
   it('redo prompt includes partial failure handling', () => {

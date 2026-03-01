@@ -1329,6 +1329,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     let consecutiveNoToolIterations = 0;
     // Same-tool loop detection: track recent tool call signatures (name+args)
     const recentToolSignatures: string[] = [];
+    // Invalid JSON args tracking: consecutive iterations where ALL tool calls have invalid JSON
+    let consecutiveInvalidArgsIterations = 0;
+    const MAX_INVALID_ARGS_NUDGE = 4; // After 4 iterations with all-invalid args, inject nudge
+    const MAX_INVALID_ARGS_BAIL = 8; // After 8, bail out — model can't format tool calls
     // P2 guardrails: track tool errors for "No Fake Success" enforcement
     const toolErrorTracker = createToolErrorTracker();
 
@@ -1942,7 +1946,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // Check if model wants to call tools
         if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-          consecutiveNoToolIterations = 0; // Reset stall counter — model is working
+          // NOTE: stall counter reset moved after tool execution — only reset
+          // if at least one tool call had valid arguments (see below)
 
           // Add assistant message with tool calls (preserve reasoning_content for Moonshot thinking mode)
           const assistantMsg: ChatMessage = {
@@ -2102,6 +2107,46 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               trackToolError(toolErrorTracker, toolName, validation, task.iterations, toolCall?.function.arguments || '');
               console.log(`[TaskProcessor] Tool error tracked: ${toolName} (${validation.errorType}, ${validation.severity})`);
             }
+          }
+
+          // Invalid JSON args tracking: detect models that can't format tool calls
+          const invalidArgResults = toolResults.filter(
+            tr => tr.toolResult.content.startsWith('Error: Invalid JSON arguments:')
+          );
+          if (invalidArgResults.length === toolResults.length && toolResults.length > 0) {
+            // ALL tool calls in this iteration had invalid JSON
+            consecutiveInvalidArgsIterations++;
+            // Don't reset stall counter — invalid args don't count as progress
+            console.log(`[TaskProcessor] All ${toolResults.length} tool calls had invalid JSON args (${consecutiveInvalidArgsIterations}/${MAX_INVALID_ARGS_BAIL} before bail)`);
+
+            if (consecutiveInvalidArgsIterations >= MAX_INVALID_ARGS_BAIL) {
+              console.log(`[TaskProcessor] Bailing out: ${consecutiveInvalidArgsIterations} consecutive iterations with all-invalid tool call args`);
+              task.status = 'failed';
+              task.error = `Model cannot format tool call arguments correctly (${consecutiveInvalidArgsIterations} consecutive failures). Try a more capable model like /flash, /sonnet, or /deep.`;
+              task.result = `Tool calling failed: the model produced invalid JSON arguments for ${consecutiveInvalidArgsIterations} consecutive iterations. No tools were successfully executed.`;
+              await this.doState.storage.put('task', task);
+
+              if (task.telegramToken) {
+                await this.sendTelegramMessageWithButtons(
+                  task.telegramToken,
+                  task.chatId,
+                  `❌ Task failed: model can't format tool calls.\n\n${task.modelAlias} produced invalid JSON arguments ${consecutiveInvalidArgsIterations} times in a row.\n\n💡 Try a more capable model: /flash, /sonnet, or /deep`,
+                  [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+                );
+              }
+              return;
+            }
+
+            if (consecutiveInvalidArgsIterations >= MAX_INVALID_ARGS_NUDGE) {
+              conversationMessages.push({
+                role: 'user',
+                content: `[SYSTEM] Your last ${consecutiveInvalidArgsIterations} tool calls ALL had invalid JSON arguments. You MUST format arguments as valid JSON. Example: {"owner": "PetrAnto", "repo": "wagmi", "path": "ROADMAP.md"}. Use double quotes for keys and values. No trailing commas. No comments.`,
+              });
+            }
+          } else {
+            // At least one tool call succeeded — reset both counters
+            consecutiveInvalidArgsIterations = 0;
+            consecutiveNoToolIterations = 0;
           }
 
           // Same-tool loop detection: check if model is calling identical tools repeatedly
