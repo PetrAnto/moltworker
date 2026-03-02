@@ -2907,7 +2907,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         console.log(`[TaskProcessor] Phase budget exceeded: ${error.phase} (${error.elapsedMs}ms > ${error.budgetMs}ms)`);
         // Do NOT increment autoResumeCount here — the alarm handler owns that counter.
         // Previously both incremented it, causing double-counting (each cycle burned 2 slots).
-        task.lastUpdate = Date.now();
+        //
+        // CRITICAL: Backdate lastUpdate so the next watchdog alarm triggers auto-resume
+        // immediately. Without this, lastUpdate = Date.now() means the watchdog needs
+        // 3 × 90s intervals (270s!) before timeSinceUpdate exceeds the 240s stuck threshold.
+        // Backdating by stuckThreshold ensures the very next alarm (≤90s) fires auto-resume.
+        const isPaidModel = getModel(task.modelAlias)?.isFree !== true;
+        const stuckThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
+        task.lastUpdate = Date.now() - stuckThreshold;
         await this.doState.storage.put('task', task);
 
         // Save checkpoint so alarm handler can resume from here
@@ -2927,7 +2934,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.modelAlias
           );
         }
-        // Let the watchdog alarm handle auto-resume — just return
+        // Schedule a fast alarm for quick auto-resume instead of waiting for
+        // the regular 90s watchdog interval. The backdated lastUpdate ensures the
+        // alarm handler recognizes this as stuck and proceeds to auto-resume.
+        await this.doState.storage.setAlarm(Date.now() + 15_000);
         return;
       }
 

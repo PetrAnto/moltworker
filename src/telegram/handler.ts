@@ -1801,11 +1801,16 @@ export class TelegramHandler {
       });
     }
 
-    // Inject learnings and last task context
-    const contextPrompt = prompt || (mode === 'init' ? 'Create roadmap' : 'Execute next roadmap task');
-    const learningsHint = await this.getLearningsHint(userId, contextPrompt);
-    const lastTaskHint = await this.getLastTaskHint(userId);
-    const sessionContext = await this.getSessionContext(userId, contextPrompt);
+    // Inject learnings and last task context — skip for INIT mode (no prior context needed, reduces token bloat)
+    let learningsHint = '';
+    let lastTaskHint = '';
+    let sessionContext = '';
+    if (mode !== 'init') {
+      const contextPrompt = prompt || 'Execute next roadmap task';
+      learningsHint = await this.getLearningsHint(userId, contextPrompt);
+      lastTaskHint = await this.getLastTaskHint(userId);
+      sessionContext = await this.getSessionContext(userId, contextPrompt);
+    }
 
     const toolHint = modelInfo.parallelCalls
       ? '\n\nCall multiple tools in parallel when possible (e.g., read multiple files at once).'
