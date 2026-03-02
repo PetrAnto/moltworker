@@ -17,13 +17,16 @@ import type { TaskPhase } from './task-processor';
  * must be much larger than the 30s CPU limit itself.
  *
  * Actual CPU usage per iteration is ~50-100ms (parsing, formatting).
- * A 4-minute wall-clock budget allows ~10-15 slow-model iterations
- * while staying well under the 30s CPU limit.
+ * Even 20 iterations × 100ms = 2s CPU, well under the 30s limit.
+ *
+ * The work budget was 4min, but slow models (qwennext ~45-60s per call)
+ * only got 4-5 iterations before eviction. Increased to 8min to allow
+ * 8-12 iterations per cycle, reducing the number of resume cycles needed.
  */
 export const PHASE_BUDGETS: Record<TaskPhase, number> = {
   plan: 120_000,  // 2 min — planning needs a few LLM round-trips
-  work: 240_000,  // 4 min — main work phase, multiple tool-calling iterations
-  review: 60_000, // 1 min — review/summary is quick but needs ≥1 API call
+  work: 480_000,  // 8 min — main work phase, multiple tool-calling iterations
+  review: 90_000, // 1.5 min — review/summary needs ≥1 API call, slow models need more
 };
 
 /**

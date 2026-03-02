@@ -21,8 +21,8 @@ describe('Phase Budget Circuit Breakers', () => {
 
     it('should have correct budget values', () => {
       expect(PHASE_BUDGETS.plan).toBe(120_000);
-      expect(PHASE_BUDGETS.work).toBe(240_000);
-      expect(PHASE_BUDGETS.review).toBe(60_000);
+      expect(PHASE_BUDGETS.work).toBe(480_000);
+      expect(PHASE_BUDGETS.review).toBe(90_000);
     });
   });
 
@@ -52,8 +52,8 @@ describe('Phase Budget Circuit Breakers', () => {
     });
 
     it('should throw PhaseBudgetExceededError when over budget', () => {
-      // Phase started 5min ago → exceeds work budget of 4min
-      const phaseStartTime = Date.now() - 300_000;
+      // Phase started 9min ago → exceeds work budget of 8min
+      const phaseStartTime = Date.now() - 540_000;
       expect(() => checkPhaseBudget('work', phaseStartTime)).toThrow(PhaseBudgetExceededError);
     });
 
@@ -67,13 +67,13 @@ describe('Phase Budget Circuit Breakers', () => {
       expect(() => checkPhaseBudget('plan', phaseStartTime)).not.toThrow();
     });
 
-    it('should throw for review phase after 1min', () => {
-      const phaseStartTime = Date.now() - 70_000;
+    it('should throw for review phase after 1.5min', () => {
+      const phaseStartTime = Date.now() - 100_000;
       expect(() => checkPhaseBudget('review', phaseStartTime)).toThrow(PhaseBudgetExceededError);
     });
 
-    it('should not throw for review phase within 1min', () => {
-      const phaseStartTime = Date.now() - 30_000;
+    it('should not throw for review phase within 1.5min', () => {
+      const phaseStartTime = Date.now() - 60_000;
       expect(() => checkPhaseBudget('review', phaseStartTime)).not.toThrow();
     });
 
@@ -107,7 +107,7 @@ describe('Phase Budget Circuit Breakers', () => {
     it('checkPhaseBudget throws before execution can proceed', () => {
       // When checkPhaseBudget throws, the calling code in processTask() never reaches
       // the API call or tool execution. The catch block saves the checkpoint.
-      const phaseStartTime = Date.now() - 300_000;
+      const phaseStartTime = Date.now() - 540_000;
       let apiCallReached = false;
       try {
         checkPhaseBudget('work', phaseStartTime);
