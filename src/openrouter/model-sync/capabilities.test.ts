@@ -109,6 +109,41 @@ describe('detectCapabilities', () => {
       expect(caps.reasoning.confidence).toBe('high');
     });
 
+    it('detects mandatory reasoning for OpenAI o-series models', () => {
+      const o3 = makeModel({ id: 'openai/o3', supported_parameters: ['reasoning'] });
+      const caps = detectCapabilities(o3);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('high');
+    });
+
+    it('detects mandatory reasoning for OpenAI o-series without supported_parameters', () => {
+      const o4mini = makeModel({ id: 'openai/o4-mini' });
+      const caps = detectCapabilities(o4mini);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('medium');
+    });
+
+    it('detects mandatory reasoning for gpt-5-nano', () => {
+      const gpt5nano = makeModel({ id: 'openai/gpt-5-nano', supported_parameters: ['reasoning'] });
+      const caps = detectCapabilities(gpt5nano);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('high');
+    });
+
+    it('detects mandatory reasoning for gpt-5-mini', () => {
+      const gpt5mini = makeModel({ id: 'openai/gpt-5-mini' });
+      const caps = detectCapabilities(gpt5mini);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('medium');
+    });
+
+    it('does not detect mandatory for non-OpenAI o-series pattern', () => {
+      // "o1" in the middle of a non-OpenAI model should not match
+      const other = makeModel({ id: 'some-provider/model-o1-thing' });
+      const caps = detectCapabilities(other);
+      expect(caps.reasoning.value).not.toBe('mandatory');
+    });
+
     it('detects fixed reasoning from model ID pattern (r1)', () => {
       const model = makeModel({ id: 'deepseek/deepseek-r1-0528' });
       const caps = detectCapabilities(model);

@@ -7,7 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { createOpenRouterClient, parseSSEStream, type ChatMessage, type ResponseFormat } from '../openrouter/client';
 import { executeTool, AVAILABLE_TOOLS, githubReadFile, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools } from '../openrouter/tools';
-import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, detectReasoningLevel, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
+import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isReasoningMandatoryError, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { injectCacheControl } from '../openrouter/prompt-cache';
 import { markdownToTelegramHtml } from '../utils/telegram-format';
@@ -1625,6 +1625,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           (tc) => this.executeToolWithCache(tc, toolContext),
         );
 
+        // Mutable reasoning override — set by the "reasoning mandatory" 400 handler
+        // so the next retry attempt injects the param into the request body.
+        let reasoningOverride: ReturnType<typeof buildFallbackReasoningParam> | undefined;
+
         for (let attempt = 1; attempt <= MAX_API_RETRIES; attempt++) {
           try {
             console.log(`[TaskProcessor] Starting API call (attempt ${attempt}/${MAX_API_RETRIES})...`);
@@ -1699,10 +1703,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               }
 
               // Inject reasoning parameter for direct API models (DeepSeek V3.2, etc.)
-              const reasoningLevel = request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
-              const reasoningParam = getReasoningParam(task.modelAlias, reasoningLevel);
-              if (reasoningParam) {
-                requestBody.reasoning = reasoningParam;
+              // reasoningOverride is set by the "reasoning mandatory" 400 handler below
+              if (reasoningOverride) {
+                requestBody.reasoning = reasoningOverride;
+              } else {
+                const reasoningLevel = request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
+                const reasoningParam = getReasoningParam(task.modelAlias, reasoningLevel);
+                if (reasoningParam) {
+                  requestBody.reasoning = reasoningParam;
+                }
               }
 
               let response: Response;
@@ -1763,6 +1772,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             // 400 content filter (DashScope/Alibaba) — deterministic, don't retry
             if (/\b400\b/.test(lastError.message) && /inappropriate.?content|data_inspection_failed/i.test(lastError.message)) {
               console.log('[TaskProcessor] Content filter 400 — failing fast (will try rotation)');
+              break;
+            }
+
+            // 400 "Reasoning is mandatory" — inject reasoning param and retry once.
+            // For OpenRouter: chatCompletionStreamingWithTools handles this internally.
+            // For direct API: set reasoningOverride so the next attempt includes it.
+            if (/\b400\b/.test(lastError.message) && isReasoningMandatoryError(lastError.message)) {
+              if (!reasoningOverride) {
+                console.log(`[TaskProcessor] Reasoning mandatory for ${task.modelAlias} — retrying with reasoning enabled`);
+                reasoningOverride = buildFallbackReasoningParam(task.modelAlias);
+                continue; // Retry with reasoning injected (same attempt slot)
+              }
+              // Already had reasoning override — something else is wrong, fail fast
+              console.log('[TaskProcessor] Already had reasoning override, still rejected — failing');
               break;
             }
 

@@ -3,7 +3,7 @@
  * Direct integration with OpenRouter API using OpenAI-compatible format
  */
 
-import { getModelId, isImageGenModel, DEFAULT_IMAGE_MODEL, getReasoningParam, detectReasoningLevel, isAnthropicModel, type ReasoningLevel, type ReasoningParam } from './models';
+import { getModelId, isImageGenModel, DEFAULT_IMAGE_MODEL, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isAnthropicModel, isReasoningMandatoryError, type ReasoningLevel, type ReasoningParam } from './models';
 import { AVAILABLE_TOOLS, executeTool, type ToolDefinition, type ToolCall, type ToolResult, type ToolContext } from './tools';
 import { injectCacheControl } from './prompt-cache';
 
@@ -325,7 +325,7 @@ export class OpenRouterClient {
       request.response_format = options.responseFormat;
     }
 
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    let response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(request),
@@ -333,7 +333,25 @@ export class OpenRouterClient {
 
     if (!response.ok) {
       const error = await response.json() as OpenRouterError;
-      throw new Error(`OpenRouter API error: ${error.error?.message || response.statusText}`);
+      const errorMsg = error.error?.message || response.statusText;
+
+      // Reactive retry: if the provider requires reasoning, inject it and retry once
+      if (response.status === 400 && isReasoningMandatoryError(errorMsg) && !request.reasoning) {
+        console.log(`[OpenRouter] Reasoning mandatory for ${modelId} — retrying with reasoning enabled`);
+        request.reasoning = buildFallbackReasoningParam(modelAlias);
+        response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: this.getHeaders(),
+          body: JSON.stringify(request),
+        });
+        if (!response.ok) {
+          const retryError = await response.json() as OpenRouterError;
+          throw new Error(`OpenRouter API error: ${retryError.error?.message || response.statusText}`);
+        }
+        return response.json() as Promise<ChatCompletionResponse>;
+      }
+
+      throw new Error(`OpenRouter API error: ${errorMsg}`);
     }
 
     return response.json() as Promise<ChatCompletionResponse>;
@@ -411,7 +429,7 @@ export class OpenRouterClient {
         request.response_format = options.responseFormat;
       }
 
-      const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      let response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(request),
@@ -419,7 +437,24 @@ export class OpenRouterClient {
 
       if (!response.ok) {
         const error = await response.json() as OpenRouterError;
-        throw new Error(`OpenRouter API error: ${error.error?.message || response.statusText}`);
+        const errorMsg = error.error?.message || response.statusText;
+
+        // Reactive retry: if the provider requires reasoning, inject it and retry once
+        if (response.status === 400 && isReasoningMandatoryError(errorMsg) && !request.reasoning) {
+          console.log(`[OpenRouter] Reasoning mandatory for ${modelId} — retrying with reasoning enabled`);
+          request.reasoning = buildFallbackReasoningParam(modelAlias);
+          response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: this.getHeaders(),
+            body: JSON.stringify(request),
+          });
+          if (!response.ok) {
+            const retryError = await response.json() as OpenRouterError;
+            throw new Error(`OpenRouter API error: ${retryError.error?.message || response.statusText}`);
+          }
+        } else {
+          throw new Error(`OpenRouter API error: ${errorMsg}`);
+        }
       }
 
       lastResponse = await response.json() as ChatCompletionResponse;
@@ -712,7 +747,7 @@ export class OpenRouterClient {
         requestBody.response_format = options.responseFormat;
       }
 
-      const response = await fetch(url.toString(), {
+      let response = await fetch(url.toString(), {
         method: 'POST',
         headers: this.getHeaders(),
         signal: controller.signal,
@@ -723,7 +758,33 @@ export class OpenRouterClient {
 
       if (!response.ok || !response.body) {
         const errorText = await response.text().catch(() => 'unknown');
-        throw new Error(`OpenRouter API error (${response.status}): ${errorText.slice(0, 200)}`);
+
+        // Reactive retry: if reasoning is mandatory, inject it and retry once
+        if (response.status === 400 && isReasoningMandatoryError(errorText) && !requestBody.reasoning) {
+          console.log(`[OpenRouter] Reasoning mandatory for ${modelId} — retrying streaming with reasoning enabled`);
+          requestBody.reasoning = buildFallbackReasoningParam(modelAlias);
+
+          const retryTimeout = setTimeout(() => controller.abort(), Math.max(idleTimeoutMs, 60000) + 30000);
+          try {
+            response = await fetch(url.toString(), {
+              method: 'POST',
+              headers: this.getHeaders(),
+              signal: controller.signal,
+              body: JSON.stringify(requestBody),
+            });
+            clearTimeout(retryTimeout);
+
+            if (!response.ok || !response.body) {
+              const retryErrorText = await response.text().catch(() => 'unknown');
+              throw new Error(`OpenRouter API error (${response.status}): ${retryErrorText.slice(0, 200)}`);
+            }
+          } catch (retryErr) {
+            clearTimeout(retryTimeout);
+            throw retryErr;
+          }
+        } else {
+          throw new Error(`OpenRouter API error (${response.status}): ${errorText.slice(0, 200)}`);
+        }
       }
 
       return await parseSSEStream(response.body, idleTimeoutMs, options?.onProgress, options?.onToolCallReady);
