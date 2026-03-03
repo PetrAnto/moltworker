@@ -162,6 +162,42 @@ describe('detectCapabilities', () => {
       const caps = detectCapabilities(model);
       expect(caps.reasoning.value).toBe('none');
     });
+
+    it('detects mandatory reasoning for OpenAI o-series with reasoning param', () => {
+      const model = makeModel({ id: 'openai/o3', supported_parameters: ['reasoning'] });
+      const caps = detectCapabilities(model);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('high');
+      expect(caps.reasoning.source).toBe('supported_parameters+model_id_pattern');
+    });
+
+    it('detects mandatory reasoning for OpenAI o-series without reasoning param', () => {
+      const model = makeModel({ id: 'openai/o4-mini' });
+      const caps = detectCapabilities(model);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('medium');
+      expect(caps.reasoning.source).toBe('model_id_pattern');
+    });
+
+    it('detects mandatory reasoning for gpt-5-nano', () => {
+      const model = makeModel({ id: 'openai/gpt-5-nano', supported_parameters: ['reasoning_effort'] });
+      const caps = detectCapabilities(model);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('high');
+    });
+
+    it('detects mandatory reasoning for gpt-5-mini', () => {
+      const model = makeModel({ id: 'openai/gpt-5-mini' });
+      const caps = detectCapabilities(model);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('medium');
+    });
+
+    it('does not detect mandatory for openai/gpt-4o (not o-series)', () => {
+      const model = makeModel({ id: 'openai/gpt-4o', supported_parameters: ['reasoning'] });
+      const caps = detectCapabilities(model);
+      expect(caps.reasoning.value).toBe('configurable');
+    });
   });
 
   describe('image gen detection', () => {

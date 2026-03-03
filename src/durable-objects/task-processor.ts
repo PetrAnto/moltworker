@@ -1775,7 +1775,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               break;
             }
 
-            // 400 "Reasoning is mandatory" — inject reasoning param and retry once.
+            // 400 "Reasoning is mandatory" — force-enable reasoning and retry once.
             // For OpenRouter: chatCompletionStreamingWithTools handles this internally.
             // For direct API: set reasoningOverride so the next attempt includes it.
             if (/\b400\b/.test(lastError.message) && isReasoningMandatoryError(lastError.message)) {
@@ -1784,7 +1784,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 reasoningOverride = buildFallbackReasoningParam(task.modelAlias);
                 continue; // Retry with reasoning injected (same attempt slot)
               }
-              // Already had reasoning override — something else is wrong, fail fast
+              // Already tried with reasoning override — something else is wrong
               console.log('[TaskProcessor] Already had reasoning override, still rejected — failing');
               break;
             }

@@ -101,10 +101,9 @@ function detectReasoning(
   params: string[],
   combined: string,
 ): DetectedCapabilities['reasoning'] {
-  // High: Explicit reasoning parameters → configurable
+  // High: Explicit reasoning parameters → configurable (or mandatory for known patterns)
   if (params.includes('reasoning') || params.includes('reasoning_effort') || params.includes('include_reasoning')) {
-    // Check if the model is from a family where reasoning is mandatory (not optional)
-    // OpenAI o-series and gpt-5-nano require reasoning — it cannot be disabled
+    // OpenAI o-series and gpt-5-nano/mini require reasoning — it cannot be disabled
     if (isMandatoryReasoningPattern(combined)) {
       return { value: 'mandatory' as ReasoningCapability, confidence: 'high', source: 'supported_parameters+model_id_pattern' };
     }
@@ -126,12 +125,7 @@ function detectReasoning(
 
 /**
  * Check if a model ID pattern indicates mandatory reasoning.
- * These models require a reasoning parameter to be sent and reject
- * requests without it (400: "reasoning is mandatory").
- *
- * Known patterns:
- * - OpenAI o-series (o1, o3, o4-mini, etc.) — reasoning cannot be disabled
- * - OpenAI gpt-5-nano / gpt-5-mini — reasoning-first architecture
+ * These models require a reasoning parameter and reject requests without it.
  */
 function isMandatoryReasoningPattern(combined: string): boolean {
   // o-series: "openai/o1", "openai/o3", "openai/o4-mini" etc.
