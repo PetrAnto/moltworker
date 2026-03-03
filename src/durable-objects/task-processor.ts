@@ -2062,13 +2062,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 }
 
                 const toolPromise = this.executeToolWithCache(toolCall, toolContext);
+                let toolTimeoutId: ReturnType<typeof setTimeout>;
                 const toolTimeoutPromise = new Promise<never>((_, reject) => {
-                  setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
+                  toolTimeoutId = setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
                 });
-                const toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
-
-                console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
-                return { toolName, toolResult };
+                try {
+                  const toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
+                  return { toolName, toolResult };
+                } finally {
+                  clearTimeout(toolTimeoutId!);
+                }
               })
             );
 
@@ -2108,10 +2111,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 toolResult = await specResult;
                 console.log(`[TaskProcessor] Tool ${toolName} from speculative cache in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
               } else {
+                let seqTimeoutId: ReturnType<typeof setTimeout>;
                 try {
                   const toolPromise = this.executeToolWithCache(toolCall, toolContext);
                   const toolTimeoutPromise = new Promise<never>((_, reject) => {
-                    setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
+                    seqTimeoutId = setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
                   });
                   toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
                 } catch (toolError) {
@@ -2119,6 +2123,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     tool_call_id: toolCall.id,
                     content: `Error: ${toolError instanceof Error ? toolError.message : String(toolError)}`,
                   };
+                } finally {
+                  clearTimeout(seqTimeoutId!);
                 }
                 console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
               }

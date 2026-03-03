@@ -79,12 +79,15 @@ export function createSpeculativeExecutor(
     console.log(`[SpeculativeExec] Starting early: ${toolCall.function.name} (${toolCall.id})`);
 
     // Start execution with timeout protection
+    let specTimeoutId: ReturnType<typeof setTimeout>;
     const promise = Promise.race([
       execute(toolCall),
       new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Speculative timeout (${SPECULATIVE_TIMEOUT_MS / 1000}s)`)), SPECULATIVE_TIMEOUT_MS);
+        specTimeoutId = setTimeout(() => reject(new Error(`Speculative timeout (${SPECULATIVE_TIMEOUT_MS / 1000}s)`)), SPECULATIVE_TIMEOUT_MS);
       }),
-    ]).then(
+    ]).finally(() => {
+      clearTimeout(specTimeoutId!);
+    }).then(
       (result) => {
         completed++;
         console.log(`[SpeculativeExec] Completed: ${toolCall.function.name} (${result.content.length} chars)`);
