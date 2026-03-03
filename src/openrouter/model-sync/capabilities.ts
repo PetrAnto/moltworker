@@ -101,17 +101,42 @@ function detectReasoning(
   params: string[],
   combined: string,
 ): DetectedCapabilities['reasoning'] {
-  // High: Explicit reasoning parameters
+  // High: Explicit reasoning parameters → configurable
   if (params.includes('reasoning') || params.includes('reasoning_effort') || params.includes('include_reasoning')) {
+    // Check if the model is from a family where reasoning is mandatory (not optional)
+    // OpenAI o-series and gpt-5-nano require reasoning — it cannot be disabled
+    if (isMandatoryReasoningPattern(combined)) {
+      return { value: 'mandatory' as ReasoningCapability, confidence: 'high', source: 'supported_parameters+model_id_pattern' };
+    }
     return { value: 'configurable' as ReasoningCapability, confidence: 'high', source: 'supported_parameters' };
   }
 
-  // Medium: Known reasoning model patterns (fixed reasoning — always thinks)
-  if (/\b(reasoner|thinking|r1|o[1-4](-|$)|qwq)\b/.test(combined)) {
+  // Medium: Known mandatory-reasoning model patterns (provider rejects without reasoning)
+  if (isMandatoryReasoningPattern(combined)) {
+    return { value: 'mandatory' as ReasoningCapability, confidence: 'medium', source: 'model_id_pattern' };
+  }
+
+  // Medium: Known fixed-reasoning model patterns (always thinks, but doesn't require param)
+  if (/\b(reasoner|thinking|r1|qwq)\b/.test(combined)) {
     return { value: 'fixed' as ReasoningCapability, confidence: 'medium', source: 'model_id_pattern' };
   }
 
   return { value: 'none' as ReasoningCapability, confidence: 'high', source: 'not_detected' };
+}
+
+/**
+ * Check if a model ID pattern indicates mandatory reasoning.
+ * These models require a reasoning parameter to be sent and reject
+ * requests without it (400: "reasoning is mandatory").
+ *
+ * Known patterns:
+ * - OpenAI o-series (o1, o3, o4-mini, etc.) — reasoning cannot be disabled
+ * - OpenAI gpt-5-nano / gpt-5-mini — reasoning-first architecture
+ */
+function isMandatoryReasoningPattern(combined: string): boolean {
+  // o-series: "openai/o1", "openai/o3", "openai/o4-mini" etc.
+  // gpt-5 reasoning models: "openai/gpt-5-nano", "openai/gpt-5-mini"
+  return /\bopenai\/o[1-4]\b/.test(combined) || /\bopenai\/gpt-5-(nano|mini)\b/.test(combined);
 }
 
 function detectImageGen(

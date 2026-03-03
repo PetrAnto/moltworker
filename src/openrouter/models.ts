@@ -32,7 +32,7 @@ export const PROVIDERS: Record<Provider, ProviderConfig> = {
   },
 };
 
-export type ReasoningCapability = 'none' | 'fixed' | 'configurable';
+export type ReasoningCapability = 'none' | 'fixed' | 'configurable' | 'mandatory';
 
 export interface ModelInfo {
   id: string;
@@ -1151,11 +1151,26 @@ export type ReasoningParam =
 
 /**
  * Build the provider-specific reasoning parameter for a model.
- * Returns undefined if the model doesn't support configurable reasoning.
+ * Returns undefined if the model doesn't support configurable reasoning
+ * and doesn't require mandatory reasoning.
+ *
+ * For 'mandatory' models: always returns { enabled: true } (or effort: 'medium'
+ * for Gemini) regardless of the requested level, because the provider rejects
+ * requests without reasoning enabled.
  */
 export function getReasoningParam(alias: string, level: ReasoningLevel): ReasoningParam | undefined {
   const model = getModel(alias);
-  if (!model || model.reasoning !== 'configurable') return undefined;
+  if (!model) return undefined;
+
+  // 'mandatory': provider requires reasoning — always enable, ignore user level
+  if (model.reasoning === 'mandatory') {
+    if (model.id.startsWith('google/')) {
+      return { effort: 'medium' };
+    }
+    return { enabled: true };
+  }
+
+  if (model.reasoning !== 'configurable') return undefined;
 
   // Gemini models use effort levels
   if (model.id.startsWith('google/')) {
@@ -1170,6 +1185,20 @@ export function getReasoningParam(alias: string, level: ReasoningLevel): Reasoni
 
   // DeepSeek and Grok use enabled boolean
   return { enabled: level !== 'off' };
+}
+
+/**
+ * Build a fallback reasoning parameter for an unknown model that returned
+ * a "reasoning is mandatory" API error. Infers the right format from
+ * the model ID (Gemini uses effort, everything else uses enabled boolean).
+ */
+export function buildFallbackReasoningParam(modelIdOrAlias: string): ReasoningParam {
+  const model = getModel(modelIdOrAlias);
+  const id = model?.id ?? modelIdOrAlias;
+  if (id.startsWith('google/')) {
+    return { effort: 'medium' };
+  }
+  return { enabled: true };
 }
 
 /**
@@ -1249,6 +1278,20 @@ export function parseJsonPrefix(message: string): { requestJson: boolean; cleanM
 interface ChatMessageLike {
   role: string;
   content: string | unknown[] | null;
+}
+
+/**
+ * Regex that matches API error messages indicating the provider requires
+ * reasoning to be enabled. Used for reactive retry in both client.ts
+ * and task-processor.ts.
+ */
+export const REASONING_MANDATORY_ERROR = /reasoning\s+(is\s+)?mandatory|reasoning.*cannot\s+be\s+disabled|require[sd]?\s+reasoning|reasoning\s+.*required/i;
+
+/**
+ * Check if an error message indicates that reasoning is mandatory for the model.
+ */
+export function isReasoningMandatoryError(errorMessage: string): boolean {
+  return REASONING_MANDATORY_ERROR.test(errorMessage);
 }
 
 /**

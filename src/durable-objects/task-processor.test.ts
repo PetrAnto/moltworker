@@ -47,13 +47,17 @@ vi.mock('../openrouter/models', () => ({
     envKey: 'DEEPSEEK_API_KEY',
   })),
   getReasoningParam: vi.fn(() => ({})),
+  buildFallbackReasoningParam: vi.fn(() => ({ enabled: true })),
   detectReasoningLevel: vi.fn(() => undefined),
+  isReasoningMandatoryError: vi.fn((msg: string) => /reasoning\s+(is\s+)?mandatory|reasoning.*cannot\s+be\s+disabled|require[sd]?\s+reasoning|reasoning\s+.*required/i.test(msg)),
   getFreeToolModels: vi.fn(() => ['free1', 'free2']),
   categorizeModel: vi.fn(() => 'general'),
   clampMaxTokens: vi.fn((_, requested: number) => Math.min(requested, 8192)),
   getTemperature: vi.fn(() => 0.7),
   isAnthropicModel: vi.fn(() => false),
   modelSupportsTools: vi.fn(() => true),
+  registerDynamicModels: vi.fn(),
+  blockModels: vi.fn(),
 }));
 
 vi.mock('../openrouter/prompt-cache', () => ({
