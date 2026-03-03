@@ -335,8 +335,8 @@ export class OpenRouterClient {
       const error = await response.json() as OpenRouterError;
       const errorMsg = error.error?.message || response.statusText;
 
-      // Reactive retry: if the provider requires reasoning, inject it and retry once
-      if (response.status === 400 && isReasoningMandatoryError(errorMsg) && !request.reasoning) {
+      // Reactive retry: if the provider requires reasoning, force-enable and retry once
+      if (response.status === 400 && isReasoningMandatoryError(errorMsg)) {
         console.log(`[OpenRouter] Reasoning mandatory for ${modelId} — retrying with reasoning enabled`);
         request.reasoning = buildFallbackReasoningParam(modelAlias);
         response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
@@ -439,8 +439,8 @@ export class OpenRouterClient {
         const error = await response.json() as OpenRouterError;
         const errorMsg = error.error?.message || response.statusText;
 
-        // Reactive retry: if the provider requires reasoning, inject it and retry once
-        if (response.status === 400 && isReasoningMandatoryError(errorMsg) && !request.reasoning) {
+        // Reactive retry: force-enable reasoning and retry once
+        if (response.status === 400 && isReasoningMandatoryError(errorMsg)) {
           console.log(`[OpenRouter] Reasoning mandatory for ${modelId} — retrying with reasoning enabled`);
           request.reasoning = buildFallbackReasoningParam(modelAlias);
           response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
@@ -759,8 +759,8 @@ export class OpenRouterClient {
       if (!response.ok || !response.body) {
         const errorText = await response.text().catch(() => 'unknown');
 
-        // Reactive retry: if reasoning is mandatory, inject it and retry once
-        if (response.status === 400 && isReasoningMandatoryError(errorText) && !requestBody.reasoning) {
+        // Reactive retry: force-enable reasoning and retry once
+        if (response.status === 400 && isReasoningMandatoryError(errorText)) {
           console.log(`[OpenRouter] Reasoning mandatory for ${modelId} — retrying streaming with reasoning enabled`);
           requestBody.reasoning = buildFallbackReasoningParam(modelAlias);
 

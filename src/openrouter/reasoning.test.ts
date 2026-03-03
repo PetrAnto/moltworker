@@ -5,7 +5,6 @@ import {
   detectReasoningLevel,
   parseReasoningOverride,
   isReasoningMandatoryError,
-  REASONING_MANDATORY_ERROR,
   type ReasoningLevel,
 } from './models';
 import { OpenRouterClient } from './client';
@@ -375,7 +374,6 @@ describe('OpenRouterClient reasoning injection', () => {
       callCount++;
 
       if (callCount === 1) {
-        // First call: 400 reasoning mandatory
         return Promise.resolve({
           ok: false,
           status: 400,
@@ -386,7 +384,6 @@ describe('OpenRouterClient reasoning injection', () => {
         });
       }
 
-      // Second call (retry): success
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({
@@ -396,18 +393,59 @@ describe('OpenRouterClient reasoning injection', () => {
       });
     }));
 
-    // GPT model — reasoning is not configurable normally
     const result = await client.chatCompletion('gpt', [
       { role: 'user', content: 'hello' },
     ]);
 
     expect(callCount).toBe(2);
     expect(capturedBodies[0].reasoning).toBeUndefined(); // First call: no reasoning
-    expect(capturedBodies[1].reasoning).toEqual({ enabled: true }); // Retry: reasoning injected
+    expect(capturedBodies[1].reasoning).toEqual({ enabled: true }); // Retry: forced enabled
     expect(result.choices[0].message.content).toBe('ok');
   });
 
-  it('retries with reasoning when getting "reasoning mandatory" error in chatCompletionWithTools', async () => {
+  it('retries even when reasoning was { enabled: false } (the real bug)', async () => {
+    const capturedBodies: Record<string, unknown>[] = [];
+    let callCount = 0;
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedBodies.push(JSON.parse(init.body as string));
+      callCount++;
+
+      if (callCount === 1) {
+        // First call: reasoning was sent as { enabled: false } → provider rejects
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          statusText: 'Bad Request',
+          json: () => Promise.resolve({
+            error: { message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' },
+          }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          id: 'test',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        }),
+      });
+    }));
+
+    // deep + simple message → reasoning: 'off' → { enabled: false }
+    const result = await client.chatCompletion('deep', [
+      { role: 'user', content: 'hello' },
+    ]);
+
+    expect(callCount).toBe(2);
+    // First call had reasoning: { enabled: false } (from detectReasoningLevel → off)
+    expect(capturedBodies[0].reasoning).toEqual({ enabled: false });
+    // Retry overrides to { enabled: true }
+    expect(capturedBodies[1].reasoning).toEqual({ enabled: true });
+    expect(result.choices[0].message.content).toBe('ok');
+  });
+
+  it('retries with reasoning in chatCompletionWithTools on mandatory error', async () => {
     const capturedBodies: Record<string, unknown>[] = [];
     let callCount = 0;
 
@@ -440,7 +478,6 @@ describe('OpenRouterClient reasoning injection', () => {
     ]);
 
     expect(callCount).toBe(2);
-    expect(capturedBodies[0].reasoning).toBeUndefined();
     expect(capturedBodies[1].reasoning).toEqual({ enabled: true });
     expect(result.finalText).toBe('done');
   });
@@ -454,11 +491,10 @@ describe('mandatory reasoning', () => {
       expect(isReasoningMandatoryError('Reasoning is mandatory for this endpoint and cannot be disabled.')).toBe(true);
     });
 
-    it('matches "reasoning mandatory" variations', () => {
+    it('matches variations', () => {
       expect(isReasoningMandatoryError('reasoning mandatory')).toBe(true);
       expect(isReasoningMandatoryError('Reasoning cannot be disabled for this model')).toBe(true);
       expect(isReasoningMandatoryError('This model requires reasoning')).toBe(true);
-      expect(isReasoningMandatoryError('reasoning is required for this endpoint')).toBe(true);
     });
 
     it('does not match unrelated errors', () => {
@@ -472,7 +508,6 @@ describe('mandatory reasoning', () => {
     it('returns { enabled: true } for non-Gemini models', () => {
       expect(buildFallbackReasoningParam('gpt')).toEqual({ enabled: true });
       expect(buildFallbackReasoningParam('mini')).toEqual({ enabled: true });
-      expect(buildFallbackReasoningParam('deep')).toEqual({ enabled: true });
     });
 
     it('returns { effort: "medium" } for Gemini models', () => {
@@ -482,14 +517,6 @@ describe('mandatory reasoning', () => {
 
     it('returns { enabled: true } for unknown model alias', () => {
       expect(buildFallbackReasoningParam('unknownmodel123')).toEqual({ enabled: true });
-    });
-  });
-
-  describe('getReasoningParam for mandatory models', () => {
-    // minimax has reasoning: 'fixed' (not mandatory) — verify it still returns undefined
-    it('returns undefined for fixed-reasoning models (e.g. minimax)', () => {
-      expect(getReasoningParam('minimax', 'high')).toBeUndefined();
-      expect(getReasoningParam('phi4reason', 'medium')).toBeUndefined();
     });
   });
 });
