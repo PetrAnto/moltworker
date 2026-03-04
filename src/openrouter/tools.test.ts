@@ -2440,18 +2440,21 @@ describe('github_create_pr tool', () => {
     expect(tool!.function.parameters.required).toEqual(['owner', 'repo', 'title', 'branch', 'changes']);
   });
 
-  it('description explains the update workflow', () => {
+  it('description explains action types including patch', () => {
     const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'github_create_pr')!;
-    expect(tool.function.description).toContain('github_read_file');
-    expect(tool.function.description).toContain('COMPLETE new content');
-    expect(tool.function.description).toContain('append');
+    expect(tool.function.description).toContain('patch');
+    expect(tool.function.description).toContain('find/replace');
+    expect(tool.function.description).toContain('update');
+    expect(tool.function.description).toContain('create');
+    expect(tool.function.description).toContain('delete');
   });
 
-  it('changes parameter clarifies update requires full content', () => {
+  it('changes parameter documents patch action', () => {
     const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'github_create_pr')!;
     const changesParam = tool.function.parameters.properties['changes'];
-    expect(changesParam.description).toContain('COMPLETE new file content');
-    expect(changesParam.description).toContain('read the file first');
+    expect(changesParam.description).toContain('patch');
+    expect(changesParam.description).toContain('find');
+    expect(changesParam.description).toContain('replace');
   });
 
   it('github_read_file description mentions 30KB limit', () => {
@@ -2678,6 +2681,296 @@ describe('github_create_pr tool', () => {
     }, { githubToken: 'test-token' });
 
     expect(result.content).toContain('Invalid action');
+  });
+
+  it('should reject patch action with missing patches array', async () => {
+    const result = await executeTool({
+      id: 'call_patch_1',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'testowner',
+          repo: 'testrepo',
+          title: 'Test PR',
+          branch: 'test-branch',
+          changes: '[{"path":"src/app.js","action":"patch"}]',
+        }),
+      },
+    }, { githubToken: 'test-token' });
+
+    expect(result.content).toContain('Missing or empty "patches" array');
+  });
+
+  it('should reject patch with empty find string', async () => {
+    const result = await executeTool({
+      id: 'call_patch_2',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'testowner',
+          repo: 'testrepo',
+          title: 'Test PR',
+          branch: 'test-branch',
+          changes: JSON.stringify([{
+            path: 'src/app.js',
+            action: 'patch',
+            patches: [{ find: '', replace: 'new code' }],
+          }]),
+        }),
+      },
+    }, { githubToken: 'test-token' });
+
+    expect(result.content).toContain('Empty "find" string');
+  });
+
+  it('should apply patch action by fetching original and performing find/replace', async () => {
+    const originalContent = 'import React from "react";\nconst data = [1, 2, 3];\nexport default function App() { return <div>{data}</div>; }';
+    const base64Content = btoa(originalContent);
+
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : '';
+      const method = init?.method || 'GET';
+
+      // File content fetch for patch resolution
+      if (method === 'GET' && urlStr.includes('/contents/src%2Fapp.js')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ content: base64Content, encoding: 'base64', size: originalContent.length }),
+          text: () => Promise.resolve(''),
+        });
+      }
+
+      // Base branch SHA
+      if (method === 'GET' && urlStr.includes('/git/ref/heads/main')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ object: { sha: 'abc123' } }),
+        });
+      }
+
+      // Create blob
+      if (method === 'POST' && urlStr.includes('/git/blobs')) {
+        // Verify the patched content was applied correctly
+        const body = JSON.parse(init?.body as string);
+        expect(body.content).toContain('import { data } from "./data"');
+        expect(body.content).toContain('export default function App()');
+        expect(body.content).not.toContain('const data = [1, 2, 3]');
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sha: 'blob123' }),
+        });
+      }
+
+      // Create tree
+      if (method === 'POST' && urlStr.includes('/git/trees')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sha: 'tree123' }),
+        });
+      }
+
+      // Create commit
+      if (method === 'POST' && urlStr.includes('/git/commits')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sha: 'commit123' }),
+        });
+      }
+
+      // Create ref
+      if (method === 'POST' && urlStr.includes('/git/refs')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ref: 'refs/heads/bot/test-branch' }),
+        });
+      }
+
+      // Create PR
+      if (method === 'POST' && urlStr.includes('/pulls')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            html_url: 'https://github.com/testowner/testrepo/pull/1',
+            number: 1,
+            additions: 1,
+            deletions: 1,
+            changed_files: 1,
+          }),
+        });
+      }
+
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await executeTool({
+      id: 'call_patch_3',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'testowner',
+          repo: 'testrepo',
+          title: 'Refactor: extract data',
+          branch: 'test-branch',
+          changes: JSON.stringify([{
+            path: 'src/app.js',
+            action: 'patch',
+            patches: [{ find: 'const data = [1, 2, 3];\n', replace: 'import { data } from "./data";\n' }],
+          }]),
+        }),
+      },
+    }, { githubToken: 'test-token' });
+
+    expect(result.content).toContain('Pull Request created successfully');
+    expect(result.content).toContain('https://github.com/testowner/testrepo/pull/1');
+  });
+
+  it('should fail patch when find string is not found in file', async () => {
+    const originalContent = 'const x = 1;\nconst y = 2;';
+    const base64Content = btoa(originalContent);
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      const urlStr = typeof url === 'string' ? url : '';
+      if (urlStr.includes('/contents/')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ content: base64Content, encoding: 'base64', size: originalContent.length }),
+          text: () => Promise.resolve(''),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    }));
+
+    const result = await executeTool({
+      id: 'call_patch_4',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'testowner',
+          repo: 'testrepo',
+          title: 'Test PR',
+          branch: 'test-branch',
+          changes: JSON.stringify([{
+            path: 'src/app.js',
+            action: 'patch',
+            patches: [{ find: 'const z = 999', replace: 'const z = 0' }],
+          }]),
+        }),
+      },
+    }, { githubToken: 'test-token' });
+
+    expect(result.content).toContain('PATCH FAILED');
+    expect(result.content).toContain('not found in file');
+  });
+
+  it('should fail patch when find string matches multiple times', async () => {
+    const originalContent = 'const x = 1;\nconst x = 1;\nconst y = 2;';
+    const base64Content = btoa(originalContent);
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      const urlStr = typeof url === 'string' ? url : '';
+      if (urlStr.includes('/contents/')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ content: base64Content, encoding: 'base64', size: originalContent.length }),
+          text: () => Promise.resolve(''),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    }));
+
+    const result = await executeTool({
+      id: 'call_patch_5',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'testowner',
+          repo: 'testrepo',
+          title: 'Test PR',
+          branch: 'test-branch',
+          changes: JSON.stringify([{
+            path: 'src/app.js',
+            action: 'patch',
+            patches: [{ find: 'const x = 1', replace: 'const x = 2' }],
+          }]),
+        }),
+      },
+    }, { githubToken: 'test-token' });
+
+    expect(result.content).toContain('PATCH FAILED');
+    expect(result.content).toContain('matches 2 times');
+  });
+
+  it('should apply multiple patches sequentially', async () => {
+    const originalContent = 'import A from "a";\nimport B from "b";\nconst result = A + B;';
+    const base64Content = btoa(originalContent);
+    let capturedContent = '';
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : '';
+      const method = init?.method || 'GET';
+
+      if (method === 'GET' && urlStr.includes('/contents/')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ content: base64Content, encoding: 'base64', size: originalContent.length }),
+          text: () => Promise.resolve(''),
+        });
+      }
+      if (method === 'GET' && urlStr.includes('/git/ref/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'abc' } }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/blobs')) {
+        capturedContent = JSON.parse(init?.body as string).content;
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/trees')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/commits')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/git/refs')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/b' }) });
+      }
+      if (method === 'POST' && urlStr.includes('/pulls')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/1', number: 1, additions: 1, deletions: 1, changed_files: 1 }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    }));
+
+    await executeTool({
+      id: 'call_patch_6',
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        arguments: JSON.stringify({
+          owner: 'testowner',
+          repo: 'testrepo',
+          title: 'Multi-patch',
+          branch: 'multi-patch',
+          changes: JSON.stringify([{
+            path: 'src/app.js',
+            action: 'patch',
+            patches: [
+              { find: 'import A from "a";\n', replace: 'import { A } from "./a";\n' },
+              { find: 'import B from "b";\n', replace: 'import { B } from "./b";\n' },
+            ],
+          }]),
+        }),
+      },
+    }, { githubToken: 'test-token' });
+
+    expect(capturedContent).toBe('import { A } from "./a";\nimport { B } from "./b";\nconst result = A + B;');
   });
 
   it('should create a PR successfully with all API calls', async () => {

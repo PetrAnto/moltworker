@@ -375,7 +375,12 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'github_create_pr',
-      description: 'Create a GitHub Pull Request with file changes. Creates a branch, commits file changes (create/update/delete), and opens a PR. Authentication is handled automatically. Use for simple multi-file changes (up to ~10 files, 1MB total). To UPDATE an existing file: first read it with github_read_file, modify the content, then pass the COMPLETE new content with action "update". This is how you append to or edit existing files.',
+      description: 'Create a GitHub Pull Request with file changes. Creates a branch, commits file changes, and opens a PR. Authentication is handled automatically. Supports 4 action types:\n\n' +
+        '• "create" — new file with full content\n' +
+        '• "update" — replace entire file (read first with github_read_file, provide COMPLETE new content)\n' +
+        '• "patch" — PREFERRED for editing existing files. Surgical find/replace without rewriting the whole file. Provide "patches" array of {"find":"exact text to find","replace":"replacement text"} pairs. Each "find" must match exactly once. Use this for files >100 lines to avoid regeneration errors.\n' +
+        '• "delete" — remove a file\n\n' +
+        'Use "patch" whenever possible for existing files — it prevents syntax errors, unwanted rewrites, and encoding changes that happen when regenerating large files from memory.',
       parameters: {
         type: 'object',
         properties: {
@@ -401,7 +406,10 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
           },
           changes: {
             type: 'string',
-            description: 'JSON array of file changes: [{"path":"file.ts","content":"...full file content...","action":"create|update|delete"}]. For "update", content must be the COMPLETE new file content (read the file first with github_read_file, modify it, then provide the full result). For "create", provide the full new file content. For "delete", content is not needed.',
+            description: 'JSON array of file changes. Each element: {"path":"file.ts","action":"create|update|patch|delete",...}.\n' +
+              'For "create"/"update": include "content" with full file content.\n' +
+              "For \"patch\": include \"patches\" array of {\"find\":\"exact text\",\"replace\":\"new text\"} objects. Each find must match exactly once in the file. Example: [{\"path\":\"src/App.jsx\",\"action\":\"patch\",\"patches\":[{\"find\":\"import data from './data'\",\"replace\":\"import data from './newData'\"}]}]\n" +
+              'For "delete": no content needed.',
           },
           body: {
             type: 'string',
@@ -906,12 +914,25 @@ async function githubApi(
 }
 
 /**
- * File change in a github_create_pr call
+ * A single find/replace patch operation.
+ * The "find" string must match exactly once in the file.
+ */
+interface PatchOperation {
+  find: string;
+  replace: string;
+}
+
+/**
+ * File change in a github_create_pr call.
+ * - "create"/"update": requires `content` (full file)
+ * - "patch": requires `patches` (surgical find/replace pairs)
+ * - "delete": no content needed
  */
 interface FileChange {
   path: string;
   content?: string;
-  action: 'create' | 'update' | 'delete';
+  action: 'create' | 'update' | 'delete' | 'patch';
+  patches?: PatchOperation[];
 }
 
 /**
@@ -1060,10 +1081,24 @@ async function githubCreatePr(
     if (change.path.includes('..') || change.path.startsWith('/')) {
       throw new Error(`Invalid file path: "${change.path}". Paths must be relative and cannot contain "..".`);
     }
-    if (!['create', 'update', 'delete'].includes(change.action)) {
-      throw new Error(`Invalid action "${change.action}" for path "${change.path}". Must be "create", "update", or "delete".`);
+    if (!['create', 'update', 'delete', 'patch'].includes(change.action)) {
+      throw new Error(`Invalid action "${change.action}" for path "${change.path}". Must be "create", "update", "patch", or "delete".`);
     }
-    if (change.action !== 'delete' && (change.content === undefined || change.content === null)) {
+    if (change.action === 'patch') {
+      if (!change.patches || !Array.isArray(change.patches) || change.patches.length === 0) {
+        throw new Error(`Missing or empty "patches" array for patch action on "${change.path}". Provide [{"find":"...","replace":"..."}].`);
+      }
+      for (let i = 0; i < change.patches.length; i++) {
+        const p = change.patches[i];
+        if (!p || typeof p.find !== 'string' || typeof p.replace !== 'string') {
+          throw new Error(`Invalid patch #${i + 1} for "${change.path}". Each patch must have "find" (string) and "replace" (string).`);
+        }
+        if (p.find.length === 0) {
+          throw new Error(`Empty "find" string in patch #${i + 1} for "${change.path}". The find string must be non-empty.`);
+        }
+        totalContentSize += p.find.length + p.replace.length;
+      }
+    } else if (change.action !== 'delete' && (change.content === undefined || change.content === null)) {
       throw new Error(`Missing content for ${change.action} action on "${change.path}".`);
     }
     if (change.content) {
@@ -1083,6 +1118,72 @@ async function githubCreatePr(
   };
 
   const apiBase = `https://api.github.com/repos/${owner}/${repo}`;
+
+  // --- Resolve "patch" actions: fetch original file, apply find/replace, convert to "update" ---
+  for (let ci = 0; ci < changes.length; ci++) {
+    const change = changes[ci];
+    if (change.action !== 'patch' || !change.patches) continue;
+
+    // Fetch the original file content from the base branch
+    const fileResponse = await fetch(
+      `${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${baseBranch}`,
+      { headers }
+    );
+    if (!fileResponse.ok) {
+      const err = await fileResponse.text();
+      throw new Error(
+        `Cannot patch "${change.path}": file not found on branch "${baseBranch}" (${fileResponse.status}). ` +
+        `Use "create" action for new files. Details: ${err.slice(0, 200)}`
+      );
+    }
+    const fileData = await fileResponse.json() as { content?: string; encoding?: string };
+    if (!fileData.content || fileData.encoding !== 'base64') {
+      throw new Error(`Cannot patch "${change.path}": unable to decode file content from GitHub API.`);
+    }
+
+    let fileContent = atob(fileData.content.replace(/\n/g, ''));
+
+    // Apply each patch sequentially
+    for (let pi = 0; pi < change.patches.length; pi++) {
+      const patch = change.patches[pi];
+      const findStr = patch.find;
+      const replaceStr = patch.replace;
+
+      // Count occurrences
+      const firstIdx = fileContent.indexOf(findStr);
+      if (firstIdx === -1) {
+        // Provide helpful context: show nearby content to help the model fix the find string
+        const findPreview = findStr.length > 100 ? findStr.substring(0, 100) + '...' : findStr;
+        throw new Error(
+          `PATCH FAILED for "${change.path}" (patch #${pi + 1}/${change.patches.length}): ` +
+          `"find" string not found in file. The text must match EXACTLY (including whitespace, quotes, newlines). ` +
+          `Searched for: ${JSON.stringify(findPreview)}. ` +
+          `Use github_read_file to get the exact current content, then copy the precise text to match.`
+        );
+      }
+
+      const secondIdx = fileContent.indexOf(findStr, firstIdx + 1);
+      if (secondIdx !== -1) {
+        // Multiple matches — ambiguous
+        throw new Error(
+          `PATCH FAILED for "${change.path}" (patch #${pi + 1}/${change.patches.length}): ` +
+          `"find" string matches ${fileContent.split(findStr).length - 1} times (must match exactly once). ` +
+          `Include more surrounding context in the "find" string to make it unique.`
+        );
+      }
+
+      // Apply the replacement
+      fileContent = fileContent.substring(0, firstIdx) + replaceStr + fileContent.substring(firstIdx + findStr.length);
+    }
+
+    // Convert to a resolved "update" action with the patched content
+    console.log(`[github_create_pr] Resolved patch for "${change.path}": ${change.patches.length} patch(es) applied`);
+    changes[ci] = {
+      path: change.path,
+      content: fileContent,
+      action: 'update',
+    };
+  }
 
   // --- Safety guardrails: detect destructive/bogus changes ---
   const BINARY_EXTENSIONS = /\.(png|jpg|jpeg|gif|bmp|ico|svg|webp|mp3|mp4|wav|zip|tar|gz|pdf|woff|woff2|ttf|eot)$/i;
