@@ -72,7 +72,8 @@ telegram.post('/webhook/:token', async (c) => {
       sandbox, // Sandbox container for sandbox_exec tool
       env.ACONTEXT_API_KEY, // Acontext observability
       env.ACONTEXT_BASE_URL, // Acontext API base URL
-      env.CLOUDFLARE_API_TOKEN // Cloudflare API token for Code Mode MCP
+      env.CLOUDFLARE_API_TOKEN, // Cloudflare API token for Code Mode MCP
+      env.ARTIFICIAL_ANALYSIS_KEY, // AA benchmark data
     );
 
     // Process update asynchronously
