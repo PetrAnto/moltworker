@@ -295,6 +295,9 @@ const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Always save checkpoint when total tools is at or below this threshold.
 // Ensures small tasks (1-3 tool calls) are checkpointed before the watchdog fires.
 const CHECKPOINT_EARLY_THRESHOLD = 3;
+// Checkpoint schema version — bumped when checkpoint format changes.
+// Checkpoints with a different version are skipped on resume to avoid crashes.
+const CHECKPOINT_VERSION = 2;
 // Max auto-resume attempts before requiring manual intervention
 const MAX_AUTO_RESUMES_DEFAULT = 5; // Was 10 — 10 resumes lets bad situations drag on for 30min
 const MAX_AUTO_RESUMES_FREE = 5; // Was 8 — aligned with paid; 5 is enough for legitimate complex tasks
@@ -586,6 +589,18 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       return;
     }
 
+    // Stale task guard: if the task has been alive for > 1 hour, it's almost
+    // certainly a zombie from a previous deployment. Abandon it to prevent
+    // stale DO state from interfering with new code.
+    const STALE_TASK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+    if (Date.now() - task.startTime > STALE_TASK_THRESHOLD_MS) {
+      console.log(`[TaskProcessor] Abandoning stale task (started ${Math.round((Date.now() - task.startTime) / 1000)}s ago)`);
+      task.status = 'failed';
+      task.error = 'Task abandoned: exceeded 1-hour lifetime (likely stale from previous deployment)';
+      await this.doState.storage.put('task', task);
+      return;
+    }
+
     const timeSinceUpdate = Date.now() - task.lastUpdate;
     const isPaidModel = getModel(task.modelAlias)?.isFree !== true;
     const stuckThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
@@ -818,6 +833,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     modelAlias?: string
   ): Promise<void> {
     const checkpoint = {
+      version: CHECKPOINT_VERSION,
       taskId,
       messages,
       toolsUsed,
@@ -850,6 +866,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
     try {
       const checkpoint = JSON.parse(await obj.text());
+      // Skip checkpoints from incompatible versions to prevent crashes on resume
+      if (checkpoint.version !== CHECKPOINT_VERSION) {
+        console.log(`[TaskProcessor] Skipping checkpoint '${slotName}': version ${checkpoint.version ?? 'none'} !== ${CHECKPOINT_VERSION}`);
+        return null;
+      }
       // Skip completed checkpoints unless explicitly requested (for /saveas)
       if (checkpoint.completed && !includeCompleted) {
         console.log(`[TaskProcessor] Skipping completed checkpoint '${slotName}'`);
