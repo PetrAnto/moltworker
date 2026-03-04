@@ -1,3 +1,38 @@
+## Session: 2026-03-04 | Task pipeline audit hardening (Session: codex-task-pipeline-audit-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Audited the task execution pipeline and hardened streaming timeout handling, provider error classification, and context compression behavior with regression tests.
+
+### Changes Made
+- Fixed `parseSSEStream()` timeout cleanup to clear `Promise.race` timers and added trailing SSE chunk parsing.
+- Added provider error classification (`quota`, `content-filter`, `reasoning mandatory`, `context too large`, `rate-limit`, `model missing`) for more reliable recovery decisions.
+- Added preflight context compression before provider calls when context approaches budget limits.
+- Added aggressive forced-budget fallback compression for provider 400 context-limit responses.
+- Added/updated tests for trailing SSE chunk parsing, preflight compression behavior, and provider-specific content-filter classification.
+
+### Files Modified
+- `src/openrouter/client.ts`
+- `src/openrouter/client.test.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+If provider-specific 400 formats evolve (especially DashScope or Moonshot), extend `classifyProviderError()` regexes and add fixtures in task-processor tests.
+
+---
+
 # Codex Session Log
 
 > All Codex sessions logged here. Newest first.

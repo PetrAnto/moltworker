@@ -2410,6 +2410,110 @@ describe('400 input-validation context compression', () => {
     }
   });
 
+  it('should preflight-compress oversized context before first provider call', async () => {
+    const mockState = createMockState();
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    const logSpy = vi.spyOn(console, 'log');
+    const { getModel } = await import('../openrouter/models');
+
+    vi.mocked(getModel).mockReturnValue({
+      id: 'deepseek-chat', alias: 'deep', isFree: false, supportsTools: true,
+      name: 'DeepSeek', specialty: '', score: '', cost: '$0.25',
+      maxContext: 22000,
+    } as ReturnType<typeof getModel>);
+
+    let apiCallCount = 0;
+    vi.stubGlobal('fetch', vi.fn((url: string | Request, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : url.url;
+      if (urlStr.includes('api.telegram.org')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ok: true, result: { message_id: 999 } }),
+          text: () => Promise.resolve(JSON.stringify({ ok: true, result: { message_id: 999 } })),
+        });
+      }
+
+      if (init?.body) {
+        const parsed = JSON.parse(init.body as string) as Record<string, unknown>;
+        if (parsed.messages) capturedBodies.push(parsed);
+      }
+
+      apiCallCount++;
+      return Promise.resolve(buildSSEResponse({ content: 'Completed without provider 400.' }));
+    }));
+
+    const longMessages: Array<{ role: string; content: string }> = [
+      { role: 'system', content: 'System' + ' padding'.repeat(800) },
+      { role: 'user', content: 'Analyze repository' },
+    ];
+    for (let i = 0; i < 12; i++) {
+      longMessages.push({ role: 'assistant', content: `Assistant context ${i}: ` + 'details '.repeat(1300) });
+      longMessages.push({ role: 'user', content: `Continue ${i}` + ' more '.repeat(200) });
+    }
+
+    const processor = new TaskProcessorClass(mockState as never, {} as never);
+    await processor.fetch(new Request('https://do/process', {
+      method: 'POST',
+      body: JSON.stringify(createTaskRequest({ messages: longMessages })),
+    }));
+
+    await vi.waitFor(() => {
+      const task = mockState.storage._store.get('task') as Record<string, unknown> | undefined;
+      if (!task || (task.status === 'pending' || task.status === 'processing')) {
+        throw new Error('not done yet');
+      }
+    }, { timeout: 15000, interval: 50 });
+
+    expect(apiCallCount).toBeGreaterThan(0);
+    expect(capturedBodies.length).toBeGreaterThan(0);
+    expect(logSpy.mock.calls.some(call => String(call[0]).includes('Preflight compression:'))).toBe(true);
+  });
+
+  it('should classify DashScope content filter errors and fail fast without retries', async () => {
+    const mockState = createMockState();
+    let apiCallCount = 0;
+
+    vi.stubGlobal('fetch', vi.fn((url: string | Request) => {
+      const urlStr = typeof url === 'string' ? url : url.url;
+      if (urlStr.includes('api.telegram.org')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ok: true, result: { message_id: 999 } }),
+          text: () => Promise.resolve(JSON.stringify({ ok: true, result: { message_id: 999 } })),
+        });
+      }
+
+      apiCallCount++;
+      return Promise.resolve(new Response(
+        JSON.stringify({
+          error: {
+            code: 'data_inspection_failed',
+            message: 'Your request was blocked by safety policy.',
+          },
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      ));
+    }));
+
+    const processor = new TaskProcessorClass(mockState as never, {} as never);
+    await processor.fetch(new Request('https://do/process', {
+      method: 'POST',
+      body: JSON.stringify(createTaskRequest()),
+    }));
+
+    await vi.waitFor(() => {
+      const task = mockState.storage._store.get('task') as Record<string, unknown> | undefined;
+      if (!task || (task.status === 'pending' || task.status === 'processing')) {
+        throw new Error('not done yet');
+      }
+    }, { timeout: 15000, interval: 50 });
+
+    const task = mockState.storage._store.get('task') as Record<string, unknown>;
+    expect(task.status).toBe('failed');
+    // One attempt, then immediate fast-fail path.
+    expect(apiCallCount).toBe(1);
+  });
+
   it('should fail fast when context is already minimal and cannot compress', async () => {
     const mockState = createMockState();
 

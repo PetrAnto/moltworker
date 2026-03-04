@@ -230,6 +230,15 @@ describe('parseSSEStream onToolCallReady', () => {
     expect(call1Fires).toHaveLength(1);
   });
 
+  it('parses trailing SSE chunk without final newline', async () => {
+    const stream = sseStream([
+      'data: {"choices":[{"delta":{"content":"hello"}}]}',
+    ]);
+
+    const result = await parseSSEStream(stream, 5000);
+    expect(result.choices[0].message.content).toBe('hello');
+  });
+
   it('does not fire if callback is undefined', async () => {
     const stream = sseStream([
       sseLine({

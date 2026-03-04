@@ -341,6 +341,34 @@ function sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
   });
 }
 
+interface ClassifiedProviderError {
+  status?: number;
+  message: string;
+  isQuotaExceeded: boolean;
+  isRateLimited: boolean;
+  isModelMissing: boolean;
+  isReasoningMandatory: boolean;
+  isContentFilter: boolean;
+  isContextTooLarge: boolean;
+}
+
+function classifyProviderError(rawMessage: string): ClassifiedProviderError {
+  const text = rawMessage.toLowerCase();
+  const statusMatch = rawMessage.match(/\b(\d{3})\b/);
+  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+
+  return {
+    status,
+    message: rawMessage,
+    isQuotaExceeded: status === 402 || /quota|insufficient.?balance|payment.?required/.test(text),
+    isRateLimited: status === 429 || status === 503 || /rate.?limit|overloaded|capacity|busy/.test(text),
+    isModelMissing: status === 404 || /model.+(not found|does not exist|unavailable)|unknown.?model/.test(text),
+    isReasoningMandatory: status === 400 && isReasoningMandatoryError(rawMessage),
+    isContentFilter: status === 400 && /inappropriate.?content|data_inspection_failed|content.?filter|safety/i.test(rawMessage),
+    isContextTooLarge: status === 400 && /input.?validation|too.?long|too.?many.?tokens|context.?length|max.?tokens|maximum.?context|prompt is too long|reduce the length/i.test(rawMessage),
+  };
+}
+
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
   private r2?: R2Bucket;
@@ -1680,6 +1708,18 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // 2. Paid models often handle larger/harder tasks with more context
         // 3. DeepSeek V3.2 via OpenRouter routinely needs >120s for 60K+ tokens
         const estimatedCtx = this.estimateTokens(conversationMessages);
+        const contextBudget = this.getContextBudget(task.modelAlias);
+        // Pre-flight compression guard: if context already exceeds ~92% of budget,
+        // compress before API call instead of waiting for provider-side 400 errors.
+        if (estimatedCtx > Math.floor(contextBudget * 0.92)) {
+          const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
+          if (compressed.length < conversationMessages.length) {
+            console.log(`[TaskProcessor] Preflight compression: ${conversationMessages.length}->${compressed.length} msgs (~${estimatedCtx} tokens)`);
+            conversationMessages.length = 0;
+            conversationMessages.push(...compressed);
+          }
+        }
+
         const isPaid = getModel(task.modelAlias)?.isFree !== true;
         const baseTimeout = estimatedCtx > 60000 ? 180000  // 3min for 60K+ tokens
           : estimatedCtx > 30000 ? 120000                  // 2min for 30K-60K tokens
@@ -1843,22 +1883,24 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
             console.log(`[TaskProcessor] API call failed (attempt ${attempt}): ${lastError.message}`);
 
+            const classifiedError = classifyProviderError(lastError.message);
+
             // 402 = payment required / quota exceeded — fail fast, don't retry
-            if (/\b402\b/.test(lastError.message)) {
-              console.log('[TaskProcessor] 402 Payment Required — failing fast');
+            if (classifiedError.isQuotaExceeded) {
+              console.log('[TaskProcessor] Quota/payment error — failing fast');
               break;
             }
 
-            // 400 content filter (DashScope/Alibaba) — deterministic, don't retry
-            if (/\b400\b/.test(lastError.message) && /inappropriate.?content|data_inspection_failed/i.test(lastError.message)) {
-              console.log('[TaskProcessor] Content filter 400 — failing fast (will try rotation)');
+            // 400 content-filter / safety rejection — deterministic for this prompt
+            if (classifiedError.isContentFilter) {
+              console.log('[TaskProcessor] Content filter rejection — failing fast (will try rotation)');
               break;
             }
 
             // 400 "Reasoning is mandatory" — force-enable reasoning and retry once.
             // For OpenRouter: chatCompletionStreamingWithTools handles this internally.
             // For direct API: set reasoningOverride so the next attempt includes it.
-            if (/\b400\b/.test(lastError.message) && isReasoningMandatoryError(lastError.message)) {
+            if (classifiedError.isReasoningMandatory) {
               if (!reasoningOverride) {
                 console.log(`[TaskProcessor] Reasoning mandatory for ${task.modelAlias} — retrying with reasoning enabled`);
                 reasoningOverride = buildFallbackReasoningParam(task.modelAlias);
@@ -1869,21 +1911,33 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               break;
             }
 
-            // 400 "Input validation error" — context too large for provider.
-            // Compress conversation and retry once instead of failing immediately.
-            if (/\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length|max.?tokens|maximum.?context/i.test(lastError.message)) {
+            // 400 input validation / context length — compress and retry once.
+            if (classifiedError.isContextTooLarge) {
               const beforeLen = conversationMessages.length;
               const beforeTokens = this.estimateTokens(conversationMessages);
               const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
               const afterTokens = this.estimateTokens(compressed);
-              console.log(`[TaskProcessor] 400 Input validation — compressing context: ${beforeLen}→${compressed.length} msgs, ~${beforeTokens}→${afterTokens} tokens`);
+              console.log(`[TaskProcessor] Input validation — compressing context: ${beforeLen}→${compressed.length} msgs, ~${beforeTokens}→${afterTokens} tokens`);
 
-              if (compressed.length < beforeLen) {
+              if (compressed.length < beforeLen || afterTokens < beforeTokens) {
                 // Context was compressible — replace and retry
                 conversationMessages.length = 0;
                 conversationMessages.push(...compressed);
                 continue; // Retry with compressed context (same attempt slot)
               }
+              // Fallback: force a more aggressive compression pass (keepRecent=2).
+              const forcedBudget = Math.max(8000, Math.floor(this.getContextBudget(task.modelAlias) * 0.6));
+              const aggressivelyCompressed = sanitizeToolPairs(
+                compressContextBudgeted(conversationMessages, forcedBudget, 2)
+              );
+              const aggressiveTokens = this.estimateTokens(aggressivelyCompressed);
+              if (aggressiveTokens < beforeTokens) {
+                console.log(`[TaskProcessor] Aggressive compression fallback: ~${beforeTokens}→${aggressiveTokens} tokens`);
+                conversationMessages.length = 0;
+                conversationMessages.push(...aggressivelyCompressed);
+                continue;
+              }
+
               // Already minimal — nothing more to compress, fail fast
               console.log('[TaskProcessor] Context already minimal, cannot compress further — failing');
               break;
@@ -1900,9 +1954,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // If API call failed after all retries, try rotating to another free model
         if (!result && lastError) {
-          const isRateLimited = /429|503|rate.?limit|overloaded|capacity|busy/i.test(lastError.message);
-          const isQuotaExceeded = /\b402\b/.test(lastError.message);
-          const isModelGone = /\b404\b/.test(lastError.message);
+          const classifiedError = classifyProviderError(lastError.message);
+          const isRateLimited = classifiedError.isRateLimited;
+          const isQuotaExceeded = classifiedError.isQuotaExceeded;
+          const isModelGone = classifiedError.isModelMissing;
           const isContentFilter = /inappropriate.?content|data_inspection_failed/i.test(lastError.message);
           const isInputValidation = /\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length/i.test(lastError.message);
           const currentIsFree = getModel(task.modelAlias)?.isFree === true;

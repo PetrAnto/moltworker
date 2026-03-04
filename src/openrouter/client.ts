@@ -110,10 +110,15 @@ export async function parseSSEStream(
   };
 
   const readWithTimeout = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('STREAM_READ_TIMEOUT')), idleTimeoutMs);
+      timeoutId = setTimeout(() => reject(new Error('STREAM_READ_TIMEOUT')), idleTimeoutMs);
     });
-    return Promise.race([reader.read(), timeoutPromise]);
+    try {
+      return await Promise.race([reader.read(), timeoutPromise]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
   };
 
   try {
@@ -202,6 +207,28 @@ export async function parseSSEStream(
           }
         } catch (e) {
           console.error('[parseSSEStream] Failed to parse SSE chunk:', data, e);
+        }
+      }
+    }
+    // Flush any trailing bytes and parse a final line if provider closed without \\n
+    buffer += decoder.decode();
+    const trailing = buffer.trim();
+    if (trailing.startsWith('data: ')) {
+      const data = trailing.slice(6).trim();
+      if (data && data !== '[DONE]') {
+        try {
+          const chunk: {
+            choices?: Array<{
+              finish_reason?: string | null;
+              delta?: { content?: string; reasoning_content?: string };
+            }>;
+          } = JSON.parse(data);
+          const choice = chunk.choices?.[0];
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+          if (choice?.delta?.content) content += choice.delta.content;
+          if (choice?.delta?.reasoning_content) reasoningContent += choice.delta.reasoning_content;
+        } catch (e) {
+          console.error('[parseSSEStream] Failed to parse trailing SSE chunk:', data, e);
         }
       }
     }

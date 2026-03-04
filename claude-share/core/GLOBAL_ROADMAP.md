@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-01 (Merged with MOLTWORKER_ROADMAP-claude_review.md — milestone gates, future phases, cross-repo deps, metrics — 1526 tests)
+**Last Updated:** 2026-03-04 (Task pipeline audit hardening — streaming timeout cleanup, provider error classification, context preflight compression — 1567 tests)
 
 ---
 
@@ -258,6 +258,7 @@
 #### Phase 7 Dependency Graph
 
 ```
+2026-03-04 | Codex (GPT-5.2-Codex) | fix(task-processor,streaming): harden SSE timeout cleanup + provider error classification + preflight/forced compression with tests | src/openrouter/client.ts, src/openrouter/client.test.ts, src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 7A.2 (Smart Context) ─────────────────────── can be done independently
 7A.3 (Destructive Guard) ─────────────────── can be done independently
 7A.5 (Prompt Caching) ────────────────────── can be done independently
