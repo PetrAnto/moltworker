@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, registerAutoSyncedModels, formatModelInfoCard, type RouterCheckpointMeta, type ModelInfo } from './models';
+import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, registerAutoSyncedModels, formatModelInfoCard, formatModelHub, formatModelRanking, type RouterCheckpointMeta, type ModelInfo } from './models';
 
 // --- detectToolIntent ---
 
@@ -582,5 +582,77 @@ describe('formatModelInfoCard', () => {
     const card = formatModelInfoCard('dcode')!;
     expect(card).toContain('deepseek');
     expect(card).toContain('direct API');
+  });
+});
+
+// --- formatModelHub ---
+
+describe('formatModelHub', () => {
+  it('shows current model info for known alias', () => {
+    const hub = formatModelHub('deep');
+    expect(hub).toContain('Model Hub');
+    expect(hub).toContain('DeepSeek V3.2');
+    expect(hub).toContain('/deep');
+    expect(hub).toContain('Commands');
+  });
+
+  it('shows subcommand guide', () => {
+    const hub = formatModelHub('sonnet');
+    expect(hub).toContain('/model list');
+    expect(hub).toContain('/model pick');
+    expect(hub).toContain('/model info');
+    expect(hub).toContain('/model rank');
+    expect(hub).toContain('/model use');
+    expect(hub).toContain('/model update');
+    expect(hub).toContain('/model enrich');
+  });
+
+  it('shows model stats', () => {
+    const hub = formatModelHub('deep');
+    expect(hub).toMatch(/\d+ models/);
+    expect(hub).toMatch(/\d+ free/);
+    expect(hub).toMatch(/\d+ paid/);
+  });
+
+  it('shows top picks', () => {
+    const hub = formatModelHub('flash');
+    expect(hub).toContain('Top free');
+    expect(hub).toContain('Top paid');
+  });
+
+  it('handles unknown current model gracefully', () => {
+    const hub = formatModelHub('nonexistent');
+    expect(hub).toContain('Model Hub');
+    expect(hub).toContain('nonexistent');
+    expect(hub).toContain('unknown model');
+  });
+});
+
+// --- formatModelRanking ---
+
+describe('formatModelRanking', () => {
+  it('shows ranking header', () => {
+    const rank = formatModelRanking();
+    expect(rank).toContain('Model Ranking');
+    expect(rank).toContain('Orchestra');
+  });
+
+  it('shows paid and free sections', () => {
+    const rank = formatModelRanking();
+    expect(rank).toContain('PAID');
+    expect(rank).toContain('FREE');
+  });
+
+  it('shows legend', () => {
+    const rank = formatModelRanking();
+    expect(rank).toContain('parallel');
+    expect(rank).toContain('structured');
+    expect(rank).toContain('vision');
+    expect(rank).toContain('reasoning');
+  });
+
+  it('includes tier medals', () => {
+    const rank = formatModelRanking();
+    expect(rank).toMatch(/🥇|🥈|🥉/);
   });
 });
