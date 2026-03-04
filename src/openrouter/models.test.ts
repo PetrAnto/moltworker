@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, registerAutoSyncedModels, type RouterCheckpointMeta, type ModelInfo } from './models';
+import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, registerAutoSyncedModels, formatModelInfoCard, type RouterCheckpointMeta, type ModelInfo } from './models';
 
 // --- detectToolIntent ---
 
@@ -526,5 +526,61 @@ describe('resolveTaskModel', () => {
     };
     const result = resolveTaskModel('qwencoderfree', cp);
     expect(result.rationale).not.toContain('⚠️');
+  });
+});
+
+// --- formatModelInfoCard ---
+
+describe('formatModelInfoCard', () => {
+  it('returns null for unknown alias', () => {
+    expect(formatModelInfoCard('nonexistent-model-xyz')).toBeNull();
+  });
+
+  it('returns detailed card for known model', () => {
+    const card = formatModelInfoCard('sonnet');
+    expect(card).not.toBeNull();
+    expect(card).toContain('Claude Sonnet');
+    expect(card).toContain('Capabilities');
+    expect(card).toContain('Tools');
+    expect(card).toContain('Vision');
+    expect(card).toContain('Settings');
+    expect(card).toContain('Reasoning');
+    expect(card).toContain('Context');
+  });
+
+  it('shows tool support status', () => {
+    const card = formatModelInfoCard('sonnet')!;
+    expect(card).toContain('🔧 Tools: ✅');
+  });
+
+  it('shows vision for vision models', () => {
+    const card = formatModelInfoCard('gpt')!;
+    expect(card).toContain('👁️ Vision: ✅');
+  });
+
+  it('shows orchestra readiness', () => {
+    const card = formatModelInfoCard('deep')!;
+    expect(card).toContain('Orchestra Ready');
+  });
+
+  it('shows fixed temperature when set', () => {
+    const card = formatModelInfoCard('kimidirect')!;
+    expect(card).toContain('fixed at 1');
+  });
+
+  it('shows default temperature for regular models', () => {
+    const card = formatModelInfoCard('sonnet')!;
+    expect(card).toContain('default (0.7)');
+  });
+
+  it('shows reasoning capability', () => {
+    const card = formatModelInfoCard('deep')!;
+    expect(card).toContain('configurable');
+  });
+
+  it('shows direct API provider', () => {
+    const card = formatModelInfoCard('dcode')!;
+    expect(card).toContain('deepseek');
+    expect(card).toContain('direct API');
   });
 });

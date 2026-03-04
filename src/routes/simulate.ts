@@ -255,7 +255,8 @@ simulate.post('/command', async (c) => {
     sandbox,
     env.ACONTEXT_API_KEY,
     env.ACONTEXT_BASE_URL,
-    env.CLOUDFLARE_API_TOKEN
+    env.CLOUDFLARE_API_TOKEN,
+    env.ARTIFICIAL_ANALYSIS_KEY,
   );
 
   // Inject CapturingBot

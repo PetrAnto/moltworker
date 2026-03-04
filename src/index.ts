@@ -504,6 +504,18 @@ async function scheduled(
         } else {
           console.error(`[cron] Model sync failed: ${result.error}`);
         }
+        // Run enrichment after sync (adds benchmark data from Artificial Analysis)
+        if (env.ARTIFICIAL_ANALYSIS_KEY) {
+          try {
+            const { runEnrichment } = await import('./openrouter/model-sync/enrich');
+            const enrichResult = await runEnrichment(env.MOLTBOT_BUCKET, env.ARTIFICIAL_ANALYSIS_KEY, env.OPENROUTER_API_KEY);
+            if (enrichResult.success) {
+              console.log(`[cron] Enrichment complete: ${enrichResult.enrichedCount} models enriched, ${enrichResult.capabilityMismatches.length} mismatches in ${enrichResult.durationMs}ms`);
+            }
+          } catch (error) {
+            console.error('[cron] Enrichment error:', error);
+          }
+        }
       } catch (error) {
         console.error('[cron] Model sync error:', error);
       }

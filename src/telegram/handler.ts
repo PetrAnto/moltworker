@@ -38,6 +38,7 @@ import {
   getAllModels,
   getModelId,
   formatModelsList,
+  formatModelInfoCard,
   supportsVision,
   isImageGenModel,
   DEFAULT_MODEL,
@@ -502,6 +503,7 @@ export class TelegramHandler {
   private acontextKey?: string;
   private acontextBaseUrl?: string;
   private cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
+  private aaKey?: string; // Artificial Analysis API key for benchmark data
   private dynamicModelsReady: Promise<void>; // Resolves when dynamic models are loaded from R2
   // (sync sessions now persisted in R2 via storage.saveSyncSession)
 
@@ -522,7 +524,8 @@ export class TelegramHandler {
     sandbox?: SandboxLike, // Sandbox container for code execution
     acontextKey?: string, // Acontext API key for observability
     acontextBaseUrl?: string, // Acontext API base URL
-    cloudflareApiToken?: string // Cloudflare API token for Code Mode MCP
+    cloudflareApiToken?: string, // Cloudflare API token for Code Mode MCP
+    aaKey?: string, // Artificial Analysis API key for benchmark data
   ) {
     this.bot = new TelegramBot(telegramToken);
     this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
@@ -543,6 +546,7 @@ export class TelegramHandler {
     this.acontextKey = acontextKey;
     this.acontextBaseUrl = acontextBaseUrl;
     this.cloudflareApiToken = cloudflareApiToken;
+    this.aaKey = aaKey;
     if (allowedUserIds && allowedUserIds.length > 0) {
       this.allowedUsers = new Set(allowedUserIds);
     }
@@ -589,6 +593,17 @@ export class TelegramHandler {
       }
     } catch (error) {
       console.error('[Telegram] Failed to load auto-synced models from R2:', error);
+    }
+
+    // Load enrichment data (AA benchmark scores, orchestra readiness)
+    try {
+      const { loadAndApplyEnrichment } = await import('../openrouter/model-sync/enrich');
+      const enriched = await loadAndApplyEnrichment(this.r2Bucket);
+      if (enriched > 0) {
+        console.log(`[Telegram] Applied ${enriched} enrichment patches from R2`);
+      }
+    } catch (error) {
+      console.error('[Telegram] Failed to load enrichment data from R2:', error);
     }
 
     // Load model overrides (patches to curated models, e.g. from /modelupdate).
@@ -1204,6 +1219,14 @@ export class TelegramHandler {
 
       case '/synccheck':
         await this.handleSyncCheckCommand(chatId);
+        break;
+
+      case '/modelinfo':
+        await this.handleModelInfoCommand(chatId, args);
+        break;
+
+      case '/enrich':
+        await this.handleEnrichCommand(chatId);
         break;
 
       case '/syncreset': {
@@ -3701,6 +3724,54 @@ export class TelegramHandler {
   }
 
   /**
+   * Handle /modelinfo <alias> — show detailed capability card for a model.
+   */
+  private async handleModelInfoCommand(chatId: number, args: string[]): Promise<void> {
+    if (args.length === 0) {
+      await this.bot.sendMessage(chatId, '📋 Usage: /modelinfo <alias>\n\nExample: /modelinfo sonnet');
+      return;
+    }
+
+    const alias = args[0].replace(/^\//, '');
+    const card = formatModelInfoCard(alias);
+
+    if (!card) {
+      await this.bot.sendMessage(chatId, `❌ Model not found: ${alias}\n\nUse /models to see available models.`);
+      return;
+    }
+
+    await this.bot.sendMessage(chatId, card);
+  }
+
+  /**
+   * Handle /enrich — run the model enrichment pipeline.
+   * Fetches AA benchmark data and cross-references with OpenRouter capabilities.
+   */
+  private async handleEnrichCommand(chatId: number): Promise<void> {
+    await this.bot.sendChatAction(chatId, 'typing');
+
+    if (!this.aaKey) {
+      await this.bot.sendMessage(chatId, '❌ ARTIFICIAL_ANALYSIS_KEY not configured.\nSet it via: wrangler secret put ARTIFICIAL_ANALYSIS_KEY');
+      return;
+    }
+
+    await this.bot.sendMessage(chatId, '🧠 Running model enrichment (AA benchmarks + capability verification)...');
+
+    try {
+      const { runEnrichment, formatEnrichmentMessage } = await import('../openrouter/model-sync/enrich');
+      const result = await runEnrichment(
+        this.r2Bucket,
+        this.aaKey,
+        this.openrouterKey,
+      );
+      const message = formatEnrichmentMessage(result);
+      await this.bot.sendMessage(chatId, message);
+    } catch (error) {
+      await this.bot.sendMessage(chatId, `❌ Enrichment error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
    * Handle /synccheck — compare curated models against live OpenRouter catalog.
    * Detects missing models, price changes, and new models from tracked families.
    */
@@ -4419,6 +4490,8 @@ All:   /models for full list
 /syncmodels — Fetch latest free models (interactive picker)
 /syncall — Full catalog sync + top 20 recommendations
 /synccheck — Check for updates (actionable: apply price changes)
+/enrich — Fetch AA benchmark data + verify capabilities
+/modelinfo <alias> — Detailed model capability card
 /modelupdate <alias> key=val — Patch a model without deploy
 /modelupdate list — Show active overrides
 
@@ -4494,7 +4567,8 @@ export function createTelegramHandler(
   sandbox?: SandboxLike,
   acontextKey?: string,
   acontextBaseUrl?: string,
-  cloudflareApiToken?: string
+  cloudflareApiToken?: string,
+  aaKey?: string,
 ): TelegramHandler {
   return new TelegramHandler(
     telegramToken,
@@ -4513,6 +4587,7 @@ export function createTelegramHandler(
     sandbox,
     acontextKey,
     acontextBaseUrl,
-    cloudflareApiToken
+    cloudflareApiToken,
+    aaKey,
   );
 }

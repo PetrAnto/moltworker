@@ -52,6 +52,19 @@ export interface ModelInfo {
   reasoning?: ReasoningCapability; // Reasoning control capability
   maxContext?: number;           // Context window in tokens
   fixedTemperature?: number;    // Model requires this exact temperature (e.g. Kimi K2.5 = 1)
+  // Benchmark & quality data (from Artificial Analysis)
+  intelligenceIndex?: number;  // AA Intelligence Index (0-100 composite score)
+  benchmarks?: ModelBenchmarks; // Individual benchmark scores
+  orchestraReady?: boolean;    // Computed: suitable for orchestra/agentic tasks
+}
+
+/** Benchmark scores from Artificial Analysis */
+export interface ModelBenchmarks {
+  coding?: number;     // Coding benchmark score (0-100)
+  reasoning?: number;  // Reasoning benchmark score (0-100)
+  math?: number;       // Math benchmark score (0-100)
+  mmluPro?: number;    // MMLU-Pro score
+  speedTps?: number;   // Median output tokens/sec
 }
 
 /**
@@ -1131,7 +1144,90 @@ export function formatModelsList(): string {
   lines.push('\n━━━ Legend ━━━');
   lines.push('🏆=best $/perf  ⭐=strong value  ✅=solid  💎=flagship  ⚠️=outdated');
   lines.push('👁️=vision  🔧=tools  🎼=orchestra  Cost: $input/$output per M tokens');
+  lines.push('🧠=AA Intelligence Index  Use /modelinfo <alias> for details');
   lines.push('Usage: /use <alias> or /<alias>');
+
+  return lines.join('\n');
+}
+
+/**
+ * Format detailed model info card for /modelinfo command.
+ * Shows all capabilities, benchmarks, and settings for a single model.
+ */
+export function formatModelInfoCard(alias: string): string | null {
+  const model = getModel(alias);
+  if (!model) return null;
+
+  const lines: string[] = [];
+
+  // Header
+  const tier = model.isFree ? '🆓' : VALUE_TIER_LABELS[getValueTier(model)] || '✅';
+  lines.push(`${tier} ${model.name} (/${model.alias})`);
+  lines.push(`${model.specialty}\n`);
+
+  // Identity
+  lines.push('━━━ Identity ━━━');
+  lines.push(`ID: ${model.id}`);
+  if (model.provider && model.provider !== 'openrouter') {
+    lines.push(`Provider: ${model.provider} (direct API)`);
+  }
+  lines.push(`Cost: ${model.cost}`);
+  lines.push('');
+
+  // Capabilities
+  lines.push('━━━ Capabilities ━━━');
+  const caps: string[] = [];
+  caps.push(`🔧 Tools: ${model.supportsTools ? '✅' : '❌'}`);
+  caps.push(`👁️ Vision: ${model.supportsVision ? '✅' : '❌'}`);
+  caps.push(`📋 Structured Output: ${model.structuredOutput ? '✅' : '❌'}`);
+  caps.push(`⚡ Parallel Calls: ${model.parallelCalls ? '✅' : '❌'}`);
+  caps.push(`🎼 Orchestra Ready: ${model.orchestraReady ? '✅' : '❌'}`);
+  for (const c of caps) lines.push(c);
+  lines.push('');
+
+  // Settings
+  lines.push('━━━ Settings ━━━');
+  const reasoningLabel = model.reasoning || 'none';
+  lines.push(`Reasoning: ${reasoningLabel}`);
+  if (model.maxContext) {
+    const ctxStr = model.maxContext >= 1048576
+      ? `${(model.maxContext / 1048576).toFixed(1)}M`
+      : `${Math.round(model.maxContext / 1024)}K`;
+    lines.push(`Context: ${ctxStr} tokens`);
+  }
+  if (model.fixedTemperature != null) {
+    lines.push(`Temperature: fixed at ${model.fixedTemperature}`);
+  } else {
+    lines.push('Temperature: default (0.7)');
+  }
+  if (model.isImageGen) {
+    lines.push('Type: Image Generation');
+  }
+  lines.push('');
+
+  // Benchmarks (if enriched with AA data)
+  if (model.intelligenceIndex || model.benchmarks) {
+    lines.push('━━━ Benchmarks (Artificial Analysis) ━━━');
+    if (model.intelligenceIndex) {
+      lines.push(`🧠 Intelligence Index: ${model.intelligenceIndex.toFixed(1)}`);
+    }
+    if (model.benchmarks) {
+      if (model.benchmarks.coding != null) lines.push(`  Coding: ${model.benchmarks.coding.toFixed(1)}`);
+      if (model.benchmarks.reasoning != null) lines.push(`  Reasoning: ${model.benchmarks.reasoning.toFixed(1)}`);
+      if (model.benchmarks.math != null) lines.push(`  Math: ${model.benchmarks.math.toFixed(1)}`);
+      if (model.benchmarks.mmluPro != null) lines.push(`  MMLU-Pro: ${model.benchmarks.mmluPro.toFixed(1)}`);
+      if (model.benchmarks.speedTps != null) lines.push(`  Speed: ${model.benchmarks.speedTps.toFixed(0)} tok/s`);
+    }
+    lines.push('');
+  } else {
+    lines.push('📊 No benchmark data — run /enrich to fetch');
+    lines.push('');
+  }
+
+  // Score (existing manual annotation)
+  if (model.score) {
+    lines.push(`📝 Notes: ${model.score}`);
+  }
 
   return lines.join('\n');
 }
