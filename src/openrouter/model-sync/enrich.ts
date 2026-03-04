@@ -83,14 +83,15 @@ export function computeOrchestraReady(
   // Context must be >= 64K
   if ((model.maxContext || 0) < 64000) return false;
 
-  // If we have AA data, use coding score as primary signal
+  // If we have AA data, use coding score and intelligence index as signals
   if (aaBenchmark) {
     const codingScore = aaBenchmark.codingScore ?? 0;
-    const reasoningScore = aaBenchmark.reasoningScore ?? 0;
-    // Strong coding OR strong reasoning + tools = orchestra-ready
-    if (codingScore >= 40 || reasoningScore >= 50) return true;
+    // Strong coding score = orchestra-ready
+    if (codingScore >= 40) return true;
     // High intelligence index is also a good signal
     if (aaBenchmark.intelligenceIndex >= 45) return true;
+    // Good LiveCodeBench score
+    if ((aaBenchmark.livecodebench ?? 0) >= 40) return true;
   }
 
   // Heuristic fallback: check specialty/score strings
@@ -170,9 +171,10 @@ export async function runEnrichment(
 
         const benchmarks: ModelBenchmarks = {};
         if (aaData.codingScore != null) benchmarks.coding = aaData.codingScore;
-        if (aaData.reasoningScore != null) benchmarks.reasoning = aaData.reasoningScore;
         if (aaData.mathScore != null) benchmarks.math = aaData.mathScore;
         if (aaData.mmluPro != null) benchmarks.mmluPro = aaData.mmluPro;
+        if (aaData.gpqa != null) benchmarks.gpqa = aaData.gpqa;
+        if (aaData.livecodebench != null) benchmarks.livecodebench = aaData.livecodebench;
         if (aaData.speedTps != null) benchmarks.speedTps = aaData.speedTps;
 
         if (Object.keys(benchmarks).length > 0) {

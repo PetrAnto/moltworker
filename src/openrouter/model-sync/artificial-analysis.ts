@@ -9,77 +9,87 @@
  * that enrich our curated model catalog with objective quality data.
  */
 
-// === API Response Types ===
+// === API Response Types (matches actual AA API v2 response) ===
 
-/** Raw model entry from the Artificial Analysis API. */
-export interface AAModelEntry {
-  model_name: string;
-  provider_name?: string;
-  /** Composite intelligence index (0-100 scale, from 10 hard benchmarks) */
-  intelligence_index?: number;
-  /** Individual benchmark scores */
-  coding_score?: number;
-  reasoning_score?: number;
-  math_score?: number;
-  /** MMLU-Pro score */
-  mmlu_pro?: number;
-  /** GPQA Diamond score */
-  gpqa_diamond?: number;
-  /** Speed: median output tokens per second */
-  output_tokens_per_second?: number;
-  /** Time to first token in ms */
-  time_to_first_token_ms?: number;
-  /** Pricing per million tokens */
-  input_cost_per_million?: number;
-  output_cost_per_million?: number;
-  /** Blended cost (input+output average) */
-  blended_cost_per_million?: number;
-  /** Context window */
-  context_window?: number;
-  /** Whether model supports tool/function calling */
-  supports_tool_use?: boolean;
-  /** Whether model supports vision/image input */
-  supports_vision?: boolean;
-  /** Model identifier slug */
-  model_id?: string;
-  /** Any additional fields */
-  [key: string]: unknown;
+/** Raw model entry from the Artificial Analysis API v2. */
+export interface AAApiModel {
+  id: string;
+  name: string;
+  slug: string;
+  model_creator: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  evaluations?: {
+    artificial_analysis_intelligence_index?: number;
+    artificial_analysis_coding_index?: number;
+    artificial_analysis_math_index?: number;
+    mmlu_pro?: number;
+    gpqa?: number;
+    hle?: number;
+    livecodebench?: number;
+    scicode?: number;
+    math_500?: number;
+    aime?: number;
+  };
+  pricing?: {
+    price_1m_blended_3_to_1?: number;
+    price_1m_input_tokens?: number;
+    price_1m_output_tokens?: number;
+  };
+  median_output_tokens_per_second?: number;
+  median_time_to_first_token_seconds?: number;
+}
+
+/** API response wrapper. */
+interface AAApiResponse {
+  status: number;
+  data: AAApiModel[];
+  prompt_options?: unknown;
 }
 
 /** Processed benchmark data for a single model, stored in R2 cache. */
 export interface AABenchmarkData {
-  /** AA Intelligence Index (0-100) */
+  /** AA Intelligence Index (0-100 composite score) */
   intelligenceIndex: number;
-  /** Coding benchmark score (0-100) */
+  /** AA Coding Index */
   codingScore?: number;
-  /** Reasoning benchmark score (0-100) */
-  reasoningScore?: number;
-  /** Math benchmark score (0-100) */
+  /** AA Math Index */
   mathScore?: number;
   /** MMLU-Pro score */
   mmluPro?: number;
+  /** GPQA Diamond score */
+  gpqa?: number;
+  /** LiveCodeBench score */
+  livecodebench?: number;
   /** Median output tokens/sec */
   speedTps?: number;
-  /** Time to first token in ms */
-  ttftMs?: number;
+  /** Time to first token in seconds */
+  ttftSec?: number;
   /** Blended cost per million tokens */
   blendedCostPerM?: number;
-  /** Raw provider name from AA */
-  aaProvider?: string;
+  /** Raw creator name from AA */
+  aaCreator: string;
   /** Raw model name from AA */
   aaModelName: string;
+  /** AA slug (stable identifier) */
+  aaSlug: string;
 }
+
+// Re-export for backward compatibility
+export type AAModelEntry = AAApiModel;
 
 /** R2-cached benchmark catalog. */
 export interface AABenchmarkCatalog {
   version: number;
   fetchedAt: number;
-  /** Keyed by normalized model identifier (lowercase provider/model-slug) */
+  /** Keyed by normalized model identifier (lowercase) */
   models: Record<string, AABenchmarkData>;
   totalFetched: number;
 }
 
-export const AA_CATALOG_VERSION = 1;
+export const AA_CATALOG_VERSION = 2;
 export const AA_CATALOG_R2_KEY = 'sync/aa-benchmarks.json';
 /** Cache TTL: 24 hours */
 export const AA_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -91,7 +101,7 @@ const AA_API_URL = 'https://artificialanalysis.ai/api/v2/data/llms/models';
 /**
  * Fetch model benchmark data from Artificial Analysis API.
  */
-export async function fetchAABenchmarks(apiKey: string): Promise<AAModelEntry[]> {
+export async function fetchAABenchmarks(apiKey: string): Promise<AAApiModel[]> {
   const response = await fetch(AA_API_URL, {
     headers: { 'x-api-key': apiKey },
   });
@@ -100,16 +110,18 @@ export async function fetchAABenchmarks(apiKey: string): Promise<AAModelEntry[]>
     throw new Error(`Artificial Analysis API returned HTTP ${response.status}: ${response.statusText}`);
   }
 
-  const data = await response.json() as AAModelEntry[] | { data: AAModelEntry[] };
-  // API may return array directly or wrapped in { data: [...] }
-  return Array.isArray(data) ? data : (data.data || []);
+  const json = await response.json() as AAApiResponse | AAApiModel[];
+  // Handle both { data: [...] } wrapper and raw array
+  if (Array.isArray(json)) return json;
+  if ('data' in json && Array.isArray(json.data)) return json.data;
+  throw new Error('Unexpected AA API response format');
 }
 
 // === Normalization & Matching ===
 
 /**
  * Normalize a model name for matching across AA and OpenRouter catalogs.
- * Strips provider prefixes, version suffixes, and normalizes separators.
+ * Strips parentheses, normalizes separators.
  *
  * Examples:
  *   "Claude Sonnet 4.5" → "claude-sonnet-4.5"
@@ -130,40 +142,50 @@ export function normalizeModelName(name: string): string {
  * Build a lookup map from AA entries keyed by multiple name variants.
  * Returns a Map where each AA model can be found by several normalized keys.
  */
-export function buildAALookup(entries: AAModelEntry[]): Map<string, AABenchmarkData> {
+export function buildAALookup(entries: AAApiModel[]): Map<string, AABenchmarkData> {
   const lookup = new Map<string, AABenchmarkData>();
 
   for (const entry of entries) {
-    if (entry.intelligence_index == null && entry.coding_score == null) {
-      continue; // Skip entries with no useful data
+    const evals = entry.evaluations;
+    // Skip entries with no useful evaluation data
+    if (!evals || (evals.artificial_analysis_intelligence_index == null && evals.artificial_analysis_coding_index == null)) {
+      continue;
     }
 
     const data: AABenchmarkData = {
-      intelligenceIndex: entry.intelligence_index ?? 0,
-      codingScore: entry.coding_score ?? undefined,
-      reasoningScore: entry.reasoning_score ?? undefined,
-      mathScore: entry.math_score ?? undefined,
-      mmluPro: entry.mmlu_pro ?? undefined,
-      speedTps: entry.output_tokens_per_second ?? undefined,
-      ttftMs: entry.time_to_first_token_ms ?? undefined,
-      blendedCostPerM: entry.blended_cost_per_million ?? undefined,
-      aaProvider: entry.provider_name ?? undefined,
-      aaModelName: entry.model_name,
+      intelligenceIndex: evals.artificial_analysis_intelligence_index ?? 0,
+      codingScore: evals.artificial_analysis_coding_index ?? undefined,
+      mathScore: evals.artificial_analysis_math_index ?? undefined,
+      mmluPro: evals.mmlu_pro ?? undefined,
+      gpqa: evals.gpqa ?? undefined,
+      livecodebench: evals.livecodebench ?? undefined,
+      speedTps: entry.median_output_tokens_per_second ?? undefined,
+      ttftSec: entry.median_time_to_first_token_seconds ?? undefined,
+      blendedCostPerM: entry.pricing?.price_1m_blended_3_to_1 ?? undefined,
+      aaCreator: entry.model_creator?.name ?? '',
+      aaModelName: entry.name,
+      aaSlug: entry.slug,
     };
 
-    // Key 1: Raw model name normalized
-    const nameKey = normalizeModelName(entry.model_name);
-    if (nameKey) lookup.set(nameKey, data);
-
-    // Key 2: provider/model-name
-    if (entry.provider_name) {
-      const providerKey = normalizeModelName(`${entry.provider_name}/${entry.model_name}`);
-      if (providerKey) lookup.set(providerKey, data);
+    // Key 1: AA slug (stable identifier, e.g. "claude-sonnet-4-5")
+    if (entry.slug) {
+      lookup.set(entry.slug.toLowerCase(), data);
     }
 
-    // Key 3: model_id if available
-    if (entry.model_id) {
-      lookup.set(entry.model_id.toLowerCase(), data);
+    // Key 2: Normalized model name (e.g. "claude-sonnet-4.5")
+    const nameKey = normalizeModelName(entry.name);
+    if (nameKey) lookup.set(nameKey, data);
+
+    // Key 3: creator/model-name (e.g. "anthropic/claude-sonnet-4.5")
+    if (entry.model_creator?.name) {
+      const creatorKey = normalizeModelName(`${entry.model_creator.name}/${entry.name}`);
+      if (creatorKey) lookup.set(creatorKey, data);
+    }
+
+    // Key 4: creator-slug/model-slug (for more exact matching)
+    if (entry.model_creator?.slug && entry.slug) {
+      const slugKey = `${entry.model_creator.slug}/${entry.slug}`;
+      lookup.set(slugKey.toLowerCase(), data);
     }
   }
 
@@ -183,11 +205,12 @@ export function matchModelToAA(
   modelName: string,
   aaLookup: Map<string, AABenchmarkData>,
 ): AABenchmarkData | undefined {
-  // Strategy 1: Exact model ID match
   const idLower = modelId.toLowerCase();
+
+  // Strategy 1: Exact model ID match (e.g. "anthropic/claude-sonnet-4.5")
   if (aaLookup.has(idLower)) return aaLookup.get(idLower);
 
-  // Strategy 2: Normalized display name
+  // Strategy 2: Normalized display name (e.g. "Claude Sonnet 4.5" → "claude-sonnet-4.5")
   const normName = normalizeModelName(modelName);
   if (aaLookup.has(normName)) return aaLookup.get(normName);
 
@@ -198,7 +221,7 @@ export function matchModelToAA(
   const normId = normalizeModelName(idWithoutProvider);
   if (aaLookup.has(normId)) return aaLookup.get(normId);
 
-  // Strategy 4: Strip version suffixes and :free/:nitro variants
+  // Strategy 4: Strip :free/:nitro suffixes and version tags
   const baseId = normId
     .replace(/:free$/, '')
     .replace(/:nitro$/, '')
@@ -206,9 +229,31 @@ export function matchModelToAA(
     .replace(/-\d{4}$/, ''); // Strip date suffixes like -0528
   if (baseId !== normId && aaLookup.has(baseId)) return aaLookup.get(baseId);
 
-  // Strategy 5: Fuzzy prefix match — find AA entries that start with our base ID
+  // Strategy 5: Dots to hyphens (AA slugs use hyphens: "claude-sonnet-4-5" vs our "claude-sonnet-4.5")
+  const dotToHyphen = baseId.replace(/\./g, '-');
+  if (dotToHyphen !== baseId && aaLookup.has(dotToHyphen)) return aaLookup.get(dotToHyphen);
+
+  // Strategy 5b: Strip variant suffixes (-fast, -mini, -turbo, etc.) and retry
+  const variantStripped = dotToHyphen
+    .replace(/-(fast|turbo|mini|small|large|latest|online|chat|instruct|hq)$/, '');
+  if (variantStripped !== dotToHyphen && aaLookup.has(variantStripped)) return aaLookup.get(variantStripped);
+
+  // Strategy 6: Try with provider from model ID
+  if (idLower.includes('/')) {
+    const provider = idLower.split('/')[0];
+    // Try provider-slug/model-slug
+    const providerSlug = provider.replace(/ai$/, '').replace(/-?llama$/, '');
+    const withProvider = `${providerSlug}/${dotToHyphen}`;
+    if (aaLookup.has(withProvider)) return aaLookup.get(withProvider);
+  }
+
+  // Strategy 7: Fuzzy prefix match — find AA entries starting with our base
   for (const [key, data] of aaLookup) {
     if (key.startsWith(baseId) && key.length - baseId.length <= 8) {
+      return data;
+    }
+    // Also try dot-to-hyphen variant
+    if (dotToHyphen !== baseId && key.startsWith(dotToHyphen) && key.length - dotToHyphen.length <= 8) {
       return data;
     }
   }

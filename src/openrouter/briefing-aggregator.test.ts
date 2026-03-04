@@ -529,13 +529,13 @@ describe('Phase 1.5 — Structured Output (json: prefix)', () => {
     });
   });
 
-  // Test 9: JSON on non-supporting model (Sonnet)
-  describe('Test 9: json: Sonnet fallback (no structured output)', () => {
-    it('Sonnet should NOT support structured output', () => {
-      expect(supportsStructuredOutput('sonnet')).toBe(false);
+  // Test 9: JSON on supporting model (Sonnet — now has structuredOutput)
+  describe('Test 9: json: Sonnet with structured output', () => {
+    it('Sonnet should support structured output', () => {
+      expect(supportsStructuredOutput('sonnet')).toBe(true);
     });
 
-    it('should NOT inject response_format when model lacks structuredOutput', () => {
+    it('should inject response_format when model supports structuredOutput', () => {
       // Simulate handler logic: only inject if model supports it
       const requestJson = true;
       const modelAlias = 'sonnet';
@@ -544,7 +544,7 @@ describe('Phase 1.5 — Structured Output (json: prefix)', () => {
           ? { type: 'json_object' }
           : undefined;
 
-      expect(responseFormat).toBeUndefined();
+      expect(responseFormat).toEqual({ type: 'json_object' });
     });
 
     it('should still process the message normally without response_format', async () => {
@@ -573,13 +573,13 @@ describe('Phase 1.5 — Structured Output (json: prefix)', () => {
     });
   });
 
-  // Test 10: JSON on non-supporting model (Grok)
-  describe('Test 10: json: Grok fallback (no structured output)', () => {
-    it('Grok should NOT support structured output', () => {
-      expect(supportsStructuredOutput('grok')).toBe(false);
+  // Test 10: JSON on supporting model (Grok — now has structuredOutput)
+  describe('Test 10: json: Grok with structured output', () => {
+    it('Grok should support structured output', () => {
+      expect(supportsStructuredOutput('grok')).toBe(true);
     });
 
-    it('should NOT inject response_format for Grok even with json: prefix', () => {
+    it('should inject response_format for Grok with json: prefix', () => {
       const requestJson = true;
       const modelAlias = 'grok';
       const responseFormat: ResponseFormat | undefined =
@@ -587,7 +587,7 @@ describe('Phase 1.5 — Structured Output (json: prefix)', () => {
           ? { type: 'json_object' }
           : undefined;
 
-      expect(responseFormat).toBeUndefined();
+      expect(responseFormat).toEqual({ type: 'json_object' });
     });
   });
 });
@@ -1278,16 +1278,16 @@ describe('Cross-cutting Integration', () => {
       expect(supportsStructuredOutput('deep')).toBe(true);
     });
 
-    it('Sonnet: vision + tools (no structuredOutput)', () => {
+    it('Sonnet: vision + tools + structuredOutput', () => {
       expect(supportsVision('sonnet')).toBe(true);
       expect(modelSupportsTools('sonnet')).toBe(true);
-      expect(supportsStructuredOutput('sonnet')).toBe(false);
+      expect(supportsStructuredOutput('sonnet')).toBe(true);
     });
 
-    it('Grok: tools (no vision, no structuredOutput)', () => {
-      expect(supportsVision('grok')).toBe(false);
+    it('Grok: vision + tools + structuredOutput', () => {
+      expect(supportsVision('grok')).toBe(true);
       expect(modelSupportsTools('grok')).toBe(true);
-      expect(supportsStructuredOutput('grok')).toBe(false);
+      expect(supportsStructuredOutput('grok')).toBe(true);
     });
 
     it('Gemini Flash: vision + tools + structuredOutput', () => {
@@ -1296,10 +1296,10 @@ describe('Cross-cutting Integration', () => {
       expect(supportsStructuredOutput('flash')).toBe(true);
     });
 
-    it('Haiku: vision + tools (no structuredOutput)', () => {
+    it('Haiku: vision + tools + structuredOutput', () => {
       expect(supportsVision('haiku')).toBe(true);
       expect(modelSupportsTools('haiku')).toBe(true);
-      expect(supportsStructuredOutput('haiku')).toBe(false);
+      expect(supportsStructuredOutput('haiku')).toBe(true);
     });
   });
 

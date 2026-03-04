@@ -22,6 +22,8 @@ function makeAAData(overrides: Partial<AABenchmarkData>): AABenchmarkData {
   return {
     intelligenceIndex: 0,
     aaModelName: 'Test',
+    aaCreator: 'Test',
+    aaSlug: 'test',
     ...overrides,
   };
 }
@@ -48,9 +50,9 @@ describe('computeOrchestraReady', () => {
     expect(computeOrchestraReady(model, aa)).toBe(true);
   });
 
-  it('marks orchestra-ready with high AA reasoning score', () => {
+  it('marks orchestra-ready with high LiveCodeBench score', () => {
     const model = makeModel({ supportsTools: true, maxContext: 128000 });
-    const aa = makeAAData({ reasoningScore: 55, intelligenceIndex: 40 });
+    const aa = makeAAData({ livecodebench: 50, intelligenceIndex: 40 });
     expect(computeOrchestraReady(model, aa)).toBe(true);
   });
 
@@ -95,7 +97,7 @@ describe('computeOrchestraReady', () => {
       specialty: 'General',
       name: 'Weak Model',
     });
-    const aa = makeAAData({ codingScore: 10, reasoningScore: 20, intelligenceIndex: 15 });
+    const aa = makeAAData({ codingScore: 10, livecodebench: 15, intelligenceIndex: 15 });
     expect(computeOrchestraReady(model, aa)).toBe(false);
   });
 });
