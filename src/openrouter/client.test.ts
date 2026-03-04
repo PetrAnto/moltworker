@@ -303,4 +303,31 @@ describe('parseSSEStream onToolCallReady', () => {
 
     expect(firedIds).toEqual(['call_a', 'call_b', 'call_c']);
   });
+
+  it('clears idle timers after each read to avoid timeout leaks', async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = sseStream([
+        sseLine({ choices: [{ delta: { content: 'hello' } }] }),
+        sseLine({ choices: [{ finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+      ]);
+
+      await parseSSEStream(stream, 1000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('throws when provider emits error payload in stream', async () => {
+    const stream = sseStream([
+      sseLine({ choices: [{ delta: { content: 'partial' } }] }),
+      sseLine({ error: { message: 'quota exceeded', code: 402, type: 'insufficient_quota' } }),
+    ]);
+
+    await expect(parseSSEStream(stream, 5000)).rejects.toThrow(
+      'STREAM_PROVIDER_ERROR: quota exceeded code=402 type=insufficient_quota'
+    );
+  });
 });

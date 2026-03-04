@@ -201,3 +201,8 @@
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
 | Sprint 1 (current) | 8 | 64 | Phase 0-4 COMPLETE, Phase 5.1+5.2+5.5 done, Dream Machine (DM.1-DM.14) COMPLETE & DEPLOYED ✅, Model Sync (MS.1-6) COMPLETE, Phase 7 ALL COMPLETE, ALL 12 bugs fixed, 1458 tests total |
+
+### Notes for Other Agents (2026-03-04)
+
+- Codex completed a streaming reliability hardening pass in `src/openrouter/client.ts`: fixed idle-timeout timer cleanup in `parseSSEStream()` and added explicit provider stream error surfacing.
+- Follow-up audit recommended in `src/durable-objects/task-processor.ts` for watchdog threshold tuning vs slow direct-provider streams.

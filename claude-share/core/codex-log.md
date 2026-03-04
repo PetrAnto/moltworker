@@ -107,3 +107,32 @@ Implement Phase 1 first: add centralized task router policy and resume model esc
 
 ---
 
+
+## Session: 2026-03-04 | Streaming reliability audit hardening (Session: codex-stream-audit-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Fixed a critical SSE timeout leak and hardened provider-stream error handling in the task execution pipeline.
+
+### Changes Made
+- Cleared per-read idle timers in `parseSSEStream()` to prevent orphaned timeouts accumulating during long streams
+- Added explicit stream-level provider error detection (`STREAM_PROVIDER_ERROR`) for OpenAI-compatible SSE payloads
+- Added regression tests for timer cleanup and provider error payload propagation
+
+### Files Modified
+- `src/openrouter/client.ts`
+- `src/openrouter/client.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Continue deep audit in `task-processor.ts` for watchdog threshold tuning and provider-specific retry classification unification.

@@ -3,13 +3,20 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-04 (Streaming reliability hotfix in parseSSEStream + regressions)
 
 ---
 
 ## Current Task: Choose Next Direction
 
 ### Context
+
+
+### Recent Reliability Hotfix
+
+- Fixed SSE idle-timeout timer leak in `parseSSEStream()` that could accumulate orphaned timeouts on long streams.
+- Added stream-level provider error detection (`STREAM_PROVIDER_ERROR`) and regression tests.
+- Suggested next deep-dive: watchdog threshold tuning + provider-specific error classification in `task-processor.ts`.
 
 **Phase 5.1 Multi-Agent Review is COMPLETE!** Routes review phase to a different model for independent verification. Phase 7 also fully done.
 
