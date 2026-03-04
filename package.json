@@ -6,7 +6,9 @@
   "description": "Run Moltbot personal AI assistant in a Cloudflare Sandbox",
   "scripts": {
     "build": "vite build",
+    "predeploy:cleanup": "node scripts/predeploy-cleanup.mjs --execute",
     "deploy": "npm run build && wrangler deploy",
+    "deploy:clean": "npm run predeploy:cleanup && npm run deploy",
     "dev": "vite dev",
     "start": "wrangler dev",
     "types": "wrangler types",
