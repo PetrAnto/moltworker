@@ -67,10 +67,10 @@ describe('Structured Output Support', () => {
       expect(supportsStructuredOutput('flash')).toBe(true);
     });
 
-    it('should return false for models without structuredOutput flag', () => {
-      expect(supportsStructuredOutput('grok')).toBe(false);
-      expect(supportsStructuredOutput('sonnet')).toBe(false);
-      expect(supportsStructuredOutput('haiku')).toBe(false);
+    it('should return true for models with verified structuredOutput', () => {
+      expect(supportsStructuredOutput('grok')).toBe(true);
+      expect(supportsStructuredOutput('sonnet')).toBe(true);
+      expect(supportsStructuredOutput('haiku')).toBe(true);
     });
 
     it('should return false for unknown models', () => {

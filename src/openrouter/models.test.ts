@@ -137,10 +137,10 @@ describe('getFreeToolModels', () => {
     }
   });
 
-  it('does not include models without tool support', () => {
+  it('includes glmfree which now has verified tool support', () => {
     const freeToolModels = getFreeToolModels();
-    // glmfree is free but doesn't support tools
-    expect(freeToolModels).not.toContain('glmfree');
+    // glmfree was updated to have supportsTools based on OpenRouter capability detection
+    expect(freeToolModels).toContain('glmfree');
   });
 
   it('does not include removed/sunset models like pony', () => {
@@ -194,13 +194,13 @@ describe('categorizeModel', () => {
   });
 });
 
-// --- GLM free model does NOT support tools ---
+// --- GLM model tools support ---
 
 describe('GLM model tools support', () => {
-  it('glmfree does NOT have supportsTools (free tier lacks function calling)', () => {
+  it('glmfree has supportsTools (verified via OpenRouter capability detection)', () => {
     const model = getModel('glmfree');
     expect(model).toBeDefined();
-    expect(model!.supportsTools).toBeUndefined();
+    expect(model!.supportsTools).toBe(true);
   });
 
   it('glm47 (paid) has supportsTools enabled', () => {

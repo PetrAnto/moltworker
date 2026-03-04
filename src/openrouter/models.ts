@@ -60,11 +60,12 @@ export interface ModelInfo {
 
 /** Benchmark scores from Artificial Analysis */
 export interface ModelBenchmarks {
-  coding?: number;     // Coding benchmark score (0-100)
-  reasoning?: number;  // Reasoning benchmark score (0-100)
-  math?: number;       // Math benchmark score (0-100)
-  mmluPro?: number;    // MMLU-Pro score
-  speedTps?: number;   // Median output tokens/sec
+  coding?: number;        // AA Coding Index
+  math?: number;          // AA Math Index
+  mmluPro?: number;       // MMLU-Pro score
+  gpqa?: number;          // GPQA Diamond score
+  livecodebench?: number; // LiveCodeBench score
+  speedTps?: number;      // Median output tokens/sec
 }
 
 /**
@@ -93,6 +94,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '400B MoE (13B active), 128K context',
     cost: 'FREE',
     supportsTools: true,
+    structuredOutput: true,
     isFree: true,
     maxContext: 131072,
   },
@@ -113,7 +115,7 @@ export const MODELS: Record<string, ModelInfo> = {
     specialty: 'Free General/Multimodal',
     score: 'Solid MMMU/general',
     cost: 'FREE',
-    supportsVision: true,
+    supportsTools: true,
     isFree: true,
   },
   stepfree: {
@@ -123,6 +125,7 @@ export const MODELS: Record<string, ModelInfo> = {
     specialty: 'Free Speed/Long Context',
     score: '256k context, fast',
     cost: 'FREE',
+    supportsTools: true,
     isFree: true,
   },
   // llama405free removed — deprecated on OpenRouter (Jan 2026)
@@ -160,6 +163,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '26B MoE (3B active), 131K context',
     cost: 'FREE',
     supportsTools: true,
+    structuredOutput: true,
     isFree: true,
     maxContext: 131072,
   },
@@ -196,6 +200,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '#1 OSS SWE-Bench, 309B MoE (15B active), 256K ctx',
     cost: '$0.10/$0.30',
     supportsTools: true,
+    structuredOutput: true,
     maxContext: 262144,
   },
   phi4reason: {
@@ -329,6 +334,7 @@ export const MODELS: Record<string, ModelInfo> = {
     cost: '$0.05/$0.22',
     supportsTools: true,
     parallelCalls: true,
+    structuredOutput: true,
     maxContext: 262144,
   },
   glm47: {
@@ -339,6 +345,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '200K context, stable multi-step execution',
     cost: '$0.07/$0.40',
     supportsTools: true,
+    structuredOutput: true,
     maxContext: 200000,
   },
   mini: {
@@ -363,7 +370,8 @@ export const MODELS: Record<string, ModelInfo> = {
     cost: '$0.15/$1.20',
     supportsTools: true,
     reasoning: 'fixed',
-    maxContext: 262144,
+    structuredOutput: true,
+    maxContext: 128000,
   },
   minimax: {
     id: 'minimax/minimax-m2.5',
@@ -375,7 +383,8 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsTools: true,
     parallelCalls: true,
     reasoning: 'fixed', // MiniMax API requires reasoning — cannot be disabled
-    maxContext: 1000000,
+    structuredOutput: true,
+    maxContext: 196608,
   },
   grok: {
     id: 'x-ai/grok-4.1-fast',
@@ -384,9 +393,11 @@ export const MODELS: Record<string, ModelInfo> = {
     specialty: 'Paid Agentic/Tools/Search',
     score: '#1 agentic, 2M context',
     cost: '$0.20/$0.50',
+    supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
     reasoning: 'configurable',
+    structuredOutput: true,
     maxContext: 2000000,
   },
   grokcode: {
@@ -399,7 +410,8 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsTools: true,
     parallelCalls: true,
     reasoning: 'fixed',
-    maxContext: 131072,
+    structuredOutput: true,
+    maxContext: 256000,
   },
   qwennext: {
     id: 'qwen/qwen3-coder-next',
@@ -410,7 +422,8 @@ export const MODELS: Record<string, ModelInfo> = {
     cost: '$0.20/$1.50',
     supportsTools: true,
     parallelCalls: true,
-    maxContext: 131072,
+    structuredOutput: true,
+    maxContext: 262144,
   },
   qwencoder: {
     id: 'qwen/qwen3-coder',
@@ -435,7 +448,7 @@ export const MODELS: Record<string, ModelInfo> = {
     parallelCalls: true,
     structuredOutput: true,
     reasoning: 'configurable',
-    maxContext: 131072,
+    maxContext: 163840,
   },
   deepreason: {
     id: 'deepseek/deepseek-r1-0528',
@@ -444,6 +457,8 @@ export const MODELS: Record<string, ModelInfo> = {
     specialty: 'Paid Deep Math/Reasoning',
     score: 'Approaches O3/Gemini 2.5 Pro level',
     cost: '$0.40/$1.75',
+    supportsTools: true,
+    structuredOutput: true,
     maxContext: 163840,
   },
   mistrallarge: {
@@ -453,10 +468,11 @@ export const MODELS: Record<string, ModelInfo> = {
     specialty: 'Paid Premium General',
     score: '675B MoE (41B active), Apache 2.0',
     cost: '$0.50/$1.50',
+    supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
     structuredOutput: true,
-    maxContext: 131072,
+    maxContext: 262144,
   },
   kimi: {
     id: 'moonshotai/kimi-k2.5',
@@ -468,7 +484,8 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
-    maxContext: 131072,
+    structuredOutput: true,
+    maxContext: 262144,
   },
   flash: {
     id: 'google/gemini-3-flash-preview',
@@ -494,6 +511,7 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
+    structuredOutput: true,
     maxContext: 200000,
   },
   geminipro: {
@@ -533,7 +551,8 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
-    maxContext: 200000,
+    structuredOutput: true,
+    maxContext: 1000000,
   },
   opus45: {
     id: 'anthropic/claude-opus-4.5',
@@ -545,6 +564,7 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
+    structuredOutput: true,
     maxContext: 200000,
   },
   opus: {
@@ -557,7 +577,8 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
-    maxContext: 200000,
+    structuredOutput: true,
+    maxContext: 1000000,
   },
 
   // === DIRECT API MODELS (bypass OpenRouter) ===
@@ -1213,9 +1234,10 @@ export function formatModelInfoCard(alias: string): string | null {
     }
     if (model.benchmarks) {
       if (model.benchmarks.coding != null) lines.push(`  Coding: ${model.benchmarks.coding.toFixed(1)}`);
-      if (model.benchmarks.reasoning != null) lines.push(`  Reasoning: ${model.benchmarks.reasoning.toFixed(1)}`);
       if (model.benchmarks.math != null) lines.push(`  Math: ${model.benchmarks.math.toFixed(1)}`);
       if (model.benchmarks.mmluPro != null) lines.push(`  MMLU-Pro: ${model.benchmarks.mmluPro.toFixed(1)}`);
+      if (model.benchmarks.gpqa != null) lines.push(`  GPQA: ${model.benchmarks.gpqa.toFixed(1)}`);
+      if (model.benchmarks.livecodebench != null) lines.push(`  LiveCodeBench: ${model.benchmarks.livecodebench.toFixed(1)}`);
       if (model.benchmarks.speedTps != null) lines.push(`  Speed: ${model.benchmarks.speedTps.toFixed(0)} tok/s`);
     }
     lines.push('');

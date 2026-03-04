@@ -6,9 +6,18 @@ import {
   normalizeModelName,
   buildAALookup,
   matchModelToAA,
-  type AAModelEntry,
-  type AABenchmarkData,
+  type AAApiModel,
 } from './artificial-analysis';
+
+/** Helper to create a minimal AA model entry. */
+function makeAAModel(overrides: Partial<AAApiModel> & { name: string }): AAApiModel {
+  return {
+    id: 'test-uuid',
+    slug: normalizeModelName(overrides.name).replace(/\./g, '-'),
+    model_creator: { id: 'c-uuid', name: 'Unknown', slug: 'unknown' },
+    ...overrides,
+  };
+}
 
 describe('normalizeModelName', () => {
   it('lowercases and converts spaces to hyphens', () => {
@@ -33,36 +42,43 @@ describe('normalizeModelName', () => {
 });
 
 describe('buildAALookup', () => {
-  const entries: AAModelEntry[] = [
-    {
-      model_name: 'Claude Sonnet 4.5',
-      provider_name: 'Anthropic',
-      intelligence_index: 52.3,
-      coding_score: 48.5,
-      reasoning_score: 55.1,
-      model_id: 'anthropic/claude-sonnet-4.5',
-    },
-    {
-      model_name: 'GPT-4o',
-      provider_name: 'OpenAI',
-      intelligence_index: 38.2,
-      coding_score: 35.0,
-    },
-    {
-      model_name: 'No Data Model',
-      provider_name: 'Unknown',
-      // No intelligence_index or coding_score
-    },
+  const entries: AAApiModel[] = [
+    makeAAModel({
+      name: 'Claude Sonnet 4.5',
+      slug: 'claude-sonnet-4-5',
+      model_creator: { id: 'c1', name: 'Anthropic', slug: 'anthropic' },
+      evaluations: {
+        artificial_analysis_intelligence_index: 52.3,
+        artificial_analysis_coding_index: 48.5,
+        artificial_analysis_math_index: 55.1,
+      },
+    }),
+    makeAAModel({
+      name: 'GPT-4o',
+      slug: 'gpt-4o',
+      model_creator: { id: 'c2', name: 'OpenAI', slug: 'openai' },
+      evaluations: {
+        artificial_analysis_intelligence_index: 38.2,
+        artificial_analysis_coding_index: 35.0,
+      },
+    }),
+    makeAAModel({
+      name: 'No Data Model',
+      model_creator: { id: 'c3', name: 'Unknown', slug: 'unknown' },
+      // No evaluations
+    }),
   ];
 
   it('builds lookup with multiple keys per entry', () => {
     const lookup = buildAALookup(entries);
     // Should find by normalized name
     expect(lookup.has('claude-sonnet-4.5')).toBe(true);
-    // Should find by provider/name
+    // Should find by slug
+    expect(lookup.has('claude-sonnet-4-5')).toBe(true);
+    // Should find by creator/name
     expect(lookup.has('anthropic/claude-sonnet-4.5')).toBe(true);
-    // Should find by model_id
-    expect(lookup.has('anthropic/claude-sonnet-4.5')).toBe(true);
+    // Should find by creator-slug/model-slug
+    expect(lookup.has('anthropic/claude-sonnet-4-5')).toBe(true);
   });
 
   it('skips entries with no useful data', () => {
@@ -76,52 +92,54 @@ describe('buildAALookup', () => {
     expect(sonnet).toBeDefined();
     expect(sonnet!.intelligenceIndex).toBe(52.3);
     expect(sonnet!.codingScore).toBe(48.5);
-    expect(sonnet!.reasoningScore).toBe(55.1);
+    expect(sonnet!.mathScore).toBe(55.1);
     expect(sonnet!.aaModelName).toBe('Claude Sonnet 4.5');
+    expect(sonnet!.aaCreator).toBe('Anthropic');
   });
 });
 
 describe('matchModelToAA', () => {
-  const aaEntries: AAModelEntry[] = [
-    {
-      model_name: 'Claude Sonnet 4.5',
-      provider_name: 'Anthropic',
-      intelligence_index: 52.3,
-      coding_score: 48.5,
-      model_id: 'anthropic/claude-sonnet-4.5',
-    },
-    {
-      model_name: 'GPT-4o',
-      provider_name: 'OpenAI',
-      intelligence_index: 38.2,
-      coding_score: 35.0,
-    },
-    {
-      model_name: 'DeepSeek V3.2',
-      provider_name: 'DeepSeek',
-      intelligence_index: 45.0,
-      coding_score: 42.0,
-    },
-    {
-      model_name: 'Grok 4.1',
-      provider_name: 'xAI',
-      intelligence_index: 50.0,
-      coding_score: 46.0,
-    },
+  const aaEntries: AAApiModel[] = [
+    makeAAModel({
+      name: 'Claude Sonnet 4.5',
+      slug: 'claude-sonnet-4-5',
+      model_creator: { id: 'c1', name: 'Anthropic', slug: 'anthropic' },
+      evaluations: { artificial_analysis_intelligence_index: 52.3, artificial_analysis_coding_index: 48.5 },
+    }),
+    makeAAModel({
+      name: 'GPT-4o',
+      slug: 'gpt-4o',
+      model_creator: { id: 'c2', name: 'OpenAI', slug: 'openai' },
+      evaluations: { artificial_analysis_intelligence_index: 38.2, artificial_analysis_coding_index: 35.0 },
+    }),
+    makeAAModel({
+      name: 'DeepSeek V3.2',
+      slug: 'deepseek-v3-2',
+      model_creator: { id: 'c3', name: 'DeepSeek', slug: 'deepseek' },
+      evaluations: { artificial_analysis_intelligence_index: 45.0, artificial_analysis_coding_index: 42.0 },
+    }),
+    makeAAModel({
+      name: 'Grok 4.1',
+      slug: 'grok-4-1',
+      model_creator: { id: 'c4', name: 'xAI', slug: 'xai' },
+      evaluations: { artificial_analysis_intelligence_index: 50.0, artificial_analysis_coding_index: 46.0 },
+    }),
   ];
 
   const aaLookup = buildAALookup(aaEntries);
-
-  it('matches by exact model ID', () => {
-    const result = matchModelToAA('anthropic/claude-sonnet-4.5', 'Claude Sonnet 4.5', aaLookup);
-    expect(result).toBeDefined();
-    expect(result!.intelligenceIndex).toBe(52.3);
-  });
 
   it('matches by normalized display name', () => {
     const result = matchModelToAA('openai/gpt-4o', 'GPT-4o', aaLookup);
     expect(result).toBeDefined();
     expect(result!.intelligenceIndex).toBe(38.2);
+  });
+
+  it('matches by slug (dots → hyphens)', () => {
+    // Our model ID "anthropic/claude-sonnet-4.5" → stripped to "claude-sonnet-4.5"
+    // AA slug is "claude-sonnet-4-5" → matched via dot-to-hyphen strategy
+    const result = matchModelToAA('anthropic/claude-sonnet-4.5', 'Claude Sonnet 4.5', aaLookup);
+    expect(result).toBeDefined();
+    expect(result!.intelligenceIndex).toBe(52.3);
   });
 
   it('matches by stripped ID without provider', () => {
@@ -131,15 +149,18 @@ describe('matchModelToAA', () => {
   });
 
   it('matches stripping :free suffix', () => {
-    // Should match "gpt-4o" after stripping :free
     const result = matchModelToAA('openai/gpt-4o:free', 'GPT-4o (Free)', aaLookup);
-    // The display name "GPT-4o (Free)" normalizes to "gpt-4o-free" which won't match,
-    // but stripping :free from the ID gives "gpt-4o" which does
     expect(result).toBeDefined();
   });
 
   it('returns undefined for unknown models', () => {
     const result = matchModelToAA('unknown/model-xyz', 'Unknown Model XYZ', aaLookup);
     expect(result).toBeUndefined();
+  });
+
+  it('matches grok with version dot-to-hyphen', () => {
+    const result = matchModelToAA('x-ai/grok-4.1-fast', 'Grok 4.1 Fast', aaLookup);
+    expect(result).toBeDefined();
+    expect(result!.intelligenceIndex).toBe(50.0);
   });
 });
