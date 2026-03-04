@@ -2453,3 +2453,47 @@ describe('400 input-validation context compression', () => {
     expect(apiCallCount).toBeLessThanOrEqual(4); // MAX_API_RETRIES + 1 at most
   });
 });
+
+describe('classifyApiError', () => {
+  it('classifies provider-structured quota errors', async () => {
+    const { classifyApiError, ProviderApiError } = await import('./task-processor');
+    const err = new ProviderApiError(
+      'deepseek',
+      402,
+      'deepseek API error (402): Insufficient quota',
+      '{"error":{"message":"Insufficient quota","code":"insufficient_quota"}}',
+      'insufficient_quota',
+      'billing_error',
+    );
+
+    const classified = classifyApiError(err);
+    expect(classified.isQuotaExceeded).toBe(true);
+    expect(classified.isRateLimited).toBe(false);
+  });
+
+  it('classifies provider content-filter and input-validation errors', async () => {
+    const { classifyApiError, ProviderApiError } = await import('./task-processor');
+    const filterErr = new ProviderApiError(
+      'dashscope',
+      400,
+      'dashscope API error (400): data_inspection_failed',
+      '{"code":"data_inspection_failed"}',
+      'data_inspection_failed',
+      'invalid_request_error',
+    );
+    const inputErr = new ProviderApiError(
+      'moonshot',
+      400,
+      'moonshot API error (400): Input validation error: too many tokens',
+      '{"error":{"message":"Input validation error: too many tokens"}}',
+      'invalid_request',
+      'invalid_request_error',
+    );
+
+    const classifiedFilter = classifyApiError(filterErr);
+    const classifiedInput = classifyApiError(inputErr);
+
+    expect(classifiedFilter.isContentFilter).toBe(true);
+    expect(classifiedInput.isInputValidation).toBe(true);
+  });
+});

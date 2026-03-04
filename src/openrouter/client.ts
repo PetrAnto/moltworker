@@ -110,10 +110,16 @@ export async function parseSSEStream(
   };
 
   const readWithTimeout = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('STREAM_READ_TIMEOUT')), idleTimeoutMs);
+      timeoutId = setTimeout(() => reject(new Error('STREAM_READ_TIMEOUT')), idleTimeoutMs);
     });
-    return Promise.race([reader.read(), timeoutPromise]);
+
+    try {
+      return await Promise.race([reader.read(), timeoutPromise]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
   };
 
   try {

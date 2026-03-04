@@ -313,6 +313,104 @@ const MAX_SAME_TOOL_REPEATS = 3;
 const MAX_TOTAL_TOOLS_FREE = 50;
 const MAX_TOTAL_TOOLS_PAID = 100;
 
+export class ProviderApiError extends Error {
+  readonly provider: Provider;
+  readonly status: number;
+  readonly rawBody: string;
+  readonly code?: string;
+  readonly errorType?: string;
+
+  constructor(provider: Provider, status: number, message: string, rawBody: string, code?: string, errorType?: string) {
+    super(message);
+    this.name = 'ProviderApiError';
+    this.provider = provider;
+    this.status = status;
+    this.rawBody = rawBody;
+    this.code = code;
+    this.errorType = errorType;
+  }
+}
+
+interface ClassifiedApiError {
+  isRateLimited: boolean;
+  isQuotaExceeded: boolean;
+  isModelGone: boolean;
+  isContentFilter: boolean;
+  isInputValidation: boolean;
+  isReasoningMandatory: boolean;
+}
+
+function parseProviderErrorPayload(rawText: string): { message: string; code?: string; type?: string } {
+  try {
+    const parsed = JSON.parse(rawText) as Record<string, unknown>;
+    const nested = parsed.error;
+    if (nested && typeof nested === 'object') {
+      const err = nested as Record<string, unknown>;
+      return {
+        message: String(err.message ?? rawText),
+        code: typeof err.code === 'string' ? err.code : undefined,
+        type: typeof err.type === 'string' ? err.type : undefined,
+      };
+    }
+
+    return {
+      message: String(parsed.message ?? parsed.msg ?? rawText),
+      code: typeof parsed.code === 'string' ? parsed.code : undefined,
+      type: typeof parsed.type === 'string' ? parsed.type : undefined,
+    };
+  } catch {
+    return { message: rawText };
+  }
+}
+
+export function classifyApiError(err: Error): ClassifiedApiError {
+  const msg = err.message.toLowerCase();
+  const providerErr = err instanceof ProviderApiError ? err : null;
+  const statusCode = providerErr?.status ?? (/(?:api error \()([0-9]{3})(?:\))/.exec(msg)?.[1] ? Number(/(?:api error \()([0-9]{3})(?:\))/.exec(msg)?.[1]) : null);
+  const code = providerErr?.code?.toLowerCase() ?? '';
+  const type = providerErr?.errorType?.toLowerCase() ?? '';
+  const combined = `${msg} ${code} ${type}`;
+
+  return {
+    isRateLimited:
+      statusCode === 429 || statusCode === 503 ||
+      /rate.?limit|overloaded|capacity|busy|throttl/i.test(combined),
+    isQuotaExceeded:
+      statusCode === 402 || statusCode === 429 ||
+      /insufficient[_\s-]?quota|quota.?exceeded|payment.?required|balance.?insufficient/i.test(combined),
+    isModelGone: statusCode === 404 || /model.?not.?found|does.?not.?exist|unknown.?model/i.test(combined),
+    isContentFilter:
+      /inappropriate.?content|data_inspection_failed|content.?filter|safety|policy.?violation/i.test(combined),
+    isInputValidation:
+      statusCode === 400 && /input.?validation|too.?long|too.?many.?tokens|context.?length|max.?tokens|maximum.?context/i.test(combined),
+    isReasoningMandatory:
+      statusCode === 400 && isReasoningMandatoryError(combined),
+  };
+}
+
+function createProviderApiError(provider: Provider, status: number, rawText: string): ProviderApiError {
+  const parsed = parseProviderErrorPayload(rawText);
+  const message = `${provider} API error (${status}): ${(parsed.message || rawText || 'unknown error').slice(0, 300)}`;
+  return new ProviderApiError(provider, status, message, rawText, parsed.code, parsed.type);
+}
+
+function getWatchdogStuckThreshold(modelAlias: string): number {
+  const isPaidModel = getModel(modelAlias)?.isFree !== true;
+  const provider = getProvider(modelAlias);
+  const providerMultiplier = provider === 'moonshot' ? 2.5
+    : provider === 'dashscope' ? 1.5
+    : provider === 'deepseek' ? 1.3
+    : 1.0;
+
+  const baseThreshold = (isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS) * providerMultiplier;
+  const maxIdleTimeout = isPaidModel
+    ? Math.max(180000 * providerMultiplier, 90000)
+    : 180000;
+
+  // Must exceed max stream idle timeout to avoid false stuck alarms during long TTFT.
+  return Math.max(baseThreshold, maxIdleTimeout + 60000);
+}
+
 /** Get the auto-resume limit based on model cost */
 function getAutoResumeLimit(modelAlias: string): number {
   const model = getModel(modelAlias);
@@ -644,8 +742,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     const timeSinceUpdate = Date.now() - task.lastUpdate;
-    const isPaidModel = getModel(task.modelAlias)?.isFree !== true;
-    const stuckThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
+    const stuckThreshold = getWatchdogStuckThreshold(task.modelAlias);
     const elapsedMs = Date.now() - task.startTime;
     const elapsed = Math.round(elapsedMs / 1000);
     console.log(`[TaskProcessor] Time since last update: ${timeSinceUpdate}ms, elapsed: ${elapsed}s (threshold: ${stuckThreshold / 1000}s)`);
@@ -1691,6 +1788,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // on every iteration and exhausting auto-resume budget with minimal progress.
         const providerMultiplier = provider === 'moonshot' ? 2.5
           : provider === 'dashscope' ? 1.5
+          : provider === 'deepseek' ? 1.3
           : 1.0;
         // Paid models: minimum 90s even for small contexts (they handle complex tasks)
         const idleTimeout = isPaid ? Math.max(baseTimeout * providerMultiplier, 90000) : baseTimeout;
@@ -1814,7 +1912,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               if (!response.ok) {
                 const errorText = await response.text().catch(() => 'unknown error');
-                throw new Error(`${provider} API error (${response.status}): ${errorText.slice(0, 200)}`);
+                throw createProviderApiError(provider, response.status, errorText);
               }
 
               if (!response.body) {
@@ -1841,24 +1939,24 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           } catch (apiError) {
             lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
+            const classified = classifyApiError(lastError);
             console.log(`[TaskProcessor] API call failed (attempt ${attempt}): ${lastError.message}`);
 
-            // 402 = payment required / quota exceeded — fail fast, don't retry
-            if (/\b402\b/.test(lastError.message)) {
-              console.log('[TaskProcessor] 402 Payment Required — failing fast');
+            // Quota/content-filter errors are deterministic; skip retry loop quickly.
+            if (classified.isQuotaExceeded) {
+              console.log('[TaskProcessor] Quota/payment error — failing fast');
               break;
             }
 
-            // 400 content filter (DashScope/Alibaba) — deterministic, don't retry
-            if (/\b400\b/.test(lastError.message) && /inappropriate.?content|data_inspection_failed/i.test(lastError.message)) {
-              console.log('[TaskProcessor] Content filter 400 — failing fast (will try rotation)');
+            if (classified.isContentFilter) {
+              console.log('[TaskProcessor] Content filter error — failing fast (will try rotation)');
               break;
             }
 
             // 400 "Reasoning is mandatory" — force-enable reasoning and retry once.
             // For OpenRouter: chatCompletionStreamingWithTools handles this internally.
             // For direct API: set reasoningOverride so the next attempt includes it.
-            if (/\b400\b/.test(lastError.message) && isReasoningMandatoryError(lastError.message)) {
+            if (classified.isReasoningMandatory) {
               if (!reasoningOverride) {
                 console.log(`[TaskProcessor] Reasoning mandatory for ${task.modelAlias} — retrying with reasoning enabled`);
                 reasoningOverride = buildFallbackReasoningParam(task.modelAlias);
@@ -1871,7 +1969,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
             // 400 "Input validation error" — context too large for provider.
             // Compress conversation and retry once instead of failing immediately.
-            if (/\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length|max.?tokens|maximum.?context/i.test(lastError.message)) {
+            if (classified.isInputValidation) {
               const beforeLen = conversationMessages.length;
               const beforeTokens = this.estimateTokens(conversationMessages);
               const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
@@ -1900,11 +1998,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // If API call failed after all retries, try rotating to another free model
         if (!result && lastError) {
-          const isRateLimited = /429|503|rate.?limit|overloaded|capacity|busy/i.test(lastError.message);
-          const isQuotaExceeded = /\b402\b/.test(lastError.message);
-          const isModelGone = /\b404\b/.test(lastError.message);
-          const isContentFilter = /inappropriate.?content|data_inspection_failed/i.test(lastError.message);
-          const isInputValidation = /\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length/i.test(lastError.message);
+          const classified = classifyApiError(lastError);
+          const isRateLimited = classified.isRateLimited;
+          const isQuotaExceeded = classified.isQuotaExceeded;
+          const isModelGone = classified.isModelGone;
+          const isContentFilter = classified.isContentFilter;
+          const isInputValidation = classified.isInputValidation;
           const currentIsFree = getModel(task.modelAlias)?.isFree === true;
 
           if ((isRateLimited || isQuotaExceeded || isModelGone || isContentFilter || isInputValidation) && currentIsFree && rotationIndex < MAX_FREE_ROTATIONS) {
@@ -1917,7 +2016,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.lastUpdate = Date.now();
             await this.doState.storage.put('task', task);
 
-            const reason = isInputValidation ? 'context too large (400)' : isContentFilter ? 'content filtered' : isModelGone ? 'unavailable (404)' : 'busy';
+            const reason = isInputValidation
+              ? 'context too large (400)'
+              : isContentFilter
+                ? 'content filtered'
+                : isModelGone
+                  ? 'unavailable (404)'
+                  : isQuotaExceeded
+                    ? 'quota exceeded'
+                    : 'busy';
             const isEmergency = EMERGENCY_CORE_ALIASES.includes(nextAlias) && rotationIndex > MAX_FREE_ROTATIONS - EMERGENCY_CORE_ALIASES.length;
             console.log(`[TaskProcessor] Rotating from /${prevAlias} to /${nextAlias} — ${reason} (${rotationIndex}/${MAX_FREE_ROTATIONS}${isEmergency ? ', emergency core' : ''}, task: ${taskCategory})`);
 

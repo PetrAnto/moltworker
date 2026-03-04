@@ -201,3 +201,4 @@
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
 | Sprint 1 (current) | 8 | 64 | Phase 0-4 COMPLETE, Phase 5.1+5.2+5.5 done, Dream Machine (DM.1-DM.14) COMPLETE & DEPLOYED ✅, Model Sync (MS.1-6) COMPLETE, Phase 7 ALL COMPLETE, ALL 12 bugs fixed, 1458 tests total |
+- 2026-03-04: Codex completed task-pipeline reliability hardening (stream timeout cleanup, provider-aware watchdog thresholds, provider error normalization, regression tests) on branch `work`.

@@ -744,3 +744,4 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | **README.md** | project root | User-facing documentation |
 | **AGENTS.md** | project root | Developer/AI agent instructions |
 | **CLAUDE.md** | project root | Claude Code project instructions |
+2026-03-04 | Codex (GPT-5.2-Codex) | fix(task-processor): harden streaming/watchdog/error classification across OpenRouter/DeepSeek/Moonshot/DashScope; fix parseSSE Promise.race timer cleanup; add regression tests | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts, src/openrouter/client.ts, src/openrouter/client.test.ts

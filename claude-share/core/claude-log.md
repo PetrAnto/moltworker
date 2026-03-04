@@ -1619,3 +1619,25 @@ Created comprehensive tool-calling landscape analysis and multi-AI orchestration
 - Start with Phase 0 quick wins (tasks 0.1-0.3 in GLOBAL_ROADMAP.md)
 - See `next_prompt.md` for ready-to-copy task prompt
 - Model IDs for GPT-OSS-120B and GLM 4.7 need verification on OpenRouter
+
+## Session: 2026-03-04 | Task Pipeline Reliability Audit (Session: codex-task-pipeline-audit)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** `work`
+**Status:** Completed
+
+### Summary
+Audited and hardened task execution reliability across streaming providers, watchdog/auto-resume thresholds, timeout cleanup, and provider error classification. Added regression tests.
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `src/openrouter/client.ts`
+- `src/openrouter/client.test.ts`
+
+### Tests
+- [x] `npm test` (1567 passing)
+- [x] `npm run typecheck`
+
+### Notes for Next Session
+- Consider extracting provider error classification to its own module if additional providers are added.

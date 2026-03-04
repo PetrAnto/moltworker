@@ -304,3 +304,20 @@ describe('parseSSEStream onToolCallReady', () => {
     expect(firedIds).toEqual(['call_a', 'call_b', 'call_c']);
   });
 });
+
+describe('parseSSEStream timeout cleanup', () => {
+  it('clears per-read timeout timers after stream completes', async () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    const stream = sseStream([
+      sseLine({ choices: [{ delta: { content: 'ok' } }] }),
+      sseLine({ choices: [{ finish_reason: 'stop' }] }),
+      'data: [DONE]\n\n',
+    ]);
+
+    await parseSSEStream(stream, 5000);
+    expect(clearSpy).toHaveBeenCalled();
+
+    clearSpy.mockRestore();
+  });
+});
