@@ -110,10 +110,15 @@ export async function parseSSEStream(
   };
 
   const readWithTimeout = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('STREAM_READ_TIMEOUT')), idleTimeoutMs);
+      timeoutId = setTimeout(() => reject(new Error('STREAM_READ_TIMEOUT')), idleTimeoutMs);
     });
-    return Promise.race([reader.read(), timeoutPromise]);
+    try {
+      return await Promise.race([reader.read(), timeoutPromise]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
   };
 
   try {
@@ -142,6 +147,7 @@ export async function parseSSEStream(
             created?: number;
             model?: string;
             usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+            error?: unknown;
             choices?: Array<{
               finish_reason?: string | null;
               delta?: {
@@ -156,6 +162,25 @@ export async function parseSSEStream(
               };
             }>;
           } = JSON.parse(data);
+
+          // Detect provider error payloads embedded in SSE data chunks.
+          // Some providers (DashScope, Moonshot, DeepSeek) emit errors as
+          // SSE data rather than HTTP status codes.
+          if (chunk.error) {
+            const providerError = typeof chunk.error === 'string'
+              ? chunk.error
+              : (() => {
+                  if (!chunk.error || typeof chunk.error !== 'object') return JSON.stringify(chunk.error);
+                  const details = chunk.error as { message?: unknown; code?: unknown; type?: unknown; error_msg?: unknown };
+                  const message = typeof details.message === 'string' ? details.message
+                    : typeof details.error_msg === 'string' ? details.error_msg
+                    : JSON.stringify(chunk.error);
+                  const code = details.code !== undefined ? ` code=${String(details.code)}` : '';
+                  const type = details.type !== undefined ? ` type=${String(details.type)}` : '';
+                  return `${message}${code}${type}`;
+                })();
+            throw new Error(`STREAM_PROVIDER_ERROR: ${providerError}`);
+          }
 
           if (chunk.id) id = chunk.id;
           if (chunk.created) created = chunk.created;
@@ -201,12 +226,36 @@ export async function parseSSEStream(
             }
           }
         } catch (e) {
+          if (e instanceof Error && e.message.startsWith('STREAM_PROVIDER_ERROR:')) throw e;
           console.error('[parseSSEStream] Failed to parse SSE chunk:', data, e);
+        }
+      }
+    }
+    // Flush trailing bytes: some providers close without a final \n
+    buffer += decoder.decode();
+    const trailing = buffer.trim();
+    if (trailing.startsWith('data: ')) {
+      const data = trailing.slice(6).trim();
+      if (data && data !== '[DONE]') {
+        try {
+          const chunk: {
+            choices?: Array<{
+              finish_reason?: string | null;
+              delta?: { content?: string; reasoning_content?: string };
+            }>;
+          } = JSON.parse(data);
+          const choice = chunk.choices?.[0];
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+          if (choice?.delta?.content) content += choice.delta.content;
+          if (choice?.delta?.reasoning_content) reasoningContent += choice.delta.reasoning_content;
+        } catch (e) {
+          console.error('[parseSSEStream] Failed to parse trailing SSE chunk:', data, e);
         }
       }
     }
   } catch (err) {
     if (err instanceof Error && err.message === 'STREAM_READ_TIMEOUT') {
+      await reader.cancel().catch(() => undefined);
       throw new Error(`Streaming read timeout (no data for ${idleTimeoutMs / 1000}s after ${chunksReceived} chunks), content_length: ${content.length}`);
     }
     throw err;
