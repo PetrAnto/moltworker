@@ -265,10 +265,22 @@ Use \`github_list_files\` and \`github_read_file\` to read files related to the 
 If any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, split it into modules first (refactor PR using \`sandbox_exec\`) and defer the original task. Do NOT use \`github_create_pr\` for splitting — its identifier check blocks updates where most identifiers move to new files.
 
 ## Step 4: IMPLEMENT
-Use \`github_create_pr\` (simple changes) or \`sandbox_exec\` (complex: clone, build, test, push).
-- **Read files before modifying** — use \`github_read_file\` first, then provide COMPLETE updated content
+Use \`github_create_pr\` or \`sandbox_exec\` (complex: clone, build, test, push).
+
+**CRITICAL — Use "patch" action for editing existing files (especially files >100 lines):**
+- Read the file first with \`github_read_file\`
+- Use action \`"patch"\` with \`"patches"\` array of \`{"find":"exact text","replace":"new text"}\` pairs
+- Each "find" must match exactly once — copy the EXACT text from the file including whitespace
+- This prevents syntax errors, encoding changes, and unwanted rewrites that happen with "update"
+- Only use "update" (full file content) for small files (<100 lines) or when changes touch >50% of the file
+- Use "create" for new files
+
+Example patch: \`{"path":"src/App.jsx","action":"patch","patches":[{"find":"const data = [...]","replace":"import { data } from './data'"}]}\`
+
+**Other rules:**
 - **Surgical edits only** — preserve all existing functions/exports. The tool BLOCKS updates losing >60% of identifiers
 - Follow existing code conventions, proper types (no \`any\`)
+- Do NOT regenerate entire files from memory — you WILL introduce syntax errors and encoding changes
 
 If blocked (file too large, API errors): update WORK_LOG.md with status, report \`pr: FAILED\`.
 
@@ -294,7 +306,7 @@ summary: {1-2 sentence summary}
 ## Rules
 - **DO NOT ask for user confirmation or permission** — execute ALL steps immediately and autonomously
 - Always create a PR. One task per run. Update ROADMAP.md + WORK_LOG.md in same PR.
-- Never regenerate entire files. Never delete work log entries or roadmap tasks.
+- **USE "patch" ACTION for editing existing files** — never regenerate entire files from memory. Never delete work log entries or roadmap tasks.
 - Use "${modelAlias}" in branch names and commit messages.
 - You MUST produce an ORCHESTRA_RESULT: block with a real PR URL — the task is NOT complete without it
 ${historyContext}`;
@@ -961,18 +973,23 @@ Update the roadmap to reflect the split as a completed prerequisite task.
 - Include proper types (no \`any\`)
 - Write/fix tests if the repo has a test pattern
 
-### How to Update Existing Files
-To modify an existing file (append content, edit a section, etc.):
-1. **Read first**: Use \`github_read_file\` to get the current content
-2. **Modify in memory**: Add/change/remove the parts you need
-3. **Write full content**: Use \`github_create_pr\` with \`action: "update"\` and the COMPLETE modified content
-This is how you "append" to files — read the original, add new content at the end, provide the full result.
+### How to Edit Existing Files — USE PATCH ACTION
+**CRITICAL: Use action \`"patch"\` for all edits to existing files, especially files >100 lines.**
+
+The "patch" action applies surgical find/replace pairs WITHOUT regenerating the whole file:
+1. **Read first**: Use \`github_read_file\` to get the exact current content
+2. **Identify changes**: Determine the exact text sections that need to change
+3. **Use patch action**: \`{"path":"file.js","action":"patch","patches":[{"find":"exact text to find","replace":"replacement text"}]}\`
+4. Each "find" must match EXACTLY once — copy text verbatim from the file including whitespace and quotes
+
+This prevents: syntax errors from imperfect regeneration, encoding changes (\u2019 → '), unwanted component rewrites, feature regressions.
+
+Only use \`"update"\` (full content) for: small files (<100 lines), new files ("create"), or changes touching >50% of the file.
 
 ### CRITICAL — Surgical Edits Only
 **NEVER regenerate or rewrite an entire file from scratch.** This is the most common failure mode.
 - Make TARGETED, SURGICAL changes — add/modify/remove only the specific lines needed
 - ALL existing exports, functions, classes, and variables MUST be preserved unless the task explicitly requires removing them
-- Before writing file content, mentally verify: "Does my new version still contain every function and export from the original?"
 - If you cannot make targeted edits, STOP and do a file-splitting refactor first
 - The \`github_create_pr\` tool will BLOCK updates that lose more than 60% of original identifiers
 

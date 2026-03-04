@@ -1155,9 +1155,10 @@ describe('anti-rewrite rules in prompts', () => {
     expect(prompt).toContain('BLOCKS updates losing >60% of identifiers');
   });
 
-  it('run prompt rules section includes anti-rewrite rule', () => {
+  it('run prompt rules section includes patch action and anti-rewrite rule', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('Never regenerate entire files');
+    expect(prompt).toContain('USE "patch" ACTION');
+    expect(prompt).toContain('never regenerate entire files from memory');
   });
 
   it('redo prompt includes surgical edit instructions', () => {
@@ -1175,11 +1176,12 @@ describe('anti-rewrite rules in prompts', () => {
 // --- File update workflow instructions ---
 
 describe('file update workflow in prompts', () => {
-  it('run prompt includes file reading before modifying', () => {
+  it('run prompt includes patch action and file reading', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('Read files before modifying');
+    expect(prompt).toContain('patch');
     expect(prompt).toContain('github_read_file');
-    expect(prompt).toContain('COMPLETE updated content');
+    expect(prompt).toContain('find');
+    expect(prompt).toContain('replace');
   });
 
   it('run prompt explains the append workflow', () => {
@@ -1187,20 +1189,20 @@ describe('file update workflow in prompts', () => {
     expect(prompt).toContain('APPEND');
   });
 
-  it('redo prompt includes How to Update Existing Files section', () => {
+  it('redo prompt includes How to Edit Existing Files section with patch', () => {
     const prompt = buildRedoPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [], taskToRedo: 'fix auth' });
-    expect(prompt).toContain('How to Update Existing Files');
+    expect(prompt).toContain('How to Edit Existing Files');
+    expect(prompt).toContain('patch');
     expect(prompt).toContain('github_read_file');
-    expect(prompt).toContain('COMPLETE modified content');
   });
 
-  it('file reading comes before surgical edits in run prompt', () => {
+  it('patch instructions come before surgical edits in run prompt', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    const readIdx = prompt.indexOf('Read files before modifying');
+    const patchIdx = prompt.indexOf('patch');
     const surgicalIdx = prompt.indexOf('Surgical edits only');
-    expect(readIdx).toBeGreaterThan(0);
+    expect(patchIdx).toBeGreaterThan(0);
     expect(surgicalIdx).toBeGreaterThan(0);
-    expect(readIdx).toBeLessThan(surgicalIdx);
+    expect(patchIdx).toBeLessThan(surgicalIdx);
   });
 });
 
