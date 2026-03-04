@@ -1633,10 +1633,17 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           : estimatedCtx > 30000 ? 120000                  // 2min for 30K-60K tokens
           : estimatedCtx > 15000 ? 90000                   // 90s for 15K-30K tokens
           : 45000;                                          // 45s default
+        // Provider-aware multiplier: some direct APIs (Moonshot/Kimi, DashScope/Qwen)
+        // have high time-to-first-token due to deep reasoning. Without this, their
+        // inter-chunk pauses exceed the idle timeout, causing STREAM_READ_TIMEOUT
+        // on every iteration and exhausting auto-resume budget with minimal progress.
+        const providerMultiplier = provider === 'moonshot' ? 2.5
+          : provider === 'dashscope' ? 1.5
+          : 1.0;
         // Paid models: minimum 90s even for small contexts (they handle complex tasks)
-        const idleTimeout = isPaid ? Math.max(baseTimeout, 90000) : baseTimeout;
+        const idleTimeout = isPaid ? Math.max(baseTimeout * providerMultiplier, 90000) : baseTimeout;
         if (idleTimeout > 45000) {
-          console.log(`[TaskProcessor] Scaled idle timeout: ${idleTimeout / 1000}s (estimated ${estimatedCtx} tokens, ${isPaid ? 'paid' : 'free'})`);
+          console.log(`[TaskProcessor] Scaled idle timeout: ${idleTimeout / 1000}s (estimated ${estimatedCtx} tokens, ${isPaid ? 'paid' : 'free'}${providerMultiplier > 1 ? `, ${provider} ×${providerMultiplier}` : ''})`);
         }
 
         // 7B.1: Create speculative executor for this iteration
