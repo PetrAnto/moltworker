@@ -1356,14 +1356,45 @@ async function githubCreatePr(
                 .filter(l => l.trim().startsWith('|') && !l.trim().match(/^\|[-\s|]+\|$/) && !l.includes('Date'))
                 .map(l => l.trim());
 
+            // Extract key cell values from a table row for fuzzy matching.
+            // Models often reformat rows (change column order, encode emojis differently),
+            // but the core data (dates, branch names, PR numbers) should survive.
+            const extractKeyCells = (row: string): string[] =>
+              row.split('|')
+                .map(c => c.trim())
+                .filter(c => c.length > 0)
+                // Extract distinct tokens: dates, branch names, PR refs
+                .flatMap(c => c.match(/\b(?:\d{4}-\d{2}-\d{2}|bot\/[\w-]+|claude\/[\w-]+|PR\s*#\d+|#\d+)\b/g) || []);
+
             const originalRows = extractDataRows(originalContent);
             const newRows = extractDataRows(change.content);
 
-            // Check that all original rows still exist in the new content
+            // Check that all original rows still exist in the new content.
+            // Use fuzzy matching: an original row is "preserved" if a new row
+            // contains all its key data tokens (dates, branches, PR numbers),
+            // OR if the exact whitespace-normalized text matches.
             const missingRows = originalRows.filter(row => {
-              // Normalize whitespace for comparison
               const normalized = row.replace(/\s+/g, ' ');
-              return !newRows.some(nr => nr.replace(/\s+/g, ' ') === normalized);
+              // Exact match (with whitespace normalization)
+              if (newRows.some(nr => nr.replace(/\s+/g, ' ') === normalized)) return false;
+              // Fuzzy match: check if key data tokens from original row appear in any new row
+              const keys = extractKeyCells(row);
+              if (keys.length >= 2) {
+                const matched = newRows.some(nr =>
+                  keys.every(k => nr.includes(k))
+                );
+                if (matched) return false;
+              }
+              // Substring match: check if a significant portion of the original row text
+              // appears in any new row (handles column reordering / minor reformatting)
+              const cells = row.split('|').map(c => c.trim()).filter(c => c.length > 5);
+              if (cells.length >= 2) {
+                const cellsMatched = newRows.some(nr =>
+                  cells.filter(c => nr.includes(c)).length >= Math.ceil(cells.length * 0.6)
+                );
+                if (cellsMatched) return false;
+              }
+              return true;
             });
 
             if (missingRows.length > 0) {

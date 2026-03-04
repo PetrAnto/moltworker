@@ -550,6 +550,48 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   }
 
   /**
+   * Update R2 orchestra history when a task fails.
+   * Without this, failed tasks stay at 'started' forever in the history.
+   */
+  private async updateOrchestraHistoryOnFailure(task: TaskState, failureReason: string): Promise<void> {
+    if (!this.r2) return;
+    try {
+      // Detect if this was an orchestra task from the messages
+      const systemMsg = task.messages.find(m => m.role === 'system');
+      const sysContent = typeof systemMsg?.content === 'string' ? systemMsg.content : '';
+      const isOrchestra = sysContent.includes('Orchestra INIT Mode') || sysContent.includes('Orchestra RUN Mode') || sysContent.includes('Orchestra REDO Mode');
+      if (!isOrchestra) return;
+
+      const orchestraMode = sysContent.includes('Orchestra INIT Mode') ? 'init' as const : 'run' as const;
+      const repoMatch = sysContent.match(/Full:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/);
+      const repo = repoMatch ? repoMatch[1] : 'unknown/unknown';
+      const userMsg = task.messages.find(m => m.role === 'user');
+      const prompt = typeof userMsg?.content === 'string' ? userMsg.content : '';
+
+      // Try to extract branch from task result or messages
+      const branchMatch = (task.result || '').match(/branch:\s*(\S+)/) || sysContent.match(/Branch:\s*`([^`]+)`/);
+      const branch = branchMatch ? branchMatch[1] : '';
+
+      const failedTask: OrchestraTask = {
+        taskId: task.taskId,
+        timestamp: Date.now(),
+        modelAlias: task.modelAlias,
+        repo,
+        mode: orchestraMode,
+        prompt: prompt.substring(0, 200),
+        branchName: branch,
+        status: 'failed',
+        filesChanged: [],
+        summary: `FAILED: ${failureReason}`,
+      };
+      await storeOrchestraTask(this.r2, task.userId, failedTask);
+      console.log(`[TaskProcessor] Orchestra failure recorded: ${repo} — ${failureReason}`);
+    } catch (orchErr) {
+      console.error('[TaskProcessor] Failed to update orchestra history on failure:', orchErr);
+    }
+  }
+
+  /**
    * Alarm handler - acts as a watchdog to detect stuck/crashed tasks
    * This fires even if the DO was terminated and restarted by Cloudflare
    */
@@ -659,10 +701,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         console.log(`[TaskProcessor] No real progress since last resume: ${reason} (stall ${noProgressResumes}/${MAX_NO_PROGRESS_RESUMES})`);
 
         if (noProgressResumes >= MAX_NO_PROGRESS_RESUMES) {
-          console.log(`[TaskProcessor] Task stalled: ${noProgressResumes} consecutive resumes with no progress`);
+          const stallReason = `Task stalled: no progress across ${noProgressResumes} auto-resumes (${task.iterations} iterations, ${toolCountNow} tools)`;
+          console.log(`[TaskProcessor] ${stallReason}`);
           task.status = 'failed';
-          task.error = `Task stalled: no real progress across ${noProgressResumes} auto-resumes (${task.iterations} iterations, ${toolCountNow} tools total). The model may not be capable of this task.`;
+          task.error = `${stallReason}. The model may not be capable of this task.`;
           await this.doState.storage.put('task', task);
+
+          // Update orchestra history so failed tasks don't stay at 'started' forever
+          await this.updateOrchestraHistoryOnFailure(task, stallReason);
 
           if (task.telegramToken) {
             await this.sendTelegramMessageWithButtons(
@@ -724,9 +770,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     // Auto-resume disabled or limit reached - mark as failed and notify user
+    const failureReason = resumeCount >= maxResumes
+      ? `Auto-resume limit (${maxResumes}) reached after ${elapsed}s`
+      : `Task stopped unexpectedly after ${elapsed}s (no auto-resume)`;
     task.status = 'failed';
-    task.error = 'Task stopped unexpectedly (API timeout or network issue)';
+    task.error = failureReason;
     await this.doState.storage.put('task', task);
+
+    // Update orchestra history so failed tasks don't stay at 'started' forever
+    await this.updateOrchestraHistoryOnFailure(task, failureReason);
 
     if (task.telegramToken) {
       const limitReachedMsg = resumeCount >= maxResumes
@@ -2701,10 +2753,34 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           }
         }
 
-        // Orchestra result tracking: if the response contains ORCHESTRA_RESULT, update history
+        // Orchestra result tracking: if the response contains ORCHESTRA_RESULT, update history.
+        // Also fallback to extracting PR URLs from tool results when model doesn't produce the block.
         if (this.r2 && task.result) {
           try {
-            const rawOrchestraResult = parseOrchestraResult(task.result);
+            let rawOrchestraResult = parseOrchestraResult(task.result);
+
+            // Fallback: if no ORCHESTRA_RESULT block but tool results contain a successful PR URL,
+            // construct a synthetic result so orchestra history gets updated
+            if (!rawOrchestraResult) {
+              const toolOutputs = conversationMessages
+                .filter(m => m.role === 'tool')
+                .map(m => typeof m.content === 'string' ? m.content : '');
+              const prSuccessOutput = toolOutputs.find(o => o.includes('Pull Request created successfully'));
+              if (prSuccessOutput) {
+                const prUrlMatch = prSuccessOutput.match(/PR:\s*(https:\/\/github\.com\/[^\s]+)/);
+                const branchMatch = prSuccessOutput.match(/Branch:\s*(\S+)/);
+                if (prUrlMatch) {
+                  console.log('[TaskProcessor] Fallback orchestra result: extracted PR URL from tool output');
+                  rawOrchestraResult = {
+                    branch: branchMatch ? branchMatch[1] : '',
+                    prUrl: prUrlMatch[1],
+                    files: [],
+                    summary: '(Auto-extracted from tool output — model did not produce ORCHESTRA_RESULT block)',
+                  };
+                }
+              }
+            }
+
             if (rawOrchestraResult) {
               // Fix 3: Cross-reference tool results — detect phantom PRs where model
               // claims success but github_create_pr actually failed
@@ -2947,6 +3023,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       // Cancel watchdog alarm - we're handling the error here
       await this.doState.storage.deleteAlarm();
+
+      // Update orchestra history so failed tasks don't stay at 'started' forever
+      await this.updateOrchestraHistoryOnFailure(task, task.error);
 
       // Store failure learning (only if task made progress)
       if (this.r2 && task.iterations > 0) {

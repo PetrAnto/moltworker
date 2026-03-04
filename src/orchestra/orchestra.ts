@@ -151,10 +151,12 @@ Key rules for the roadmap:
   **Use \`sandbox_exec\` for splitting** — \`github_create_pr\` cannot split files because its identifier check blocks updates where >60% of identifiers move to new files.
 
 ### Step 4: CREATE or UPDATE WORK_LOG.md
-**CRITICAL — WORK_LOG.md is APPEND-ONLY:**
+**CRITICAL — WORK_LOG.md is APPEND-ONLY and FORMAT-PRESERVING:**
 - If WORK_LOG.md already exists, use \`github_read_file\` to get its current content first
-- KEEP ALL existing rows exactly as they are — do NOT delete or modify any existing rows
-- APPEND your new row at the bottom of the table
+- **PRESERVE THE EXISTING TABLE FORMAT** — do NOT change column headers or restructure existing rows
+- KEEP ALL existing rows BYTE-FOR-BYTE identical — do NOT reformat, reorder columns, or re-encode characters
+- APPEND your new row at the bottom of the table, matching the EXISTING column format exactly
+- For your new row: fill in columns that match what you have (date, task, branch, status, etc.) — leave others as "-" if the column doesn't apply
 - If the file doesn't exist, create it with this template:
 
 \`\`\`markdown
@@ -180,7 +182,7 @@ Key rules for the roadmap:
 **CRITICAL** — After calling \`github_create_pr\`, CHECK THE TOOL RESULT:
 - If it returned a PR URL (https://github.com/...) → success, proceed to Step 6
 - If it returned an error (422, 403, etc.) → FIX AND RETRY with a different branch name
-- If it returned "AUDIT TRAIL VIOLATION" → you deleted existing WORK_LOG.md rows. Re-read the file with \`github_read_file\`, include ALL existing rows, and APPEND your new row at the bottom.
+- If it returned "AUDIT TRAIL VIOLATION" → you modified existing WORK_LOG.md rows. Re-read the file with \`github_read_file\`, use the EXACT content as-is (do NOT reformat or restructure the table), and ONLY append your new row at the bottom matching the existing column format.
 - **NEVER claim you created a PR if the tool returned an error.**
 
 ### Step 6: REPORT
@@ -272,7 +274,7 @@ If blocked (file too large, API errors): update WORK_LOG.md with status, report 
 
 ## Step 5: UPDATE ROADMAP & WORK LOG (in same PR)
 - **ROADMAP.md**: Change ONLY your completed task from \`- [ ]\` to \`- [x]\`. Never delete tasks.
-- **WORK_LOG.md**: APPEND a row: \`| {date} | {task} | ${modelAlias} | {branch} | {pr-url} | ✅ |\`. Never delete existing rows.
+- **WORK_LOG.md**: Read the existing file first. KEEP ALL existing content BYTE-FOR-BYTE identical. APPEND a new row at the bottom matching the EXISTING column format. Do NOT restructure the table or change column headers. If the existing format differs from what you expect, match it exactly.
 
 ## Step 6: CREATE PR
 - Branch: \`${branch}\` (bot/ prefix added automatically)
@@ -328,7 +330,10 @@ export function parseOrchestraResult(response: string): {
   files: string[];
   summary: string;
 } | null {
-  const match = response.match(/ORCHESTRA_RESULT:\s*\n([\s\S]*?)(?:```|$)/);
+  // Try multiple patterns — models format this block inconsistently
+  const match = response.match(/ORCHESTRA_RESULT:\s*\n([\s\S]*?)(?:```|$)/)
+    || response.match(/ORCHESTRA_RESULT:\s*([\s\S]*?)(?:```|$)/)
+    || response.match(/ORCHESTRA.RESULT[:\s]+([\s\S]*?)(?:```|$)/i);
   if (!match) return null;
 
   const block = match[1];
@@ -985,7 +990,9 @@ In the SAME PR:
 - Add a note: "(redone)" next to the task
 
 **WORK_LOG.md update:**
-- Append: \`| {date} | REDO: {task title} | ${modelAlias} | {branch} | {pr-url} | ✅ |\`
+- Read the existing file first. KEEP ALL existing content BYTE-FOR-BYTE identical.
+- APPEND a new row at the bottom matching the EXISTING column format exactly.
+- Do NOT restructure the table or change column headers. Fill in columns that match what you have.
 - **APPEND ONLY** — NEVER delete or modify existing work log rows (immutable audit trail)
 
 ## Step 5: CREATE PR
