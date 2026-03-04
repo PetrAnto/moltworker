@@ -313,6 +313,51 @@ const MAX_SAME_TOOL_REPEATS = 3;
 const MAX_TOTAL_TOOLS_FREE = 50;
 const MAX_TOTAL_TOOLS_PAID = 100;
 
+interface ProviderErrorInfo {
+  status: number;
+  body: string;
+  message: string;
+}
+
+async function parseProviderError(response: Response): Promise<ProviderErrorInfo> {
+  const fallback = `${response.status} ${response.statusText}`.trim();
+  let body = await response.text().catch(() => 'unknown error');
+  if (!body || !body.trim()) body = fallback;
+
+  let parsedMessage: string | undefined;
+  try {
+    const payload = JSON.parse(body) as {
+      error?: { message?: string; code?: string | number } | string;
+      message?: string;
+      msg?: string;
+      code?: string | number;
+      request_id?: string;
+    };
+    if (typeof payload.error === 'string') {
+      parsedMessage = payload.error;
+    } else {
+      parsedMessage = payload.error?.message ?? payload.message ?? payload.msg;
+      if (payload.error?.code && parsedMessage) {
+        parsedMessage = `${parsedMessage} (code: ${String(payload.error.code)})`;
+      } else if (payload.code && parsedMessage) {
+        parsedMessage = `${parsedMessage} (code: ${String(payload.code)})`;
+      }
+      if (payload.request_id && parsedMessage) {
+        parsedMessage = `${parsedMessage} (request_id: ${payload.request_id})`;
+      }
+    }
+  } catch {
+    // non-JSON body; keep raw text
+  }
+
+  const message = parsedMessage || body;
+  return {
+    status: response.status,
+    body,
+    message: message.slice(0, 500),
+  };
+}
+
 /** Get the auto-resume limit based on model cost */
 function getAutoResumeLimit(modelAlias: string): number {
   const model = getModel(modelAlias);
@@ -687,7 +732,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const maxResumes = getAutoResumeLimit(task.modelAlias);
 
     // Check if auto-resume is enabled and under limit
-    if (task.autoResume && resumeCount < maxResumes && task.telegramToken && task.openrouterKey) {
+    const hasAnyProviderKey = !!(task.openrouterKey || task.deepseekKey || task.moonshotKey || task.dashscopeKey);
+    if (task.autoResume && resumeCount < maxResumes && task.telegramToken && hasAnyProviderKey) {
       // --- STALL DETECTION ---
       // Two layers:
       // 1. Raw tool count: no new tool calls at all → obvious stall
@@ -766,7 +812,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         modelAlias: task.modelAlias,
         messages: task.messages,
         telegramToken: task.telegramToken,
-        openrouterKey: task.openrouterKey,
+        openrouterKey: task.openrouterKey || '',
         githubToken: task.githubToken,
         braveSearchKey: task.braveSearchKey,
         cloudflareApiToken: task.cloudflareApiToken,
@@ -1690,10 +1736,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // inter-chunk pauses exceed the idle timeout, causing STREAM_READ_TIMEOUT
         // on every iteration and exhausting auto-resume budget with minimal progress.
         const providerMultiplier = provider === 'moonshot' ? 2.5
+          : provider === 'deepseek' ? 1.8
           : provider === 'dashscope' ? 1.5
           : 1.0;
+        // Apply provider multiplier to both free and paid models.
+        // Free direct providers (esp. DeepSeek/Moonshot) can have long first-token
+        // and inter-chunk delays that otherwise trip idle timeouts.
+        const scaledTimeout = baseTimeout * providerMultiplier;
         // Paid models: minimum 90s even for small contexts (they handle complex tasks)
-        const idleTimeout = isPaid ? Math.max(baseTimeout * providerMultiplier, 90000) : baseTimeout;
+        const idleTimeout = isPaid ? Math.max(scaledTimeout, 90000) : scaledTimeout;
         if (idleTimeout > 45000) {
           console.log(`[TaskProcessor] Scaled idle timeout: ${idleTimeout / 1000}s (estimated ${estimatedCtx} tokens, ${isPaid ? 'paid' : 'free'}${providerMultiplier > 1 ? `, ${provider} ×${providerMultiplier}` : ''})`);
         }
@@ -1813,8 +1864,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               }
 
               if (!response.ok) {
-                const errorText = await response.text().catch(() => 'unknown error');
-                throw new Error(`${provider} API error (${response.status}): ${errorText.slice(0, 200)}`);
+                const providerError = await parseProviderError(response);
+                throw new Error(`${provider} API error (${providerError.status}): ${providerError.message}`);
               }
 
               if (!response.body) {
@@ -1878,8 +1929,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               const afterTokens = this.estimateTokens(compressed);
               console.log(`[TaskProcessor] 400 Input validation — compressing context: ${beforeLen}→${compressed.length} msgs, ~${beforeTokens}→${afterTokens} tokens`);
 
-              if (compressed.length < beforeLen) {
-                // Context was compressible — replace and retry
+              if (compressed.length < beforeLen || afterTokens < beforeTokens) {
+                // Context was compressible — replace and retry.
+                // Token reduction can happen even when message count stays flat
+                // (e.g., long tool outputs truncated in-place), so check both.
                 conversationMessages.length = 0;
                 conversationMessages.push(...compressed);
                 continue; // Retry with compressed context (same attempt slot)

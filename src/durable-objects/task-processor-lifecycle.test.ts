@@ -615,6 +615,46 @@ describe('TaskProcessor lifecycle', () => {
       // Alarm should have been rescheduled (via setAlarm in the catch block)
       expect(mockState.storage.setAlarm).toHaveBeenCalled();
     });
+
+    it('should auto-resume when only direct-provider key is available', async () => {
+      const mockState = createMockState();
+      const processor = new TaskProcessorClass(mockState as never, {} as never);
+      const processSpy = vi.spyOn(processor as any, 'processTask').mockResolvedValue(undefined);
+
+      await mockState.storage.put('task', {
+        taskId: 'test-task-direct-key',
+        status: 'processing',
+        startTime: Date.now() - 5 * 60 * 1000,
+        lastUpdate: Date.now() - 5 * 60 * 1000,
+        iterations: 2,
+        modelAlias: 'deep',
+        messages: [{ role: 'user', content: 'resume me' }],
+        toolsUsed: [],
+        chatId: 12345,
+        userId: 'user-1',
+        telegramToken: 'fake-telegram',
+        openrouterKey: '',
+        deepseekKey: 'fake-deepseek-key',
+        moonshotKey: '',
+        dashscopeKey: '',
+        autoResume: true,
+        autoResumeCount: 0,
+      });
+
+      vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ ok: true, result: { message_id: 1000 } }),
+        text: () => Promise.resolve(JSON.stringify({ ok: true, result: { message_id: 1000 } })),
+      })));
+
+      await processor.alarm();
+
+      expect(mockState.waitUntil).toHaveBeenCalled();
+      expect(processSpy).toHaveBeenCalled();
+
+      const task = mockState.storage._store.get('task') as Record<string, unknown>;
+      expect(task.autoResumeCount).toBe(1);
+    });
   });
 
   describe('isRunning lock', () => {

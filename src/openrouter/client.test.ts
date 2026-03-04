@@ -256,6 +256,23 @@ describe('parseSSEStream onToolCallReady', () => {
     expect(result.choices[0].message.tool_calls).toHaveLength(1);
   });
 
+
+
+  it('clears per-read timeout timers while parsing SSE chunks', async () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    const stream = sseStream([
+      sseLine({ choices: [{ delta: { content: 'chunk-1' } }] }),
+      sseLine({ choices: [{ delta: { content: 'chunk-2' } }] }),
+      sseLine({ choices: [{ finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
+      'data: [DONE]\n\n',
+    ]);
+
+    await parseSSEStream(stream, 5000);
+
+    expect(clearSpy).toHaveBeenCalled();
+  });
+
   it('handles three tool calls fired in correct order', async () => {
     const firedIds: string[] = [];
 

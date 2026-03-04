@@ -5,6 +5,42 @@
 ---
 
 
+
+## Session: 2026-03-04 | Task execution pipeline deep audit + hardening (Session: codex-task-pipeline-audit-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Audited and hardened the DO task execution pipeline across streaming reliability, watchdog auto-resume behavior, timeout leak cleanup, provider error parsing, and context compression retry gating.
+
+### Changes Made
+- Fixed SSE per-read timeout cleanup in `parseSSEStream()` to avoid orphan timers
+- Hardened direct-provider path with structured provider error parsing (`parseProviderError`)
+- Expanded direct-provider timeout scaling (including DeepSeek and free-model path)
+- Fixed watchdog auto-resume eligibility to work with direct-provider-only API keys
+- Improved context compression retry trigger to use token reduction (not only message-count reduction)
+- Added regression tests for timeout cleanup and direct-provider-key alarm resume
+- Added audit report documenting file map, error history, findings, and deliverables
+
+### Files Modified
+- `src/openrouter/client.ts`
+- `src/openrouter/client.test.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor-lifecycle.test.ts`
+- `docs/task-execution-pipeline-audit-2026-03.md`
+
+### Tests
+- [x] Targeted tests pass
+- [x] Full test suite passes
+- [x] Typecheck passes
+
+### Notes for Next Session
+If provider-level failures continue, consider promoting provider-specific error codes to a typed classifier enum instead of regex over normalized messages.
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

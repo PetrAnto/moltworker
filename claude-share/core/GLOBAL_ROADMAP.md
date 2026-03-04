@@ -478,6 +478,7 @@
 
 ## Changelog
 
+2026-03-04 | Codex (Session: codex-task-pipeline-audit-001) | fix(task-processor+streaming): deep audit hardening — clear SSE read timeouts, parse provider error formats, broaden direct-provider idle timeout scaling, allow auto-resume with direct-provider keys, retry on token-only compression, add regression tests + audit report | src/openrouter/client.ts, src/openrouter/client.test.ts, src/durable-objects/task-processor.ts, src/durable-objects/task-processor-lifecycle.test.ts, docs/task-execution-pipeline-audit-2026-03.md
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
