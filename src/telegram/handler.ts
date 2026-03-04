@@ -39,6 +39,8 @@ import {
   getModelId,
   formatModelsList,
   formatModelInfoCard,
+  formatModelHub,
+  formatModelRanking,
   supportsVision,
   isImageGenModel,
   DEFAULT_MODEL,
@@ -778,23 +780,17 @@ export class TelegramHandler {
         break;
 
       case '/models':
+        // Legacy alias — same as /model list
         await this.bot.sendMessage(chatId, formatModelsList());
         break;
 
       case '/use':
+        // Legacy alias — same as /model use
         await this.handleUseCommand(chatId, userId, username, args);
         break;
 
       case '/model':
-        const currentModel = await this.storage.getUserModel(userId);
-        const modelInfo = getModel(currentModel);
-        await this.bot.sendMessage(
-          chatId,
-          `Current model: ${modelInfo?.name || currentModel}\n` +
-          `Alias: /${currentModel}\n` +
-          `${modelInfo?.specialty || ''}\n` +
-          `Cost: ${modelInfo?.cost || 'N/A'}`
-        );
+        await this.handleModelCommand(chatId, userId, username, args);
         break;
 
       case '/clear':
@@ -938,7 +934,7 @@ export class TelegramHandler {
         break;
 
       case '/pick':
-        // Show model picker with inline buttons
+        // Legacy alias — same as /model pick
         await this.sendModelPicker(chatId);
         break;
 
@@ -1222,10 +1218,12 @@ export class TelegramHandler {
         break;
 
       case '/modelinfo':
+        // Legacy alias — same as /model info
         await this.handleModelInfoCommand(chatId, args);
         break;
 
       case '/enrich':
+        // Legacy alias — same as /model enrich
         await this.handleEnrichCommand(chatId);
         break;
 
@@ -1242,6 +1240,7 @@ export class TelegramHandler {
       }
 
       case '/modelupdate':
+        // Legacy alias — same as /model update
         await this.handleModelUpdateCommand(chatId, args);
         break;
 
@@ -3724,6 +3723,71 @@ export class TelegramHandler {
   }
 
   /**
+   * Handle /model — unified model hub with subcommands.
+   *
+   * Subcommands:
+   *   (none)          — Overview: current model + stats + subcommand guide
+   *   list            — Full catalog with prices (was /models)
+   *   pick            — Inline button picker (was /pick)
+   *   info <alias>    — Detailed capability card (was /modelinfo)
+   *   rank            — Orchestra/capability ranking
+   *   use <alias>     — Switch model (was /use)
+   *   update ...      — Patch model live (was /modelupdate)
+   *   enrich          — Fetch AA benchmarks (was /enrich)
+   */
+  private async handleModelCommand(
+    chatId: number,
+    userId: string,
+    username: string | undefined,
+    args: string[],
+  ): Promise<void> {
+    const sub = args[0]?.toLowerCase();
+
+    if (!sub) {
+      // /model — hub overview
+      const currentAlias = await this.storage.getUserModel(userId);
+      await this.bot.sendMessage(chatId, formatModelHub(currentAlias));
+      return;
+    }
+
+    switch (sub) {
+      case 'list':
+        await this.bot.sendMessage(chatId, formatModelsList());
+        break;
+
+      case 'pick':
+        await this.sendModelPicker(chatId);
+        break;
+
+      case 'info':
+        await this.handleModelInfoCommand(chatId, args.slice(1));
+        break;
+
+      case 'rank':
+      case 'ranking':
+        await this.bot.sendMessage(chatId, formatModelRanking());
+        break;
+
+      case 'use':
+        await this.handleUseCommand(chatId, userId, username, args.slice(1));
+        break;
+
+      case 'update':
+        await this.handleModelUpdateCommand(chatId, args.slice(1));
+        break;
+
+      case 'enrich':
+        await this.handleEnrichCommand(chatId);
+        break;
+
+      default:
+        // Treat unknown subcommand as /model info <alias> for convenience
+        await this.handleModelInfoCommand(chatId, [sub]);
+        break;
+    }
+  }
+
+  /**
    * Handle /modelinfo <alias> — show detailed capability card for a model.
    */
   private async handleModelInfoCommand(chatId: number, args: string[]): Promise<void> {
@@ -4445,10 +4509,12 @@ Each /orch next picks up where the last one left off.`;
     return `📖 Moltworker — Command Reference
 
 ━━━ Core ━━━
-/use <alias> — Set your model (e.g. /use deep)
-/pick — Model picker (buttons)
-/model — Show current model
-/models — Full model catalog with prices
+/model — Model hub (overview + all subcommands)
+/model list — Full catalog with prices
+/model pick — Quick picker (buttons)
+/model info <alias> — Detailed capability card
+/model rank — Orchestra/capability ranking
+/model use <alias> — Switch model
 /new or /clear — Reset conversation
 /cancel — Stop a running task
 /status — Bot status
@@ -4486,14 +4552,12 @@ Available: fluxklein, fluxpro, fluxflex, fluxmax
 Paid:  /deep /grok /gpt /sonnet /haiku /flash /mimo
 Free:  /trinity /deepfree /qwencoderfree /devstral
 Direct: /dcode /dreason /q3coder /kimidirect
-All:   /models for full list
+All:   /model list
+/model update <alias> key=val — Patch a model without deploy
+/model enrich — Fetch AA benchmarks + verify capabilities
 /syncmodels — Fetch latest free models (interactive picker)
 /syncall — Full catalog sync + top 20 recommendations
 /synccheck — Check for updates (actionable: apply price changes)
-/enrich — Fetch AA benchmark data + verify capabilities
-/modelinfo <alias> — Detailed model capability card
-/modelupdate <alias> key=val — Patch a model without deploy
-/modelupdate list — Show active overrides
 
 ━━━ Cloudflare API ━━━
 /cloudflare search <query> — Search CF API endpoints

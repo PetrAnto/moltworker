@@ -1165,8 +1165,164 @@ export function formatModelsList(): string {
   lines.push('\n━━━ Legend ━━━');
   lines.push('🏆=best $/perf  ⭐=strong value  ✅=solid  💎=flagship  ⚠️=outdated');
   lines.push('👁️=vision  🔧=tools  🎼=orchestra  Cost: $input/$output per M tokens');
-  lines.push('🧠=AA Intelligence Index  Use /modelinfo <alias> for details');
-  lines.push('Usage: /use <alias> or /<alias>');
+  lines.push('🧠=AA Intelligence Index  Use /model info <alias> for details');
+  lines.push('Usage: /model use <alias> or /<alias>');
+
+  return lines.join('\n');
+}
+
+/**
+ * Format the /model hub — one-stop overview with subcommand guide.
+ */
+export function formatModelHub(currentAlias: string): string {
+  const lines: string[] = [];
+  const model = getModel(currentAlias);
+  const all = Object.values(getAllModels());
+  const chatModels = all.filter(m => !m.isImageGen);
+
+  // Current model
+  lines.push('🤖 Model Hub\n');
+  if (model) {
+    const caps = [
+      model.supportsTools && '🔧',
+      model.supportsVision && '👁️',
+      model.structuredOutput && '📋',
+      model.parallelCalls && '⚡',
+    ].filter(Boolean).join('');
+    const tier = model.isFree ? '🆓' : VALUE_TIER_LABELS[getValueTier(model)] || '✅';
+    lines.push(`${tier} Active: ${model.name} (/${model.alias}) ${caps}`);
+    lines.push(`   ${model.specialty} — ${model.cost}`);
+    if (model.reasoning) lines.push(`   Reasoning: ${model.reasoning}`);
+  } else {
+    lines.push(`Active: /${currentAlias} (unknown model)`);
+  }
+
+  // Quick stats
+  const freeCount = chatModels.filter(m => m.isFree).length;
+  const paidCount = chatModels.filter(m => !m.isFree).length;
+  const toolCount = chatModels.filter(m => m.supportsTools).length;
+  lines.push(`\n📊 ${chatModels.length} models (${freeCount} free, ${paidCount} paid, ${toolCount} with tools)`);
+
+  // Top picks — 3 best free + 3 best paid by orchestra score
+  const orchRecs = getOrchestraRecommendations();
+  if (orchRecs.free.length > 0) {
+    const topFree = orchRecs.free.slice(0, 3).map(r => `/${r.alias}`).join('  ');
+    lines.push(`\n🆓 Top free: ${topFree}`);
+  }
+  if (orchRecs.paid.length > 0) {
+    const topPaid = orchRecs.paid.slice(0, 3).map(r => `/${r.alias}`).join('  ');
+    lines.push(`💎 Top paid: ${topPaid}`);
+  }
+
+  // Subcommands
+  lines.push('\n━━━ Commands ━━━');
+  lines.push('/model list        — Full catalog with prices');
+  lines.push('/model pick        — Quick picker (buttons)');
+  lines.push('/model info <name> — Detailed capability card');
+  lines.push('/model rank        — Orchestra/capability ranking');
+  lines.push('/model use <name>  — Switch model');
+  lines.push('/model update ...  — Patch model live');
+  lines.push('/model enrich      — Fetch benchmarks & verify');
+  lines.push('\nTip: /<alias> is a shortcut to switch (e.g. /deep)');
+
+  return lines.join('\n');
+}
+
+/**
+ * Format capability ranking — models sorted by orchestra readiness and intelligence.
+ * Shows a clear tier list for demanding tasks.
+ */
+export function formatModelRanking(): string {
+  const lines: string[] = [];
+  lines.push('🏅 Model Ranking — Orchestra & Capability\n');
+
+  const all = Object.values(getAllModels());
+  const chatModels = all.filter(m => !m.isImageGen && m.supportsTools);
+
+  // Score each model comprehensively
+  interface RankedModel {
+    m: ModelInfo;
+    score: number;
+    tier: string;
+  }
+
+  const ranked: RankedModel[] = chatModels.map(m => {
+    let score = 0;
+    const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
+
+    // AA intelligence index (most reliable signal)
+    if (m.intelligenceIndex) score += m.intelligenceIndex * 2;
+
+    // SWE-Bench (real-world coding benchmark)
+    const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
+    if (sweMatch) score += parseFloat(sweMatch[1]);
+
+    // Agentic capability
+    if (/agentic/i.test(lower)) score += 20;
+    if (/multi-?file/i.test(lower)) score += 15;
+    if (/coding/i.test(lower)) score += 10;
+
+    // Feature flags
+    if (m.parallelCalls) score += 5;
+    if (m.structuredOutput) score += 5;
+    if (m.supportsVision) score += 3;
+    if ((m.maxContext || 0) >= 200000) score += 5;
+    if (m.reasoning) score += 5;
+
+    // Penalty for small models
+    if (/\b(mini|small|lite|nano)\b/i.test(m.name)) score -= 15;
+
+    return { m, score, tier: '' };
+  });
+
+  ranked.sort((a, b) => b.score - a.score);
+
+  // Assign tiers
+  for (let i = 0; i < ranked.length; i++) {
+    if (i < 5) ranked[i].tier = '🥇';
+    else if (i < 10) ranked[i].tier = '🥈';
+    else if (i < 18) ranked[i].tier = '🥉';
+    else ranked[i].tier = '  ';
+  }
+
+  // Group: free vs paid
+  const freeRanked = ranked.filter(r => r.m.isFree);
+  const paidRanked = ranked.filter(r => !r.m.isFree);
+
+  const formatRankLine = (r: RankedModel, idx: number): string => {
+    const caps = [
+      r.m.parallelCalls && '⚡',
+      r.m.structuredOutput && '📋',
+      r.m.supportsVision && '👁️',
+      r.m.reasoning && '🧠',
+    ].filter(Boolean).join('');
+    const ctx = r.m.maxContext
+      ? r.m.maxContext >= 1048576
+        ? `${(r.m.maxContext / 1048576).toFixed(0)}M`
+        : `${Math.round(r.m.maxContext / 1024)}K`
+      : '?';
+    const aaStr = r.m.intelligenceIndex ? ` AA:${r.m.intelligenceIndex.toFixed(0)}` : '';
+    return `${r.tier} ${idx}. /${r.m.alias} ${caps} ${ctx}${aaStr} ${r.m.cost}`;
+  };
+
+  if (paidRanked.length > 0) {
+    lines.push('💎 PAID (best for orchestra/complex tasks):');
+    paidRanked.slice(0, 12).forEach((r, i) => lines.push(formatRankLine(r, i + 1)));
+    lines.push('');
+  }
+
+  if (freeRanked.length > 0) {
+    lines.push('🆓 FREE (best free options):');
+    freeRanked.slice(0, 8).forEach((r, i) => lines.push(formatRankLine(r, i + 1)));
+    lines.push('');
+  }
+
+  lines.push('━━━ Legend ━━━');
+  lines.push('⚡=parallel  📋=structured  👁️=vision  🧠=reasoning');
+  lines.push('AA = Artificial Analysis Intelligence Index');
+  lines.push('🥇=top 5  🥈=top 10  🥉=top 18');
+  lines.push('\nUse /model info <alias> for full details');
+  lines.push('Use /model enrich to update benchmark data');
 
   return lines.join('\n');
 }
