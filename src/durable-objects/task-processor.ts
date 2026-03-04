@@ -320,6 +320,60 @@ function getAutoResumeLimit(modelAlias: string): number {
 }
 
 /**
+ * Parse a structured error from a provider API response.
+ * Extracts error codes and request_ids for better diagnostics.
+ */
+function parseProviderError(status: number, rawText: string): { status: number; message: string } {
+  let parsedMessage: string | undefined;
+  try {
+    const payload = JSON.parse(rawText) as {
+      error?: { message?: string; code?: string | number } | string;
+      message?: string;
+      msg?: string;
+      code?: string | number;
+      request_id?: string;
+    };
+    if (typeof payload.error === 'string') {
+      parsedMessage = payload.error;
+    } else {
+      parsedMessage = payload.error?.message ?? payload.message ?? payload.msg;
+      if (payload.error?.code && parsedMessage) {
+        parsedMessage = `${parsedMessage} (code: ${String(payload.error.code)})`;
+      } else if (payload.code && parsedMessage) {
+        parsedMessage = `${parsedMessage} (code: ${String(payload.code)})`;
+      }
+      if (payload.request_id && parsedMessage) {
+        parsedMessage = `${parsedMessage} (request_id: ${payload.request_id})`;
+      }
+    }
+  } catch {
+    // non-JSON body
+  }
+  return { status, message: (parsedMessage || rawText).slice(0, 500) };
+}
+
+/**
+ * Provider-aware watchdog stuck threshold.
+ * Must exceed the maximum possible idle timeout for the model's provider,
+ * otherwise the watchdog fires a false "stuck" alarm during long TTFT waits.
+ */
+function getWatchdogStuckThreshold(modelAlias: string): number {
+  const isPaidModel = getModel(modelAlias)?.isFree !== true;
+  const provider = getProvider(modelAlias);
+  const providerMultiplier = provider === 'moonshot' ? 2.5
+    : provider === 'deepseek' ? 1.8
+    : provider === 'dashscope' ? 1.5
+    : 1.0;
+
+  const baseThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
+  // Max idle timeout for this provider (180s base * multiplier for paid, or 180s * multiplier for free)
+  const maxIdleTimeout = Math.max(180000 * providerMultiplier, isPaidModel ? 90000 : 45000);
+
+  // Stuck threshold must exceed max idle timeout + buffer to avoid false alarms
+  return Math.max(baseThreshold * providerMultiplier, maxIdleTimeout + 60000);
+}
+
+/**
  * Sanitize messages before sending to API providers.
  * Some providers (Moonshot/Kimi) reject assistant messages with empty content.
  * - Assistant messages with tool_calls: set content to null (valid per OpenAI spec)
@@ -644,8 +698,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     const timeSinceUpdate = Date.now() - task.lastUpdate;
-    const isPaidModel = getModel(task.modelAlias)?.isFree !== true;
-    const stuckThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
+    const stuckThreshold = getWatchdogStuckThreshold(task.modelAlias);
     const elapsedMs = Date.now() - task.startTime;
     const elapsed = Math.round(elapsedMs / 1000);
     console.log(`[TaskProcessor] Time since last update: ${timeSinceUpdate}ms, elapsed: ${elapsed}s (threshold: ${stuckThreshold / 1000}s)`);
@@ -686,8 +739,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const resumeCount = task.autoResumeCount ?? 0;
     const maxResumes = getAutoResumeLimit(task.modelAlias);
 
-    // Check if auto-resume is enabled and under limit
-    if (task.autoResume && resumeCount < maxResumes && task.telegramToken && task.openrouterKey) {
+    // Check if auto-resume is enabled and under limit.
+    // Direct-API models (DeepSeek, Moonshot, DashScope) may not have an OpenRouter key
+    // — check for any provider key to avoid blocking auto-resume for direct providers.
+    const hasAnyProviderKey = !!(task.openrouterKey || task.deepseekKey || task.moonshotKey || task.dashscopeKey);
+    if (task.autoResume && resumeCount < maxResumes && task.telegramToken && hasAnyProviderKey) {
       // --- STALL DETECTION ---
       // Two layers:
       // 1. Raw tool count: no new tool calls at all → obvious stall
@@ -766,7 +822,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         modelAlias: task.modelAlias,
         messages: task.messages,
         telegramToken: task.telegramToken,
-        openrouterKey: task.openrouterKey,
+        openrouterKey: task.openrouterKey || '',
         githubToken: task.githubToken,
         braveSearchKey: task.braveSearchKey,
         cloudflareApiToken: task.cloudflareApiToken,
@@ -1669,6 +1725,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         } | null = null;
         let lastError: Error | null = null;
 
+        // Pre-flight compression: if context already exceeds ~92% of provider budget,
+        // compress before the API call to avoid a wasted round-trip + 400 error.
+        const estimatedCtx = this.estimateTokens(conversationMessages);
+        const contextBudget = this.getContextBudget(task.modelAlias);
+        if (estimatedCtx > Math.floor(contextBudget * 0.92)) {
+          const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
+          if (compressed.length < conversationMessages.length) {
+            console.log(`[TaskProcessor] Preflight compression: ${conversationMessages.length}->${compressed.length} msgs (~${estimatedCtx} tokens, budget: ${contextBudget})`);
+            conversationMessages.length = 0;
+            conversationMessages.push(...compressed);
+          }
+        }
+
         // Scale SSE idle timeout based on context size AND model.
         // Large prompts (60K+ tokens) cause slower first-token latency, especially on
         // DeepSeek V3.2 through OpenRouter where routing adds overhead.
@@ -1679,23 +1748,28 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // 1. Users are paying — don't waste their money on premature timeouts
         // 2. Paid models often handle larger/harder tasks with more context
         // 3. DeepSeek V3.2 via OpenRouter routinely needs >120s for 60K+ tokens
-        const estimatedCtx = this.estimateTokens(conversationMessages);
+        // (re-estimate after possible preflight compression)
+        const estimatedCtxAfter = this.estimateTokens(conversationMessages);
         const isPaid = getModel(task.modelAlias)?.isFree !== true;
-        const baseTimeout = estimatedCtx > 60000 ? 180000  // 3min for 60K+ tokens
-          : estimatedCtx > 30000 ? 120000                  // 2min for 30K-60K tokens
-          : estimatedCtx > 15000 ? 90000                   // 90s for 15K-30K tokens
-          : 45000;                                          // 45s default
+        const baseTimeout = estimatedCtxAfter > 60000 ? 180000  // 3min for 60K+ tokens
+          : estimatedCtxAfter > 30000 ? 120000                  // 2min for 30K-60K tokens
+          : estimatedCtxAfter > 15000 ? 90000                   // 90s for 15K-30K tokens
+          : 45000;                                               // 45s default
         // Provider-aware multiplier: some direct APIs (Moonshot/Kimi, DashScope/Qwen)
         // have high time-to-first-token due to deep reasoning. Without this, their
         // inter-chunk pauses exceed the idle timeout, causing STREAM_READ_TIMEOUT
         // on every iteration and exhausting auto-resume budget with minimal progress.
         const providerMultiplier = provider === 'moonshot' ? 2.5
+          : provider === 'deepseek' ? 1.8
           : provider === 'dashscope' ? 1.5
           : 1.0;
+        // Apply provider multiplier to both free and paid models — free direct
+        // providers (DeepSeek, Moonshot) can also have long first-token delays.
+        const scaledTimeout = baseTimeout * providerMultiplier;
         // Paid models: minimum 90s even for small contexts (they handle complex tasks)
-        const idleTimeout = isPaid ? Math.max(baseTimeout * providerMultiplier, 90000) : baseTimeout;
+        const idleTimeout = isPaid ? Math.max(scaledTimeout, 90000) : scaledTimeout;
         if (idleTimeout > 45000) {
-          console.log(`[TaskProcessor] Scaled idle timeout: ${idleTimeout / 1000}s (estimated ${estimatedCtx} tokens, ${isPaid ? 'paid' : 'free'}${providerMultiplier > 1 ? `, ${provider} ×${providerMultiplier}` : ''})`);
+          console.log(`[TaskProcessor] Scaled idle timeout: ${idleTimeout / 1000}s (estimated ${estimatedCtxAfter} tokens, ${isPaid ? 'paid' : 'free'}${providerMultiplier > 1 ? `, ${provider} ×${providerMultiplier}` : ''})`);
         }
 
         // 7B.1: Create speculative executor for this iteration
@@ -1814,7 +1888,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               if (!response.ok) {
                 const errorText = await response.text().catch(() => 'unknown error');
-                throw new Error(`${provider} API error (${response.status}): ${errorText.slice(0, 200)}`);
+                const providerErr = parseProviderError(response.status, errorText);
+                throw new Error(`${provider} API error (${providerErr.status}): ${providerErr.message}`);
               }
 
               if (!response.body) {
@@ -1871,18 +1946,30 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
             // 400 "Input validation error" — context too large for provider.
             // Compress conversation and retry once instead of failing immediately.
-            if (/\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length|max.?tokens|maximum.?context/i.test(lastError.message)) {
+            if (/\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length|max.?tokens|maximum.?context|prompt is too long|reduce the length/i.test(lastError.message)) {
               const beforeLen = conversationMessages.length;
               const beforeTokens = this.estimateTokens(conversationMessages);
               const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
               const afterTokens = this.estimateTokens(compressed);
               console.log(`[TaskProcessor] 400 Input validation — compressing context: ${beforeLen}→${compressed.length} msgs, ~${beforeTokens}→${afterTokens} tokens`);
 
-              if (compressed.length < beforeLen) {
-                // Context was compressible — replace and retry
+              if (compressed.length < beforeLen || afterTokens < beforeTokens) {
+                // Context was compressible (fewer messages or fewer tokens) — replace and retry
                 conversationMessages.length = 0;
                 conversationMessages.push(...compressed);
                 continue; // Retry with compressed context (same attempt slot)
+              }
+              // Standard compression didn't help — try aggressive fallback (60% budget, keepRecent=2)
+              const forcedBudget = Math.max(8000, Math.floor(this.getContextBudget(task.modelAlias) * 0.6));
+              const aggressivelyCompressed = sanitizeToolPairs(
+                compressContextBudgeted(conversationMessages, forcedBudget, 2)
+              );
+              const aggressiveTokens = this.estimateTokens(aggressivelyCompressed);
+              if (aggressiveTokens < beforeTokens) {
+                console.log(`[TaskProcessor] Aggressive compression fallback: ~${beforeTokens}→${aggressiveTokens} tokens`);
+                conversationMessages.length = 0;
+                conversationMessages.push(...aggressivelyCompressed);
+                continue;
               }
               // Already minimal — nothing more to compress, fail fast
               console.log('[TaskProcessor] Context already minimal, cannot compress further — failing');
@@ -3045,8 +3132,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // immediately. Without this, lastUpdate = Date.now() means the watchdog needs
         // 3 × 90s intervals (270s!) before timeSinceUpdate exceeds the 240s stuck threshold.
         // Backdating by stuckThreshold ensures the very next alarm (≤90s) fires auto-resume.
-        const isPaidModel = getModel(task.modelAlias)?.isFree !== true;
-        const stuckThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
+        const stuckThreshold = getWatchdogStuckThreshold(task.modelAlias);
         task.lastUpdate = Date.now() - stuckThreshold;
         await this.doState.storage.put('task', task);
 
