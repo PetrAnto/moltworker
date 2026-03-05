@@ -24,6 +24,7 @@ import {
   findMatchingTasks,
   resetRoadmapTasks,
   createRoadmapResetPR,
+  parseRoadmapPhases,
   type OrchestraTask,
 } from '../orchestra/orchestra';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
@@ -61,6 +62,7 @@ import {
   detectToolIntent,
   getFreeToolModels,
   formatOrchestraModelRecs,
+  getOrchestraRecommendations,
   categorizeModel,
   getValueTier,
   resolveTaskModel,
@@ -154,6 +156,7 @@ export class TelegramBot {
   async sendMessage(chatId: number, text: string, options?: {
     parseMode?: 'Markdown' | 'MarkdownV2' | 'HTML';
     replyToMessageId?: number;
+    reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
   }): Promise<TelegramMessage> {
     // Truncate if too long (Telegram limit is 4096)
     if (text.length > 4000) {
@@ -168,6 +171,7 @@ export class TelegramBot {
         text,
         parse_mode: options?.parseMode,
         reply_to_message_id: options?.replyToMessageId,
+        reply_markup: options?.reply_markup,
       }),
     });
 
@@ -1635,6 +1639,88 @@ export class TelegramHandler {
       return;
     }
 
+    // /orch advise — analyze next task and recommend best model with clickable buttons
+    if (sub === 'advise' || sub === 'pick') {
+      const lockedRepo = await this.storage.getOrchestraRepo(userId);
+      if (!lockedRepo) {
+        await this.bot.sendMessage(chatId, '❌ No default repo set.\n\nFirst run: /orch set owner/repo');
+        return;
+      }
+      await this.bot.sendChatAction(chatId, 'typing');
+      try {
+        const [owner, repoName] = lockedRepo.split('/');
+        const { content } = await fetchRoadmapFromGitHub(owner, repoName, this.githubToken);
+        const phases = parseRoadmapPhases(content);
+
+        // Find the next uncompleted task
+        let nextTask: { title: string; phase: string } | null = null;
+        for (const phase of phases) {
+          for (const task of phase.tasks) {
+            if (!task.done) {
+              nextTask = { title: task.title, phase: phase.name };
+              break;
+            }
+          }
+          if (nextTask) break;
+        }
+
+        if (!nextTask) {
+          await this.bot.sendMessage(chatId, '✅ All roadmap tasks are complete! Nothing to advise on.');
+          return;
+        }
+
+        // Classify task complexity and recommend models
+        const taskLower = nextTask.title.toLowerCase();
+        const isHeavyCoding = /refactor|split|migrat|rewrite|architect|complex|multi.?file|test suite/i.test(taskLower);
+        const isSimple = /add comment|update readme|rename|typo|config|bump|version/i.test(taskLower);
+
+        const recs = getOrchestraRecommendations();
+        const lines: string[] = [
+          `🔍 Next task: ${nextTask.title}`,
+          `📁 Phase: ${nextTask.phase}`,
+          '',
+        ];
+
+        if (isHeavyCoding) {
+          lines.push('🔴 Complex task — use a strong coding model:');
+        } else if (isSimple) {
+          lines.push('🟢 Simple task — a free model should work:');
+        } else {
+          lines.push('🟡 Standard task — recommended models:');
+        }
+
+        // Build buttons: for simple tasks prioritize free, for complex prioritize paid
+        const buttons: { text: string; callback_data: string }[][] = [];
+        if (isSimple || !isHeavyCoding) {
+          const freeRow = recs.free.slice(0, 3).map(r => ({
+            text: `/${r.alias} (free)`, callback_data: `orchgo:${r.alias}`,
+          }));
+          if (freeRow.length > 0) buttons.push(freeRow);
+        }
+        if (isHeavyCoding || !isSimple) {
+          const paidRow = recs.paid.slice(0, 3).map(r => ({
+            text: `/${r.alias} ${r.cost}`, callback_data: `orchgo:${r.alias}`,
+          }));
+          if (paidRow.length > 0) buttons.push(paidRow);
+        }
+
+        // Store pending orchestra params so buttons work
+        await this.storage.setPendingOrchestra(userId, { mode: 'run', repo: lockedRepo, prompt: '', chatId });
+
+        // Add recommendation details
+        for (const r of [...recs.free.slice(0, 2), ...recs.paid.slice(0, 2)]) {
+          lines.push(`  /${r.alias} — ${r.why}`);
+        }
+
+        await this.bot.sendMessage(chatId, lines.join('\n'), {
+          reply_markup: { inline_keyboard: buttons },
+        });
+      } catch (error) {
+        await this.bot.sendMessage(chatId, `❌ ${error instanceof Error ? error.message : 'Failed to analyze roadmap'}`);
+      }
+      return;
+    }
+
     // /orch next [specific task] — shorthand for run with locked repo
     if (sub === 'next') {
       const lockedRepo = await this.storage.getOrchestraRepo(userId);
@@ -1736,7 +1822,8 @@ export class TelegramHandler {
       '/orch history — View past tasks\n' +
       '/orch roadmap — View roadmap status\n' +
       '/orch reset <task> — Uncheck task(s) for re-run\n' +
-      '/orch redo <task> — Re-implement a failed task\n\n' +
+      '/orch redo <task> — Re-implement a failed task\n' +
+      '/orch advise — Analyze next task & pick best model\n\n' +
       modelRecs + '\n\n' +
       '━━━ Workflow ━━━\n' +
       '1. /orch set PetrAnto/myapp\n' +
@@ -1774,10 +1861,50 @@ export class TelegramHandler {
     const modelInfo = getModel(modelAlias);
 
     if (!modelInfo?.supportsTools) {
+      // Hard block: model can't call tools at all
+      const recs = getOrchestraRecommendations();
+      const freeButtons = recs.free.slice(0, 3).map(r => ({
+        text: `/${r.alias} (free)`, callback_data: `orchgo:${r.alias}`,
+      }));
+      const paidButtons = recs.paid.slice(0, 2).map(r => ({
+        text: `/${r.alias} ${r.cost}`, callback_data: `orchgo:${r.alias}`,
+      }));
+      // Store pending orchestra params for the callback
+      await this.storage.setPendingOrchestra(userId, { mode, repo, prompt, chatId });
       await this.bot.sendMessage(
         chatId,
-        `⚠️ Model /${modelAlias} doesn't support tools. Orchestra needs tool-calling.\n` +
-        `Switch to: ${getFreeToolModels().slice(0, 3).map(a => `/${a}`).join(' ')} (free) or /deep /grok /sonnet (paid)`
+        `❌ /${modelAlias} doesn't support tools — orchestra requires tool-calling.\n\nPick a model:`,
+        { reply_markup: { inline_keyboard: [freeButtons, paidButtons] } },
+      );
+      return;
+    }
+
+    // Soft warning: model supports tools but isn't orchestra-ready
+    if (modelInfo.orchestraReady === false && !modelInfo.isImageGen) {
+      const recs = getOrchestraRecommendations();
+      const betterModels = [...recs.free.slice(0, 2), ...recs.paid.slice(0, 2)];
+      const buttons = betterModels.map(r => ({
+        text: `/${r.alias}${r.cost !== 'Free' ? ` ${r.cost}` : ' (free)'}`,
+        callback_data: `orchgo:${r.alias}`,
+      }));
+      buttons.push({ text: `Proceed with /${modelAlias}`, callback_data: 'orchgo:proceed' });
+      // Store pending orchestra params for the callback
+      await this.storage.setPendingOrchestra(userId, { mode, repo, prompt, chatId });
+      const warnings: string[] = [];
+      if (modelInfo.intelligenceIndex && modelInfo.intelligenceIndex < 45) {
+        warnings.push(`low intelligence score (${modelInfo.intelligenceIndex.toFixed(0)})`);
+      }
+      if (modelInfo.benchmarks?.coding && modelInfo.benchmarks.coding < 30) {
+        warnings.push(`weak coding benchmark (${modelInfo.benchmarks.coding.toFixed(0)})`);
+      }
+      if ((modelInfo.maxContext || 0) < 64000) {
+        warnings.push(`small context (${Math.round((modelInfo.maxContext || 0) / 1000)}K)`);
+      }
+      const warnStr = warnings.length > 0 ? `\nIssues: ${warnings.join(', ')}` : '';
+      await this.bot.sendMessage(
+        chatId,
+        `⚠️ /${modelAlias} may struggle with orchestra tasks.${warnStr}\n\nRecommended models:`,
+        { reply_markup: { inline_keyboard: [buttons.slice(0, 4), buttons.slice(4)] } },
       );
       return;
     }
@@ -2746,6 +2873,26 @@ export class TelegramHandler {
           await this.bot.sendMessage(chatId, formatModelRanking());
         }
         break;
+
+      case 'orchgo': {
+        // Orchestra model gate: switch model (or proceed) then resume pending orchestra
+        if (query.message) {
+          await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+        }
+        const pending = await this.storage.getPendingOrchestra(userId);
+        if (!pending) {
+          await this.bot.sendMessage(chatId, '⏳ Orchestra request expired. Please run /orch again.');
+          break;
+        }
+        // Switch model unless "proceed" was chosen
+        if (payload && payload !== 'proceed') {
+          await this.handleUseCommand(chatId, userId, query.from.username, [payload]);
+        }
+        // Clear pending and execute
+        await this.storage.setPendingOrchestra(userId, null);
+        await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt);
+        break;
+      }
 
       case 'confirm':
         // Confirmation action: confirm:yes or confirm:no

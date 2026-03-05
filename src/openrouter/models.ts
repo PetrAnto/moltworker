@@ -1749,20 +1749,55 @@ export function getOrchestraRecommendations(): {
   const all = getAllModels();
   const toolModels = Object.values(all).filter(m => m.supportsTools && !m.isImageGen);
 
-  // Score each model for orchestra suitability
+  // Score each model for orchestra suitability using AA benchmarks + heuristics
   const scored = toolModels.map(m => {
     let score = 0;
     const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
 
-    // Strong positive: agentic / multi-file / coding specialty
-    if (/agentic/i.test(lower)) score += 30;
-    if (/multi-?file/i.test(lower)) score += 25;
-    if (/coding/i.test(lower)) score += 15;
-    if (/swe-?bench/i.test(lower)) score += 10;
+    // === AA Benchmark Data (most reliable signals) ===
+    if (m.intelligenceIndex) {
+      // Intelligence index is 0-100; strong models score 50+
+      if (m.intelligenceIndex >= 60) score += 25;
+      else if (m.intelligenceIndex >= 50) score += 15;
+      else if (m.intelligenceIndex >= 40) score += 5;
+      else score -= 10; // Low intelligence = risky for orchestra
+    }
+    if (m.benchmarks?.coding) {
+      // Coding index: orchestra tasks are primarily code changes
+      if (m.benchmarks.coding >= 50) score += 20;
+      else if (m.benchmarks.coding >= 40) score += 10;
+      else if (m.benchmarks.coding < 25) score -= 10;
+    }
+    if (m.benchmarks?.livecodebench) {
+      // LiveCodeBench: real-world coding signal
+      if (m.benchmarks.livecodebench >= 50) score += 10;
+      else if (m.benchmarks.livecodebench >= 40) score += 5;
+    }
+
+    // === Heuristic signals (fallback when no AA data) ===
+    const hasAAData = !!(m.intelligenceIndex || m.benchmarks?.coding);
+
+    if (!hasAAData) {
+      // Only use keyword heuristics when we have no benchmark data
+      if (/agentic/i.test(lower)) score += 30;
+      if (/multi-?file/i.test(lower)) score += 25;
+      if (/coding/i.test(lower)) score += 15;
+      if (/swe-?bench/i.test(lower)) score += 10;
+
+      // SWE-Bench score from description string
+      const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
+      if (sweMatch) {
+        const sweScore = parseFloat(sweMatch[1]);
+        if (sweScore >= 70) score += 15;
+        else if (sweScore >= 60) score += 5;
+      }
+    }
+
+    // === Universal signals (always apply) ===
 
     // Positive: large context (orchestra tasks can be long)
     if ((m.maxContext || 0) >= 200000) score += 10;
-    if ((m.maxContext || 0) >= 128000) score += 5;
+    else if ((m.maxContext || 0) >= 128000) score += 5;
 
     // Positive: dense models (all params active = better instruction following)
     if (/dense/i.test(lower)) score += 15;
@@ -1773,17 +1808,9 @@ export function getOrchestraRecommendations(): {
       const activeMatch = m.score.match(/(\d+)B active/i);
       if (activeMatch) {
         const activeB = parseInt(activeMatch[1], 10);
-        if (activeB < 20) score -= 15; // Very small active params
-        if (activeB >= 40) score += 10; // Large active params
+        if (activeB < 20) score -= 15;
+        if (activeB >= 40) score += 10;
       }
-    }
-
-    // Positive: high SWE-Bench scores
-    const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
-    if (sweMatch) {
-      const sweScore = parseFloat(sweMatch[1]);
-      if (sweScore >= 70) score += 15;
-      if (sweScore >= 60) score += 5;
     }
 
     // Positive: direct API models (faster, more reliable, no OpenRouter overhead)
@@ -1791,6 +1818,9 @@ export function getOrchestraRecommendations(): {
 
     // Positive: parallel tool calls (orchestra uses many tools)
     if (m.parallelCalls) score += 5;
+
+    // Use orchestraReady flag computed by enrichment pipeline
+    if (m.orchestraReady) score += 10;
 
     return { model: m, score };
   });
@@ -1806,11 +1836,16 @@ export function getOrchestraRecommendations(): {
 
   const formatRec = (s: { model: ModelInfo; score: number }): OrchestraModelRec => {
     const specialty = s.model.specialty.replace(/^(Free|Paid)\s+/i, '');
+    // Append AA benchmark summary when available
+    const aaHints: string[] = [];
+    if (s.model.intelligenceIndex) aaHints.push(`IQ:${s.model.intelligenceIndex.toFixed(0)}`);
+    if (s.model.benchmarks?.coding) aaHints.push(`Code:${s.model.benchmarks.coding.toFixed(0)}`);
+    const aaStr = aaHints.length > 0 ? ` (${aaHints.join(', ')})` : '';
     return {
       alias: s.model.alias,
       name: s.model.name,
       cost: s.model.cost,
-      why: specialty,
+      why: specialty + aaStr,
     };
   };
 

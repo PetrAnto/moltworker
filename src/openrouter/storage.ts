@@ -5,6 +5,14 @@
 
 import { DEFAULT_MODEL, type ModelInfo } from './models';
 
+/** Pending orchestra request stored when model gate triggers. */
+export interface PendingOrchestraParams {
+  mode: 'init' | 'run' | 'redo';
+  repo: string;
+  prompt: string;
+  chatId: number;
+}
+
 export interface UserPreferences {
   userId: string;
   username?: string;
@@ -172,6 +180,36 @@ export class UserStorage {
     const prefs = await this.getPreferences(userId);
     prefs.orchestraRepo = repo;
     await this.setPreferences(prefs);
+  }
+
+  /**
+   * Store pending orchestra request (for model-switch-then-proceed flow).
+   * Short-lived: overwritten on each /orch invocation.
+   */
+  async setPendingOrchestra(userId: string, params: PendingOrchestraParams | null): Promise<void> {
+    const key = `${this.prefix}/${userId}/pending-orch.json`;
+    if (!params) {
+      await this.bucket.delete(key);
+      return;
+    }
+    await this.bucket.put(key, JSON.stringify({ ...params, storedAt: Date.now() }));
+  }
+
+  /**
+   * Get pending orchestra request. Returns null if expired (>10min) or missing.
+   */
+  async getPendingOrchestra(userId: string): Promise<PendingOrchestraParams | null> {
+    const key = `${this.prefix}/${userId}/pending-orch.json`;
+    try {
+      const obj = await this.bucket.get(key);
+      if (!obj) return null;
+      const data = await obj.json() as PendingOrchestraParams & { storedAt: number };
+      // Expire after 10 minutes
+      if (Date.now() - data.storedAt > 10 * 60 * 1000) return null;
+      return data;
+    } catch {
+      return null;
+    }
   }
 
   /**
