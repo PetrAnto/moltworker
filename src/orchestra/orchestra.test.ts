@@ -358,7 +358,7 @@ describe('LARGE_FILE_THRESHOLD constants', () => {
 describe('repo health check in buildRunPrompt', () => {
   it('includes health check step', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('split it into modules');
+    expect(prompt).toContain('split');
   });
 
   it('references the warning threshold (not the hard limit)', () => {
@@ -368,28 +368,23 @@ describe('repo health check in buildRunPrompt', () => {
 
   it('instructs to split large files', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('split it into modules');
-    expect(prompt).toContain('refactor PR');
+    expect(prompt).toContain('split');
   });
 
-  it('instructs to use sandbox_exec for splitting (not github_create_pr)', () => {
+  it('instructs to use github_create_pr for splitting with all files in one call', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('sandbox_exec');
-    expect(prompt).toContain('identifier check blocks');
+    expect(prompt).toContain('github_create_pr');
+    expect(prompt).toContain('SINGLE');
+    expect(prompt).toContain('identifier check allows splits');
   });
 
-  it('instructs to defer original task when splitting', () => {
+  it('file splitting guidance is in Step 4', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('defer the original task');
-  });
-
-  it('health check is in Step 3', () => {
-    const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    const step3Idx = prompt.indexOf('## Step 3:');
-    const splitIdx = prompt.indexOf('split it into modules');
     const step4Idx = prompt.indexOf('## Step 4:');
-    expect(step3Idx).toBeLessThan(splitIdx);
-    expect(splitIdx).toBeLessThan(step4Idx);
+    const splitIdx = prompt.indexOf('FILE SPLITTING');
+    const step5Idx = prompt.indexOf('## Step 5:');
+    expect(step4Idx).toBeLessThan(splitIdx);
+    expect(splitIdx).toBeLessThan(step5Idx);
   });
 });
 
@@ -417,10 +412,10 @@ describe('repo health check in buildInitPrompt', () => {
     expect(prompt).toContain(`${LARGE_FILE_WARNING_LINES}`);
   });
 
-  it('instructs to use sandbox_exec for splitting', () => {
+  it('instructs to use github_create_pr for splitting', () => {
     const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
-    expect(prompt).toContain('sandbox_exec');
-    expect(prompt).toContain('identifier check');
+    expect(prompt).toContain('github_create_pr');
+    expect(prompt).toContain('identifier check allows splits');
   });
 
   it('large file step comes before analysis step', () => {
@@ -452,14 +447,15 @@ describe('repo health check in buildRedoPrompt', () => {
     expect(prompt).toContain(`${LARGE_FILE_WARNING_LINES} lines`);
   });
 
-  it('instructs to use sandbox_exec for splitting', () => {
+  it('instructs to use github_create_pr for splitting', () => {
     const prompt = buildRedoPrompt({
       repo: 'o/r',
       modelAlias: 'deep',
       previousTasks: [],
       taskToRedo: 'fix auth',
     });
-    expect(prompt).toContain('sandbox_exec');
+    expect(prompt).toContain('github_create_pr');
+    expect(prompt).toContain('identifier check allows splits');
   });
 
   it('health check comes between Step 2 and Step 3', () => {
@@ -1143,16 +1139,15 @@ describe('model alias in prompts', () => {
 });
 
 describe('anti-rewrite rules in prompts', () => {
-  it('run prompt includes surgical edit instructions', () => {
+  it('run prompt includes code convention instructions', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('Surgical edits only');
-    expect(prompt).toContain('preserve all existing functions/exports');
+    expect(prompt).toContain('existing code conventions');
+    expect(prompt).toContain('Do NOT regenerate entire files');
   });
 
   it('run prompt warns about identifier blocking', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     expect(prompt).toContain('github_create_pr');
-    expect(prompt).toContain('BLOCKS updates losing >60% of identifiers');
   });
 
   it('run prompt rules section includes patch action and anti-rewrite rule', () => {
@@ -1196,13 +1191,13 @@ describe('file update workflow in prompts', () => {
     expect(prompt).toContain('github_read_file');
   });
 
-  it('patch instructions come before surgical edits in run prompt', () => {
+  it('patch instructions come before convention rules in run prompt', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     const patchIdx = prompt.indexOf('patch');
-    const surgicalIdx = prompt.indexOf('Surgical edits only');
+    const conventionIdx = prompt.indexOf('existing code conventions');
     expect(patchIdx).toBeGreaterThan(0);
-    expect(surgicalIdx).toBeGreaterThan(0);
-    expect(patchIdx).toBeLessThan(surgicalIdx);
+    expect(conventionIdx).toBeGreaterThan(0);
+    expect(patchIdx).toBeLessThan(conventionIdx);
   });
 });
 
@@ -1218,13 +1213,13 @@ describe('partial failure handling in prompts', () => {
   it('run prompt explains how to log failures', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     expect(prompt).toContain('WORK_LOG.md');
-    expect(prompt).toContain('file too large');
+    expect(prompt).toContain('API errors');
   });
 
   it('run prompt lists failure scenarios', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
-    expect(prompt).toContain('file too large');
     expect(prompt).toContain('API errors');
+    expect(prompt).toContain('pr: FAILED');
   });
 
   it('failure handling is in Step 4', () => {

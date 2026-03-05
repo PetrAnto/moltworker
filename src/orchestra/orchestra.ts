@@ -148,7 +148,7 @@ Key rules for the roadmap:
 - 3-6 phases is typical, each with 2-5 tasks
 - **CRITICAL — Large file splitting:** If Step 1.5 found any large files (>${LARGE_FILE_THRESHOLD_LINES} lines) OR warning-zone files (>${LARGE_FILE_WARNING_LINES} lines), add a "Refactor: Split {filename} into modules" task EARLY in the roadmap (Phase 1 or as the first task in the phase that would modify the file). All tasks that modify that file MUST depend on the split task. Files in the warning zone WILL cross the threshold once features are added — split them proactively. Example:
   \`- [ ] **Refactor**: Split src/App.tsx into route-level modules (~464 lines, approaching limit → ~6 files)\`
-  **Use \`sandbox_exec\` for splitting** — \`github_create_pr\` cannot split files because its identifier check blocks updates where >60% of identifiers move to new files.
+  **For splitting:** use \`github_create_pr\` with BOTH the new module files (action "create") AND the updated source file (action "update" or "patch") in a SINGLE PR call. The identifier check allows splits when moved identifiers are found in other files in the same PR.
 
 ### Step 4: CREATE or UPDATE WORK_LOG.md
 **CRITICAL — WORK_LOG.md is APPEND-ONLY and FORMAT-PRESERVING:**
@@ -262,12 +262,22 @@ ${taskSelection}
 
 ## Step 3: UNDERSTAND CODEBASE
 Use \`github_list_files\` and \`github_read_file\` to read files related to the task.
-If any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, split it into modules first (refactor PR using \`sandbox_exec\`) and defer the original task. Do NOT use \`github_create_pr\` for splitting — its identifier check blocks updates where most identifiers move to new files.
+If any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you can split it as part of this task.
 
 ## Step 4: IMPLEMENT
-Use \`github_create_pr\` or \`sandbox_exec\` (complex: clone, build, test, push).
+Use \`github_create_pr\` for all changes.
 
-**CRITICAL — Use "patch" action for editing existing files (especially files >100 lines):**
+**FILE SPLITTING — How to split a large file into modules:**
+When the task is to split a large file, include ALL files in a SINGLE \`github_create_pr\` call:
+1. Read the original file with \`github_read_file\`
+2. Plan the split: identify logical groups of functions/components to extract
+3. Create new module files (action "create") with the extracted code + proper imports/exports
+4. Update the original file (action "patch" or "update") to import from the new modules and re-export
+5. Submit ALL changes (new files + updated original) in ONE \`github_create_pr\` call
+The identifier check allows splits: identifiers moved to other files in the same PR are not counted as lost.
+**CRITICAL**: The updated original file MUST import from and re-export the new modules so nothing breaks for consumers.
+
+**Use "patch" action for editing existing files (especially files >100 lines):**
 - Read the file first with \`github_read_file\`
 - Use action \`"patch"\` with \`"patches"\` array of \`{"find":"exact text","replace":"new text"}\` pairs
 - Each "find" must match exactly once — copy the EXACT text from the file including whitespace
@@ -278,11 +288,10 @@ Use \`github_create_pr\` or \`sandbox_exec\` (complex: clone, build, test, push)
 Example patch: \`{"path":"src/App.jsx","action":"patch","patches":[{"find":"const data = [...]","replace":"import { data } from './data'"}]}\`
 
 **Other rules:**
-- **Surgical edits only** — preserve all existing functions/exports. The tool BLOCKS updates losing >60% of identifiers
 - Follow existing code conventions, proper types (no \`any\`)
 - Do NOT regenerate entire files from memory — you WILL introduce syntax errors and encoding changes
 
-If blocked (file too large, API errors): update WORK_LOG.md with status, report \`pr: FAILED\`.
+If blocked (API errors): update WORK_LOG.md with status, report \`pr: FAILED\`.
 
 ## Step 5: UPDATE ROADMAP & WORK LOG (in same PR)
 - **ROADMAP.md**: Change ONLY your completed task from \`- [ ]\` to \`- [x]\`. Never delete tasks.
@@ -966,8 +975,8 @@ You are RE-DOING a task that was previously attempted but needs correction.
 
 ## Step 2.5: REPO HEALTH CHECK
 Before re-implementing, check if the target file(s) are too large (>${LARGE_FILE_WARNING_LINES} lines / ~${LARGE_FILE_THRESHOLD_KB}KB of source code).
-If so, split the large file into smaller modules FIRST using \`sandbox_exec\` (pure refactor, no behavior change), then proceed with the redo on the now-smaller files.
-Do NOT use \`github_create_pr\` for splitting — its identifier check blocks updates where most identifiers move to new files.
+If so, split the large file into smaller modules FIRST (pure refactor, no behavior change), then proceed with the redo on the now-smaller files.
+Use \`github_create_pr\` with ALL files (new modules + updated original) in a SINGLE call — the identifier check allows splits when moved identifiers are found in other files in the same PR.
 Update the roadmap to reflect the split as a completed prerequisite task.
 
 ## Step 3: RE-IMPLEMENT
@@ -994,7 +1003,7 @@ Only use \`"update"\` (full content) for: small files (<100 lines), new files ("
 - Make TARGETED, SURGICAL changes — add/modify/remove only the specific lines needed
 - ALL existing exports, functions, classes, and variables MUST be preserved unless the task explicitly requires removing them
 - If you cannot make targeted edits, STOP and do a file-splitting refactor first
-- The \`github_create_pr\` tool will BLOCK updates that lose more than 60% of original identifiers
+- The \`github_create_pr\` tool will BLOCK updates that lose more than 60% of original identifiers (unless they moved to other files in the same PR)
 
 ### Handle Partial Failures
 If you CANNOT complete the redo (file too large, complex dependencies):
