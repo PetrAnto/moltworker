@@ -327,6 +327,35 @@ simulate.post('/command', async (c) => {
 });
 
 /**
+ * GET /simulate/task
+ *
+ * Poll the simulate user's TaskProcessor DO.
+ * This is the DO used by /simulate/command for orchestra tasks.
+ * Use this to check on long-running /orch next tasks after the initial timeout.
+ */
+simulate.get('/task', async (c) => {
+  const env = c.env;
+
+  if (!env.TASK_PROCESSOR) {
+    return c.json({ error: 'TASK_PROCESSOR not configured' }, 503);
+  }
+
+  const userId = '999999999';
+  const doId = env.TASK_PROCESSOR.idFromName(userId);
+  const doStub = env.TASK_PROCESSOR.get(doId);
+
+  try {
+    const resp = await fetchDOWithRetry(doStub, new Request('https://do/status', { method: 'GET' }));
+    const raw = await resp.json() as Record<string, unknown>;
+    return c.json(sanitizeStatus(raw));
+  } catch (err) {
+    return c.json({
+      error: err instanceof Error ? err.message : String(err),
+    }, 500);
+  }
+});
+
+/**
  * GET /simulate/status/:taskId
  *
  * Check status of a previously submitted simulation task.
