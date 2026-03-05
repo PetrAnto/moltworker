@@ -1797,13 +1797,32 @@ export class TelegramHandler {
       return this.executeOrchestra(chatId, userId, parsed.mode, parsed.repo, parsed.prompt);
     }
 
-    // No valid subcommand — show help
+    // No valid subcommand — show help with action buttons
     const lockedRepo = await this.storage.getOrchestraRepo(userId);
     const repoLine = lockedRepo
       ? `📦 Current repo: ${lockedRepo}\n\n`
       : '📦 No repo set — use /orch set owner/repo first\n\n';
 
     const modelRecs = formatOrchestraModelRecs();
+
+    // Build inline buttons for main actions
+    const orchButtons: InlineKeyboardButton[][] = [];
+    if (lockedRepo) {
+      // Primary actions (only when repo is set)
+      orchButtons.push([
+        { text: '▶️ Next Task', callback_data: 'orch:next' },
+        { text: '🔍 Advise', callback_data: 'orch:advise' },
+        { text: '📋 Roadmap', callback_data: 'orch:roadmap' },
+      ]);
+      orchButtons.push([
+        { text: '📜 History', callback_data: 'orch:history' },
+        { text: '🔓 Unset Repo', callback_data: 'orch:unset' },
+      ]);
+    } else {
+      orchButtons.push([
+        { text: '📜 History', callback_data: 'orch:history' },
+      ]);
+    }
 
     await this.bot.sendMessage(
       chatId,
@@ -1813,26 +1832,20 @@ export class TelegramHandler {
       '/orch set owner/repo — Lock your repo\n' +
       '/orch init <description> — Create roadmap + work log\n' +
       '/orch next — Execute next roadmap task\n\n' +
-      '━━━ Full Commands ━━━\n' +
-      '/orch init owner/repo <desc> — Create roadmap (explicit repo)\n' +
-      '/orch run owner/repo [task] — Run task (explicit repo)\n' +
-      '/orch next [task] — Run next task (locked repo)\n' +
-      '/orch set owner/repo — Lock default repo\n' +
-      '/orch unset — Clear locked repo\n' +
-      '/orch history — View past tasks\n' +
+      '━━━ Commands ━━━\n' +
+      '/orch advise — Analyze next task & pick best model\n' +
+      '/orch next [task] — Run next (or specific) task\n' +
       '/orch roadmap — View roadmap status\n' +
-      '/orch reset <task> — Uncheck task(s) for re-run\n' +
-      '/orch redo <task> — Re-implement a failed task\n' +
-      '/orch advise — Analyze next task & pick best model\n\n' +
+      '/orch history — View past tasks\n' +
+      '/orch reset <task> — Uncheck for re-run\n' +
+      '/orch redo <task> — Re-implement a failed task\n\n' +
       modelRecs + '\n\n' +
       '━━━ Workflow ━━━\n' +
       '1. /orch set PetrAnto/myapp\n' +
       '2. /orch init Build a user auth system\n' +
-      '3. /orch next  (repeat until done)\n\n' +
-      '━━━ Fixing Mistakes ━━━\n' +
-      '/orch redo <task> — Bot re-does a bad task\n' +
-      '/orch reset <task> — Uncheck, then /orch next\n' +
-      '/orch reset Phase 2 — Reset an entire phase'
+      '3. /orch advise → pick best model\n' +
+      '4. /orch next (repeat until done)',
+      { reply_markup: { inline_keyboard: orchButtons } },
     );
   }
 
@@ -2891,6 +2904,35 @@ export class TelegramHandler {
         // Clear pending and execute
         await this.storage.setPendingOrchestra(userId, null);
         await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt);
+        break;
+      }
+
+      case 'orch': {
+        // Orchestra hub buttons: orch:next, orch:advise, orch:roadmap, etc.
+        if (query.message) {
+          await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+        }
+        // Create a fake message for handleOrchestraCommand
+        const fakeMsg = { chat: { id: chatId }, from: query.from } as TelegramMessage;
+        switch (payload) {
+          case 'next':
+            await this.handleOrchestraCommand(fakeMsg, chatId, userId, ['next']);
+            break;
+          case 'advise':
+            await this.handleOrchestraCommand(fakeMsg, chatId, userId, ['advise']);
+            break;
+          case 'roadmap':
+            await this.handleOrchestraCommand(fakeMsg, chatId, userId, ['roadmap']);
+            break;
+          case 'history':
+            await this.handleOrchestraCommand(fakeMsg, chatId, userId, ['history']);
+            break;
+          case 'unset':
+            await this.handleOrchestraCommand(fakeMsg, chatId, userId, ['unset']);
+            break;
+          default:
+            await this.bot.sendMessage(chatId, '❓ Unknown orchestra action.');
+        }
         break;
       }
 
