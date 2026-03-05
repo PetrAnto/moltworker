@@ -1275,27 +1275,52 @@ async function githubCreatePr(
               const surviving = originalIdentifiers.filter(id => newContent.includes(id));
               const survivalRate = surviving.length / originalIdentifiers.length;
 
-              // If fewer than 40% of original identifiers survive, this is a full rewrite
-              if (survivalRate < 0.4) {
-                const missing = originalIdentifiers.filter(id => !newContent.includes(id));
-                const missingPreview = missing.slice(0, 10).join(', ');
-                throw new Error(
-                  `Full-rewrite blocked for "${change.path}": ` +
-                  `only ${surviving.length}/${originalIdentifiers.length} original identifiers survive (${Math.round(survivalRate * 100)}%). ` +
-                  `Missing identifiers: ${missingPreview}${missing.length > 10 ? ` ... and ${missing.length - 10} more` : ''}. ` +
-                  `The file appears to have been regenerated from scratch, destroying existing business logic. ` +
-                  `Make SURGICAL edits that preserve existing functions, exports, and variables. ` +
-                  `If the file is too large to edit safely, split it into smaller modules first.`
-                );
-              }
-
-              // Warn if 40-60% survive (borderline rewrite)
+              // If fewer than 40% of original identifiers survive, check if this is
+              // an intentional file-split: missing identifiers may have moved to new
+              // files being created in the same PR.
               if (survivalRate < 0.6) {
                 const missing = originalIdentifiers.filter(id => !newContent.includes(id));
-                warnings.push(
-                  `⚠️ "${change.path}": only ${Math.round(survivalRate * 100)}% of original identifiers survive. ` +
-                  `Missing: ${missing.slice(0, 5).join(', ')}. Verify no features were accidentally removed.`
+
+                // Check if missing identifiers live in other files in this PR
+                const otherFileContents = changes
+                  .filter(c => c.path !== change.path && c.content && CODE_EXTENSIONS.test(c.path))
+                  .map(c => c.content as string);
+                const relocated = missing.filter(id =>
+                  otherFileContents.some(content => content.includes(id))
                 );
+                const relocatedRate = missing.length > 0 ? relocated.length / missing.length : 0;
+
+                // If >70% of missing identifiers are found in other PR files, this is a
+                // refactor/split — allow it with a warning instead of blocking
+                const isRefactorSplit = relocatedRate > 0.7 && otherFileContents.length > 0;
+
+                if (survivalRate < 0.4 && !isRefactorSplit) {
+                  const missingPreview = missing.slice(0, 10).join(', ');
+                  throw new Error(
+                    `Full-rewrite blocked for "${change.path}": ` +
+                    `only ${surviving.length}/${originalIdentifiers.length} original identifiers survive (${Math.round(survivalRate * 100)}%). ` +
+                    `Missing identifiers: ${missingPreview}${missing.length > 10 ? ` ... and ${missing.length - 10} more` : ''}. ` +
+                    `The file appears to have been regenerated from scratch, destroying existing business logic. ` +
+                    `Make SURGICAL edits that preserve existing functions, exports, and variables. ` +
+                    `If the file is too large to edit safely, split it into smaller modules first.`
+                  );
+                }
+
+                if (isRefactorSplit) {
+                  console.log(
+                    `[github_create_pr] Refactor split detected for "${change.path}": ` +
+                    `${relocated.length}/${missing.length} missing identifiers found in ${otherFileContents.length} new/updated files`
+                  );
+                  warnings.push(
+                    `ℹ️ "${change.path}": file-split detected — ${relocated.length}/${missing.length} identifiers moved to other files in this PR.`
+                  );
+                } else if (survivalRate < 0.6) {
+                  // Borderline rewrite warning (not a detected split)
+                  warnings.push(
+                    `⚠️ "${change.path}": only ${Math.round(survivalRate * 100)}% of original identifiers survive. ` +
+                    `Missing: ${missing.slice(0, 5).join(', ')}. Verify no features were accidentally removed.`
+                  );
+                }
               }
             }
           }
