@@ -5,6 +5,13 @@
 import { getModel } from './models';
 import { cloudflareApi } from './tools-cloudflare';
 
+/** Decode base64 GitHub content to proper UTF-8 string (atob alone mangles multi-byte chars). */
+function decodeBase64Utf8(base64: string): string {
+  const binary = atob(base64.replace(/\n/g, ''));
+  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
 // Tool definitions in OpenAI function calling format
 export interface ToolDefinition {
   type: 'function';
@@ -725,7 +732,7 @@ export async function githubReadFile(
   }
 
   // GitHub returns base64 encoded content
-  const content = atob(data.content.replace(/\n/g, ''));
+  const content = decodeBase64Utf8(data.content);
 
   // Truncate long files (30KB keeps ~7.5K tokens of context budget)
   if (content.length > 30000) {
@@ -833,7 +840,7 @@ async function fetchRepoOverview(
     if (readmeResp.ok) {
       const readmeData = await readmeResp.json() as { content?: string; encoding?: string; size?: number };
       if (readmeData.content) {
-        const content = atob(readmeData.content.replace(/\n/g, ''));
+        const content = decodeBase64Utf8(readmeData.content);
         // Extract markdown headings as a structural outline
         const headings = content.split('\n')
           .filter(line => /^#{1,3}\s/.test(line))
@@ -1141,7 +1148,7 @@ async function githubCreatePr(
       throw new Error(`Cannot patch "${change.path}": unable to decode file content from GitHub API.`);
     }
 
-    let fileContent = atob(fileData.content.replace(/\n/g, ''));
+    let fileContent = decodeBase64Utf8(fileData.content);
 
     // Apply each patch sequentially
     for (let pi = 0; pi < change.patches.length; pi++) {
@@ -1250,7 +1257,7 @@ async function githubCreatePr(
         //     size but loses all the original business logic (functions, exports, variables).
         const isCodePath = /\.(js|jsx|ts|tsx|mjs|cjs|vue|svelte|py|rb|go|rs|java|c|cpp|h|cs|php|swift|kt|scala|css|scss|less|html|json)$/i.test(change.path);
         if (isCodePath && fileData.content && fileData.encoding === 'base64') {
-          const originalContent = atob(fileData.content.replace(/\n/g, ''));
+          const originalContent = decodeBase64Utf8(fileData.content);
           const originalLines = originalContent.split('\n');
 
           // Only run rewrite detection on non-trivial files (>50 lines)
@@ -1291,7 +1298,7 @@ async function githubCreatePr(
         //     Models that regenerate files from memory lose original data values (destinations,
         //     config entries, URLs) even when the structure looks correct.
         if (isCodePath && fileData.content && fileData.encoding === 'base64') {
-          const origContent = atob(fileData.content.replace(/\n/g, ''));
+          const origContent = decodeBase64Utf8(fileData.content);
           if (origContent.length > 200) {
             // Extract meaningful string literals (>10 chars) — these are data fingerprints
             const extractStringLiterals = (text: string): string[] => {
@@ -1404,7 +1411,7 @@ async function githubCreatePr(
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
-            const originalContent = atob(fileData.content.replace(/\n/g, ''));
+            const originalContent = decodeBase64Utf8(fileData.content);
             totalOriginalLines += originalContent.split('\n').length;
           }
         }
@@ -1450,7 +1457,7 @@ async function githubCreatePr(
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
-            const originalContent = atob(fileData.content.replace(/\n/g, ''));
+            const originalContent = decodeBase64Utf8(fileData.content);
             // Extract table rows (lines starting with |) that have actual data (not just header/separator)
             const extractDataRows = (text: string): string[] =>
               text.split('\n')
@@ -1523,7 +1530,7 @@ async function githubCreatePr(
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
-            const originalContent = atob(fileData.content.replace(/\n/g, ''));
+            const originalContent = decodeBase64Utf8(fileData.content);
 
             // Extract task lines: "- [ ] **Task..." or "- [x] **Task..."
             const extractTasks = (text: string): { title: string; done: boolean }[] =>

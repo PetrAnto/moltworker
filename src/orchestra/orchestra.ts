@@ -613,7 +613,10 @@ export async function fetchRoadmapFromGitHub(
     const data = await response.json() as { content?: string; message?: string };
     if (!data.content) continue;
 
-    const content = atob(data.content.replace(/\n/g, ''));
+    // Decode base64 → UTF-8 (atob produces Latin-1, mangling multi-byte chars like →)
+    const binary = atob(data.content.replace(/\n/g, ''));
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    const content = new TextDecoder().decode(bytes);
     return { content, path: candidate };
   }
 

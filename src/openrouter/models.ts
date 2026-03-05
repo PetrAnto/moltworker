@@ -542,11 +542,11 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 128000,
   },
   sonnet: {
-    id: 'anthropic/claude-sonnet-4.5',
+    id: 'anthropic/claude-sonnet-4.6',
     alias: 'sonnet',
-    name: 'Claude Sonnet 4.5',
+    name: 'Claude Sonnet 4.6',
     specialty: 'Paid Premium Reasoning',
-    score: '77-81% SWE, 91% MMLU',
+    score: 'AA Index (48), Code (79), 1M context',
     cost: '$3/$15',
     supportsVision: true,
     supportsTools: true,
@@ -1888,10 +1888,11 @@ export function formatOrchestraModelRecs(): string {
   }
 
   if (recs.avoid.length > 0) {
-    lines.push(`Avoid: ${recs.avoid.map(a => '/' + a).join(', ')} (weak instruction following)`);
+    // Only show a count + use /orch advise for details, don't dump 100+ aliases
+    lines.push(`⚠️ ${recs.avoid.length} models not suited for orchestra — use /orch advise to check`);
   }
 
-  lines.push('Switch model before /orch run: just type /<model>');
+  lines.push('Switch model: type /<model> then /orch next');
 
   return lines.join('\n');
 }
