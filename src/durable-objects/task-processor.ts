@@ -7,7 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { createOpenRouterClient, parseSSEStream, type ChatMessage, type ResponseFormat } from '../openrouter/client';
 import { executeTool, AVAILABLE_TOOLS, githubReadFile, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools } from '../openrouter/tools';
-import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isReasoningMandatoryError, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
+import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isReasoningMandatoryError, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, getOrchestraRecommendations, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { injectCacheControl } from '../openrouter/prompt-cache';
 import { markdownToTelegramHtml } from '../utils/telegram-format';
@@ -785,7 +785,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             await this.sendTelegramMessageWithButtons(
               task.telegramToken,
               task.chatId,
-              `🛑 Task stalled after ${noProgressResumes} resumes with no progress (${task.iterations} iter, ${toolCountNow} tools).\n\n💡 Try a more capable model: /deep, /grok, or /sonnet\n\nProgress saved.`,
+              `🛑 Task stalled after ${noProgressResumes} resumes with no progress (${task.iterations} iter, ${toolCountNow} tools).\n\n💡 Try a more capable model: ${this.getStallModelRecs()}\n\nProgress saved.`,
               [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
             );
           }
@@ -2515,7 +2515,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           }
           await this.sendTelegramMessageWithButtons(
             request.telegramToken, request.chatId,
-            `🛑 Model stalled after ${task.iterations} iterations without using tools.\n\n💡 Try a more capable model: /deep, /grok, or /sonnet`,
+            `🛑 Model stalled after ${task.iterations} iterations without using tools.\n\n💡 Try a more capable model: ${this.getStallModelRecs()}`,
             [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
           );
           return;
@@ -3245,6 +3245,22 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     } finally {
       this.isRunning = false;
     }
+  }
+
+  /**
+   * Get dynamic model recommendations for stall messages.
+   */
+  private getStallModelRecs(): string {
+    try {
+      const recs = getOrchestraRecommendations();
+      const top = [...recs.paid.slice(0, 2), ...recs.free.slice(0, 1)];
+      if (top.length > 0) {
+        return top.map(r => `/${r.alias}`).join(', ');
+      }
+    } catch {
+      // Fall through to default
+    }
+    return '/sonnet, /deep, or /grok';
   }
 
   /**

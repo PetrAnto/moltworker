@@ -1778,19 +1778,27 @@ export function getOrchestraRecommendations(): {
     const hasAAData = !!(m.intelligenceIndex || m.benchmarks?.coding);
 
     if (!hasAAData) {
-      // Only use keyword heuristics when we have no benchmark data
-      if (/agentic/i.test(lower)) score += 30;
-      if (/multi-?file/i.test(lower)) score += 25;
-      if (/coding/i.test(lower)) score += 15;
-      if (/swe-?bench/i.test(lower)) score += 10;
+      // Only use keyword heuristics when we have no benchmark data.
+      // Cap heuristic bonus to avoid unverified models outscoring benchmarked ones.
+      let heuristicBonus = 0;
+      if (/agentic/i.test(lower)) heuristicBonus += 15;
+      if (/multi-?file/i.test(lower)) heuristicBonus += 10;
+      if (/coding/i.test(lower)) heuristicBonus += 10;
+      if (/swe-?bench/i.test(lower)) heuristicBonus += 5;
 
       // SWE-Bench score from description string
       const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
       if (sweMatch) {
         const sweScore = parseFloat(sweMatch[1]);
-        if (sweScore >= 70) score += 15;
-        else if (sweScore >= 60) score += 5;
+        if (sweScore >= 70) heuristicBonus += 15;
+        else if (sweScore >= 60) heuristicBonus += 5;
       }
+
+      // Cap: unverified models shouldn't score higher than mid-tier benchmarked ones
+      score += Math.min(heuristicBonus, 25);
+
+      // Uncertainty penalty: no benchmarks means we can't trust reliability
+      score -= 10;
     }
 
     // === Universal signals (always apply) ===
