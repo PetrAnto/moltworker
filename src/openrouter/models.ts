@@ -1173,6 +1173,7 @@ export function formatModelsList(): string {
 
 /**
  * Format the /model hub — one-stop overview with subcommand guide.
+ * Returns text for the hub message. Buttons are added by the handler.
  */
 export function formatModelHub(currentAlias: string): string {
   const lines: string[] = [];
@@ -1180,52 +1181,111 @@ export function formatModelHub(currentAlias: string): string {
   const all = Object.values(getAllModels());
   const chatModels = all.filter(m => !m.isImageGen);
 
-  // Current model
+  // Header
   lines.push('🤖 Model Hub\n');
+
+  // Current model
   if (model) {
     const caps = [
       model.supportsTools && '🔧',
       model.supportsVision && '👁️',
       model.structuredOutput && '📋',
       model.parallelCalls && '⚡',
+      model.reasoning && '🧠',
     ].filter(Boolean).join('');
     const tier = model.isFree ? '🆓' : VALUE_TIER_LABELS[getValueTier(model)] || '✅';
     lines.push(`${tier} Active: ${model.name} (/${model.alias}) ${caps}`);
     lines.push(`   ${model.specialty} — ${model.cost}`);
-    if (model.reasoning) lines.push(`   Reasoning: ${model.reasoning}`);
+    if (model.maxContext) {
+      const ctxStr = model.maxContext >= 1048576
+        ? `${(model.maxContext / 1048576).toFixed(0)}M`
+        : `${Math.round(model.maxContext / 1024)}K`;
+      lines.push(`   Context: ${ctxStr}`);
+    }
   } else {
-    lines.push(`Active: /${currentAlias} (unknown model)`);
+    lines.push(`Active: /${currentAlias} (unknown — run /model sync)`);
   }
 
   // Quick stats
   const freeCount = chatModels.filter(m => m.isFree).length;
   const paidCount = chatModels.filter(m => !m.isFree).length;
   const toolCount = chatModels.filter(m => m.supportsTools).length;
-  lines.push(`\n📊 ${chatModels.length} models (${freeCount} free, ${paidCount} paid, ${toolCount} with tools)`);
+  const orchCount = chatModels.filter(m =>
+    m.supportsTools && m.parallelCalls && (m.maxContext || 0) >= 64000
+  ).length;
+  lines.push(`\n📊 ${chatModels.length} models available`);
+  lines.push(`   ${freeCount} free · ${paidCount} paid · ${toolCount} with tools · ${orchCount} orchestra-ready`);
 
-  // Top picks — 3 best free + 3 best paid by orchestra score
-  const orchRecs = getOrchestraRecommendations();
-  if (orchRecs.free.length > 0) {
-    const topFree = orchRecs.free.slice(0, 3).map(r => `/${r.alias}`).join('  ');
-    lines.push(`\n🆓 Top free: ${topFree}`);
-  }
-  if (orchRecs.paid.length > 0) {
-    const topPaid = orchRecs.paid.slice(0, 3).map(r => `/${r.alias}`).join('  ');
-    lines.push(`💎 Top paid: ${topPaid}`);
-  }
+  // Tap a button below to switch, or use commands:
+  lines.push('\n⬇️ Tap a button to switch instantly\n');
 
-  // Subcommands
-  lines.push('\n━━━ Commands ━━━');
-  lines.push('/model list        — Full catalog with prices');
-  lines.push('/model pick        — Quick picker (buttons)');
-  lines.push('/model info <name> — Detailed capability card');
-  lines.push('/model rank        — Orchestra/capability ranking');
-  lines.push('/model use <name>  — Switch model');
-  lines.push('/model update ...  — Patch model live');
-  lines.push('/model enrich      — Fetch benchmarks & verify');
-  lines.push('\nTip: /<alias> is a shortcut to switch (e.g. /deep)');
+  // Subcommands — organized by purpose
+  lines.push('━━━ Browse & Switch ━━━');
+  lines.push('/model list     — Full catalog with prices');
+  lines.push('/model rank     — Capability ranking');
+  lines.push('/model <alias>  — Model details (e.g. /model sonnet)');
+
+  lines.push('\n━━━ Keep Up to Date ━━━');
+  lines.push('/model sync     — Fetch latest free models');
+  lines.push('/model syncall  — Full catalog sync');
+  lines.push('/model check    — Check for updates');
+  lines.push('/model enrich   — Fetch benchmarks (AA)');
+
+  lines.push('\n━━━ Advanced ━━━');
+  lines.push('/model update <alias> key=val  — Patch live');
+  lines.push('/model reset    — Clear synced models');
+
+  lines.push('\n🔧=tools 👁️=vision 📋=structured 🧠=reasoning ⚡=parallel');
 
   return lines.join('\n');
+}
+
+/**
+ * Get top recommended models for hub buttons.
+ * Returns { free, value, premium } arrays of ModelInfo.
+ */
+export function getTopModelPicks(): {
+  free: ModelInfo[];
+  value: ModelInfo[];
+  premium: ModelInfo[];
+} {
+  const all = Object.values(getAllModels());
+  const toolModels = all.filter(m => m.supportsTools && !m.isImageGen);
+
+  const score = (m: ModelInfo): number => {
+    let s = 0;
+    const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
+    const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
+    if (sweMatch) s += parseFloat(sweMatch[1]);
+    if (/agentic|coding/i.test(lower)) s += 15;
+    if ((m.maxContext || 0) >= 200000) s += 5;
+    if (m.supportsVision) s += 3;
+    if (m.parallelCalls) s += 2;
+    if (m.intelligenceIndex) s += m.intelligenceIndex;
+    return s;
+  };
+
+  const scored = toolModels.map(m => ({ m, s: score(m) }));
+
+  const free = scored
+    .filter(x => x.m.isFree)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 4)
+    .map(x => x.m);
+
+  const value = scored
+    .filter(x => !x.m.isFree && ['exceptional', 'great'].includes(getValueTier(x.m)))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 4)
+    .map(x => x.m);
+
+  const premium = scored
+    .filter(x => !x.m.isFree && ['good', 'premium'].includes(getValueTier(x.m)))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 4)
+    .map(x => x.m);
+
+  return { free, value, premium };
 }
 
 /**

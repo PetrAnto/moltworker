@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, registerAutoSyncedModels, formatModelInfoCard, formatModelHub, formatModelRanking, type RouterCheckpointMeta, type ModelInfo } from './models';
+import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, registerAutoSyncedModels, formatModelInfoCard, formatModelHub, formatModelRanking, getTopModelPicks, type RouterCheckpointMeta, type ModelInfo } from './models';
 
 // --- detectToolIntent ---
 
@@ -593,18 +593,18 @@ describe('formatModelHub', () => {
     expect(hub).toContain('Model Hub');
     expect(hub).toContain('DeepSeek V3.2');
     expect(hub).toContain('/deep');
-    expect(hub).toContain('Commands');
   });
 
-  it('shows subcommand guide', () => {
+  it('shows browse/switch and sync subcommands', () => {
     const hub = formatModelHub('sonnet');
     expect(hub).toContain('/model list');
-    expect(hub).toContain('/model pick');
-    expect(hub).toContain('/model info');
     expect(hub).toContain('/model rank');
-    expect(hub).toContain('/model use');
-    expect(hub).toContain('/model update');
+    expect(hub).toContain('/model sync');
+    expect(hub).toContain('/model syncall');
+    expect(hub).toContain('/model check');
     expect(hub).toContain('/model enrich');
+    expect(hub).toContain('/model update');
+    expect(hub).toContain('/model reset');
   });
 
   it('shows model stats', () => {
@@ -612,19 +612,51 @@ describe('formatModelHub', () => {
     expect(hub).toMatch(/\d+ models/);
     expect(hub).toMatch(/\d+ free/);
     expect(hub).toMatch(/\d+ paid/);
+    expect(hub).toContain('orchestra-ready');
   });
 
-  it('shows top picks', () => {
+  it('shows context size for current model', () => {
     const hub = formatModelHub('flash');
-    expect(hub).toContain('Top free');
-    expect(hub).toContain('Top paid');
+    expect(hub).toContain('Context:');
   });
 
   it('handles unknown current model gracefully', () => {
     const hub = formatModelHub('nonexistent');
     expect(hub).toContain('Model Hub');
     expect(hub).toContain('nonexistent');
-    expect(hub).toContain('unknown model');
+    expect(hub).toContain('unknown');
+  });
+});
+
+// --- getTopModelPicks ---
+
+describe('getTopModelPicks', () => {
+  it('returns free, value, and premium picks', () => {
+    const picks = getTopModelPicks();
+    expect(picks.free.length).toBeGreaterThan(0);
+    expect(picks.value.length).toBeGreaterThan(0);
+    expect(picks.premium.length).toBeGreaterThan(0);
+  });
+
+  it('only returns models with tool support', () => {
+    const picks = getTopModelPicks();
+    for (const m of [...picks.free, ...picks.value, ...picks.premium]) {
+      expect(m.supportsTools).toBe(true);
+    }
+  });
+
+  it('returns at most 4 per category', () => {
+    const picks = getTopModelPicks();
+    expect(picks.free.length).toBeLessThanOrEqual(4);
+    expect(picks.value.length).toBeLessThanOrEqual(4);
+    expect(picks.premium.length).toBeLessThanOrEqual(4);
+  });
+
+  it('free picks are all free models', () => {
+    const picks = getTopModelPicks();
+    for (const m of picks.free) {
+      expect(m.isFree).toBe(true);
+    }
   });
 });
 
