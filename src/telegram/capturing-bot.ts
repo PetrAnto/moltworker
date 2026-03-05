@@ -49,6 +49,7 @@ export class CapturingBot extends TelegramBot {
   override async sendMessage(chatId: number, text: string, options?: {
     parseMode?: 'Markdown' | 'MarkdownV2' | 'HTML';
     replyToMessageId?: number;
+    reply_markup?: { inline_keyboard: InlineKeyboardButton[][] };
   }): Promise<TelegramMessage> {
     this.captured.push({
       type: 'text',
