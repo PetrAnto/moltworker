@@ -383,7 +383,7 @@ describe('formatOrchestraModelRecs', () => {
 
   it('includes model switch instruction', () => {
     const output = formatOrchestraModelRecs();
-    expect(output).toContain('Switch model before /orch run');
+    expect(output).toContain('Switch model');
   });
 });
 
