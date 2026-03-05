@@ -3959,11 +3959,15 @@ export class TelegramHandler {
   /**
    * Handle /modelupdate command — patch curated model fields without code deploy.
    *
-   * Usage:
+   * Smart modes (auto-fetch from OpenRouter):
+   *   /modelupdate <alias> refresh                  — refresh cost/caps from live API
+   *   /modelupdate <alias> id=<new-model-id>        — swap model + auto-fill metadata
+   *   /modelupdate <alias> id=<id> name="Custom"    — auto-fill + manual override
+   *
+   * Manual mode:
    *   /modelupdate <alias> <key>=<value> [key=value ...]
-   *   /modelupdate sonnet id=anthropic/claude-sonnet-4.6 name="Claude Sonnet 4.6"
-   *   /modelupdate sonnet revert   (remove override, revert to static catalog)
-   *   /modelupdate list             (show all active overrides)
+   *   /modelupdate <alias> revert
+   *   /modelupdate list
    *
    * Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools,
    *               supportsVision, parallelCalls, structuredOutput, reasoning
@@ -3973,12 +3977,21 @@ export class TelegramHandler {
       await this.bot.sendMessage(chatId, `🔧 /modelupdate — Patch curated models without deploy
 
 Usage:
+  /modelupdate <alias> refresh
+  /modelupdate <alias> id=<new-model-id>
   /modelupdate <alias> <key>=<value> ...
   /modelupdate <alias> revert
   /modelupdate list
 
-Examples:
-  /modelupdate sonnet id=anthropic/claude-sonnet-4.6 name="Claude Sonnet 4.6"
+Smart modes (auto-fetch from OpenRouter):
+  /modelupdate sonnet refresh
+    → Refreshes cost, capabilities, context from live API
+  /modelupdate sonnet id=anthropic/claude-sonnet-4.6
+    → Swaps to new model ID + auto-fills all metadata
+  /modelupdate sonnet id=anthropic/claude-sonnet-4.6 name="Custom"
+    → Auto-fills from API, then applies your overrides on top
+
+Manual mode:
   /modelupdate sonnet cost=$3/$15 score="81% SWE, 200K ctx"
   /modelupdate opus45 revert
 
@@ -4028,6 +4041,58 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
       return;
     }
 
+    // /modelupdate <alias> refresh — auto-fetch live data for current model ID
+    if (args[1] === 'refresh') {
+      const currentModel = getModel(alias);
+      if (!currentModel) {
+        await this.bot.sendMessage(chatId, `❌ /${alias} not found.`);
+        return;
+      }
+      await this.bot.sendMessage(chatId, `🔄 Fetching live data for ${currentModel.id}...`);
+      try {
+        const { fetchModelById, buildPatchFromApiModel } = await import('../openrouter/model-sync/sync');
+        const liveModel = await fetchModelById(this.openrouterKey, currentModel.id);
+        if (!liveModel) {
+          await this.bot.sendMessage(chatId, `⚠️ ${currentModel.id} not found on OpenRouter. Model may have been removed.`);
+          return;
+        }
+        const apiPatch = buildPatchFromApiModel(liveModel);
+        // Don't override the alias or id (same model, just refreshing metadata)
+        delete apiPatch.id;
+
+        // Compute what actually changed vs current state
+        const base = MODELS[alias];
+        const actualChanges: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(apiPatch)) {
+          if (JSON.stringify(v) !== JSON.stringify((base as unknown as Record<string, unknown>)[k])) {
+            actualChanges[k] = v;
+          }
+        }
+
+        if (Object.keys(actualChanges).length === 0) {
+          await this.bot.sendMessage(chatId, `✅ /${alias} is already up to date — no changes needed.`);
+          return;
+        }
+
+        applyModelOverrides({ [alias]: actualChanges as Partial<ModelInfo> });
+        const allOverrides = getAllModelOverrides();
+        await this.storage.saveModelOverrides(allOverrides);
+
+        const updatedModel = getModel(alias);
+        const changes = Object.entries(actualChanges)
+          .map(([k, v]) => `  ${k}: ${(base as unknown as Record<string, unknown>)?.[k]} → ${v}`)
+          .join('\n');
+
+        await this.bot.sendMessage(chatId,
+          `✅ /${alias} refreshed from OpenRouter:\n${changes}\n\nNow: ${updatedModel?.name} (${updatedModel?.id})\nCost: ${updatedModel?.cost}\n\n💡 Use /modelupdate ${alias} revert to undo.`
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        await this.bot.sendMessage(chatId, `❌ Refresh failed: ${msg}`);
+      }
+      return;
+    }
+
     // Parse key=value pairs
     const ALLOWED_STRING_KEYS = new Set(['id', 'name', 'cost', 'score', 'specialty', 'reasoning']);
     const ALLOWED_NUMBER_KEYS = new Set(['maxContext']);
@@ -4067,6 +4132,30 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
     if (Object.keys(patch).length === 0) {
       await this.bot.sendMessage(chatId, '❌ No valid key=value pairs found.\nExample: /modelupdate sonnet id=anthropic/claude-sonnet-4.6');
       return;
+    }
+
+    // Smart auto-fetch: when `id` is provided, fetch metadata from OpenRouter
+    // and use it as the base, with any explicit key=value overrides applied on top.
+    if (patch.id && typeof patch.id === 'string') {
+      const newModelId = patch.id;
+      await this.bot.sendMessage(chatId, `🔄 Fetching metadata for ${newModelId}...`);
+      try {
+        const { fetchModelById, buildPatchFromApiModel } = await import('../openrouter/model-sync/sync');
+        const liveModel = await fetchModelById(this.openrouterKey, newModelId);
+        if (liveModel) {
+          // Build auto-filled patch from API data
+          const apiPatch = buildPatchFromApiModel(liveModel);
+          // Merge: API data first, then user's explicit overrides on top
+          const userOverrides = { ...patch };
+          delete userOverrides.id; // id is already in apiPatch
+          Object.assign(patch, apiPatch, userOverrides);
+        } else {
+          await this.bot.sendMessage(chatId, `⚠️ ${newModelId} not found on OpenRouter — applying manual values only.`);
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        await this.bot.sendMessage(chatId, `⚠️ Auto-fetch failed (${msg}) — applying manual values only.`);
+      }
     }
 
     // Apply the override
