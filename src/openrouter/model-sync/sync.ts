@@ -36,6 +36,18 @@ const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const MIN_CONTEXT_LENGTH = 4096;
 
 /**
+ * Fetch a single model by ID from the OpenRouter API.
+ * Returns the raw API model data, or null if not found.
+ */
+export async function fetchModelById(
+  apiKey: string,
+  modelId: string,
+): Promise<OpenRouterApiModel | null> {
+  const allModels = await fetchOpenRouterModels(apiKey);
+  return allModels.find(m => m.id === modelId) || null;
+}
+
+/**
  * Fetch all models from the OpenRouter API.
  */
 export async function fetchOpenRouterModels(apiKey: string): Promise<OpenRouterApiModel[]> {
@@ -52,6 +64,33 @@ export async function fetchOpenRouterModels(apiKey: string): Promise<OpenRouterA
 
   const data = await response.json() as OpenRouterApiResponse;
   return data.data || [];
+}
+
+/**
+ * Build a ModelInfo patch from live OpenRouter API data.
+ * Used by /model update to auto-fill fields from the API.
+ */
+export function buildPatchFromApiModel(raw: OpenRouterApiModel): Partial<ModelInfo> {
+  const caps = detectCapabilities(raw);
+  const costStr = formatCostString(raw.pricing);
+
+  const patch: Partial<ModelInfo> = {
+    id: raw.id,
+    name: raw.name,
+    cost: costStr,
+    maxContext: raw.context_length,
+    score: `${Math.round(raw.context_length / 1024)}K context`,
+  };
+
+  // Only set capability fields when detected with confidence
+  if (caps.supportsVision.value) patch.supportsVision = true;
+  if (caps.supportsTools.value) patch.supportsTools = true;
+  if (caps.structuredOutput.value) patch.structuredOutput = true;
+  if (caps.parallelCalls.value) patch.parallelCalls = true;
+  if (caps.reasoning.value !== 'none') patch.reasoning = caps.reasoning.value;
+  if (caps.isFree.value) patch.isFree = true;
+
+  return patch;
 }
 
 /**
