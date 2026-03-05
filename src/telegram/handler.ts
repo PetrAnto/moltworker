@@ -1928,13 +1928,35 @@ export class TelegramHandler {
     const history = await loadOrchestraHistory(this.r2Bucket, userId);
     const previousTasks = history?.tasks.filter(t => t.repo === repo) || [];
 
+    // For run mode with no specific task, pre-identify the next task from the roadmap
+    // so the model doesn't pick a different one than /orch advise showed
+    let resolvedTask = prompt;
+    if (mode === 'run' && !prompt && this.githubToken) {
+      try {
+        const [owner, repoName] = repo.split('/');
+        const { content } = await fetchRoadmapFromGitHub(owner, repoName, this.githubToken);
+        const phases = parseRoadmapPhases(content);
+        for (const phase of phases) {
+          for (const task of phase.tasks) {
+            if (!task.done) {
+              resolvedTask = task.title;
+              break;
+            }
+          }
+          if (resolvedTask) break;
+        }
+      } catch {
+        // Roadmap fetch failed — let the model figure it out
+      }
+    }
+
     // Determine branch name — append short timestamp suffix to prevent branch collisions
     const branchSuffix = Date.now().toString(36).slice(-4); // 4-char unique suffix
     const taskSlug = mode === 'init'
       ? 'roadmap-init'
       : mode === 'redo'
       ? `redo-${generateTaskSlug(prompt)}`
-      : generateTaskSlug(prompt || 'next-task');
+      : generateTaskSlug(resolvedTask || 'next-task');
     const branchName = `bot/${taskSlug}-${modelAlias}-${branchSuffix}`;
 
     // Build mode-specific system prompt
@@ -1955,7 +1977,7 @@ export class TelegramHandler {
         repo,
         modelAlias,
         previousTasks,
-        specificTask: prompt || undefined,
+        specificTask: resolvedTask || undefined,
         branchSlug,
       });
     }
@@ -1965,7 +1987,7 @@ export class TelegramHandler {
     let lastTaskHint = '';
     let sessionContext = '';
     if (mode !== 'init') {
-      const contextPrompt = prompt || 'Execute next roadmap task';
+      const contextPrompt = resolvedTask || prompt || 'Execute next roadmap task';
       learningsHint = await this.getLearningsHint(userId, contextPrompt);
       lastTaskHint = await this.getLastTaskHint(userId);
       sessionContext = await this.getSessionContext(userId, contextPrompt);
@@ -1980,7 +2002,9 @@ export class TelegramHandler {
       ? prompt
       : mode === 'redo'
       ? `Redo this task: ${prompt}`
-      : (prompt || 'Execute the next uncompleted task from the roadmap.');
+      : resolvedTask
+      ? `Execute this task: ${resolvedTask}`
+      : 'Execute the next uncompleted task from the roadmap.';
     const messages: ChatMessage[] = [
       {
         role: 'system',
@@ -1997,7 +2021,7 @@ export class TelegramHandler {
       modelAlias,
       repo,
       mode: mode === 'redo' ? 'run' : mode,
-      prompt: (prompt || (mode === 'init' ? 'Roadmap creation' : 'Next roadmap task')).substring(0, 200),
+      prompt: (resolvedTask || prompt || (mode === 'init' ? 'Roadmap creation' : 'Next roadmap task')).substring(0, 200),
       branchName,
       status: 'started',
       filesChanged: [],
@@ -2023,7 +2047,7 @@ export class TelegramHandler {
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
       autoResume,
-      prompt: `[Orchestra ${modeLabel}] ${repo}: ${(prompt || 'next task').substring(0, 150)}`,
+      prompt: `[Orchestra ${modeLabel}] ${repo}: ${(resolvedTask || prompt || 'next task').substring(0, 150)}`,
       acontextKey: this.acontextKey,
       acontextBaseUrl: this.acontextBaseUrl,
     };
@@ -2035,7 +2059,7 @@ export class TelegramHandler {
       body: JSON.stringify(taskRequest),
     }));
 
-    await this.storage.addMessage(userId, 'user', `[Orchestra ${modeLabel}: ${repo}] ${prompt || 'next task'}`);
+    await this.storage.addMessage(userId, 'user', `[Orchestra ${modeLabel}: ${repo}] ${resolvedTask || prompt || 'next task'}`);
 
     // Mode-specific confirmation message
     if (mode === 'init') {
@@ -2064,8 +2088,9 @@ export class TelegramHandler {
         `Use /cancel to stop.`
       );
     } else {
-      const taskDesc = prompt
-        ? `📝 Task: ${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`
+      const effectiveTask = resolvedTask || prompt;
+      const taskDesc = effectiveTask
+        ? `📝 Task: ${effectiveTask.substring(0, 100)}${effectiveTask.length > 100 ? '...' : ''}`
         : '📝 Task: next uncompleted from roadmap';
       await this.bot.sendMessage(
         chatId,
