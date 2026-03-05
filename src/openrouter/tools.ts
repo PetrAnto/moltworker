@@ -481,7 +481,7 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
  * Common issues: trailing commas, single quotes, unquoted keys, JS comments.
  * Returns parsed object on success, null on failure.
  */
-function repairJsonArgs(raw: string): Record<string, string> | null {
+function repairJsonArgs(raw: string): Record<string, any> | null {
   if (!raw || typeof raw !== 'string') return null;
 
   let fixed = raw.trim();
@@ -512,7 +512,8 @@ function repairJsonArgs(raw: string): Record<string, string> | null {
 export async function executeTool(toolCall: ToolCall, context?: ToolContext): Promise<ToolResult> {
   const { name, arguments: argsString } = toolCall.function;
 
-  let args: Record<string, string>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON.parse can return any structure; values validated per-tool
+  let args: Record<string, any>;
   try {
     args = JSON.parse(argsString);
   } catch {
@@ -1039,7 +1040,7 @@ async function githubCreatePr(
   repo: string,
   title: string,
   branch: string,
-  changesJson: string,
+  changesInput: string | FileChange[],
   base?: string,
   body?: string,
   token?: string
@@ -1063,12 +1064,18 @@ async function githubCreatePr(
   const fullBranch = branch.startsWith('bot/') ? branch : `bot/${branch}`;
   const baseBranch = base || 'main';
 
-  // Parse changes
+  // Parse changes — accept both JSON string and native array
   let changes: FileChange[];
-  try {
-    changes = JSON.parse(changesJson);
-  } catch {
-    throw new Error('Invalid changes JSON. Expected: [{"path":"file.ts","content":"...","action":"create|update|delete"}]');
+  if (Array.isArray(changesInput)) {
+    changes = changesInput;
+  } else if (typeof changesInput === 'string') {
+    try {
+      changes = JSON.parse(changesInput);
+    } catch {
+      throw new Error('Invalid changes JSON. Expected: [{"path":"file.ts","content":"...","action":"create|update|delete"}]');
+    }
+  } else {
+    throw new Error('Changes must be a JSON string or an array of file changes.');
   }
 
   if (!Array.isArray(changes) || changes.length === 0) {

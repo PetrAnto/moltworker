@@ -167,6 +167,54 @@ describe('summarizeToolUsage', () => {
     expect(summary).toContain('BTC');
   });
 
+  it('gives mutation tools (github_create_pr) more truncation space', () => {
+    const longResult = 'PR created: https://github.com/foo/bar/pull/1\n' + 'x'.repeat(600);
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'c1',
+          type: 'function' as const,
+          function: {
+            name: 'github_create_pr',
+            arguments: JSON.stringify({ owner: 'foo', repo: 'bar' }),
+          },
+        }],
+      },
+      { role: 'tool', content: longResult, tool_call_id: 'c1' },
+    ];
+
+    const summary = summarizeToolUsage(messages);
+    // Mutation tools get 800 chars, not 300 — so the full 650+ char result should be included
+    expect(summary.length).toBeGreaterThan(400);
+    expect(summary).toContain('PR created');
+  });
+
+  it('truncates non-mutation tools at 300 chars', () => {
+    const longResult = 'x'.repeat(500);
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'c1',
+          type: 'function' as const,
+          function: {
+            name: 'web_search',
+            arguments: JSON.stringify({ query: 'test' }),
+          },
+        }],
+      },
+      { role: 'tool', content: longResult, tool_call_id: 'c1' },
+    ];
+
+    const summary = summarizeToolUsage(messages);
+    // Non-mutation: truncated at 300, so summary line should be under ~350 (tool name + truncated result)
+    expect(summary.length).toBeLessThan(350);
+    expect(summary).toContain('...');
+  });
+
   it('shows path arg for github_read_file', () => {
     const messages: ChatMessage[] = [
       {
@@ -314,6 +362,31 @@ describe('buildReviewMessages', () => {
     const sys = result[0].content as string;
     expect(sys).toContain('complete');
     expect(sys).toContain('factual claims');
+  });
+
+  it('uses orchestra review instructions when isOrchestra is true', () => {
+    const result = buildReviewMessages(sampleMessages, 'answer', 'coding', true);
+    const sys = result[0].content as string;
+    expect(sys).toContain('ORCHESTRA');
+    expect(sys).toContain('github_create_pr');
+    expect(sys).toContain('ORCHESTRA_RESULT');
+    // Should NOT contain coding/general instructions
+    expect(sys).not.toContain('code claims');
+    expect(sys).not.toContain('factual claims');
+  });
+
+  it('uses coding instructions when isOrchestra is false', () => {
+    const result = buildReviewMessages(sampleMessages, 'answer', 'coding', false);
+    const sys = result[0].content as string;
+    expect(sys).toContain('code claims');
+    expect(sys).not.toContain('ORCHESTRA');
+  });
+
+  it('falls back to taskCategory when isOrchestra is undefined', () => {
+    const result = buildReviewMessages(sampleMessages, 'answer', 'coding');
+    const sys = result[0].content as string;
+    expect(sys).toContain('code claims');
+    expect(sys).not.toContain('ORCHESTRA');
   });
 });
 
