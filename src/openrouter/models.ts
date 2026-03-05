@@ -1827,6 +1827,15 @@ export function getOrchestraRecommendations(): {
     // Positive: parallel tool calls (orchestra uses many tools)
     if (m.parallelCalls) score += 5;
 
+    // Tool-calling reliability: models from families with proven structured JSON tool output.
+    // Orchestra requires github_create_pr with complex JSON — models that struggle with
+    // structured tool arguments waste all their iterations on formatting errors.
+    const modelId = m.id.toLowerCase();
+    if (modelId.includes('anthropic') || modelId.includes('claude')) score += 12;
+    if (modelId.includes('openai') || modelId.includes('gpt')) score += 10;
+    if (modelId.includes('qwen') || modelId.includes('alibaba')) score += 8;
+    if (modelId.includes('deepseek')) score += 6;
+
     // Use orchestraReady flag computed by enrichment pipeline
     if (m.orchestraReady) score += 10;
 

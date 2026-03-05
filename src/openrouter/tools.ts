@@ -413,7 +413,7 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
           },
           changes: {
             type: 'string',
-            description: 'JSON array of file changes. Each element: {"path":"file.ts","action":"create|update|patch|delete",...}.\n' +
+            description: 'JSON array of file changes. Can be a JSON string OR a native array. Each element: {"path":"file.ts","action":"create|update|patch|delete",...}.\n' +
               'For "create"/"update": include "content" with full file content.\n' +
               "For \"patch\": include \"patches\" array of {\"find\":\"exact text\",\"replace\":\"new text\"} objects. Each find must match exactly once in the file. Example: [{\"path\":\"src/App.jsx\",\"action\":\"patch\",\"patches\":[{\"find\":\"import data from './data'\",\"replace\":\"import data from './newData'\"}]}]\n" +
               'For "delete": no content needed.',
@@ -1039,7 +1039,7 @@ async function githubCreatePr(
   repo: string,
   title: string,
   branch: string,
-  changesJson: string,
+  changesInput: string | FileChange[],
   base?: string,
   body?: string,
   token?: string
@@ -1063,12 +1063,18 @@ async function githubCreatePr(
   const fullBranch = branch.startsWith('bot/') ? branch : `bot/${branch}`;
   const baseBranch = base || 'main';
 
-  // Parse changes
+  // Parse changes — accept both JSON string and native array
   let changes: FileChange[];
-  try {
-    changes = JSON.parse(changesJson);
-  } catch {
-    throw new Error('Invalid changes JSON. Expected: [{"path":"file.ts","content":"...","action":"create|update|delete"}]');
+  if (Array.isArray(changesInput)) {
+    changes = changesInput;
+  } else if (typeof changesInput === 'string') {
+    try {
+      changes = JSON.parse(changesInput);
+    } catch {
+      throw new Error('Invalid changes JSON. Expected: [{"path":"file.ts","content":"...","action":"create|update|delete"}]');
+    }
+  } else {
+    throw new Error('Changes must be a JSON string or an array of file changes.');
   }
 
   if (!Array.isArray(changes) || changes.length === 0) {

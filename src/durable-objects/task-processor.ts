@@ -2678,7 +2678,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             await sendProgressUpdate(true);
 
             // Build focused review context and call reviewer model
-            const reviewMessages = buildReviewMessages(conversationMessages, task.workPhaseContent, taskCategory);
+            const reviewMessages = buildReviewMessages(conversationMessages, task.workPhaseContent, taskCategory, isOrchestraRun);
             const reviewContent = await this.executeMultiAgentReview(
               reviewerAlias, reviewMessages, request.openrouterKey, task,
             );
