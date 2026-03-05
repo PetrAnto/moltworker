@@ -413,7 +413,7 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
           },
           changes: {
             type: 'string',
-            description: 'JSON array of file changes. Can be a JSON string OR a native array. Each element: {"path":"file.ts","action":"create|update|patch|delete",...}.\n' +
+            description: 'JSON array of file changes. Each element: {"path":"file.ts","action":"create|update|patch|delete",...}.\n' +
               'For "create"/"update": include "content" with full file content.\n' +
               "For \"patch\": include \"patches\" array of {\"find\":\"exact text\",\"replace\":\"new text\"} objects. Each find must match exactly once in the file. Example: [{\"path\":\"src/App.jsx\",\"action\":\"patch\",\"patches\":[{\"find\":\"import data from './data'\",\"replace\":\"import data from './newData'\"}]}]\n" +
               'For "delete": no content needed.',
@@ -481,7 +481,7 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
  * Common issues: trailing commas, single quotes, unquoted keys, JS comments.
  * Returns parsed object on success, null on failure.
  */
-function repairJsonArgs(raw: string): Record<string, string> | null {
+function repairJsonArgs(raw: string): Record<string, any> | null {
   if (!raw || typeof raw !== 'string') return null;
 
   let fixed = raw.trim();
@@ -512,7 +512,8 @@ function repairJsonArgs(raw: string): Record<string, string> | null {
 export async function executeTool(toolCall: ToolCall, context?: ToolContext): Promise<ToolResult> {
   const { name, arguments: argsString } = toolCall.function;
 
-  let args: Record<string, string>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON.parse can return any structure; values validated per-tool
+  let args: Record<string, any>;
   try {
     args = JSON.parse(argsString);
   } catch {
