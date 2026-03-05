@@ -41,6 +41,7 @@ import {
   formatModelInfoCard,
   formatModelHub,
   formatModelRanking,
+  getTopModelPicks,
   supportsVision,
   isImageGenModel,
   DEFAULT_MODEL,
@@ -1206,14 +1207,17 @@ export class TelegramHandler {
 
       case '/syncmodels':
       case '/sync':
+        // Legacy alias — same as /model sync
         await this.handleSyncModelsCommand(chatId, userId);
         break;
 
       case '/syncall':
+        // Legacy alias — same as /model syncall
         await this.handleSyncAllCommand(chatId, userId);
         break;
 
       case '/synccheck':
+        // Legacy alias — same as /model check
         await this.handleSyncCheckCommand(chatId);
         break;
 
@@ -1227,17 +1231,10 @@ export class TelegramHandler {
         await this.handleEnrichCommand(chatId);
         break;
 
-      case '/syncreset': {
-        // Clear all dynamic models and blocked list from R2
-        await this.storage.saveDynamicModels({}, []);
-        registerDynamicModels({});
-        const currentBlocked = getBlockedAliases();
-        if (currentBlocked.length > 0) {
-          unblockModels(currentBlocked);
-        }
-        await this.bot.sendMessage(chatId, '🗑️ Dynamic models and blocked list cleared.\nOnly static catalog models are available now.');
+      case '/syncreset':
+        // Legacy alias — same as /model reset
+        await this.handleModelCommand(chatId, userId, username, ['reset']);
         break;
-      }
 
       case '/modelupdate':
         // Legacy alias — same as /model update
@@ -2741,6 +2738,15 @@ export class TelegramHandler {
         }
         break;
 
+      case 'modelnav':
+        // Hub navigation buttons: modelnav:list or modelnav:rank
+        if (payload === 'list') {
+          await this.bot.sendMessage(chatId, formatModelsList());
+        } else if (payload === 'rank') {
+          await this.bot.sendMessage(chatId, formatModelRanking());
+        }
+        break;
+
       case 'confirm':
         // Confirmation action: confirm:yes or confirm:no
         const confirmed = parts[1] === 'yes';
@@ -3726,14 +3732,19 @@ export class TelegramHandler {
    * Handle /model — unified model hub with subcommands.
    *
    * Subcommands:
-   *   (none)          — Overview: current model + stats + subcommand guide
-   *   list            — Full catalog with prices (was /models)
-   *   pick            — Inline button picker (was /pick)
-   *   info <alias>    — Detailed capability card (was /modelinfo)
-   *   rank            — Orchestra/capability ranking
-   *   use <alias>     — Switch model (was /use)
-   *   update ...      — Patch model live (was /modelupdate)
-   *   enrich          — Fetch AA benchmarks (was /enrich)
+   *   (none)           — Hub: current model + top picks (buttons) + guide
+   *   list             — Full catalog with prices
+   *   pick             — Quick model picker (buttons)
+   *   info <alias>     — Detailed capability card
+   *   <alias>          — Shortcut for info (e.g. /model sonnet)
+   *   rank             — Orchestra/capability ranking
+   *   use <alias>      — Switch model
+   *   sync             — Fetch latest free models
+   *   syncall          — Full catalog sync + recommendations
+   *   check            — Check for model updates
+   *   enrich           — Fetch AA benchmarks + verify capabilities
+   *   update <a> k=v   — Patch model live
+   *   reset            — Clear synced models
    */
   private async handleModelCommand(
     chatId: number,
@@ -3744,9 +3755,8 @@ export class TelegramHandler {
     const sub = args[0]?.toLowerCase();
 
     if (!sub) {
-      // /model — hub overview
-      const currentAlias = await this.storage.getUserModel(userId);
-      await this.bot.sendMessage(chatId, formatModelHub(currentAlias));
+      // /model — hub overview with inline buttons for top picks
+      await this.sendModelHub(chatId, userId);
       return;
     }
 
@@ -3772,6 +3782,30 @@ export class TelegramHandler {
         await this.handleUseCommand(chatId, userId, username, args.slice(1));
         break;
 
+      // --- Sync commands ---
+      case 'sync':
+        await this.handleSyncModelsCommand(chatId, userId);
+        break;
+
+      case 'syncall':
+        await this.handleSyncAllCommand(chatId, userId);
+        break;
+
+      case 'check':
+        await this.handleSyncCheckCommand(chatId);
+        break;
+
+      case 'reset': {
+        await this.storage.saveDynamicModels({}, []);
+        registerDynamicModels({});
+        const currentBlocked = getBlockedAliases();
+        if (currentBlocked.length > 0) {
+          unblockModels(currentBlocked);
+        }
+        await this.bot.sendMessage(chatId, '🗑️ Synced models cleared. Only static catalog models are available now.');
+        break;
+      }
+
       case 'update':
         await this.handleModelUpdateCommand(chatId, args.slice(1));
         break;
@@ -3788,11 +3822,53 @@ export class TelegramHandler {
   }
 
   /**
+   * Send the model hub with inline buttons for top picks.
+   */
+  private async sendModelHub(chatId: number, userId: string): Promise<void> {
+    const currentAlias = await this.storage.getUserModel(userId);
+    const text = formatModelHub(currentAlias);
+    const picks = getTopModelPicks();
+
+    const makeButton = (m: ModelInfo, prefix: string): InlineKeyboardButton => {
+      const icons = [
+        m.supportsTools && '🔧',
+        m.supportsVision && '👁️',
+        m.reasoning && '🧠',
+      ].filter(Boolean).join('');
+      const shortName = m.name.length > 16 ? m.name.slice(0, 15) + '…' : m.name;
+      return { text: `${prefix} ${shortName} ${icons}`, callback_data: `model:${m.alias}` };
+    };
+
+    const toRows = (items: ModelInfo[], prefix: string): InlineKeyboardButton[][] => {
+      const rows: InlineKeyboardButton[][] = [];
+      for (let i = 0; i < items.length; i += 2) {
+        const row = [makeButton(items[i], prefix)];
+        if (i + 1 < items.length) row.push(makeButton(items[i + 1], prefix));
+        rows.push(row);
+      }
+      return rows;
+    };
+
+    const buttons: InlineKeyboardButton[][] = [];
+    if (picks.free.length > 0) buttons.push(...toRows(picks.free, '🆓'));
+    if (picks.value.length > 0) buttons.push(...toRows(picks.value, '🏆'));
+    if (picks.premium.length > 0) buttons.push(...toRows(picks.premium, '💎'));
+
+    // Navigation row
+    buttons.push([
+      { text: '📋 Full List', callback_data: 'modelnav:list' },
+      { text: '🏅 Ranking', callback_data: 'modelnav:rank' },
+    ]);
+
+    await this.bot.sendMessageWithButtons(chatId, text, buttons);
+  }
+
+  /**
    * Handle /modelinfo <alias> — show detailed capability card for a model.
    */
   private async handleModelInfoCommand(chatId: number, args: string[]): Promise<void> {
     if (args.length === 0) {
-      await this.bot.sendMessage(chatId, '📋 Usage: /modelinfo <alias>\n\nExample: /modelinfo sonnet');
+      await this.bot.sendMessage(chatId, 'Usage: /model <alias>\n\nExample: /model sonnet');
       return;
     }
 
@@ -4509,18 +4585,24 @@ Each /orch next picks up where the last one left off.`;
     return `📖 Moltworker — Command Reference
 
 ━━━ Core ━━━
-/model — Model hub (overview + all subcommands)
-/model list — Full catalog with prices
-/model pick — Quick picker (buttons)
-/model info <alias> — Detailed capability card
-/model rank — Orchestra/capability ranking
-/model use <alias> — Switch model
+/model — Model hub (top picks + buttons + guide)
 /new or /clear — Reset conversation
 /cancel — Stop a running task
 /status — Bot status
 /ping — Latency check
-/test — Run smoke tests (DO health check)
-/test list — Show available tests
+
+━━━ Models ━━━
+/model              — Hub with recommended models
+/model list         — Full catalog with prices
+/model rank         — Capability/orchestra ranking
+/model <alias>      — Model details (e.g. /model sonnet)
+/model use <alias>  — Switch model
+/model sync         — Fetch latest free models
+/model syncall      — Full catalog sync
+/model check        — Check for updates
+/model enrich       — Fetch benchmarks (Artificial Analysis)
+/model update       — Patch model without deploy
+Quick switch: /deep /grok /sonnet /flash /opus etc.
 
 ━━━ Costs & Credits ━━━
 /credits — OpenRouter balance
@@ -4532,7 +4614,7 @@ Each /orch next picks up where the last one left off.`;
 
 ━━━ Task History ━━━
 /learnings — View task patterns, success rates, top tools
-/sessions — Recent Acontext sessions (replay & analysis)
+/sessions — Recent context sessions (replay & analysis)
 
 ━━━ Image Generation ━━━
 /img <prompt> — Generate (default: FLUX.2 Pro)
@@ -4547,17 +4629,6 @@ Available: fluxklein, fluxpro, fluxflex, fluxmax
 /ar — Toggle auto-resume
 /autoroute — Toggle fast-model routing for simple queries
 /resume [model] — Resume with optional model override
-
-━━━ Models (quick switch) ━━━
-Paid:  /deep /grok /gpt /sonnet /haiku /flash /mimo
-Free:  /trinity /deepfree /qwencoderfree /devstral
-Direct: /dcode /dreason /q3coder /kimidirect
-All:   /model list
-/model update <alias> key=val — Patch a model without deploy
-/model enrich — Fetch AA benchmarks + verify capabilities
-/syncmodels — Fetch latest free models (interactive picker)
-/syncall — Full catalog sync + top 20 recommendations
-/synccheck — Check for updates (actionable: apply price changes)
 
 ━━━ Cloudflare API ━━━
 /cloudflare search <query> — Search CF API endpoints
