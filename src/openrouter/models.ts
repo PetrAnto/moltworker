@@ -561,7 +561,7 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 1000000,
   },
   opus45: {
-    id: 'claude-opus-4-5-20250520',
+    id: 'claude-opus-4-5-20251101',
     alias: 'opus45',
     name: 'Claude Opus 4.5',
     specialty: 'Paid Premium (Previous Gen)',
