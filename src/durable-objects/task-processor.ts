@@ -305,12 +305,14 @@ const STUCK_THRESHOLD_FREE_MS = 150000;
 const STUCK_THRESHOLD_PAID_MS = 240000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
-// Max cumulative active (non-sleep) time before yielding to a fresh alarm event.
-// Prevents hitting the ~30s CPU time limit per event. Conservative margin: 12s
-// to account for CPU work that isn't captured (checkpoint serialization, storage
-// ops, token estimation, etc.). With waitUntil, each event gets a hard 30s CPU
-// budget. 12s active ≈ ~15-18s real CPU, leaving 12-15s margin.
-const MAX_ACTIVE_TIME_BEFORE_YIELD_MS = 12000;
+// Max iterations per event before yielding to a fresh alarm event.
+// Each iteration uses ~3-8s CPU (request build, SSE parsing, tool execution,
+// checkpoint save). 3 iterations ≈ 9-24s CPU, leaving margin under 30s limit.
+const MAX_ITERATIONS_BEFORE_YIELD = 3;
+// Safety net: yield if cumulative active time exceeds this regardless of
+// iteration count. Catches single very-CPU-heavy iterations. Set high because
+// streaming I/O inflates active time (237s wall for 20s CPU).
+const MAX_ACTIVE_TIME_BEFORE_YIELD_MS = 25000;
 // Always save checkpoint when total tools is at or below this threshold.
 // Ensures small tasks (1-3 tool calls) are checkpointed before the watchdog fires.
 const CHECKPOINT_EARLY_THRESHOLD = 3;
@@ -1712,20 +1714,26 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // CPU budget yield: Cloudflare DOs have a ~30s CPU time limit per event.
         // Check BEFORE starting a new iteration to ensure we don't die mid-stream.
-        // Uses cumulative active time (excluding sleeps) as a proxy for CPU time.
-        if (cumulativeActiveMs > MAX_ACTIVE_TIME_BEFORE_YIELD_MS && task.iterations > 0) {
-          console.log(`[TaskProcessor] CPU budget yield after ${Math.round(cumulativeActiveMs / 1000)}s active time, ${task.iterations} iterations`);
-          // Persist current conversation state so alarm resume picks up correctly
-          task.messages = [...conversationMessages];
+        // Primary trigger: iteration count (each uses 3-8s CPU).
+        // Secondary trigger: active time safety net (for CPU-heavy single iterations).
+        // Only yield if R2 is available (needed to save/load checkpoint for resume).
+        // Without R2, the yield would lose conversation state.
+        const shouldYield = this.r2
+          && (task.iterations >= MAX_ITERATIONS_BEFORE_YIELD
+            || cumulativeActiveMs > MAX_ACTIVE_TIME_BEFORE_YIELD_MS)
+          && task.iterations > 0;
+        if (shouldYield) {
+          console.log(`[TaskProcessor] CPU budget yield: ${task.iterations} iterations, ${Math.round(cumulativeActiveMs / 1000)}s active time`);
+          // Save checkpoint to R2 — processTask loads from R2 on resume, so we
+          // don't need to store messages in task state (which may exceed 128KB).
+          await this.saveCheckpoint(
+            this.r2!, request.userId, request.taskId,
+            conversationMessages, task.toolsUsed, task.iterations,
+            request.prompt, 'latest', false, task.phase, task.modelAlias
+          );
+          // Store minimal task state (no messages) with yield flag
           task.lastUpdate = Date.now();
-          task.yieldPending = true; // Signal alarm handler for clean resume
-          if (this.r2) {
-            await this.saveCheckpoint(
-              this.r2, request.userId, request.taskId,
-              conversationMessages, task.toolsUsed, task.iterations,
-              request.prompt, 'latest', false, task.phase, task.modelAlias
-            );
-          }
+          task.yieldPending = true;
           await this.doState.storage.put('task', task);
           // Schedule immediate alarm for resume with fresh CPU budget
           await this.doState.storage.setAlarm(Date.now() + 100);
