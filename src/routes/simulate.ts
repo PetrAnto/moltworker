@@ -156,6 +156,7 @@ simulate.post('/chat', async (c) => {
     dashscopeKey: env.DASHSCOPE_API_KEY,
     moonshotKey: env.MOONSHOT_API_KEY,
     deepseekKey: env.DEEPSEEK_API_KEY,
+    anthropicKey: env.ANTHROPIC_API_KEY,
     autoResume: false, // Don't auto-resume simulated tasks
     prompt: `[simulate] ${text.slice(0, 100)}`,
     acontextKey: env.ACONTEXT_API_KEY,
@@ -252,6 +253,7 @@ simulate.post('/command', async (c) => {
     env.DASHSCOPE_API_KEY,
     env.MOONSHOT_API_KEY,
     env.DEEPSEEK_API_KEY,
+    env.ANTHROPIC_API_KEY,
     sandbox,
     env.ACONTEXT_API_KEY,
     env.ACONTEXT_BASE_URL,

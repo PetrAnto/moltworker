@@ -506,6 +506,7 @@ export class TelegramHandler {
   private dashscopeKey?: string;
   private moonshotKey?: string;
   private deepseekKey?: string;
+  private anthropicKey?: string;
   // Acontext observability
   private acontextKey?: string;
   private acontextBaseUrl?: string;
@@ -528,6 +529,7 @@ export class TelegramHandler {
     dashscopeKey?: string, // DashScope API key (Qwen)
     moonshotKey?: string, // Moonshot API key (Kimi)
     deepseekKey?: string, // DeepSeek API key
+    anthropicKey?: string, // Anthropic API key (Claude direct)
     sandbox?: SandboxLike, // Sandbox container for code execution
     acontextKey?: string, // Acontext API key for observability
     acontextBaseUrl?: string, // Acontext API base URL
@@ -550,6 +552,7 @@ export class TelegramHandler {
     this.dashscopeKey = dashscopeKey;
     this.moonshotKey = moonshotKey;
     this.deepseekKey = deepseekKey;
+    this.anthropicKey = anthropicKey;
     this.acontextKey = acontextKey;
     this.acontextBaseUrl = acontextBaseUrl;
     this.cloudflareApiToken = cloudflareApiToken;
@@ -2046,6 +2049,7 @@ export class TelegramHandler {
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
+      anthropicKey: this.anthropicKey,
       autoResume,
       prompt: `[Orchestra ${modeLabel}] ${repo}: ${(resolvedTask || prompt || 'next task').substring(0, 150)}`,
       acontextKey: this.acontextKey,
@@ -2281,6 +2285,7 @@ export class TelegramHandler {
             dashscopeKey: this.dashscopeKey,
             moonshotKey: this.moonshotKey,
             deepseekKey: this.deepseekKey,
+      anthropicKey: this.anthropicKey,
             autoResume,
             acontextKey: this.acontextKey,
             acontextBaseUrl: this.acontextBaseUrl,
@@ -2415,6 +2420,7 @@ export class TelegramHandler {
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
+      anthropicKey: this.anthropicKey,
       autoResume,
       acontextKey: this.acontextKey,
       acontextBaseUrl: this.acontextBaseUrl,
@@ -2480,6 +2486,7 @@ export class TelegramHandler {
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
       deepseekKey: this.deepseekKey,
+      anthropicKey: this.anthropicKey,
       autoResume,
       acontextKey: this.acontextKey,
       acontextBaseUrl: this.acontextBaseUrl,
@@ -2640,6 +2647,7 @@ export class TelegramHandler {
           dashscopeKey: this.dashscopeKey,
           moonshotKey: this.moonshotKey,
           deepseekKey: this.deepseekKey,
+      anthropicKey: this.anthropicKey,
           autoResume,
           reasoningLevel: reasoningLevel ?? undefined,
           responseFormat,
@@ -3027,6 +3035,7 @@ export class TelegramHandler {
               dashscopeKey: this.dashscopeKey,
               moonshotKey: this.moonshotKey,
               deepseekKey: this.deepseekKey,
+      anthropicKey: this.anthropicKey,
               autoResume,
               acontextKey: this.acontextKey,
               acontextBaseUrl: this.acontextBaseUrl,
@@ -5002,6 +5011,7 @@ export function createTelegramHandler(
   dashscopeKey?: string,
   moonshotKey?: string,
   deepseekKey?: string,
+  anthropicKey?: string,
   sandbox?: SandboxLike,
   acontextKey?: string,
   acontextBaseUrl?: string,
@@ -5022,6 +5032,7 @@ export function createTelegramHandler(
     dashscopeKey,
     moonshotKey,
     deepseekKey,
+    anthropicKey,
     sandbox,
     acontextKey,
     acontextBaseUrl,

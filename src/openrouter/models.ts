@@ -4,7 +4,7 @@
  */
 
 // Direct API providers
-export type Provider = 'openrouter' | 'dashscope' | 'moonshot' | 'deepseek';
+export type Provider = 'openrouter' | 'dashscope' | 'moonshot' | 'deepseek' | 'anthropic';
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -29,6 +29,10 @@ export const PROVIDERS: Record<Provider, ProviderConfig> = {
     baseUrl: 'https://api.deepseek.com/chat/completions',
     envKey: 'DEEPSEEK_API_KEY',
     maxOutputTokens: 8192, // DeepSeek API hard limit
+  },
+  anthropic: {
+    baseUrl: 'https://api.anthropic.com/v1/messages',
+    envKey: 'ANTHROPIC_API_KEY',
   },
 };
 
@@ -502,12 +506,13 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 1048576,
   },
   haiku: {
-    id: 'anthropic/claude-haiku-4.5',
+    id: 'claude-haiku-4-5-20251001',
     alias: 'haiku',
     name: 'Claude Haiku 4.5',
     specialty: 'Paid Fast Claude',
     score: '73% SWE',
     cost: '$1/$5',
+    provider: 'anthropic',
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
@@ -542,12 +547,13 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 128000,
   },
   sonnet: {
-    id: 'anthropic/claude-sonnet-4.6',
+    id: 'claude-sonnet-4-6-20250514',
     alias: 'sonnet',
     name: 'Claude Sonnet 4.6',
     specialty: 'Paid Premium Reasoning',
     score: 'AA Index (48), Code (79), 1M context',
     cost: '$3/$15',
+    provider: 'anthropic',
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
@@ -555,12 +561,13 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 1000000,
   },
   opus45: {
-    id: 'anthropic/claude-opus-4.5',
+    id: 'claude-opus-4-5-20250520',
     alias: 'opus45',
     name: 'Claude Opus 4.5',
     specialty: 'Paid Premium (Previous Gen)',
     score: '80.9% SWE-Bench, 200K context',
     cost: '$5/$25',
+    provider: 'anthropic',
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
@@ -568,12 +575,13 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 200000,
   },
   opus: {
-    id: 'anthropic/claude-opus-4.6',
+    id: 'claude-opus-4-6-20250610',
     alias: 'opus',
     name: 'Claude Opus 4.6',
     specialty: 'Paid Best Quality (Newest)',
     score: 'AA Index #1 (53), best for professional tasks',
     cost: '$5/$25',
+    provider: 'anthropic',
     supportsVision: true,
     supportsTools: true,
     parallelCalls: true,
@@ -923,12 +931,12 @@ export function isAutoSyncedModel(alias: string): boolean {
 }
 
 /**
- * Check if a model routes to Anthropic (model ID starts with 'anthropic/')
+ * Check if a model routes to Anthropic (direct provider or OpenRouter anthropic/).
  */
 export function isAnthropicModel(alias: string): boolean {
   const model = getModel(alias);
   if (!model) return false;
-  return model.id.startsWith('anthropic/');
+  return model.provider === 'anthropic' || model.id.startsWith('anthropic/');
 }
 
 /**
