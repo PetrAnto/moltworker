@@ -302,6 +302,9 @@ const STUCK_THRESHOLD_FREE_MS = 150000;
 const STUCK_THRESHOLD_PAID_MS = 240000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
+// Max wall time before yielding to a fresh alarm event (prevents hitting
+// the 30s CPU time limit per event — wall time is a proxy for CPU time)
+const MAX_WALL_TIME_BEFORE_YIELD_MS = 25000;
 // Always save checkpoint when total tools is at or below this threshold.
 // Ensures small tasks (1-3 tool calls) are checkpointed before the watchdog fires.
 const CHECKPOINT_EARLY_THRESHOLD = 3;
@@ -1340,6 +1343,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     this.isRunning = true;
     this.isCancelled = false; // Reset for new/resumed task
     this.lastHeartbeatMs = Date.now(); // Initialize heartbeat
+    let processStartTime = Date.now(); // Track wall time for CPU budget yield (mutable — reset after sleeps)
 
     // Check if this is a resume of the same task (used for cache + state preservation)
     const existingTask = await this.doState.storage.get<TaskState>('task');
@@ -1770,6 +1774,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             // Reset window after waiting
             anthropicWindowStart = Date.now();
             anthropicWindowTokens = 0;
+            // Reset CPU budget timer — sleep doesn't consume CPU
+            processStartTime = Date.now();
           } else if (elapsedInWindow >= 60000) {
             // Window expired, reset
             anthropicWindowStart = Date.now();
@@ -2050,6 +2056,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 this.lastHeartbeatMs = Date.now();
                 await new Promise(r => setTimeout(r, waitSecs * 1000));
                 this.lastHeartbeatMs = Date.now();
+                processStartTime = Date.now(); // Reset CPU budget timer — sleep doesn't consume CPU
                 attempt--; // Don't consume the attempt slot for rate limits
                 continue;
               }
@@ -2664,6 +2671,24 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
 
           console.log(`[TaskProcessor] Iteration ${task.iterations} COMPLETE - total time: ${Date.now() - iterStartTime}ms`);
+
+          // CPU budget yield: Cloudflare DOs have a 30s CPU time limit per event.
+          // After running multiple iterations, we may approach this limit. Proactively
+          // yield by saving state and scheduling an immediate alarm for auto-resume.
+          // The alarm handler picks up with a fresh CPU budget.
+          const wallTimeElapsed = Date.now() - processStartTime;
+          if (wallTimeElapsed > MAX_WALL_TIME_BEFORE_YIELD_MS && task.iterations < maxIterations) {
+            console.log(`[TaskProcessor] CPU budget yield after ${Math.round(wallTimeElapsed / 1000)}s wall time, ${task.iterations} iterations`);
+            // Backdate lastUpdate past stuck threshold so alarm handler triggers auto-resume
+            const stuckThreshold = getWatchdogStuckThreshold(task.modelAlias);
+            task.lastUpdate = Date.now() - stuckThreshold - 1000;
+            await this.doState.storage.put('task', task);
+            // Schedule alarm for immediate pickup (1s delay)
+            await this.doState.storage.setAlarm(Date.now() + 1000);
+            this.isRunning = false;
+            this.lastHeartbeatMs = 0; // Clear heartbeat so alarm detects "stuck"
+            return; // Exit processTask — alarm will auto-resume with fresh CPU budget
+          }
 
           // Check total tool call limit — prevents excessive API usage on runaway tasks
           const maxTotalTools = (getModel(task.modelAlias)?.isFree === true) ? MAX_TOTAL_TOOLS_FREE : MAX_TOTAL_TOOLS_PAID;
