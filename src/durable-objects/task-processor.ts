@@ -1200,9 +1200,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       // Start processing in the background with global error catching
       // This ensures ANY error sends a notification to user
-      // Use waitUntil to keep DO alive during long-running background work
-      // (matches alarm handler pattern at line ~863)
-      const taskPromise = this.processTask(taskRequest).catch(async (error) => {
+      // NOTE: intentionally NOT using waitUntil here — processTask runs as a
+      // fire-and-forget promise. The DO stays alive via pending I/O (fetch,
+      // storage reads/writes, stream reads). Using waitUntil imposed a 30s CPU
+      // time budget that caused Anthropic streaming to be terminated (499
+      // client disconnect) after ~43s of processing.
+      this.processTask(taskRequest).catch(async (error) => {
         console.error('[TaskProcessor] Uncaught error in processTask:', error);
         try {
           // Cancel watchdog alarm
@@ -1226,7 +1229,6 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           console.error('[TaskProcessor] Failed to notify user:', notifyError);
         }
       });
-      this.doState.waitUntil(taskPromise);
 
       return new Response(JSON.stringify({
         status: 'started',
@@ -1618,6 +1620,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Track cumulative token usage across all iterations
     const totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
 
+    // Anthropic rate limit pacing: track input tokens consumed in the current minute window
+    let anthropicWindowStart = Date.now();
+    let anthropicWindowTokens = 0;
+
     // Progress tracking state (7B.5: Streaming User Feedback)
     let currentTool: string | null = null;
     let currentToolContext: string | null = null;
@@ -1745,6 +1751,30 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Phase budget circuit breaker: check before API call
         if (task.phase) {
           checkPhaseBudget(task.phase, phaseStartTime);
+        }
+
+        // Anthropic rate limit pacing: with a 30K input tokens/min limit,
+        // blasting 4 iterations (~38K tokens) in 15 seconds guarantees a 429.
+        // Track cumulative tokens per window and proactively sleep before hitting the limit.
+        if (provider === 'anthropic' && anthropicWindowTokens > 0) {
+          const elapsedInWindow = Date.now() - anthropicWindowStart;
+          const ANTHROPIC_INPUT_TPM = 30000;
+          const estimatedNext = this.estimateTokens(conversationMessages);
+          if (anthropicWindowTokens + estimatedNext > ANTHROPIC_INPUT_TPM * 0.85 && elapsedInWindow < 60000) {
+            const waitMs = Math.min(60000 - elapsedInWindow + 2000, 65000);
+            console.log(`[TaskProcessor] Anthropic rate limit pacing: ${anthropicWindowTokens} tokens used in ${Math.round(elapsedInWindow / 1000)}s, next ~${estimatedNext} tokens — waiting ${Math.round(waitMs / 1000)}s`);
+            task.lastUpdate = Date.now();
+            await this.doState.storage.put('task', task);
+            await new Promise(r => setTimeout(r, waitMs));
+            this.lastHeartbeatMs = Date.now();
+            // Reset window after waiting
+            anthropicWindowStart = Date.now();
+            anthropicWindowTokens = 0;
+          } else if (elapsedInWindow >= 60000) {
+            // Window expired, reset
+            anthropicWindowStart = Date.now();
+            anthropicWindowTokens = 0;
+          }
         }
 
         // Retry loop for API calls
@@ -2173,6 +2203,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           totalUsage.cacheMissTokens = (totalUsage.cacheMissTokens ?? 0) + (iterationUsage.cacheMissTokens ?? 0);
           const cacheLog = cacheInfo ? `, cache: ${cacheInfo.cacheHitTokens} hit/${cacheInfo.cacheMissTokens} miss` : '';
           console.log(`[TaskProcessor] Usage: ${result.usage.prompt_tokens}+${result.usage.completion_tokens} tokens, $${iterationUsage.costUsd.toFixed(4)}${cacheLog}`);
+
+          // Track Anthropic input tokens for rate limit pacing
+          if (provider === 'anthropic') {
+            anthropicWindowTokens += result.usage.prompt_tokens;
+          }
         }
 
         const choice = result.choices[0];
