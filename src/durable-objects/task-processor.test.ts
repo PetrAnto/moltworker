@@ -110,6 +110,7 @@ function createMockState() {
   return {
     storage: createMockStorage(),
     id: { toString: () => 'test-do-id' },
+    waitUntil: (_promise: Promise<unknown>) => {},
   };
 }
 
