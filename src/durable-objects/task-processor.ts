@@ -896,13 +896,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    *   DO evictions, and cascading auto-resumes.
    */
   private getToolResultLimit(modelAlias?: string, batchSize = 1): number {
-    const modelContext = modelAlias ? getModel(modelAlias)?.maxContext : undefined;
-    if (!modelContext || modelContext <= 0) {
-      return Math.max(4000, Math.floor(DEFAULT_TOOL_RESULT_LENGTH / Math.max(1, batchSize)));
-    }
-    // Total budget: ~20% of context in chars (~4 chars/token), shared across all results
-    // 128K context → 102K total → 20K each for 5 tools, 51K each for 2 tools
-    const totalBudget = Math.floor(modelContext * 0.20 * 4);
+    // Use getContextBudget (which has a DO-safe cap) instead of raw model context.
+    // Without this, Sonnet's 1M context allows 50KB per result × 5 reads = 250KB
+    // per iteration, which bloats checkpoints and causes the read-loop stall.
+    const contextBudget = this.getContextBudget(modelAlias);
+    // Total budget: ~20% of context budget in chars (~4 chars/token), shared across all results
+    // 100K budget → 80K total → 16K each for 5 tools, 40K each for 2 tools
+    const totalBudget = Math.floor(contextBudget * 0.20 * 4);
     const perResult = Math.floor(totalBudget / Math.max(1, batchSize));
     return Math.min(MAX_TOOL_RESULT_LENGTH, Math.max(4000, perResult));
   }
@@ -940,7 +940,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
     // Reserve room for completion + overhead to avoid hitting hard context limits.
     const budget = Math.floor(modelContext * 0.75);
-    return Math.max(16000, budget);
+    // Hard cap: even if the model supports 1M tokens, the Cloudflare DO can't
+    // realistically handle prompts larger than ~100K tokens — Anthropic/OpenRouter
+    // API latency with huge prompts causes DO evictions before the response arrives.
+    // Without this cap, Sonnet (1M context) gets a 750K budget, compression never
+    // triggers, checkpoints store 250KB+ of file reads, and every resume cycle
+    // re-reads the same files (the "read-only loop" stall pattern).
+    const DO_CONTEXT_CAP = 100000;
+    return Math.max(16000, Math.min(budget, DO_CONTEXT_CAP));
   }
 
   /**
