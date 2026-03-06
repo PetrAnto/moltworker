@@ -306,15 +306,12 @@ const STUCK_THRESHOLD_PAID_MS = 240000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max iterations per event before yielding to a fresh alarm event.
-// Anthropic direct API: yield after EVERY iteration (1). Each iteration involves
-// loading context, streaming the full response, and executing tools. Even a single
-// iteration can consume significant CPU (SSE parsing, JSON processing, tool execution)
-// and the 30s CPU limit kills the DO mid-stream if exceeded → 499 client disconnect.
-// With threshold=1, the check fires after iteration 1 completes (iterations=1 >= 1
-// AND iterations > 0), yielding before iteration 2 starts.
-// OpenRouter/other: relaxed (8) because OpenRouter proxies the connection,
-// and iterations use less CPU (streaming is handled server-side).
-const MAX_ITERATIONS_BEFORE_YIELD_ANTHROPIC = 1;
+// Direct API providers (Anthropic, DeepSeek, Moonshot, DashScope): yield after
+// EVERY iteration (1). The DO holds the TCP connection directly, so if the 30s
+// CPU limit kills the DO mid-stream → 499 client disconnect. Each iteration
+// (streaming response + tool execution) can consume significant CPU.
+// OpenRouter: relaxed (8) because it proxies the connection server-side.
+const MAX_ITERATIONS_BEFORE_YIELD_DIRECT = 1;
 const MAX_ITERATIONS_BEFORE_YIELD_DEFAULT = 8;
 // Safety net: yield if cumulative active time exceeds this regardless of
 // iteration count. Catches single very-CPU-heavy iterations. Set high because
@@ -1743,8 +1740,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Primary trigger: iteration count (provider-specific threshold).
         // Secondary trigger: active time safety net (for CPU-heavy single iterations).
         // Only yield if R2 is available (needed to save/load checkpoint for resume).
-        const iterYieldThreshold = getProvider(task.modelAlias) === 'anthropic'
-          ? MAX_ITERATIONS_BEFORE_YIELD_ANTHROPIC
+        const taskProvider = getProvider(task.modelAlias);
+        const isDirectApi = taskProvider === 'anthropic' || taskProvider === 'deepseek'
+          || taskProvider === 'moonshot' || taskProvider === 'dashscope';
+        const iterYieldThreshold = isDirectApi
+          ? MAX_ITERATIONS_BEFORE_YIELD_DIRECT
           : MAX_ITERATIONS_BEFORE_YIELD_DEFAULT;
         const shouldYield = this.r2
           && (task.iterations >= iterYieldThreshold
