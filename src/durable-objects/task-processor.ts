@@ -306,9 +306,12 @@ const STUCK_THRESHOLD_PAID_MS = 240000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max iterations per event before yielding to a fresh alarm event.
-// Each iteration uses ~3-8s CPU (request build, SSE parsing, tool execution,
-// checkpoint save). 3 iterations ≈ 9-24s CPU, leaving margin under 30s limit.
-const MAX_ITERATIONS_BEFORE_YIELD = 3;
+// Anthropic direct API: aggressive (3) because each iteration's TCP connection
+// to Anthropic dies if the DO hits its 30s CPU limit mid-stream → 499.
+// OpenRouter/other: relaxed (8) because OpenRouter proxies the connection,
+// and iterations use less CPU (streaming is handled server-side).
+const MAX_ITERATIONS_BEFORE_YIELD_ANTHROPIC = 3;
+const MAX_ITERATIONS_BEFORE_YIELD_DEFAULT = 8;
 // Safety net: yield if cumulative active time exceeds this regardless of
 // iteration count. Catches single very-CPU-heavy iterations. Set high because
 // streaming I/O inflates active time (237s wall for 20s CPU).
@@ -1714,12 +1717,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // CPU budget yield: Cloudflare DOs have a ~30s CPU time limit per event.
         // Check BEFORE starting a new iteration to ensure we don't die mid-stream.
-        // Primary trigger: iteration count (each uses 3-8s CPU).
+        // Primary trigger: iteration count (provider-specific threshold).
         // Secondary trigger: active time safety net (for CPU-heavy single iterations).
         // Only yield if R2 is available (needed to save/load checkpoint for resume).
-        // Without R2, the yield would lose conversation state.
+        const iterYieldThreshold = getProvider(task.modelAlias) === 'anthropic'
+          ? MAX_ITERATIONS_BEFORE_YIELD_ANTHROPIC
+          : MAX_ITERATIONS_BEFORE_YIELD_DEFAULT;
         const shouldYield = this.r2
-          && (task.iterations >= MAX_ITERATIONS_BEFORE_YIELD
+          && (task.iterations >= iterYieldThreshold
             || cumulativeActiveMs > MAX_ACTIVE_TIME_BEFORE_YIELD_MS)
           && task.iterations > 0;
         if (shouldYield) {
