@@ -1343,7 +1343,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     this.isRunning = true;
     this.isCancelled = false; // Reset for new/resumed task
     this.lastHeartbeatMs = Date.now(); // Initialize heartbeat
-    const processStartTime = Date.now(); // Track wall time for CPU budget yield
+    let processStartTime = Date.now(); // Track wall time for CPU budget yield (mutable — reset after sleeps)
 
     // Check if this is a resume of the same task (used for cache + state preservation)
     const existingTask = await this.doState.storage.get<TaskState>('task');
@@ -1774,6 +1774,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             // Reset window after waiting
             anthropicWindowStart = Date.now();
             anthropicWindowTokens = 0;
+            // Reset CPU budget timer — sleep doesn't consume CPU
+            processStartTime = Date.now();
           } else if (elapsedInWindow >= 60000) {
             // Window expired, reset
             anthropicWindowStart = Date.now();
@@ -2054,6 +2056,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 this.lastHeartbeatMs = Date.now();
                 await new Promise(r => setTimeout(r, waitSecs * 1000));
                 this.lastHeartbeatMs = Date.now();
+                processStartTime = Date.now(); // Reset CPU budget timer — sleep doesn't consume CPU
                 attempt--; // Don't consume the attempt slot for rate limits
                 continue;
               }
