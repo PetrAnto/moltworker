@@ -2139,6 +2139,29 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           choice.message.tool_calls = validToolCalls;
         }
 
+        // Handle finish_reason: length for text-only responses (no tool calls).
+        // During orchestra work phase, the model may be writing the ORCHESTRA_RESULT
+        // block or a long explanation when output is truncated. Without this handler,
+        // the truncated text is treated as a complete response and transitions to review
+        // with a broken/missing PR URL.
+        if (choice.finish_reason === 'length' && (!choice.message.tool_calls || choice.message.tool_calls.length === 0)) {
+          const sysMsg = request.messages.find(m => m.role === 'system');
+          const sysContent = typeof sysMsg?.content === 'string' ? sysMsg.content : '';
+          const isOrch = sysContent.includes('Orchestra RUN') || sysContent.includes('Orchestra INIT') || sysContent.includes('Orchestra REDO');
+          if (isOrch && task.phase === 'work') {
+            console.log(`[TaskProcessor] Text-only truncation in orchestra work phase — nudging model to continue`);
+            conversationMessages.push({
+              role: 'assistant',
+              content: choice.message.content || '',
+            });
+            conversationMessages.push({
+              role: 'user',
+              content: '[Your text response was cut off (output limit reached). Continue EXACTLY where you left off. If you were writing the ORCHESTRA_RESULT block, complete it now. If you haven\'t called github_create_pr yet, call it now using "patch" actions to keep the output small.]',
+            });
+            continue;
+          }
+        }
+
         // Phase transition: plan → work after first model response
         if (task.phase === 'plan') {
           task.phase = 'work';
@@ -2670,13 +2693,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const isOrchestraRun = sysText.includes('Orchestra RUN Mode') || sysText.includes('Orchestra INIT Mode') || sysText.includes('Orchestra REDO Mode');
         const looksIncomplete = /\b(unable to|could not|couldn't|not found|no .*(roadmap|file|task)|I (need|should) to .*(check|try|search|look|examine)|let me (try|check|search)|calling tools|please confirm|would you like|shall I|do you want me to|if you'?d like|awaiting.*confirm|let me know if|ready to (start|proceed|begin))\b/i.test(contentText);
         // For orchestra tasks, also check if the required ORCHESTRA_RESULT: block is missing.
-        // Only apply this early-exit guard when the model hasn't done much work yet
-        // (< 8 tool calls). After 8+ tool calls the model has done substantial work
-        // and should be allowed to transition naturally. This prevents the guard from
-        // re-triggering after every auto-resume (which resets workIterations to 0).
+        // Only applies when the model hasn't yet called github_create_pr — once the PR
+        // tool has been called, the model should be composing the result block, not
+        // getting pushed back to work. Previous `toolsUsed.length < 8` heuristic broke
+        // on resume because re-reads inflated the count past 8 without a PR being created.
         const orchestraResultMissing = isOrchestraRun
           && !contentText.includes('ORCHESTRA_RESULT:')
-          && task.toolsUsed.length < 8;
+          && !task.toolsUsed.includes('github_create_pr');
 
         // For orchestra tasks, require at least 3 work-phase iterations or non-failure content
         // before transitioning to review. This prevents premature review when the model
