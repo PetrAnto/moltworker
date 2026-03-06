@@ -1745,6 +1745,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // Retry loop for API calls
         const MAX_API_RETRIES = 3;
+        let rateLimitRetries = 0;
+        const MAX_RATE_LIMIT_RETRIES = 5;
         let result: {
           choices: Array<{
             message: {
@@ -1983,6 +1985,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           } catch (apiError) {
             lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
             console.log(`[TaskProcessor] API call failed (attempt ${attempt}): ${lastError.message}`);
+
+            // 429 rate limit on paid model — wait longer and retry (per-minute limits)
+            if (/\b429\b/.test(lastError.message) && !(getModel(task.modelAlias)?.isFree === true)) {
+              if (rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
+                rateLimitRetries++;
+                const waitSecs = Math.min(15 * Math.pow(2, rateLimitRetries - 1), 60);
+                console.log(`[TaskProcessor] 429 rate limit on paid model — waiting ${waitSecs}s (rate limit retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`);
+                await new Promise(r => setTimeout(r, waitSecs * 1000));
+                attempt--; // Don't consume the attempt slot for rate limits
+                continue;
+              }
+              console.log('[TaskProcessor] 429 rate limit retries exhausted — failing');
+              break;
+            }
 
             // 402 = payment required / quota exceeded — fail fast, don't retry
             if (/\b402\b/.test(lastError.message)) {
