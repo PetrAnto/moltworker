@@ -232,6 +232,11 @@ interface TaskState {
   toolSignatures?: string[];
   // Track when context was last compressed to allow post-compression re-reads
   lastCompressionToolCount?: number;
+  // Last few tool errors for user-facing progress messages (persisted across resumes)
+  lastToolErrors?: string[];
+  // Files involved in the task (extracted from tool calls for progress display)
+  filesRead?: string[];
+  filesModified?: string[];
   // Reasoning level override
   reasoningLevel?: ReasoningLevel;
   // Structured output format
@@ -795,10 +800,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           await this.updateOrchestraHistoryOnFailure(task, stallReason);
 
           if (task.telegramToken) {
+            const stallProgress = this.buildProgressSummary(task);
             await this.sendTelegramMessageWithButtons(
               task.telegramToken,
               task.chatId,
-              `🛑 Task stalled after ${noProgressResumes} resumes with no progress (${task.iterations} iter, ${toolCountNow} tools).\n\n💡 Try a more capable model: ${this.getStallModelRecs()}\n\nProgress saved.`,
+              `🛑 Task stalled after ${noProgressResumes} resumes with no progress (${task.iterations} iter, ${toolCountNow} tools).${stallProgress}\n\n💡 Try a more capable model: ${this.getStallModelRecs()}\n\nProgress saved.`,
               [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
             );
           }
@@ -820,11 +826,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.lastUpdate = Date.now();
       await this.doState.storage.put('task', task);
 
-      // Notify user about auto-resume
+      // Notify user about auto-resume with progress context
+      const resumeTools = newTools > 0 ? `, ${newTools} new tools` : '';
       await this.sendTelegramMessage(
         task.telegramToken,
         task.chatId,
-        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations`
+        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}`
       );
 
       // Reconstruct TaskRequest and trigger resume
@@ -868,10 +875,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       const limitReachedMsg = resumeCount >= maxResumes
         ? `\n\n⚠️ Auto-resume limit (${maxResumes}) reached.`
         : '';
+      const stopProgress = this.buildProgressSummary(task);
       await this.sendTelegramMessageWithButtons(
         task.telegramToken,
         task.chatId,
-        `⚠️ Task stopped unexpectedly after ${elapsed}s (${task.iterations} iterations, ${task.toolsUsed.length} tools).\n\nThis can happen due to API timeouts or network issues. Tap Resume to continue.${limitReachedMsg}\n\n💡 Progress saved.`,
+        `⚠️ Task stopped unexpectedly after ${elapsed}s (${task.iterations} iterations, ${task.toolsUsed.length} tools).${stopProgress}${limitReachedMsg}\n\n💡 Progress saved. Tap Resume to continue.`,
         [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
       );
     }
@@ -1193,10 +1201,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.error = `Unexpected error: ${error instanceof Error ? error.message : String(error)}`;
             await this.doState.storage.put('task', task);
           }
+          const crashProgress = task ? this.buildProgressSummary(task) : '';
           await this.sendTelegramMessageWithButtons(
             taskRequest.telegramToken,
             taskRequest.chatId,
-            `❌ Task crashed: ${error instanceof Error ? error.message : 'Unknown error'}\n\n💡 Progress may be saved.`,
+            `❌ Task crashed: ${error instanceof Error ? error.message : 'Unknown error'}${crashProgress}\n\n💡 Progress may be saved.`,
             [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
           );
         } catch (notifyError) {
@@ -1265,7 +1274,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           if (task.statusMessageId) {
             await this.deleteTelegramMessage(task.telegramToken, task.chatId, task.statusMessageId);
           }
-          await this.sendTelegramMessage(task.telegramToken, task.chatId, '🛑 Task cancelled.');
+          const cancelElapsed = Math.round((Date.now() - task.startTime) / 1000);
+          const cancelProgress = this.buildProgressSummary(task);
+          await this.sendTelegramMessage(task.telegramToken, task.chatId,
+            `🛑 Task cancelled after ${cancelElapsed}s (${task.iterations} iter, ${task.toolsUsed.length} tools).${cancelProgress}`);
         }
 
         return new Response(JSON.stringify({ status: 'cancelled' }), {
@@ -2336,6 +2348,30 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             if (validation.isError) {
               trackToolError(toolErrorTracker, toolName, validation, task.iterations, toolCall?.function.arguments || '');
               console.log(`[TaskProcessor] Tool error tracked: ${toolName} (${validation.errorType}, ${validation.severity})`);
+              // Track last errors for user-facing messages
+              if (!task.lastToolErrors) task.lastToolErrors = [];
+              const shortError = toolResult.content.slice(0, 120).replace(/\n/g, ' ');
+              task.lastToolErrors.push(`${toolName}: ${shortError}`);
+              if (task.lastToolErrors.length > 5) task.lastToolErrors = task.lastToolErrors.slice(-5);
+            }
+
+            // Track files read/modified for progress display
+            if (toolCall) {
+              try {
+                const args = JSON.parse(toolCall.function.arguments);
+                if (toolName === 'github_read_file' && args.path) {
+                  if (!task.filesRead) task.filesRead = [];
+                  if (!task.filesRead.includes(args.path)) task.filesRead.push(args.path);
+                } else if (toolName === 'github_create_pr' && args.changes) {
+                  if (!task.filesModified) task.filesModified = [];
+                  const changes = typeof args.changes === 'string' ? JSON.parse(args.changes) : args.changes;
+                  if (Array.isArray(changes)) {
+                    for (const c of changes) {
+                      if (c.path && !task.filesModified.includes(c.path)) task.filesModified.push(c.path);
+                    }
+                  }
+                }
+              } catch { /* ignore parse errors for tracking */ }
             }
           }
 
@@ -2528,9 +2564,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           if (statusMessageId) {
             await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
           }
+          const noToolProgress = this.buildProgressSummary(task);
           await this.sendTelegramMessageWithButtons(
             request.telegramToken, request.chatId,
-            `🛑 Model stalled after ${task.iterations} iterations without using tools.\n\n💡 Try a more capable model: ${this.getStallModelRecs()}`,
+            `🛑 Model stalled after ${task.iterations} iterations without using tools.${noToolProgress}\n\n💡 Try a more capable model: ${this.getStallModelRecs()}`,
             [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
           );
           return;
@@ -3140,10 +3177,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
       }
 
+      const limitProgress = this.buildProgressSummary(task);
       await this.sendTelegramMessageWithButtons(
         request.telegramToken,
         request.chatId,
-        `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${task.iterations} iterations.\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
+        `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${task.iterations} iterations.${limitProgress}\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
         [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
       );
 
@@ -3254,11 +3292,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       }
 
       if (task.iterations > 0) {
-        // Send error with resume button
+        // Send error with resume button and progress summary
+        const failProgress = this.buildProgressSummary(task);
         await this.sendTelegramMessageWithButtons(
           request.telegramToken,
           request.chatId,
-          `❌ Task failed: ${task.error}\n\n💡 Progress saved (${task.iterations} iterations).`,
+          `❌ Task failed: ${task.error}${failProgress}\n\n💡 Progress saved (${task.iterations} iterations).`,
           [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
         );
       } else {
@@ -3287,6 +3326,53 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Fall through to default
     }
     return '/sonnet, /deep, or /grok';
+  }
+
+  /**
+   * Build a concise progress summary for Telegram messages.
+   * Shows what was accomplished and what errors occurred.
+   */
+  private buildProgressSummary(task: TaskState): string {
+    const parts: string[] = [];
+
+    // Phase info
+    if (task.phase) {
+      parts.push(`Phase: ${task.phase}`);
+    }
+
+    // Tool usage breakdown
+    if (task.toolsUsed.length > 0) {
+      const toolCounts = new Map<string, number>();
+      for (const t of task.toolsUsed) {
+        toolCounts.set(t, (toolCounts.get(t) || 0) + 1);
+      }
+      const toolSummary = [...toolCounts.entries()]
+        .map(([name, count]) => count > 1 ? `${name}×${count}` : name)
+        .join(', ');
+      parts.push(`Tools: ${toolSummary}`);
+    }
+
+    // Files read
+    if (task.filesRead && task.filesRead.length > 0) {
+      const unique = [...new Set(task.filesRead)];
+      const display = unique.length <= 5
+        ? unique.join(', ')
+        : `${unique.slice(0, 4).join(', ')} +${unique.length - 4} more`;
+      parts.push(`Files read: ${display}`);
+    }
+
+    // Files modified (from github_create_pr)
+    if (task.filesModified && task.filesModified.length > 0) {
+      parts.push(`Files modified: ${task.filesModified.join(', ')}`);
+    }
+
+    // Recent errors
+    if (task.lastToolErrors && task.lastToolErrors.length > 0) {
+      const recent = task.lastToolErrors.slice(-3);
+      parts.push(`Errors: ${recent.join('; ')}`);
+    }
+
+    return parts.length > 0 ? '\n\n📋 Progress:\n' + parts.join('\n') : '';
   }
 
   /**
