@@ -437,6 +437,14 @@ If the task is not in the roadmap, execute it anyway and add it to the roadmap a
 
 Execute the next task from the project roadmap for **${repo}**.
 
+## CRITICAL RULES (breaking these will block your PR)
+- Read each file AT MOST ONCE. Never call github_read_file on the same path twice.
+- WORK_LOG.md is APPEND-ONLY. Never delete or modify existing rows. Only add a new row at the bottom matching the existing column format.
+- ROADMAP.md: only change your task from \`- [ ]\` to \`- [x]\`. Never delete or modify other tasks.
+- Do NOT regenerate entire files from memory — use "patch" action for edits.
+- After calling github_create_pr, CHECK THE RESULT. If it returned an error, fix and retry. Never claim success if the tool returned an error.
+- Always finish with ONE github_create_pr call + ORCHESTRA_RESULT block with a real PR URL.
+
 ## Step 1: READ ROADMAP
 Use \`github_read_file\` with owner="${owner}" repo="${repoName}" to read the roadmap.
 Check paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.
