@@ -306,11 +306,15 @@ const STUCK_THRESHOLD_PAID_MS = 240000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max iterations per event before yielding to a fresh alarm event.
-// Anthropic direct API: aggressive (3) because each iteration's TCP connection
-// to Anthropic dies if the DO hits its 30s CPU limit mid-stream → 499.
+// Anthropic direct API: yield after EVERY iteration (1). Each iteration involves
+// loading context, streaming the full response, and executing tools. Even a single
+// iteration can consume significant CPU (SSE parsing, JSON processing, tool execution)
+// and the 30s CPU limit kills the DO mid-stream if exceeded → 499 client disconnect.
+// With threshold=1, the check fires after iteration 1 completes (iterations=1 >= 1
+// AND iterations > 0), yielding before iteration 2 starts.
 // OpenRouter/other: relaxed (8) because OpenRouter proxies the connection,
 // and iterations use less CPU (streaming is handled server-side).
-const MAX_ITERATIONS_BEFORE_YIELD_ANTHROPIC = 3;
+const MAX_ITERATIONS_BEFORE_YIELD_ANTHROPIC = 1;
 const MAX_ITERATIONS_BEFORE_YIELD_DEFAULT = 8;
 // Safety net: yield if cumulative active time exceeds this regardless of
 // iteration count. Catches single very-CPU-heavy iterations. Set high because
@@ -750,7 +754,26 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         responseFormat: task.responseFormat,
       };
 
-      this.doState.waitUntil(this.processTask(taskRequest));
+      this.doState.waitUntil(this.processTask(taskRequest).catch(async (error) => {
+        console.error('[TaskProcessor] Uncaught error in resumed processTask:', error);
+        try {
+          await this.doState.storage.deleteAlarm();
+          const failedTask = await this.doState.storage.get<TaskState>('task');
+          if (failedTask) {
+            failedTask.status = 'failed';
+            failedTask.error = `Resume error: ${error instanceof Error ? error.message : String(error)}`;
+            await this.doState.storage.put('task', failedTask);
+          }
+          await this.sendTelegramMessageWithButtons(
+            taskRequest.telegramToken,
+            taskRequest.chatId,
+            `❌ Task crashed during resume: ${error instanceof Error ? error.message : 'Unknown error'}\n\n💡 Progress may be saved.`,
+            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+          );
+        } catch (notifyError) {
+          console.error('[TaskProcessor] Failed to notify about resume crash:', notifyError);
+        }
+      }));
       return;
     }
 
