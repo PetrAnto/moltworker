@@ -373,6 +373,7 @@ function getWatchdogStuckThreshold(modelAlias: string): number {
   const providerMultiplier = provider === 'moonshot' ? 2.5
     : provider === 'deepseek' ? 1.8
     : provider === 'dashscope' ? 1.5
+    : provider === 'anthropic' ? 3.0
     : 1.0;
 
   const baseThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
@@ -1771,7 +1772,6 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           };
         } | null = null;
         let lastError: Error | null = null;
-        let orLastStorageFlush = Date.now();
 
         // Pre-flight compression: if context already exceeds ~92% of provider budget,
         // compress before the API call to avoid a wasted round-trip + 400 error.
@@ -1842,40 +1842,35 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               // Use streaming with progress callback for heartbeat
               let progressCount = 0;
-              result = await client.chatCompletionStreamingWithTools(
-                task.modelAlias, // Pass alias - method will resolve to model ID (supports rotation)
-                sanitizeMessages(conversationMessages),
-                {
-                  maxTokens: isPaid ? 32768 : 16384,
-                  temperature: getTemperature(task.modelAlias),
-                  tools: useTools ? getToolsForPhase(task.phase) : undefined,
-                  toolChoice: useTools && task.phase !== 'review' ? 'auto' : undefined,
-                  idleTimeoutMs: idleTimeout, // Scaled by context size (45s-120s)
-                  reasoningLevel: request.reasoningLevel,
-                  responseFormat: request.responseFormat,
-                  onProgress: () => {
-                    progressCount++;
-                    // Update in-memory heartbeat on every chunk — alarm handler reads this
-                    // directly without a storage round-trip. Previously updated every 10
-                    // chunks, but on slow models (DeepSeek V3.2) the gap between chunks can
-                    // be 5-15s, making 10-chunk intervals = 50-150s between heartbeats,
-                    // which exceeds the stuck threshold and triggers false auto-resumes.
-                    this.lastHeartbeatMs = Date.now();
-                    // Log progress less frequently to avoid log spam
-                    if (progressCount % 100 === 0) {
-                      console.log(`[TaskProcessor] Streaming progress: ${progressCount} chunks received`);
-                    }
-                    // Periodically flush lastUpdate to storage during long streaming
-                    const now = Date.now();
-                    if (now - orLastStorageFlush > 60000) {
-                      orLastStorageFlush = now;
-                      task.lastUpdate = now;
-                      this.doState.storage.put('task', task).catch(() => {});
-                    }
-                  },
-                  onToolCallReady: useTools ? specExec.onToolCallReady : undefined,
-                }
-              );
+              const orFlushInterval = setInterval(() => {
+                task.lastUpdate = Date.now();
+                this.doState.storage.put('task', task).catch(() => {});
+              }, 55000);
+              try {
+                result = await client.chatCompletionStreamingWithTools(
+                  task.modelAlias, // Pass alias - method will resolve to model ID (supports rotation)
+                  sanitizeMessages(conversationMessages),
+                  {
+                    maxTokens: isPaid ? 32768 : 16384,
+                    temperature: getTemperature(task.modelAlias),
+                    tools: useTools ? getToolsForPhase(task.phase) : undefined,
+                    toolChoice: useTools && task.phase !== 'review' ? 'auto' : undefined,
+                    idleTimeoutMs: idleTimeout, // Scaled by context size (45s-120s)
+                    reasoningLevel: request.reasoningLevel,
+                    responseFormat: request.responseFormat,
+                    onProgress: () => {
+                      progressCount++;
+                      this.lastHeartbeatMs = Date.now();
+                      if (progressCount % 100 === 0) {
+                        console.log(`[TaskProcessor] Streaming progress: ${progressCount} chunks received`);
+                      }
+                    },
+                    onToolCallReady: useTools ? specExec.onToolCallReady : undefined,
+                  }
+                );
+              } finally {
+                clearInterval(orFlushInterval);
+              }
 
               console.log(`[TaskProcessor] Streaming completed: ${progressCount} total chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);
               break; // Success! Exit retry loop
@@ -1969,33 +1964,39 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               // Parse SSE stream — Anthropic uses different event format
               let directProgressCount = 0;
-              let lastStorageFlushMs = Date.now();
               const onStreamProgress = () => {
                 directProgressCount++;
                 this.lastHeartbeatMs = Date.now();
                 if (directProgressCount % 100 === 0) {
                   console.log(`[TaskProcessor] ${provider} streaming: ${directProgressCount} chunks`);
                 }
-                // Periodically flush lastUpdate to storage during long streaming
-                // to prevent watchdog from detecting stale state if DO is evicted
-                const now = Date.now();
-                if (now - lastStorageFlushMs > 60000) {
-                  lastStorageFlushMs = now;
-                  task.lastUpdate = now;
-                  this.doState.storage.put('task', task).catch(() => {});
-                }
               };
 
-              if (provider === 'anthropic') {
-                result = await parseAnthropicSSEStream(
-                  response.body, idleTimeout, onStreamProgress,
-                  useTools ? specExec.onToolCallReady : undefined,
-                );
-              } else {
-                result = await parseSSEStream(
-                  response.body, idleTimeout, onStreamProgress,
-                  useTools ? specExec.onToolCallReady : undefined,
-                );
+              // Periodic storage flush during long streaming — uses setInterval
+              // instead of in-callback storage.put() because unawaited puts from
+              // synchronous callbacks get abandoned if the DO is evicted mid-stream.
+              // setInterval fires between await points in the streaming parser,
+              // keeping task.lastUpdate fresh in durable storage.
+              const streamingFlushInterval = setInterval(() => {
+                task.lastUpdate = Date.now();
+                this.doState.storage.put('task', task).catch(() => {});
+                console.log(`[TaskProcessor] Streaming storage flush (${directProgressCount} chunks so far)`);
+              }, 55000);
+
+              try {
+                if (provider === 'anthropic') {
+                  result = await parseAnthropicSSEStream(
+                    response.body, idleTimeout, onStreamProgress,
+                    useTools ? specExec.onToolCallReady : undefined,
+                  );
+                } else {
+                  result = await parseSSEStream(
+                    response.body, idleTimeout, onStreamProgress,
+                    useTools ? specExec.onToolCallReady : undefined,
+                  );
+                }
+              } finally {
+                clearInterval(streamingFlushInterval);
               }
 
               console.log(`[TaskProcessor] ${provider} streaming complete: ${directProgressCount} chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);
@@ -2584,7 +2585,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           // Always save for the first few tool calls (CHECKPOINT_EARLY_THRESHOLD) so
           // small tasks are checkpointed before the watchdog alarm fires.
           const shouldCheckpoint = task.toolsUsed.length <= CHECKPOINT_EARLY_THRESHOLD
-            || task.toolsUsed.length % CHECKPOINT_EVERY_N_TOOLS === 0;
+            || task.toolsUsed.length % CHECKPOINT_EVERY_N_TOOLS === 0
+            || isPaid; // Paid models: checkpoint every iteration to prevent losing expensive work
           if (this.r2 && shouldCheckpoint) {
             // Pre-checkpoint compression: ensure context is compact before R2 write.
             // Without this, early checkpoints (before COMPRESS_AFTER_TOOLS triggers)
