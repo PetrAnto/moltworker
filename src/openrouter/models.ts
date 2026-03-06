@@ -506,7 +506,7 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 1048576,
   },
   haiku: {
-    id: 'claude-haiku-4-5-20251001',
+    id: 'claude-haiku-4-5',
     alias: 'haiku',
     name: 'Claude Haiku 4.5',
     specialty: 'Paid Fast Claude',
@@ -561,7 +561,7 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 1000000,
   },
   opus45: {
-    id: 'claude-opus-4-5-20251101',
+    id: 'claude-opus-4-5',
     alias: 'opus45',
     name: 'Claude Opus 4.5',
     specialty: 'Paid Premium (Previous Gen)',
