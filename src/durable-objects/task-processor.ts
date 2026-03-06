@@ -10,6 +10,7 @@ import { executeTool, AVAILABLE_TOOLS, githubReadFile, type ToolContext, type To
 import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isReasoningMandatoryError, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, getOrchestraRecommendations, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { injectCacheControl } from '../openrouter/prompt-cache';
+import { buildAnthropicRequest, buildAnthropicHeaders, parseAnthropicSSEStream } from '../openrouter/anthropic-direct';
 import { markdownToTelegramHtml } from '../utils/telegram-format';
 import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSummary, type SessionSummary } from '../openrouter/learnings';
 import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extractor';
@@ -221,6 +222,7 @@ interface TaskState {
   dashscopeKey?: string;
   moonshotKey?: string;
   deepseekKey?: string;
+  anthropicKey?: string;
   // Auto-resume settings
   autoResume?: boolean; // If true, automatically resume on timeout
   autoResumeCount?: number; // Number of auto-resumes so far
@@ -269,6 +271,7 @@ export interface TaskRequest {
   dashscopeKey?: string;   // For Qwen (DashScope/Alibaba)
   moonshotKey?: string;    // For Kimi (Moonshot)
   deepseekKey?: string;    // For DeepSeek
+  anthropicKey?: string;   // For Claude (Anthropic direct)
   cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
   // Auto-resume setting
   autoResume?: boolean;    // If true, auto-resume on timeout
@@ -749,7 +752,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Check if auto-resume is enabled and under limit.
     // Direct-API models (DeepSeek, Moonshot, DashScope) may not have an OpenRouter key
     // — check for any provider key to avoid blocking auto-resume for direct providers.
-    const hasAnyProviderKey = !!(task.openrouterKey || task.deepseekKey || task.moonshotKey || task.dashscopeKey);
+    const hasAnyProviderKey = !!(task.openrouterKey || task.deepseekKey || task.moonshotKey || task.dashscopeKey || task.anthropicKey);
     if (task.autoResume && resumeCount < maxResumes && task.telegramToken && hasAnyProviderKey) {
       // --- STALL DETECTION ---
       // Two layers:
@@ -850,6 +853,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         dashscopeKey: task.dashscopeKey,
         moonshotKey: task.moonshotKey,
         deepseekKey: task.deepseekKey,
+        anthropicKey: task.anthropicKey,
         autoResume: task.autoResume,
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
@@ -1238,7 +1242,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Strip secrets from status response — these are stored for alarm recovery
       // but must never be exposed via the status API
       const { telegramToken, openrouterKey, githubToken, braveSearchKey,
-              cloudflareApiToken, dashscopeKey, moonshotKey, deepseekKey,
+              cloudflareApiToken, dashscopeKey, moonshotKey, deepseekKey, anthropicKey,
               ...safeTask } = task;
       return new Response(JSON.stringify(safeTask), {
         headers: { 'Content-Type': 'application/json' }
@@ -1371,6 +1375,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.dashscopeKey = request.dashscopeKey;
     task.moonshotKey = request.moonshotKey;
     task.deepseekKey = request.deepseekKey;
+    task.anthropicKey = request.anthropicKey;
     // Preserve auto-resume setting (and count if resuming)
     task.autoResume = request.autoResume;
     task.reasoningLevel = request.reasoningLevel;
@@ -1700,6 +1705,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           case 'deepseek':
             apiKey = request.deepseekKey || '';
             break;
+          case 'anthropic':
+            apiKey = request.anthropicKey || '';
+            break;
           default:
             apiKey = request.openrouterKey;
         }
@@ -1709,10 +1717,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
 
         // Build headers based on provider
-        const headers: Record<string, string> = {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        };
+        const headers: Record<string, string> = provider === 'anthropic'
+          ? buildAnthropicHeaders(apiKey)
+          : {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            };
 
         // OpenRouter-specific headers
         if (provider === 'openrouter') {
@@ -1858,45 +1868,61 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               break; // Success! Exit retry loop
 
             } else {
-              // Non-OpenRouter providers: use SSE streaming (same as OpenRouter)
-              // This prevents DO termination during long Kimi/DeepSeek API calls
+              // Non-OpenRouter providers: use SSE streaming
+              // This prevents DO termination during long API calls
               const abortController = new AbortController();
-              // Fetch timeout must be >= idle timeout. The fetch timeout covers the
-              // initial connection + first chunk, then parseSSEStream's per-chunk
-              // idle timeout takes over. Using idleTimeout + 30s buffer.
               const fetchTimeout = setTimeout(() => abortController.abort(), idleTimeout + 30000);
 
               // Inject cache_control on system messages for Anthropic models (prompt caching)
               const sanitized = sanitizeMessages(conversationMessages);
               const finalMessages = isAnthropicModel(task.modelAlias) ? injectCacheControl(sanitized) : sanitized;
 
-              const requestBody: Record<string, unknown> = {
-                model: getModelId(task.modelAlias),
-                messages: finalMessages,
-                max_tokens: clampMaxTokens(task.modelAlias, isPaid ? 32768 : 16384),
-                temperature: getTemperature(task.modelAlias),
-                stream: true,
-              };
-              if (useTools) {
-                const phaseTools = getToolsForPhase(task.phase);
-                if (phaseTools.length > 0) {
-                  requestBody.tools = phaseTools;
-                  requestBody.tool_choice = 'auto';
-                }
-              }
-              if (request.responseFormat) {
-                requestBody.response_format = request.responseFormat;
-              }
+              // Build request body — Anthropic uses a different format (Messages API)
+              let requestBody: Record<string, unknown>;
+              const maxTokens = clampMaxTokens(task.modelAlias, isPaid ? 32768 : 16384);
 
-              // Inject reasoning parameter for direct API models (DeepSeek V3.2, etc.)
-              // reasoningOverride is set by the "reasoning mandatory" 400 handler below
-              if (reasoningOverride) {
-                requestBody.reasoning = reasoningOverride;
-              } else {
+              if (provider === 'anthropic') {
+                // Anthropic Messages API: different structure from OpenAI format
                 const reasoningLevel = request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
-                const reasoningParam = getReasoningParam(task.modelAlias, reasoningLevel);
-                if (reasoningParam) {
-                  requestBody.reasoning = reasoningParam;
+                const reasoningParam = reasoningOverride || getReasoningParam(task.modelAlias, reasoningLevel) || undefined;
+                requestBody = buildAnthropicRequest({
+                  modelId: getModelId(task.modelAlias),
+                  messages: finalMessages,
+                  maxTokens,
+                  temperature: getTemperature(task.modelAlias),
+                  tools: useTools ? getToolsForPhase(task.phase) : undefined,
+                  toolChoice: useTools && task.phase !== 'review' ? 'auto' : undefined,
+                  reasoning: reasoningParam,
+                }) as unknown as Record<string, unknown>;
+              } else {
+                // OpenAI-compatible direct APIs (DeepSeek, Moonshot, DashScope)
+                requestBody = {
+                  model: getModelId(task.modelAlias),
+                  messages: finalMessages,
+                  max_tokens: maxTokens,
+                  temperature: getTemperature(task.modelAlias),
+                  stream: true,
+                };
+                if (useTools) {
+                  const phaseTools = getToolsForPhase(task.phase);
+                  if (phaseTools.length > 0) {
+                    requestBody.tools = phaseTools;
+                    requestBody.tool_choice = 'auto';
+                  }
+                }
+                if (request.responseFormat) {
+                  requestBody.response_format = request.responseFormat;
+                }
+
+                // Inject reasoning parameter for direct API models (DeepSeek V3.2, etc.)
+                if (reasoningOverride) {
+                  requestBody.reasoning = reasoningOverride;
+                } else {
+                  const reasoningLevel = request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
+                  const reasoningParam = getReasoningParam(task.modelAlias, reasoningLevel);
+                  if (reasoningParam) {
+                    requestBody.reasoning = reasoningParam;
+                  }
                 }
               }
 
@@ -1928,19 +1954,27 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 throw new Error(`${provider} API returned no response body`);
               }
 
-              // Parse SSE stream with progress callback for watchdog heartbeat.
-              // Direct APIs may stream slower with large context — update heartbeat
-              // every 5 chunks (not 10) to prevent false "stuck" detection.
+              // Parse SSE stream — Anthropic uses different event format
               let directProgressCount = 0;
-              result = await parseSSEStream(response.body, idleTimeout, () => {
+              const onStreamProgress = () => {
                 directProgressCount++;
-                // Update heartbeat on every chunk (was every 5). Same reasoning as
-                // OpenRouter path — slow models can have 5-15s between chunks.
                 this.lastHeartbeatMs = Date.now();
                 if (directProgressCount % 100 === 0) {
                   console.log(`[TaskProcessor] ${provider} streaming: ${directProgressCount} chunks`);
                 }
-              }, useTools ? specExec.onToolCallReady : undefined);
+              };
+
+              if (provider === 'anthropic') {
+                result = await parseAnthropicSSEStream(
+                  response.body, idleTimeout, onStreamProgress,
+                  useTools ? specExec.onToolCallReady : undefined,
+                );
+              } else {
+                result = await parseSSEStream(
+                  response.body, idleTimeout, onStreamProgress,
+                  useTools ? specExec.onToolCallReady : undefined,
+                );
+              }
 
               console.log(`[TaskProcessor] ${provider} streaming complete: ${directProgressCount} chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);
               break; // Success!
