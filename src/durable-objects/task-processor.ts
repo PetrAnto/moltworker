@@ -1199,7 +1199,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       // Start processing in the background with global error catching
       // This ensures ANY error sends a notification to user
-      this.processTask(taskRequest).catch(async (error) => {
+      // Use waitUntil to keep DO alive during long-running background work
+      // (matches alarm handler pattern at line ~863)
+      const taskPromise = this.processTask(taskRequest).catch(async (error) => {
         console.error('[TaskProcessor] Uncaught error in processTask:', error);
         try {
           // Cancel watchdog alarm
@@ -1223,6 +1225,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           console.error('[TaskProcessor] Failed to notify user:', notifyError);
         }
       });
+      this.doState.waitUntil(taskPromise);
 
       return new Response(JSON.stringify({
         status: 'started',
@@ -1768,6 +1771,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           };
         } | null = null;
         let lastError: Error | null = null;
+        let orLastStorageFlush = Date.now();
 
         // Pre-flight compression: if context already exceeds ~92% of provider budget,
         // compress before the API call to avoid a wasted round-trip + 400 error.
@@ -1860,6 +1864,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     // Log progress less frequently to avoid log spam
                     if (progressCount % 100 === 0) {
                       console.log(`[TaskProcessor] Streaming progress: ${progressCount} chunks received`);
+                    }
+                    // Periodically flush lastUpdate to storage during long streaming
+                    const now = Date.now();
+                    if (now - orLastStorageFlush > 60000) {
+                      orLastStorageFlush = now;
+                      task.lastUpdate = now;
+                      this.doState.storage.put('task', task).catch(() => {});
                     }
                   },
                   onToolCallReady: useTools ? specExec.onToolCallReady : undefined,
@@ -1958,11 +1969,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               // Parse SSE stream — Anthropic uses different event format
               let directProgressCount = 0;
+              let lastStorageFlushMs = Date.now();
               const onStreamProgress = () => {
                 directProgressCount++;
                 this.lastHeartbeatMs = Date.now();
                 if (directProgressCount % 100 === 0) {
                   console.log(`[TaskProcessor] ${provider} streaming: ${directProgressCount} chunks`);
+                }
+                // Periodically flush lastUpdate to storage during long streaming
+                // to prevent watchdog from detecting stale state if DO is evicted
+                const now = Date.now();
+                if (now - lastStorageFlushMs > 60000) {
+                  lastStorageFlushMs = now;
+                  task.lastUpdate = now;
+                  this.doState.storage.put('task', task).catch(() => {});
                 }
               };
 
@@ -1992,7 +2012,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 rateLimitRetries++;
                 const waitSecs = Math.min(15 * Math.pow(2, rateLimitRetries - 1), 60);
                 console.log(`[TaskProcessor] 429 rate limit on paid model — waiting ${waitSecs}s (rate limit retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`);
+                // Keep heartbeat and storage alive during rate limit sleep
+                // to prevent watchdog from triggering false auto-resume
+                task.lastUpdate = Date.now();
+                await this.doState.storage.put('task', task);
+                this.lastHeartbeatMs = Date.now();
                 await new Promise(r => setTimeout(r, waitSecs * 1000));
+                this.lastHeartbeatMs = Date.now();
                 attempt--; // Don't consume the attempt slot for rate limits
                 continue;
               }
