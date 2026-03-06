@@ -254,6 +254,9 @@ interface TaskState {
   coveRetried?: boolean;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
+  // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
+  // The alarm handler resumes immediately without stall detection or auto-resume counting.
+  yieldPending?: boolean;
 }
 
 // Task request from the worker
@@ -303,9 +306,11 @@ const STUCK_THRESHOLD_PAID_MS = 240000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max cumulative active (non-sleep) time before yielding to a fresh alarm event.
-// Prevents hitting the ~30s CPU time limit per event. Conservative margin: 20s
-// to account for CPU work that isn't captured (checkpoint serialization, etc.)
-const MAX_ACTIVE_TIME_BEFORE_YIELD_MS = 20000;
+// Prevents hitting the ~30s CPU time limit per event. Conservative margin: 12s
+// to account for CPU work that isn't captured (checkpoint serialization, storage
+// ops, token estimation, etc.). With waitUntil, each event gets a hard 30s CPU
+// budget. 12s active ≈ ~15-18s real CPU, leaving 12-15s margin.
+const MAX_ACTIVE_TIME_BEFORE_YIELD_MS = 12000;
 // Always save checkpoint when total tools is at or below this threshold.
 // Ensures small tasks (1-3 tool calls) are checkpointed before the watchdog fires.
 const CHECKPOINT_EARLY_THRESHOLD = 3;
@@ -709,6 +714,38 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.status = 'failed';
       task.error = 'Task abandoned: exceeded 1-hour lifetime (likely stale from previous deployment)';
       await this.doState.storage.put('task', task);
+      return;
+    }
+
+    // CPU budget yield: processTask proactively yielded to get fresh CPU budget.
+    // Resume immediately without stall detection, auto-resume counting, or notifications.
+    if (task.yieldPending) {
+      task.yieldPending = false;
+      await this.doState.storage.put('task', task);
+      const elapsed = Math.round((Date.now() - task.startTime) / 1000);
+      console.log(`[TaskProcessor] CPU budget yield resume — ${task.iterations} iterations, ${elapsed}s elapsed`);
+
+      const taskRequest: TaskRequest = {
+        taskId: task.taskId,
+        chatId: task.chatId,
+        userId: task.userId,
+        modelAlias: task.modelAlias,
+        messages: task.messages,
+        telegramToken: task.telegramToken || '',
+        openrouterKey: task.openrouterKey || '',
+        githubToken: task.githubToken,
+        braveSearchKey: task.braveSearchKey,
+        cloudflareApiToken: task.cloudflareApiToken,
+        dashscopeKey: task.dashscopeKey,
+        moonshotKey: task.moonshotKey,
+        deepseekKey: task.deepseekKey,
+        anthropicKey: task.anthropicKey,
+        autoResume: task.autoResume,
+        reasoningLevel: task.reasoningLevel,
+        responseFormat: task.responseFormat,
+      };
+
+      this.doState.waitUntil(this.processTask(taskRequest));
       return;
     }
 
@@ -1202,14 +1239,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (url.pathname === '/process' && request.method === 'POST') {
       const taskRequest = await request.json() as TaskRequest;
 
-      // Start processing in the background with global error catching
-      // This ensures ANY error sends a notification to user
-      // NOTE: intentionally NOT using waitUntil here — processTask runs as a
-      // fire-and-forget promise. The DO stays alive via pending I/O (fetch,
-      // storage reads/writes, stream reads). Using waitUntil imposed a 30s CPU
-      // time budget that caused Anthropic streaming to be terminated (499
-      // client disconnect) after ~43s of processing.
-      this.processTask(taskRequest).catch(async (error) => {
+      // Start processing in the background with global error catching.
+      // waitUntil prevents DO eviction (without it, Cloudflare may GC the DO
+      // after the POST response is sent, killing in-flight streaming fetches).
+      // The 30s CPU limit per event is managed by the CPU budget yield mechanism
+      // which proactively yields every ~12s of active time and resumes via alarm.
+      const processPromise = this.processTask(taskRequest).catch(async (error) => {
         console.error('[TaskProcessor] Uncaught error in processTask:', error);
         try {
           // Cancel watchdog alarm
@@ -1233,6 +1268,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           console.error('[TaskProcessor] Failed to notify user:', notifyError);
         }
       });
+      this.doState.waitUntil(processPromise);
 
       return new Response(JSON.stringify({
         status: 'started',
@@ -1679,9 +1715,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Uses cumulative active time (excluding sleeps) as a proxy for CPU time.
         if (cumulativeActiveMs > MAX_ACTIVE_TIME_BEFORE_YIELD_MS && task.iterations > 0) {
           console.log(`[TaskProcessor] CPU budget yield after ${Math.round(cumulativeActiveMs / 1000)}s active time, ${task.iterations} iterations`);
-          // Persist current conversation state so auto-resume picks up correctly
+          // Persist current conversation state so alarm resume picks up correctly
           task.messages = [...conversationMessages];
           task.lastUpdate = Date.now();
+          task.yieldPending = true; // Signal alarm handler for clean resume
           if (this.r2) {
             await this.saveCheckpoint(
               this.r2, request.userId, request.taskId,
@@ -1689,15 +1726,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               request.prompt, 'latest', false, task.phase, task.modelAlias
             );
           }
-          // Backdate lastUpdate past stuck threshold so alarm handler triggers auto-resume
-          const stuckThreshold = getWatchdogStuckThreshold(task.modelAlias);
-          task.lastUpdate = Date.now() - stuckThreshold - 1000;
           await this.doState.storage.put('task', task);
-          // Schedule alarm for immediate pickup (1s delay)
-          await this.doState.storage.setAlarm(Date.now() + 1000);
+          // Schedule immediate alarm for resume with fresh CPU budget
+          await this.doState.storage.setAlarm(Date.now() + 100);
           this.isRunning = false;
-          this.lastHeartbeatMs = 0; // Clear heartbeat so alarm detects "stuck"
-          return; // Exit processTask — alarm will auto-resume with fresh CPU budget
+          return; // Exit processTask — alarm will resume with fresh CPU budget
         }
 
         // Inject pending steering messages from /steer endpoint as system messages.
