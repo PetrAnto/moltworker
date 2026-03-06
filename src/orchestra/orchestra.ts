@@ -15,6 +15,8 @@
  *   - Creates a PR with code changes + updated ROADMAP.md + WORK_LOG.md entry
  */
 
+import { getModel } from '../openrouter/models';
+
 // Orchestra task entry stored in R2
 export interface OrchestraTask {
   taskId: string;
@@ -210,18 +212,201 @@ The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FA
 // RUN MODE — Execute next task from roadmap
 // ============================================================
 
-/**
- * Build the system prompt for /orchestra run.
- * Instructs the model to read the roadmap, pick the next task,
- * implement it, and update the roadmap + work log in the same PR.
- */
-export function buildRunPrompt(params: {
+// Shared params type for all run prompt builders
+interface BuildRunPromptParams {
   repo: string;
   modelAlias: string;
   previousTasks: OrchestraTask[];
   specificTask?: string; // Optional: user-specified task instead of "next"
   branchSlug?: string; // Pre-generated branch slug (without bot/ prefix)
-}): string {
+}
+
+/**
+ * Determine prompt complexity tier based on model capability.
+ * Uses AA Intelligence Index from enrichment pipeline when available,
+ * falls back to isFree + maxContext heuristic otherwise.
+ */
+function getPromptTier(modelAlias: string): 'minimal' | 'standard' | 'full' {
+  const model = getModel(modelAlias);
+  if (!model) return 'standard'; // Unknown model → safe middle ground
+
+  // Use enrichment data when available (populated by /model enrich → R2)
+  if (model.intelligenceIndex !== undefined) {
+    if (model.intelligenceIndex >= 45) return 'full';     // Strong: Claude, GPT-4o, Grok
+    if (model.intelligenceIndex >= 28) return 'standard'; // Mid: 70B-class, Mixtral
+    return 'minimal';                                     // Weak: 32B-class
+  }
+
+  // Fallback when enrichment data isn't loaded
+  if (!model.isFree) return 'full';  // Paid models are generally stronger
+  if ((model.maxContext || 0) >= 200000) return 'standard';
+  return 'minimal';
+}
+
+/**
+ * Build the system prompt for /orchestra run.
+ * Dispatches to tier-specific builders based on model capability.
+ * - minimal (~900 tokens): weak/free models that drown in long prompts
+ * - standard (~1500 tokens): mid-tier models that need guidance but not hand-holding
+ * - full (~3500 tokens): strong models that benefit from detailed rules
+ */
+export function buildRunPrompt(params: BuildRunPromptParams): string {
+  const tier = getPromptTier(params.modelAlias);
+  console.log(`[orchestra] buildRunPrompt tier=${tier} for /${params.modelAlias}`);
+  if (tier === 'minimal') return buildMinimalRunPrompt(params);
+  if (tier === 'standard') return buildStandardRunPrompt(params);
+  return buildFullRunPrompt(params);
+}
+
+/**
+ * MINIMAL run prompt (~900 tokens).
+ * For weak/free models (32B class). Stripped to bare essentials
+ * with explicit guardrail mentions to avoid audit trail blocks.
+ */
+function buildMinimalRunPrompt(params: BuildRunPromptParams): string {
+  const { repo, modelAlias, specificTask, branchSlug } = params;
+  const [owner, repoName] = repo.split('/');
+  const branch = branchSlug || `task-${modelAlias}`;
+
+  const taskInstruction = specificTask
+    ? `Find and execute this task: "${specificTask}"`
+    : 'Find the first unchecked task `- [ ]` whose dependencies are done.';
+
+  return `# Orchestra RUN
+
+Execute the next task from the roadmap for **${repo}**.
+
+## RULES (breaking these will block your PR)
+- Read each file AT MOST ONCE. Never call github_read_file on the same path twice.
+- WORK_LOG.md is APPEND-ONLY. Never delete or modify existing rows. Only add a new row at the bottom matching the existing column format.
+- ROADMAP.md: only change your task from \`- [ ]\` to \`- [x]\`. Never delete or modify other tasks.
+- Do NOT regenerate entire files from memory — use "patch" action for edits.
+- Always finish with ONE github_create_pr call + ORCHESTRA_RESULT block.
+
+## Step 1: READ ROADMAP
+Use \`github_read_file\` with owner="${owner}" repo="${repoName}" to read ROADMAP.md.
+Check paths: ${ROADMAP_FILE_CANDIDATES.slice(0, 3).join(', ')}. Also read WORK_LOG.md if it exists.
+${taskInstruction}
+
+## Step 2: READ RELEVANT FILES
+Read only the files you need to implement the task. Stop reading when you have enough.
+
+## Step 3: IMPLEMENT — ONE github_create_pr CALL
+Include ALL changes in a single \`github_create_pr\` call:
+- Source file changes (use "patch" for existing files, "create" for new files)
+- Updated ROADMAP.md (mark task \`- [x]\`)
+- Updated WORK_LOG.md (append one row)
+- Branch: \`${branch}\` (bot/ prefix added automatically)
+- Title: ends with [${modelAlias}]
+
+For "patch" action: \`{"path":"file.js","action":"patch","patches":[{"find":"exact text","replace":"new text"}]}\`
+For "create" action: \`{"path":"file.js","action":"create","content":"full content"}\`
+
+**After calling github_create_pr, CHECK THE RESULT.** If it returned an error, fix and retry. Never claim success if the tool returned an error.
+
+## Step 4: REPORT
+\`\`\`
+ORCHESTRA_RESULT:
+branch: {branch-name}
+pr: {pr-url from tool result}
+files: {comma-separated changed files}
+summary: {one sentence}
+\`\`\`
+
+Begin now. Read the roadmap first.`;
+}
+
+/**
+ * STANDARD run prompt (~1500 tokens).
+ * For mid-tier models (70B class). Adds patch guidance, few-shot example,
+ * file splitting rules, and history context over minimal.
+ */
+function buildStandardRunPrompt(params: BuildRunPromptParams): string {
+  const { repo, modelAlias, previousTasks, specificTask, branchSlug } = params;
+  const [owner, repoName] = repo.split('/');
+  const branch = branchSlug || `task-${modelAlias}`;
+
+  const taskInstruction = specificTask
+    ? `The user requested: "${specificTask}"\nFind this task in the roadmap and execute it.`
+    : `Find the NEXT uncompleted task: first \`- [ ]\` whose dependencies are all \`- [x]\`.`;
+
+  // Abbreviated history (last 3 tasks)
+  let historyContext = '';
+  if (previousTasks.length > 0) {
+    const recent = previousTasks.slice(-3);
+    const lines = recent.map(t => {
+      const icon = t.status === 'completed' ? '✅' : '❌';
+      return `  ${icon} "${t.prompt.substring(0, 60)}"`;
+    });
+    historyContext = `\n\n## Recent History\n${lines.join('\n')}\nAvoid duplicating this work.`;
+  }
+
+  return `# Orchestra RUN
+
+Execute the next task from the roadmap for **${repo}**.
+
+## RULES (breaking these will block your PR)
+- Read each file AT MOST ONCE. Never call github_read_file on the same path twice.
+- WORK_LOG.md is APPEND-ONLY. Never delete or modify existing rows. Only add a new row at the bottom matching the existing column format.
+- ROADMAP.md: only change your task from \`- [ ]\` to \`- [x]\`. Never delete or modify other tasks.
+- Do NOT regenerate entire files from memory — use "patch" action for edits.
+- Always finish with ONE github_create_pr call + ORCHESTRA_RESULT block.
+
+## Step 1: READ ROADMAP
+Use \`github_read_file\` with owner="${owner}" repo="${repoName}" to read ROADMAP.md.
+Check paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.
+${taskInstruction}
+
+## Step 2: UNDERSTAND CODEBASE
+Use \`github_list_files\` and \`github_read_file\` to read files related to the task.
+If any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you may split it as part of this task.
+
+## Step 3: IMPLEMENT — ONE github_create_pr CALL
+Include ALL changes in a single \`github_create_pr\` call:
+- Source file changes
+- Updated ROADMAP.md (mark task \`- [x]\`)
+- Updated WORK_LOG.md (append one row matching existing format)
+- Branch: \`${branch}\` (bot/ prefix added automatically)
+- Title: under 70 chars, ends with [${modelAlias}]
+- Body: summary + "Generated by: ${modelAlias}"
+
+### How to edit files — USE PATCH ACTION
+For existing files (especially >100 lines), use action \`"patch"\`:
+1. Read the file first with github_read_file
+2. Use \`{"path":"file.js","action":"patch","patches":[{"find":"exact text to find","replace":"replacement text"}]}\`
+3. Each "find" must match EXACTLY once — copy text verbatim including whitespace
+
+Only use "update" (full content) for small files (<100 lines) or when >50% of the file changes.
+Use "create" for new files.
+
+### File splitting (if task requires it)
+Include ALL files in ONE github_create_pr call:
+1. New module files with action "create" (extracted code + imports/exports)
+2. Updated original file with action "patch" (import from new modules, re-export)
+
+**After calling github_create_pr, CHECK THE RESULT.** If error (422, 403), fix and retry with a different branch name. NEVER claim success if the tool returned an error.
+
+## Step 4: REPORT
+\`\`\`
+ORCHESTRA_RESULT:
+branch: {branch-name}
+pr: {pr-url from tool result}
+files: {comma-separated changed files}
+summary: {one sentence}
+\`\`\`
+
+The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FAILED\`.
+${historyContext}
+
+Begin now. Read the roadmap first.`;
+}
+
+/**
+ * FULL run prompt (~3500 tokens).
+ * For strong models (Claude, GPT-4o, Grok). Complete detailed rules,
+ * file splitting guidance, audit trail enforcement, verification steps.
+ */
+function buildFullRunPrompt(params: BuildRunPromptParams): string {
   const { repo, modelAlias, previousTasks, specificTask, branchSlug } = params;
   const [owner, repoName] = repo.split('/');
   const branch = branchSlug || `{task-slug}-${modelAlias}`;
