@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, type SandboxLike, type SandboxProcess } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, type SandboxLike, type SandboxProcess } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -2460,6 +2460,78 @@ describe('github_create_pr tool', () => {
   it('github_read_file description mentions 30KB limit', () => {
     const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'github_read_file')!;
     expect(tool.function.description).toContain('30KB');
+  });
+
+  it('github_read_file has line_start and line_end parameters', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'github_read_file')!;
+    expect(tool.function.parameters.properties).toHaveProperty('line_start');
+    expect(tool.function.parameters.properties).toHaveProperty('line_end');
+    // line_start/line_end should NOT be required
+    expect(tool.function.parameters.required).not.toContain('line_start');
+    expect(tool.function.parameters.required).not.toContain('line_end');
+  });
+
+  describe('githubReadFile line range support', () => {
+    const makeGitHubResponse = (content: string) => ({
+      content: btoa(content),
+      encoding: 'base64',
+    });
+
+    it('returns full content when no line range specified', async () => {
+      const content = 'line1\nline2\nline3\nline4\nline5';
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(makeGitHubResponse(content)), { status: 200 })
+      );
+      const result = await githubReadFile('owner', 'repo', 'file.ts');
+      expect(result).toBe(content);
+    });
+
+    it('returns specific line range when line_start and line_end provided', async () => {
+      const content = 'line1\nline2\nline3\nline4\nline5';
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(makeGitHubResponse(content)), { status: 200 })
+      );
+      const result = await githubReadFile('owner', 'repo', 'file.ts', undefined, undefined, 2, 4);
+      expect(result).toContain('lines 2-4 of 5 total');
+      expect(result).toContain('2: line2');
+      expect(result).toContain('3: line3');
+      expect(result).toContain('4: line4');
+      expect(result).not.toContain('1: line1');
+      expect(result).not.toContain('5: line5');
+    });
+
+    it('returns from line_start to end when line_end not specified', async () => {
+      const content = 'line1\nline2\nline3\nline4\nline5';
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(makeGitHubResponse(content)), { status: 200 })
+      );
+      const result = await githubReadFile('owner', 'repo', 'file.ts', undefined, undefined, 3);
+      expect(result).toContain('lines 3-5 of 5 total');
+      expect(result).toContain('3: line3');
+      expect(result).toContain('5: line5');
+    });
+
+    it('adds line count metadata for large files over 500 lines', async () => {
+      // Create a file with 600 short lines (~3KB, under 20KB so no metadata)
+      const shortLines = Array.from({ length: 600 }, (_, i) => `line ${i + 1}`).join('\n');
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(makeGitHubResponse(shortLines)), { status: 200 })
+      );
+      // Short lines total ~5KB, under 20KB threshold — no metadata added
+      const result = await githubReadFile('owner', 'repo', 'big.ts');
+      expect(result).not.toContain('line_start/line_end');
+    });
+
+    it('adds line count metadata for large files over 500 lines and 20KB', async () => {
+      // Create a file with 600 lines of substantial content (>20KB)
+      const longLines = Array.from({ length: 600 }, (_, i) => `// line ${i + 1}: ${'x'.repeat(50)}`).join('\n');
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(makeGitHubResponse(longLines)), { status: 200 })
+      );
+      const result = await githubReadFile('owner', 'repo', 'big.ts');
+      expect(result).toContain('line_start/line_end');
+      expect(result).toContain('600 lines');
+    });
   });
 
   it('should be included in TOOLS_WITHOUT_BROWSER (available in DOs)', () => {

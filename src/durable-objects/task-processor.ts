@@ -230,6 +230,8 @@ interface TaskState {
   // Cross-resume tool signature dedup: track unique tool call signatures (name:argsHash)
   // to detect when the model re-calls identical tools across resumes
   toolSignatures?: string[];
+  // Track when context was last compressed to allow post-compression re-reads
+  lastCompressionToolCount?: number;
   // Reasoning level override
   reasoningLevel?: ReasoningLevel;
   // Structured output format
@@ -762,8 +764,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const priorSigs = new Set(task.toolSignatures.slice(0, -newTools));
         allNewToolsDuplicate = recentSigs.every(sig => priorSigs.has(sig));
         if (allNewToolsDuplicate) {
-          console.log(`[TaskProcessor] All ${newTools} new tool calls are duplicates of prior calls — counting as no progress`);
+          console.log(`[TaskProcessor] All ${newTools} new tool calls are duplicates of prior calls`);
         }
+      }
+
+      // Allow duplicate reads after context compression — the model legitimately
+      // needs to re-read files whose content was evicted during compression.
+      // Only forgive duplicates once per compression event.
+      const compressedSinceLastResume = (task.lastCompressionToolCount ?? 0) > toolCountAtLastResume;
+      if (allNewToolsDuplicate && compressedSinceLastResume) {
+        console.log(`[TaskProcessor] Allowing duplicate tool calls: context was compressed since last resume (compression at tool #${task.lastCompressionToolCount})`);
+        allNewToolsDuplicate = false;
+        // Clear compression marker so we don't forgive duplicates indefinitely
+        task.lastCompressionToolCount = 0;
       }
 
       if ((newTools === 0 || allNewToolsDuplicate) && resumeCount > 0) {
@@ -2397,12 +2410,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             const compressed = this.compressContext(conversationMessages, task.modelAlias);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
+            task.lastCompressionToolCount = task.toolsUsed.length;
             console.log(`[TaskProcessor] Compressed context: ${beforeCount} -> ${compressed.length} messages`);
           } else if (estimatedTokens > this.getContextBudget(task.modelAlias)) {
             // Force compression if tokens too high
             const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
+            task.lastCompressionToolCount = task.toolsUsed.length;
             console.log(`[TaskProcessor] Force compressed due to ${estimatedTokens} estimated tokens`);
           }
 
@@ -2615,14 +2630,25 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // only tried one file path out of many.
         if (hasContent && task.phase === 'work' && task.toolsUsed.length > 0
             && isOrchestraRun && workIterations < 3 && (looksIncomplete || orchestraResultMissing)) {
-          console.log(`[TaskProcessor] Deferring work→review: orchestra task with only ${workIterations} work iterations and incomplete content — pushing model to continue`);
+          // Check what specific progress is missing to give a targeted nudge
+          const hasCalledCreatePr = task.toolsUsed.includes('github_create_pr');
+          const hasReadFiles = task.toolsUsed.some(t => t === 'github_read_file');
+          let nudge: string;
+          if (!hasReadFiles) {
+            nudge = '[CONTINUE] You need to READ the files first. Use github_read_file to read the source files you need to modify, then use github_create_pr to implement the changes. Do NOT just output a plan — call the tools NOW.';
+          } else if (!hasCalledCreatePr) {
+            nudge = '[CONTINUE] You have read the files — now IMPLEMENT the changes. Call github_create_pr with your file changes (use "create" for new files, "patch" for edits). Include ROADMAP.md and WORK_LOG.md updates in the SAME PR. Do NOT describe what you will do — call the tool NOW.';
+          } else {
+            nudge = '[CONTINUE] Your work is NOT complete — you MUST produce an ORCHESTRA_RESULT: block with the real PR URL that was returned by github_create_pr. Format:\nORCHESTRA_RESULT:\nbranch: {branch}\npr: {url}\nfiles: {files}\nsummary: {summary}';
+          }
+          console.log(`[TaskProcessor] Deferring work→review: orchestra task with only ${workIterations} work iterations (readFiles=${hasReadFiles}, createdPr=${hasCalledCreatePr}) — nudging model`);
           conversationMessages.push({
             role: 'assistant',
             content: contentText,
           });
           conversationMessages.push({
             role: 'user',
-            content: '[CONTINUE] Your work is NOT complete — you MUST execute ALL steps before finishing. Do NOT ask for confirmation or permission — proceed immediately with the next step. Use your tools (github_read_file, github_create_pr, etc.) to complete the task. For orchestra tasks, you MUST produce an ORCHESTRA_RESULT: block with a real PR URL.',
+            content: nudge,
           });
           await this.doState.storage.put('task', task);
           continue;

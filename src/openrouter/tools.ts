@@ -101,7 +101,7 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'github_read_file',
-      description: 'Read a file from a GitHub repository. EXPENSIVE: each call uses ~7K tokens of context. Only read files you truly need — prefer github_list_files first for overview. Returns content for source code files (truncated at 30KB). Binary files (images, fonts, etc.) and generated files (package-lock.json, yarn.lock) return metadata only. Authentication is handled automatically.',
+      description: 'Read a file from a GitHub repository. EXPENSIVE: each call uses ~7K tokens of context. Only read files you truly need — prefer github_list_files first for overview. Returns content for source code files (truncated at 30KB). Binary files (images, fonts, etc.) and generated files (package-lock.json, yarn.lock) return metadata only. For large files, use line_start/line_end to read specific sections. Authentication is handled automatically.',
       parameters: {
         type: 'object',
         properties: {
@@ -120,6 +120,14 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
           ref: {
             type: 'string',
             description: 'Branch, tag, or commit SHA (optional, defaults to main/master)',
+          },
+          line_start: {
+            type: 'string',
+            description: 'Start line number (1-based, optional). Use with line_end to read a specific range of a large file.',
+          },
+          line_end: {
+            type: 'string',
+            description: 'End line number (1-based, inclusive, optional). Use with line_start to read a specific range.',
           },
         },
         required: ['owner', 'repo', 'path'],
@@ -540,9 +548,12 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
       case 'fetch_url':
         result = await fetchUrl(args.url);
         break;
-      case 'github_read_file':
-        result = await githubReadFile(args.owner, args.repo, args.path, args.ref, githubToken);
+      case 'github_read_file': {
+        const lineStart = args.line_start ? parseInt(args.line_start, 10) : undefined;
+        const lineEnd = args.line_end ? parseInt(args.line_end, 10) : undefined;
+        result = await githubReadFile(args.owner, args.repo, args.path, args.ref, githubToken, lineStart, lineEnd);
         break;
+      }
       case 'github_list_files':
         result = await githubListFiles(args.owner, args.repo, args.path || '', args.ref, githubToken);
         break;
@@ -689,7 +700,9 @@ export async function githubReadFile(
   repo: string,
   path: string,
   ref?: string,
-  token?: string
+  token?: string,
+  lineStart?: number,
+  lineEnd?: number
 ): Promise<string> {
   // Pre-flight: check file extension for binary files
   const filename = path.split('/').pop() || '';
@@ -734,6 +747,31 @@ export async function githubReadFile(
 
   // GitHub returns base64 encoded content
   const content = decodeBase64Utf8(data.content);
+  const allLines = content.split('\n');
+  const totalLines = allLines.length;
+
+  // Line range support: allow reading specific sections of large files
+  if (lineStart && lineStart > 0) {
+    const start = Math.max(1, lineStart);
+    const end = lineEnd ? Math.min(totalLines, lineEnd) : totalLines;
+    const selectedLines = allLines.slice(start - 1, end);
+    const rangeContent = selectedLines.join('\n');
+
+    // Add line numbers and metadata
+    const numbered = selectedLines.map((line, i) => `${start + i}: ${line}`).join('\n');
+    const header = `[${path} — lines ${start}-${end} of ${totalLines} total]\n\n`;
+    return header + numbered;
+  }
+
+  // For files over 500 lines, add line count metadata so the model knows it can use line ranges
+  if (totalLines > 500 && content.length > 20000) {
+    const truncated = content.length > 30000;
+    const shown = truncated ? content.slice(0, 30000) : content;
+    const suffix = truncated
+      ? `\n\n[Content truncated at 30KB — full file is ${totalLines} lines, ${Math.round(content.length / 1024)}KB. Use line_start/line_end to read specific sections.]`
+      : `\n\n[File: ${totalLines} lines. Use line_start/line_end to read specific sections if needed.]`;
+    return shown + suffix;
+  }
 
   // Truncate long files (30KB keeps ~7.5K tokens of context budget)
   if (content.length > 30000) {
