@@ -1823,7 +1823,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 task.modelAlias, // Pass alias - method will resolve to model ID (supports rotation)
                 sanitizeMessages(conversationMessages),
                 {
-                  maxTokens: 16384,
+                  maxTokens: isPaid ? 32768 : 16384,
                   temperature: getTemperature(task.modelAlias),
                   tools: useTools ? getToolsForPhase(task.phase) : undefined,
                   toolChoice: useTools && task.phase !== 'review' ? 'auto' : undefined,
@@ -1866,7 +1866,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               const requestBody: Record<string, unknown> = {
                 model: getModelId(task.modelAlias),
                 messages: finalMessages,
-                max_tokens: clampMaxTokens(task.modelAlias, 16384),
+                max_tokens: clampMaxTokens(task.modelAlias, isPaid ? 32768 : 16384),
                 temperature: getTemperature(task.modelAlias),
                 stream: true,
               };
@@ -2108,13 +2108,29 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           if (validToolCalls.length === 0) {
             // All tool_calls truncated — compress and retry with nudge
-            console.log(`[TaskProcessor] All tool_calls truncated (finish_reason: length) — compressing and retrying`);
+            const truncatedToolName = choice.message.tool_calls[0]?.function?.name || 'unknown';
+            console.log(`[TaskProcessor] All tool_calls truncated (finish_reason: length, tool: ${truncatedToolName}) — compressing and retrying`);
             const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
+
+            // Orchestra-aware nudge: if github_create_pr was truncated, guide the model
+            // to use patch actions and avoid regenerating full file contents.
+            // The generic "break into smaller steps" contradicts the orchestra prompt's
+            // "ONE github_create_pr call" requirement and confuses the model.
+            let truncNudge: string;
+            if (truncatedToolName === 'github_create_pr') {
+              truncNudge = '[Your github_create_pr call was too large and got cut off. To fit within the output limit:\n'
+                + '1. Use "patch" action (not "update") for existing files — only send the changed lines, not the whole file\n'
+                + '2. For new files, keep content minimal — only include the necessary code\n'
+                + '3. If the PR has many files, prioritize the most important changes\n'
+                + 'Try the github_create_pr call again with these optimizations.]';
+            } else {
+              truncNudge = '[Your last response was cut off. Please try again with a shorter tool call or break it into smaller steps.]';
+            }
             conversationMessages.push({
               role: 'user',
-              content: '[Your last response was cut off. Please try again with a shorter tool call or break it into smaller steps.]',
+              content: truncNudge,
             });
             continue;
           }
