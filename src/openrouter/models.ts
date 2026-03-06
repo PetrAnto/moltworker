@@ -547,7 +547,7 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 128000,
   },
   sonnet: {
-    id: 'claude-sonnet-4-6-20250514',
+    id: 'claude-sonnet-4-6',
     alias: 'sonnet',
     name: 'Claude Sonnet 4.6',
     specialty: 'Paid Premium Reasoning',
@@ -575,7 +575,7 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 200000,
   },
   opus: {
-    id: 'claude-opus-4-6-20250610',
+    id: 'claude-opus-4-6',
     alias: 'opus',
     name: 'Claude Opus 4.6',
     specialty: 'Paid Best Quality (Newest)',
