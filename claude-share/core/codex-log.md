@@ -5,6 +5,38 @@
 ---
 
 
+## Session: 2026-03-07 | Orchestra stall + Anthropic 499 mitigation (Session: codex-orch-stall-499-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Audited `/orch next` long-run failure logs and implemented mitigations for Anthropic streaming disconnect loops plus Wrangler config warning cleanup.
+
+### Changes Made
+- Limited Anthropic direct-provider max completion tokens in TaskProcessor to reduce runaway long-thinking streams and lower client disconnect risk
+- Disabled implicit Anthropic thinking mode unless explicitly requested (`think:`) or required by fallback retry path
+- Removed unsupported `usage_model` field from `wrangler.jsonc` to eliminate Wrangler warning noise
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `wrangler.jsonc`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Targeted tests pass (`src/durable-objects/task-processor.test.ts`)
+- [x] Typecheck passes (`npm run typecheck`)
+
+### Notes for Next Session
+Monitor new `/orch` runs for reduced Anthropic chunk counts and fewer 499 disconnects; if still stalling, add adaptive model fallback after repeated oversized Anthropic streams.
+
+---
+
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

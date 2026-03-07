@@ -2030,12 +2030,24 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               // Build request body — Anthropic uses a different format (Messages API)
               let requestBody: Record<string, unknown>;
-              const maxTokens = clampMaxTokens(task.modelAlias, isPaid ? 32768 : 16384);
+              // Anthropic Sonnet can emit very long hidden-thinking streams on orchestration
+              // prompts (10k+ chunks, 20k+ output tokens) which increases disconnect risk
+              // and triggers repeated auto-resume loops. Keep completion budget tighter for
+              // Anthropic direct calls while leaving other providers unchanged.
+              const providerMaxTokens = provider === 'anthropic'
+                ? (isPaid ? 16384 : 8192)
+                : (isPaid ? 32768 : 16384);
+              const maxTokens = clampMaxTokens(task.modelAlias, providerMaxTokens);
 
               if (provider === 'anthropic') {
                 // Anthropic Messages API: different structure from OpenAI format
-                const reasoningLevel = request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
-                const reasoningParam = reasoningOverride || getReasoningParam(task.modelAlias, reasoningLevel) || undefined;
+                // Only enable Anthropic "thinking" when explicitly requested or required
+                // by fallback after a mandatory-reasoning provider error. Auto-detected
+                // reasoning levels can cause excessive hidden-thinking output and 499s.
+                const reasoningLevel = request.reasoningLevel;
+                const reasoningParam = reasoningOverride
+                  || (reasoningLevel ? getReasoningParam(task.modelAlias, reasoningLevel) : null)
+                  || undefined;
                 requestBody = buildAnthropicRequest({
                   modelId: getModelId(task.modelAlias),
                   messages: finalMessages,
