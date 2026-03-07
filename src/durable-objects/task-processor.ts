@@ -310,8 +310,10 @@ const STUCK_THRESHOLD_PAID_MS = 240000;
 // Orphaned task threshold: when isRunning=false (DO was evicted), we KNOW the
 // processing loop is dead. No need to wait the full provider-aware threshold
 // — resume faster. Must still exceed one watchdog interval to avoid races.
-const ORPHANED_THRESHOLD_FREE_MS = 120000;
-const ORPHANED_THRESHOLD_PAID_MS = 180000;
+/** @internal Exported for testing */
+export const ORPHANED_THRESHOLD_FREE_MS = 120000;
+/** @internal Exported for testing */
+export const ORPHANED_THRESHOLD_PAID_MS = 180000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max iterations per event before yielding to a fresh alarm event.
@@ -358,7 +360,8 @@ const MAX_TOTAL_TOOLS_PAID = 100;
  * These fields are only needed in-memory during processTask() and are
  * persisted in R2 checkpoints alongside messages.
  */
-function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & { messages: never[] } {
+/** @internal Exported for testing */
+export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & { messages: never[] } {
   const { messages: _msgs, workPhaseContent: _wpc, structuredPlan: _sp, ...rest } = task;
   const result = { ...rest, messages: [] as never[] };
   // Guard against 128KB DO storage limit — truncate growable arrays if needed
@@ -421,7 +424,8 @@ function parseProviderError(status: number, rawText: string): { status: number; 
  * Must exceed the maximum possible idle timeout for the model's provider,
  * otherwise the watchdog fires a false "stuck" alarm during long TTFT waits.
  */
-function getWatchdogStuckThreshold(modelAlias: string): number {
+/** @internal Exported for testing */
+export function getWatchdogStuckThreshold(modelAlias: string): number {
   const isPaidModel = getModel(modelAlias)?.isFree !== true;
   const provider = getProvider(modelAlias);
   const providerMultiplier = provider === 'moonshot' ? 2.5
@@ -2081,28 +2085,37 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 task.lastUpdate = Date.now();
                 this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
               }, 15000);
+
+              // Hard stream timeout for OpenRouter — same as direct API path.
+              // Prevents runaway streams that keep dribbling chunks.
+              const orHardTimeoutMs = Math.min(Math.max(idleTimeout * 3, 180_000), 300_000);
               try {
-                result = await client.chatCompletionStreamingWithTools(
-                  task.modelAlias, // Pass alias - method will resolve to model ID (supports rotation)
-                  sanitizeMessages(conversationMessages),
-                  {
-                    maxTokens: isPaid ? 32768 : 16384,
-                    temperature: getTemperature(task.modelAlias),
-                    tools: useTools ? getToolsForPhase(task.phase) : undefined,
-                    toolChoice: useTools && task.phase !== 'review' ? 'auto' : undefined,
-                    idleTimeoutMs: idleTimeout, // Scaled by context size (45s-120s)
-                    reasoningLevel: request.reasoningLevel,
-                    responseFormat: request.responseFormat,
-                    onProgress: () => {
-                      progressCount++;
-                      this.lastHeartbeatMs = Date.now();
-                      if (progressCount % 100 === 0) {
-                        console.log(`[TaskProcessor] Streaming progress: ${progressCount} chunks received`);
-                      }
-                    },
-                    onToolCallReady: useTools ? specExec.onToolCallReady : undefined,
-                  }
-                );
+                result = await Promise.race([
+                  client.chatCompletionStreamingWithTools(
+                    task.modelAlias, // Pass alias - method will resolve to model ID (supports rotation)
+                    sanitizeMessages(conversationMessages),
+                    {
+                      maxTokens: isPaid ? 32768 : 16384,
+                      temperature: getTemperature(task.modelAlias),
+                      tools: useTools ? getToolsForPhase(task.phase) : undefined,
+                      toolChoice: useTools && task.phase !== 'review' ? 'auto' : undefined,
+                      idleTimeoutMs: idleTimeout, // Scaled by context size (45s-120s)
+                      reasoningLevel: request.reasoningLevel,
+                      responseFormat: request.responseFormat,
+                      onProgress: () => {
+                        progressCount++;
+                        this.lastHeartbeatMs = Date.now();
+                        if (progressCount % 100 === 0) {
+                          console.log(`[TaskProcessor] Streaming progress: ${progressCount} chunks received`);
+                        }
+                      },
+                      onToolCallReady: useTools ? specExec.onToolCallReady : undefined,
+                    }
+                  ),
+                  new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error(`OpenRouter hard stream timeout (${Math.round(orHardTimeoutMs / 1000)}s)`)), orHardTimeoutMs)
+                  ),
+                ]);
               } finally {
                 clearInterval(orFlushInterval);
                 task.isStreaming = false;
@@ -2608,7 +2621,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           // alarm handler can detect this as spinning even though tool count increases.
           if (!task.toolSignatures) task.toolSignatures = [];
           for (const tc of choice.message.tool_calls) {
-            task.toolSignatures.push(`${tc.function.name}:${tc.function.arguments}`);
+            // Hash arguments to avoid storing large payloads (e.g. patch_file diffs)
+            const argsStr = tc.function.arguments || '';
+            let hash = 0;
+            for (let i = 0; i < argsStr.length; i++) {
+              hash = ((hash << 5) - hash + argsStr.charCodeAt(i)) | 0;
+            }
+            task.toolSignatures.push(`${tc.function.name}:${hash.toString(36)}`);
           }
           // Cap at 100 to avoid unbounded growth in long tasks
           if (task.toolSignatures.length > 100) {
