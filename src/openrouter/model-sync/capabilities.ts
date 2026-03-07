@@ -73,7 +73,7 @@ function detectTools(
   }
 
   // Medium: Known tool-capable model families
-  if (/gpt-4|claude|gemini|qwen3|kimi|grok|minimax|devstral|deepseek-(chat|v3)/.test(combined)) {
+  if (/gpt-(4|5\.[1-9])|claude|gemini|qwen3|kimi|grok|minimax|devstral|deepseek-(chat|v3)/.test(combined)) {
     return { value: true, confidence: 'medium', source: 'known_model_family' };
   }
 

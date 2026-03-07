@@ -80,6 +80,10 @@ export function computeOrchestraReady(
   // Image gen models are never orchestra-ready
   if (model.isImageGen) return false;
 
+  // Codex models support tools in metadata but don't use them in practice
+  // (they output code/plans as text instead of making function calls)
+  if (/codex/i.test(model.id)) return false;
+
   // Context must be >= 64K
   if ((model.maxContext || 0) < 64000) return false;
 
@@ -101,7 +105,7 @@ export function computeOrchestraReady(
 
   // Known strong orchestra models by family
   const idLower = model.id.toLowerCase();
-  if (/claude-(sonnet|opus)|gpt-4o|gemini-3-(pro|flash)|grok-4|deepseek-(v3|chat)|devstral|qwen3-coder|minimax-m2/.test(idLower)) {
+  if (/claude-(sonnet|opus)|gpt-(4o|5\.4)|gemini-3(\.\d)?-(pro|flash)|grok-4|deepseek-(v3|chat)|devstral|qwen3-coder|minimax-m2/.test(idLower)) {
     return true;
   }
 
