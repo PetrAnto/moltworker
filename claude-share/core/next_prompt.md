@@ -3,9 +3,16 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (post `/orch next` stall hardening)
 
 ---
+
+
+### Fresh Context (2026-03-07)
+
+- `/orch next` runs with `/sonnet` showed long Anthropic streams ending in client disconnect (499) and repeated auto-resume stalls after `github_create_pr` was called.
+- TaskProcessor now caps Anthropic direct tool-enabled output tokens and routes all background resumes through unified crash handling.
+- Next validation task: benchmark whether stall rate and elapsed time improve on the same `Refactor 1.1` workload.
 
 ## Current Task: Choose Next Direction
 

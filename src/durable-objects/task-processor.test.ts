@@ -1316,6 +1316,26 @@ describe('isToolCallParallelSafe', () => {
   });
 });
 
+
+describe('clampDirectProviderMaxTokens', () => {
+  it('caps anthropic tool-enabled work phases to 8192 tokens', async () => {
+    const { clampDirectProviderMaxTokens } = await import('./task-processor');
+    expect(clampDirectProviderMaxTokens('anthropic', 32768, true, 'work')).toBe(8192);
+    expect(clampDirectProviderMaxTokens('anthropic', 12000, true, 'plan')).toBe(8192);
+  });
+
+  it('caps anthropic tool-enabled review phase to 4096 tokens', async () => {
+    const { clampDirectProviderMaxTokens } = await import('./task-processor');
+    expect(clampDirectProviderMaxTokens('anthropic', 32768, true, 'review')).toBe(4096);
+  });
+
+  it('does not cap non-anthropic providers or tool-less calls', async () => {
+    const { clampDirectProviderMaxTokens } = await import('./task-processor');
+    expect(clampDirectProviderMaxTokens('deepseek', 32768, true, 'work')).toBe(32768);
+    expect(clampDirectProviderMaxTokens('anthropic', 32768, false, 'work')).toBe(32768);
+  });
+});
+
 describe('Parallel tools execution', () => {
   let TaskProcessorClass: typeof import('./task-processor').TaskProcessor;
 

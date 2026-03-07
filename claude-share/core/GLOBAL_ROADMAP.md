@@ -478,6 +478,7 @@
 
 ## Changelog
 
+2026-03-07 | Codex (Session: codex-orch-stall-audit-001) | fix(task-processor): harden long-running Anthropic direct streaming — cap tool-phase max_tokens + unify safe background error handling for all resume paths | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```

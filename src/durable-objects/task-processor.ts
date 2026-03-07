@@ -137,6 +137,27 @@ export function isToolCallParallelSafe(toolCall: ToolCall): boolean {
 type TaskCategory = 'coding' | 'reasoning' | 'general';
 
 /**
+ * Apply provider-specific max output token safety caps for direct APIs.
+ *
+ * Anthropic direct + tools can occasionally produce very long streamed outputs
+ * (especially on resume), which increases disconnect risk and can trigger long
+ * watchdog recovery loops. Keep tool-enabled Anthropic calls tighter.
+ */
+export function clampDirectProviderMaxTokens(
+  provider: Provider,
+  requestedMaxTokens: number,
+  useTools: boolean,
+  phase: TaskPhase,
+): number {
+  if (provider !== 'anthropic' || !useTools) {
+    return requestedMaxTokens;
+  }
+
+  const cap = phase === 'review' ? 4096 : 8192;
+  return Math.min(requestedMaxTokens, cap);
+}
+
+/**
  * Detect what capability the task primarily needs from the user message.
  */
 function detectTaskCategory(messages: readonly ChatMessage[]): TaskCategory {
@@ -495,6 +516,35 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     };
   }
 
+  private runTaskInBackground(taskRequest: TaskRequest, context: string): void {
+    const processPromise = this.processTask(taskRequest).catch(async (error) => {
+      console.error(`[TaskProcessor] Uncaught error in ${context}:`, error);
+      try {
+        await this.doState.storage.deleteAlarm();
+
+        const failedTask = await this.doState.storage.get<TaskState>('task');
+        if (failedTask) {
+          failedTask.status = 'failed';
+          failedTask.error = `${context} error: ${error instanceof Error ? error.message : String(error)}`;
+          await this.doState.storage.put('task', taskForStorage(failedTask));
+        }
+
+        if (taskRequest.telegramToken) {
+          await this.sendTelegramMessageWithButtons(
+            taskRequest.telegramToken,
+            taskRequest.chatId,
+            `❌ Task crashed during ${context}: ${error instanceof Error ? error.message : 'Unknown error'}\n\n💡 Progress may be saved.`,
+            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
+          );
+        }
+      } catch (notifyError) {
+        console.error(`[TaskProcessor] Failed to notify about ${context} crash:`, notifyError);
+      }
+    });
+
+    this.doState.waitUntil(processPromise);
+  }
+
   /**
    * Start pre-fetching files referenced in user messages (Phase 7B.3).
    * Runs in parallel with the first LLM call — results populate prefetchPromises.
@@ -767,26 +817,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         responseFormat: task.responseFormat,
       };
 
-      this.doState.waitUntil(this.processTask(taskRequest).catch(async (error) => {
-        console.error('[TaskProcessor] Uncaught error in resumed processTask:', error);
-        try {
-          await this.doState.storage.deleteAlarm();
-          const failedTask = await this.doState.storage.get<TaskState>('task');
-          if (failedTask) {
-            failedTask.status = 'failed';
-            failedTask.error = `Resume error: ${error instanceof Error ? error.message : String(error)}`;
-            await this.doState.storage.put('task', taskForStorage(failedTask));
-          }
-          await this.sendTelegramMessageWithButtons(
-            taskRequest.telegramToken,
-            taskRequest.chatId,
-            `❌ Task crashed during resume: ${error instanceof Error ? error.message : 'Unknown error'}\n\n💡 Progress may be saved.`,
-            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
-          );
-        } catch (notifyError) {
-          console.error('[TaskProcessor] Failed to notify about resume crash:', notifyError);
-        }
-      }));
+      this.runTaskInBackground(taskRequest, 'resume');
       return;
     }
 
@@ -943,7 +974,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       };
 
       // Use waitUntil to trigger resume without blocking alarm
-      this.doState.waitUntil(this.processTask(taskRequest));
+      this.runTaskInBackground(taskRequest, 'auto-resume');
       return;
     }
 
@@ -1285,31 +1316,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // after the POST response is sent, killing in-flight streaming fetches).
       // The 30s CPU limit per event is managed by the CPU budget yield mechanism
       // which proactively yields every ~12s of active time and resumes via alarm.
-      const processPromise = this.processTask(taskRequest).catch(async (error) => {
-        console.error('[TaskProcessor] Uncaught error in processTask:', error);
-        try {
-          // Cancel watchdog alarm
-          await this.doState.storage.deleteAlarm();
-
-          // Try to save checkpoint and notify user
-          const task = await this.doState.storage.get<TaskState>('task');
-          if (task) {
-            task.status = 'failed';
-            task.error = `Unexpected error: ${error instanceof Error ? error.message : String(error)}`;
-            await this.doState.storage.put('task', taskForStorage(task));
-          }
-          const crashProgress = task ? this.buildProgressSummary(task) : '';
-          await this.sendTelegramMessageWithButtons(
-            taskRequest.telegramToken,
-            taskRequest.chatId,
-            `❌ Task crashed: ${error instanceof Error ? error.message : 'Unknown error'}${crashProgress}\n\n💡 Progress may be saved.`,
-            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
-          );
-        } catch (notifyError) {
-          console.error('[TaskProcessor] Failed to notify user:', notifyError);
-        }
-      });
-      this.doState.waitUntil(processPromise);
+      this.runTaskInBackground(taskRequest, 'processTask');
 
       return new Response(JSON.stringify({
         status: 'started',
@@ -2030,7 +2037,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               // Build request body — Anthropic uses a different format (Messages API)
               let requestBody: Record<string, unknown>;
-              const maxTokens = clampMaxTokens(task.modelAlias, isPaid ? 32768 : 16384);
+              const baseMaxTokens = clampMaxTokens(task.modelAlias, isPaid ? 32768 : 16384);
+              const maxTokens = clampDirectProviderMaxTokens(provider, baseMaxTokens, useTools, task.phase);
+              if (maxTokens < baseMaxTokens) {
+                console.log(`[TaskProcessor] Applied ${provider} max_tokens safety cap: ${baseMaxTokens} -> ${maxTokens} (phase: ${task.phase}, tools: ${useTools})`);
+              }
 
               if (provider === 'anthropic') {
                 // Anthropic Messages API: different structure from OpenAI format
