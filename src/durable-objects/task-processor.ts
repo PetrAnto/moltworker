@@ -486,6 +486,27 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     this.r2 = env.MOLTBOT_BUCKET;
   }
 
+  /**
+   * Sleep for `totalMs` in short intervals, updating storage + heartbeat every 10s.
+   * Bare `setTimeout(58s)` gets killed when CF evicts idle DOs; this keeps the DO
+   * pinned by performing periodic I/O (storage.put), preventing eviction.
+   */
+  private async keepAliveSleep(totalMs: number, task: TaskState): Promise<void> {
+    const INTERVAL = 10_000; // 10s between heartbeats
+    let remaining = totalMs;
+    while (remaining > 0) {
+      const chunk = Math.min(remaining, INTERVAL);
+      await new Promise(r => setTimeout(r, chunk));
+      remaining -= chunk;
+      // Update heartbeat + storage to keep DO alive and prevent watchdog false alarm
+      this.lastHeartbeatMs = Date.now();
+      if (remaining > 0) {
+        task.lastUpdate = Date.now();
+        await this.doState.storage.put('task', taskForStorage(task));
+      }
+    }
+  }
+
   getToolCacheStats(): { hits: number; misses: number; size: number; prefetchHits: number } {
     return {
       hits: this.toolCacheHits,
@@ -1438,6 +1459,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       this.prefetchHits = 0;
     } else {
       console.log(`[TaskProcessor] Preserving tool cache for resume (${this.toolResultCache.size} entries)`);
+      // If DO was evicted, in-memory cache is empty — will be rebuilt from checkpoint messages below
     }
 
     const task: TaskState = {
@@ -1652,6 +1674,28 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           );
         }
         console.log(`[TaskProcessor] Resumed from checkpoint: ${checkpoint.iterations} iterations`);
+
+        // Rebuild tool cache from checkpoint messages if DO was evicted (in-memory cache lost)
+        if (this.toolResultCache.size === 0) {
+          const toolCallMap = new Map<string, { name: string; arguments: string }>();
+          for (const msg of conversationMessages) {
+            if (msg.role === 'assistant' && msg.tool_calls) {
+              for (const tc of msg.tool_calls) {
+                toolCallMap.set(tc.id, { name: tc.function.name, arguments: tc.function.arguments });
+              }
+            }
+            if (msg.role === 'tool' && msg.tool_call_id) {
+              const tc = toolCallMap.get(msg.tool_call_id);
+              if (tc && typeof msg.content === 'string' && this.shouldCacheToolResult(msg.content)) {
+                const cacheKey = `${tc.name}:${tc.arguments}`;
+                this.toolResultCache.set(cacheKey, msg.content);
+              }
+            }
+          }
+          if (this.toolResultCache.size > 0) {
+            console.log(`[TaskProcessor] Rebuilt tool cache from checkpoint: ${this.toolResultCache.size} entries`);
+          }
+        }
 
         // Force-compress context after checkpoint restore.
         // Checkpoints accumulate context across iterations. Without compression,
@@ -1878,8 +1922,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.lastUpdate = Date.now();
             await this.doState.storage.put('task', taskForStorage(task));
             iterSleepMs += waitMs; // Track sleep time for CPU budget accounting
-            await new Promise(r => setTimeout(r, waitMs));
-            this.lastHeartbeatMs = Date.now();
+            await this.keepAliveSleep(waitMs, task);
             // Reset window after waiting
             anthropicWindowStart = Date.now();
             anthropicWindowTokens = 0;
@@ -2160,10 +2203,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 // to prevent watchdog from triggering false auto-resume
                 task.lastUpdate = Date.now();
                 await this.doState.storage.put('task', taskForStorage(task));
-                this.lastHeartbeatMs = Date.now();
                 iterSleepMs += waitSecs * 1000; // Track sleep time for CPU budget accounting
-                await new Promise(r => setTimeout(r, waitSecs * 1000));
-                this.lastHeartbeatMs = Date.now();
+                await this.keepAliveSleep(waitSecs * 1000, task);
                 attempt--; // Don't consume the attempt slot for rate limits
                 continue;
               }
