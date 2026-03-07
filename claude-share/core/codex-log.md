@@ -107,3 +107,36 @@ Implement Phase 1 first: add centralized task router policy and resume model esc
 
 ---
 
+
+## Session: 2026-03-07 | /orch next watchdog audit + recovery fix (Session: codex-orch-watchdog-audit-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Audited `/orch next` timeout/resume behavior from production logs, identified slow orphaned-task recovery, and shipped a watchdog threshold fix plus regression test.
+
+### Changes Made
+- Added an orphaned-task fast resume threshold in TaskProcessor watchdog logic so tasks with `isRunning=false` resume sooner after eviction/disconnect.
+- Kept provider-aware thresholds for active in-memory runs, but applied a lower effective threshold only for orphaned processing tasks.
+- Added lifecycle regression test that seeds a stale `processing` task and verifies alarm-driven auto-resume completes.
+- Removed deprecated `usage_model` from `wrangler.jsonc` to eliminate Wrangler config warnings.
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor-lifecycle.test.ts`
+- `wrangler.jsonc`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Monitor live `/orch` tasks for fewer long idle windows before auto-resume notifications; if needed, tune orphaned thresholds per provider using real latency histograms.
+
+---
