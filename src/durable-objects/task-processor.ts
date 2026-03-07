@@ -339,13 +339,19 @@ const MAX_TOTAL_TOOLS_FREE = 50;
 const MAX_TOTAL_TOOLS_PAID = 100;
 
 /**
- * Create a storage-safe copy of TaskState by stripping the messages array.
+ * Create a storage-safe copy of TaskState by stripping large transient fields.
  * Messages are stored in R2 checkpoints — keeping them in DO storage too
  * causes the value to exceed CF's 128KB storage.put() limit once context
  * grows past ~30K tokens (serializes to >131072 bytes).
+ *
+ * Also strips workPhaseContent (can be 19K+ tokens for large code generation)
+ * and structuredPlan (serialised step descriptions can grow large).
+ * These fields are only needed in-memory during processTask() and are
+ * persisted in R2 checkpoints alongside messages.
  */
 function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & { messages: never[] } {
-  return { ...task, messages: [] };
+  const { messages: _msgs, workPhaseContent: _wpc, structuredPlan: _sp, ...rest } = task;
+  return { ...rest, messages: [] as never[] };
 }
 
 /** Get the auto-resume limit based on model cost */
