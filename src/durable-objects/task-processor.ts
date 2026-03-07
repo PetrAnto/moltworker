@@ -3622,7 +3622,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Backdating by stuckThreshold ensures the very next alarm (≤90s) fires auto-resume.
         const stuckThreshold = getWatchdogStuckThreshold(task.modelAlias);
         task.lastUpdate = Date.now() - stuckThreshold;
-        await this.doState.storage.put('task', taskForStorage(task));
+        try {
+          await this.doState.storage.put('task', taskForStorage(task));
+        } catch (storageErr) {
+          console.error('[TaskProcessor] Phase budget: failed to persist state:', storageErr);
+        }
 
         // Save checkpoint so alarm handler can resume from here
         // Sanitize messages to fix orphaned tool_calls from budget interruption
@@ -3650,10 +3654,39 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       task.status = 'failed';
       task.error = error instanceof Error ? error.message : String(error);
-      await this.doState.storage.put('task', taskForStorage(task));
+
+      // Wrap storage writes in try/catch to prevent zombie loops:
+      // If the original error was QuotaExceededError, blindly calling storage.put
+      // here would throw the same exception, crash the isolate, and the alarm
+      // would restart us into the same crash → infinite loop.
+      try {
+        await this.doState.storage.put('task', taskForStorage(task));
+      } catch (storageErr) {
+        console.error('[TaskProcessor] Failed to persist error state, writing minimal fallback:', storageErr);
+        // Write a minimal task object that fits in any storage budget
+        try {
+          await this.doState.storage.put('task', {
+            taskId: task.taskId,
+            userId: task.userId,
+            status: 'failed' as const,
+            error: (task.error || 'unknown').substring(0, 500),
+            startTime: task.startTime,
+            lastUpdate: Date.now(),
+            isRunning: false,
+          });
+        } catch {
+          console.error('[TaskProcessor] Even minimal state write failed — clearing storage');
+          await this.doState.storage.deleteAll().catch(() => {});
+        }
+      }
 
       // Cancel watchdog alarm - we're handling the error here
-      await this.doState.storage.deleteAlarm();
+      try {
+        await this.doState.storage.deleteAlarm();
+      } catch {
+        // If alarm deletion fails, it's not fatal — the alarm handler
+        // will see status='failed' and skip processing
+      }
 
       // Update orchestra history so failed tasks don't stay at 'started' forever
       await this.updateOrchestraHistoryOnFailure(task, task.error);
