@@ -437,6 +437,20 @@ function sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
   });
 }
 
+/**
+ * Estimate per-iteration CPU-active time by removing known wall-clock waits.
+ *
+ * Without subtracting provider API wait/streaming time, long responses look
+ * like CPU-heavy execution and can trigger unnecessary yield/resume loops.
+ */
+export function estimateIterationActiveMs(
+  iterDurationMs: number,
+  iterSleepMs: number,
+  apiWallMs: number,
+): number {
+  return Math.max(0, iterDurationMs - iterSleepMs - apiWallMs);
+}
+
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
   private r2?: R2Bucket;
@@ -1806,6 +1820,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         const iterStartTime = Date.now();
         let iterSleepMs = 0; // Track time spent sleeping (pacing, rate limit waits)
+        let iterApiWallMs = 0; // Track provider API wall time (streaming/network waits)
         console.log(`[TaskProcessor] Iteration ${task.iterations} START - tools: ${task.toolsUsed.length}, messages: ${conversationMessages.length}`);
 
         // Note: Checkpoint is saved after tool execution, not before API call
@@ -1975,6 +1990,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         let reasoningOverride: ReturnType<typeof buildFallbackReasoningParam> | undefined;
 
         for (let attempt = 1; attempt <= MAX_API_RETRIES; attempt++) {
+          const apiCallStartMs = Date.now();
           try {
             console.log(`[TaskProcessor] Starting API call (attempt ${attempt}/${MAX_API_RETRIES})...`);
 
@@ -2235,6 +2251,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               continue;
             }
             // All retries exhausted — don't throw yet, try model rotation below
+          } finally {
+            iterApiWallMs += Math.max(0, Date.now() - apiCallStartMs);
           }
         }
 
@@ -2778,7 +2796,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
 
           const iterDurationMs = Date.now() - iterStartTime;
-          const iterActiveMs = Math.max(0, iterDurationMs - iterSleepMs);
+          const iterActiveMs = estimateIterationActiveMs(iterDurationMs, iterSleepMs, iterApiWallMs);
           console.log(`[TaskProcessor] Iteration ${task.iterations} COMPLETE - total time: ${iterDurationMs}ms (active: ${iterActiveMs}ms)`);
 
           // Accumulate active time for CPU budget tracking (excludes pacing sleeps)

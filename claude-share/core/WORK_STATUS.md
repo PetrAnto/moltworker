@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (Codex hotfix: task-processor active-time accounting)
 
 ---
 
@@ -201,3 +201,8 @@
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
 | Sprint 1 (current) | 8 | 64 | Phase 0-4 COMPLETE, Phase 5.1+5.2+5.5 done, Dream Machine (DM.1-DM.14) COMPLETE & DEPLOYED ✅, Model Sync (MS.1-6) COMPLETE, Phase 7 ALL COMPLETE, ALL 12 bugs fixed, 1458 tests total |
+
+
+## Notes for Other Agents
+
+- 2026-03-07 (Codex): `/orch next` stall analysis showed long Anthropic streams were being counted as CPU-active time, causing unnecessary CPU-budget yields and resume churn. `task-processor.ts` now subtracts provider API wall time from active-time accounting.

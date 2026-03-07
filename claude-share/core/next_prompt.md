@@ -61,3 +61,12 @@ The human should benchmark Phase 7 gains (7B.6) at their convenience. Next AI wo
 | 2026-02-22 | 7A.5: Prompt Caching — cache_control for Anthropic models (1175 tests) | Claude Opus 4.6 | session_01V82ZPEL4WPcLtvGC6szgt5 |
 | 2026-02-22 | 7A.3: Destructive Op Guard — block risky tool calls (1158 tests) | Claude Opus 4.6 | session_01V82ZPEL4WPcLtvGC6szgt5 |
 | 2026-02-22 | 7A.2: Smart Context Loading — skip R2 reads for simple queries (1133 tests) | Claude Opus 4.6 | session_01V82ZPEL4WPcLtvGC6szgt5 |
+
+
+### Immediate Follow-up (2026-03-07)
+
+Validate the TaskProcessor active-time hotfix in production:
+- Trigger a large `/orch next` coding task on `/sonnet`
+- Confirm logs do not show premature `CPU budget yield` during long Anthropic streaming
+- Confirm auto-resume count remains low unless there is a real stall (`no new tools`)
+- If needed, tune `MAX_ACTIVE_TIME_BEFORE_YIELD_MS` based on observed telemetry

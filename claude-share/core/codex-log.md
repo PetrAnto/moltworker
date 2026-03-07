@@ -5,6 +5,38 @@
 ---
 
 
+## Session: 2026-03-07 | /orch next stall audit + fix (Session: codex-orch-stall-20260307)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Audited a real `/orch next` stall where Anthropic streaming runs were repeatedly auto-resumed, then added a fix so streaming wall time is not miscounted as CPU-active time.
+
+### Changes Made
+- Added `estimateIterationActiveMs()` helper to compute active time as `total - sleep - apiWall`
+- Tracked per-attempt API wall time and fed it into iteration active-time accounting
+- Updated CPU-yield accounting to avoid false CPU budget yields on long streaming responses
+- Added focused unit tests for active-time estimation behavior
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass (`npm test`)
+- [x] Typecheck passes (`npm run typecheck`)
+
+### Notes for Next Session
+Run a production `/orch next` canary on `/sonnet` with a large refactor task and confirm logs no longer show premature CPU-budget yields/resume loops during long Anthropic streams.
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)
