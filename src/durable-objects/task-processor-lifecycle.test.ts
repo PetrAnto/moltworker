@@ -26,7 +26,7 @@ vi.mock('../openrouter/client', async (importOriginal) => {
       chat: vi.fn(),
       chatCompletionStreamingWithTools: vi.fn(),
     })),
-    parseSSEStream: original.parseSSEStream,
+    parseSSEStream: vi.fn(original.parseSSEStream),
   };
 });
 
@@ -719,6 +719,107 @@ describe('TaskProcessor lifecycle', () => {
       // Should be ≤ 4 puts: initial save, iteration start, iteration complete, final complete
       // NOT 4 + 5 heartbeat puts = 9
       expect(taskPuts.length).toBeLessThanOrEqual(6);
+    });
+
+    it('should flush durable heartbeat while waiting for direct provider stream to start', async () => {
+      vi.useFakeTimers();
+      const mockState = createMockState();
+
+      let resolveProviderFetch: ((response: Response) => void) | undefined;
+
+      vi.stubGlobal('fetch', vi.fn((url: string | Request) => {
+        const urlStr = typeof url === 'string' ? url : url.url;
+        if (urlStr.includes('api.telegram.org')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ ok: true, result: { message_id: 999 } }),
+            text: () => Promise.resolve(JSON.stringify({ ok: true, result: { message_id: 999 } })),
+          });
+        }
+
+        return new Promise<Response>((resolve) => {
+          resolveProviderFetch = resolve;
+        });
+      }));
+
+      const processor = new TaskProcessorClass(mockState as never, {} as never);
+      await processor.fetch(new Request('https://do/process', {
+        method: 'POST',
+        body: JSON.stringify(createTaskRequest()),
+      }));
+
+      // Let processTask start and establish streaming heartbeat interval
+      await vi.advanceTimersByTimeAsync(56000);
+
+      const taskPutsBeforeResponse = mockState.storage.put.mock.calls.filter((call: unknown[]) => call[0] === 'task').length;
+      expect(taskPutsBeforeResponse).toBeGreaterThanOrEqual(2);
+
+      // Complete the delayed provider call
+      resolveProviderFetch!(new Response([
+        `data: ${JSON.stringify({ id: 'test', choices: [{ delta: { content: 'done' } }] })}\n\n`,
+        `data: ${JSON.stringify({ id: 'test', choices: [{ finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5 } })}\n\n`,
+        'data: [DONE]\n\n',
+      ].join(''), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+
+      await vi.runAllTimersAsync();
+      await waitForStatus(mockState.storage, 'completed', 10000);
+      vi.useRealTimers();
+    });
+
+    it('should clear fetch header-timeout immediately after direct provider responds', async () => {
+      vi.useFakeTimers();
+      const mockState = createMockState();
+      const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+      const { parseSSEStream } = await import('../openrouter/client');
+      type StreamResult = Awaited<ReturnType<typeof parseSSEStream>>;
+
+      let resolveStream: ((value: StreamResult) => void) | undefined;
+
+      vi.mocked(parseSSEStream).mockImplementationOnce(() => new Promise((resolve) => {
+        resolveStream = resolve;
+      }));
+
+      vi.stubGlobal('fetch', vi.fn((url: string | Request) => {
+        const urlStr = typeof url === 'string' ? url : url.url;
+        if (urlStr.includes('api.telegram.org')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ ok: true, result: { message_id: 999 } }),
+            text: () => Promise.resolve(JSON.stringify({ ok: true, result: { message_id: 999 } })),
+          });
+        }
+
+        return Promise.resolve(new Response('data: [DONE]\n\n', {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }));
+      }));
+
+      const processor = new TaskProcessorClass(mockState as never, {} as never);
+      await processor.fetch(new Request('https://do/process', {
+        method: 'POST',
+        body: JSON.stringify(createTaskRequest()),
+      }));
+
+      await vi.runOnlyPendingTimersAsync();
+
+      // Ensure header timeout was cleared before streaming parser resolves.
+      expect(resolveStream).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+
+      resolveStream!({
+        id: 'test-resp',
+        choices: [{ message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      } as StreamResult);
+
+      await vi.runAllTimersAsync();
+      await waitForStatus(mockState.storage, 'completed', 10000);
+      vi.useRealTimers();
+      clearTimeoutSpy.mockRestore();
     });
   });
 });

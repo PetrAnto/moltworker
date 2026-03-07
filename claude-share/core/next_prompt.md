@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (Codex follow-up fixed `/orch next` provider 499 disconnect regression in direct-provider stream timeout handling)
 
 ---
 
@@ -44,6 +44,8 @@ The human should benchmark Phase 7 gains (7B.6) at their convenience. Next AI wo
 
 | Date | Task | AI | Session |
 |------|------|----|---------|
+| 2026-03-07 | `/orch next` follow-up — fixed direct-provider 499 "Client disconnected" regression by scoping fetch timeout to header wait only + added timer-clear regression test | Codex (GPT-5.2-Codex) | codex-orch-499-timeout-20260307 |
+| 2026-03-07 | `/orch next` watchdog false-stuck fix — durable heartbeat flush during direct-provider TTFT wait + lifecycle regression test + wrangler warning cleanup | Codex (GPT-5.2-Codex) | codex-orch-watchdog-20260307 |
 | 2026-02-23 | 5.1: Multi-Agent Review — cross-family reviewer for independent verification (1458 tests) | Claude Opus 4.6 | session_01V82ZPEL4WPcLtvGC6szgt5 |
 
 | Date | Task | AI | Session |

@@ -2023,6 +2023,22 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // This prevents DO termination during long API calls
               const abortController = new AbortController();
               const fetchTimeout = setTimeout(() => abortController.abort(), idleTimeout + 30000);
+              let directProgressCount = 0;
+
+              // Keep durable heartbeat alive while waiting for response headers and
+              // during streaming. Without this, long TTFT / stalled provider requests
+              // can leave storage.lastUpdate stale long enough for the watchdog to
+              // trigger an unnecessary auto-resume.
+              const directProviderFlushInterval = setInterval(() => {
+                task.lastUpdate = Date.now();
+                this.lastHeartbeatMs = Date.now();
+                this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
+                if (directProgressCount === 0) {
+                  console.log(`[TaskProcessor] ${provider} heartbeat flush (waiting for stream)`);
+                } else {
+                  console.log(`[TaskProcessor] Streaming storage flush (${directProgressCount} chunks so far)`);
+                }
+              }, 55000);
 
               // Inject cache_control on system messages for Anthropic models (prompt caching)
               const sanitized = sanitizeMessages(conversationMessages);
@@ -2077,56 +2093,38 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 }
               }
 
-              let response: Response;
               try {
-                response = await fetch(providerConfig.baseUrl, {
+                const response = await fetch(providerConfig.baseUrl, {
                   method: 'POST',
                   headers,
                   body: JSON.stringify(requestBody),
                   signal: abortController.signal,
                 });
+                // Header timeout only: once we have a response body, streaming idle
+                // time is governed by parseSSEStream/parseAnthropicSSEStream.
+                // Keeping this timer alive during active streaming can abort healthy
+                // long runs and surface as provider-side 499 "Client disconnected".
                 clearTimeout(fetchTimeout);
                 console.log(`[TaskProcessor] ${provider} streaming response: ${response.status}`);
-              } catch (fetchError) {
-                clearTimeout(fetchTimeout);
-                if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
-                  throw new Error(`${provider} API timeout (${Math.round((idleTimeout + 30000) / 1000)}s) — connection aborted`);
+                if (!response.ok) {
+                  const errorText = await response.text().catch(() => 'unknown error');
+                  const providerErr = parseProviderError(response.status, errorText);
+                  throw new Error(`${provider} API error (${providerErr.status}): ${providerErr.message}`);
                 }
-                throw fetchError;
-              }
 
-              if (!response.ok) {
-                const errorText = await response.text().catch(() => 'unknown error');
-                const providerErr = parseProviderError(response.status, errorText);
-                throw new Error(`${provider} API error (${providerErr.status}): ${providerErr.message}`);
-              }
-
-              if (!response.body) {
-                throw new Error(`${provider} API returned no response body`);
-              }
-
-              // Parse SSE stream — Anthropic uses different event format
-              let directProgressCount = 0;
-              const onStreamProgress = () => {
-                directProgressCount++;
-                this.lastHeartbeatMs = Date.now();
-                if (directProgressCount % 100 === 0) {
-                  console.log(`[TaskProcessor] ${provider} streaming: ${directProgressCount} chunks`);
+                if (!response.body) {
+                  throw new Error(`${provider} API returned no response body`);
                 }
-              };
 
-              // Periodic storage flush during long streaming — uses setInterval
-              // instead of in-callback storage.put() because unawaited puts from
-              // synchronous callbacks get abandoned if the DO is evicted mid-stream.
-              // setInterval fires between await points in the streaming parser,
-              // keeping task.lastUpdate fresh in durable storage.
-              const streamingFlushInterval = setInterval(() => {
-                task.lastUpdate = Date.now();
-                this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
-                console.log(`[TaskProcessor] Streaming storage flush (${directProgressCount} chunks so far)`);
-              }, 55000);
+                // Parse SSE stream — Anthropic uses different event format
+                const onStreamProgress = () => {
+                  directProgressCount++;
+                  this.lastHeartbeatMs = Date.now();
+                  if (directProgressCount % 100 === 0) {
+                    console.log(`[TaskProcessor] ${provider} streaming: ${directProgressCount} chunks`);
+                  }
+                };
 
-              try {
                 if (provider === 'anthropic') {
                   result = await parseAnthropicSSEStream(
                     response.body, idleTimeout, onStreamProgress,
@@ -2138,8 +2136,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     useTools ? specExec.onToolCallReady : undefined,
                   );
                 }
+              } catch (fetchError) {
+                // If fetch itself fails before headers, prevent timer leak.
+                clearTimeout(fetchTimeout);
+                throw fetchError;
               } finally {
-                clearInterval(streamingFlushInterval);
+                clearInterval(directProviderFlushInterval);
+              }
+
+              if (result === null) {
+                throw new Error(`${provider} API returned no result`);
               }
 
               console.log(`[TaskProcessor] ${provider} streaming complete: ${directProgressCount} chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);

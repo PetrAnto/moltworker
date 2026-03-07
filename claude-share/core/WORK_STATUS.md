@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (Codex follow-up `/orch next` fix: prevent provider 499 disconnects from fetch-timeout scope regression)
 
 ---
 
@@ -80,7 +80,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | 5.1 Multi-Agent Review COMPLETE | `claude/execute-next-prompt-psdEX` | 2026-02-23 |
-| Codex | — | — | — |
+| Codex | `/orch next` follow-up COMPLETE — fix direct-provider 499 disconnect regression | `work` | 2026-03-07 |
 | Other | — | — | — |
 
 ---
