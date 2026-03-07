@@ -754,9 +754,10 @@ export class OpenRouterClient {
       onToolCallReady?: (toolCall: ToolCall) => void; // 7B.1: Called when a tool_call is complete during streaming
       reasoningLevel?: ReasoningLevel;
       responseFormat?: ResponseFormat;
+      modelIdOverride?: string; // Override model ID (e.g. for rerouting Anthropic via OpenRouter)
     }
   ): Promise<ChatCompletionResponse> {
-    const modelId = getModelId(modelAlias);
+    const modelId = options?.modelIdOverride || getModelId(modelAlias);
     const idleTimeoutMs = options?.idleTimeoutMs ?? 45000;
 
     const controller = new AbortController();

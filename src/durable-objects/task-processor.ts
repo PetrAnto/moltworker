@@ -306,17 +306,17 @@ const STUCK_THRESHOLD_PAID_MS = 240000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max iterations per event before yielding to a fresh alarm event.
-// Direct API providers (Anthropic, DeepSeek, Moonshot, DashScope): yield after
-// EVERY iteration (1). The DO holds the TCP connection directly, so if the 30s
-// CPU limit kills the DO mid-stream → 499 client disconnect. Each iteration
-// (streaming response + tool execution) can consume significant CPU.
-// OpenRouter: relaxed (8) because it proxies the connection server-side.
-const MAX_ITERATIONS_BEFORE_YIELD_DIRECT = 1;
-const MAX_ITERATIONS_BEFORE_YIELD_DEFAULT = 8;
+// Empirically, streaming I/O does NOT count toward CF's 30s CPU limit —
+// a Moonshot call streamed for 195s (1595 chunks) with no eviction.
+// Yield exists only for extremely long multi-iteration runs to prevent
+// wall-clock staleness, not for CPU budget reasons.
+// All providers use the same threshold since streaming CPU is negligible.
+const MAX_ITERATIONS_BEFORE_YIELD = 8;
 // Safety net: yield if cumulative active time exceeds this regardless of
-// iteration count. Catches single very-CPU-heavy iterations. Set high because
-// streaming I/O inflates active time (237s wall for 20s CPU).
-const MAX_ACTIVE_TIME_BEFORE_YIELD_MS = 25000;
+// iteration count. Only catches genuinely CPU-heavy iterations (e.g. massive
+// JSON parsing, many tool executions). Streaming I/O doesn't count toward
+// CF CPU limits, so this threshold is generous.
+const MAX_ACTIVE_TIME_BEFORE_YIELD_MS = 120000;
 // Always save checkpoint when total tools is at or below this threshold.
 // Ensures small tasks (1-3 tool calls) are checkpointed before the watchdog fires.
 const CHECKPOINT_EARLY_THRESHOLD = 3;
@@ -337,6 +337,16 @@ const MAX_SAME_TOOL_REPEATS = 3;
 // Max total tool calls before forcing a final answer (prevents excessive API usage)
 const MAX_TOTAL_TOOLS_FREE = 50;
 const MAX_TOTAL_TOOLS_PAID = 100;
+
+/**
+ * Create a storage-safe copy of TaskState by stripping the messages array.
+ * Messages are stored in R2 checkpoints — keeping them in DO storage too
+ * causes the value to exceed CF's 128KB storage.put() limit once context
+ * grows past ~30K tokens (serializes to >131072 bytes).
+ */
+function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & { messages: never[] } {
+  return { ...task, messages: [] };
+}
 
 /** Get the auto-resume limit based on model cost */
 function getAutoResumeLimit(modelAlias: string): number {
@@ -719,7 +729,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       console.log(`[TaskProcessor] Abandoning stale task (started ${Math.round((Date.now() - task.startTime) / 1000)}s ago)`);
       task.status = 'failed';
       task.error = 'Task abandoned: exceeded 1-hour lifetime (likely stale from previous deployment)';
-      await this.doState.storage.put('task', task);
+      await this.doState.storage.put('task', taskForStorage(task));
       return;
     }
 
@@ -727,7 +737,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Resume immediately without stall detection, auto-resume counting, or notifications.
     if (task.yieldPending) {
       task.yieldPending = false;
-      await this.doState.storage.put('task', task);
+      await this.doState.storage.put('task', taskForStorage(task));
       const elapsed = Math.round((Date.now() - task.startTime) / 1000);
       console.log(`[TaskProcessor] CPU budget yield resume — ${task.iterations} iterations, ${elapsed}s elapsed`);
 
@@ -759,7 +769,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           if (failedTask) {
             failedTask.status = 'failed';
             failedTask.error = `Resume error: ${error instanceof Error ? error.message : String(error)}`;
-            await this.doState.storage.put('task', failedTask);
+            await this.doState.storage.put('task', taskForStorage(failedTask));
           }
           await this.sendTelegramMessageWithButtons(
             taskRequest.telegramToken,
@@ -864,7 +874,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           console.log(`[TaskProcessor] ${stallReason}`);
           task.status = 'failed';
           task.error = `${stallReason}. The model may not be capable of this task.`;
-          await this.doState.storage.put('task', task);
+          await this.doState.storage.put('task', taskForStorage(task));
 
           // Update orchestra history so failed tasks don't stay at 'started' forever
           await this.updateOrchestraHistoryOnFailure(task, stallReason);
@@ -894,7 +904,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.autoResumeCount = resumeCount + 1;
       task.status = 'processing'; // Keep processing status
       task.lastUpdate = Date.now();
-      await this.doState.storage.put('task', task);
+      await this.doState.storage.put('task', taskForStorage(task));
 
       // Notify user about auto-resume with progress context
       const resumeTools = newTools > 0 ? `, ${newTools} new tools` : '';
@@ -937,7 +947,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       : `Task stopped unexpectedly after ${elapsed}s (no auto-resume)`;
     task.status = 'failed';
     task.error = failureReason;
-    await this.doState.storage.put('task', task);
+    await this.doState.storage.put('task', taskForStorage(task));
 
     // Update orchestra history so failed tasks don't stay at 'started' forever
     await this.updateOrchestraHistoryOnFailure(task, failureReason);
@@ -1280,7 +1290,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           if (task) {
             task.status = 'failed';
             task.error = `Unexpected error: ${error instanceof Error ? error.message : String(error)}`;
-            await this.doState.storage.put('task', task);
+            await this.doState.storage.put('task', taskForStorage(task));
           }
           const crashProgress = task ? this.buildProgressSummary(task) : '';
           await this.sendTelegramMessageWithButtons(
@@ -1343,7 +1353,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       if (task && task.status === 'processing') {
         task.status = 'cancelled';
         task.error = 'Cancelled by user';
-        await this.doState.storage.put('task', task);
+        await this.doState.storage.put('task', taskForStorage(task));
         // Set in-memory flag so processTask() can break out immediately
         // without waiting for its next storage.get() round-trip
         this.isCancelled = true;
@@ -1475,7 +1485,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Preserve tool signatures for cross-resume duplicate detection
       task.toolSignatures = existingTask.toolSignatures;
     }
-    await this.doState.storage.put('task', task);
+    await this.doState.storage.put('task', taskForStorage(task));
 
     // Set watchdog alarm to detect if DO is terminated
     await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
@@ -1490,7 +1500,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
     // Store status message ID for cancel cleanup
     task.statusMessageId = statusMessageId || undefined;
-    await this.doState.storage.put('task', task);
+    await this.doState.storage.put('task', taskForStorage(task));
 
     const client = createOpenRouterClient(request.openrouterKey);
     const toolContext: ToolContext = {
@@ -1542,7 +1552,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         console.log(`[TaskProcessor] No free models available, falling back to /auto`);
         task.modelAlias = 'auto';
       }
-      await this.doState.storage.put('task', task);
+      await this.doState.storage.put('task', taskForStorage(task));
       console.log(`[TaskProcessor] Model /${oldAlias} no longer available, pre-switching to /${task.modelAlias}`);
       if (statusMessageId) {
         try {
@@ -1602,7 +1612,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // when checkpoint has fewer tools than the pre-resume toolCountAtLastResume
         task.toolCountAtLastResume = checkpoint.toolsUsed.length;
         resumedFromCheckpoint = true;
-        await this.doState.storage.put('task', task);
+        await this.doState.storage.put('task', taskForStorage(task));
 
         // CRITICAL: Add resume instruction to break the "re-read rules" loop
         // The model tends to re-acknowledge on every resume; this prevents it.
@@ -1637,23 +1647,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
         console.log(`[TaskProcessor] Resumed from checkpoint: ${checkpoint.iterations} iterations`);
 
-        // CRITICAL: Force-compress context after checkpoint restore.
-        // Checkpoints can contain 60-80K tokens of uncompressed context.
-        // Without compression, the first API call sends a huge prompt that
-        // exceeds the SSE idle timeout (DeepSeek first-token latency >45s
-        // on 60K+ token prompts). This was the root cause of the
-        // "1 iteration then eviction" pattern on later resumes.
-        // keepRecent=8 (was 4) — preserves more recent work context so the model
-        // doesn't lose track of what it was doing (e.g. mid-PR-creation, file edits).
+        // Force-compress context after checkpoint restore.
+        // Checkpoints accumulate context across iterations. Without compression,
+        // context grows unbounded (e.g. 53K → 60K → 70K → 86K → crash).
+        // Use 50% of context budget as target — leaves room for new tool results.
+        // Note: compressContextBudgeted returns as-is if under budget, so we must
+        // pass the TARGET budget, not the full context budget.
         const resumeTokens = this.estimateTokens(conversationMessages);
-        const resumeBudget = this.getContextBudget(task.modelAlias);
-        if (resumeTokens > resumeBudget * 0.5) {
+        const resumeTargetBudget = Math.floor(this.getContextBudget(task.modelAlias) * 0.5);
+        if (resumeTokens > resumeTargetBudget) {
           const beforeCount = conversationMessages.length;
-          const compressed = this.compressContext(conversationMessages, task.modelAlias, 8);
+          const compressed = sanitizeToolPairs(
+            compressContextBudgeted(conversationMessages, resumeTargetBudget, 8)
+          );
           conversationMessages.length = 0;
           conversationMessages.push(...compressed);
           const afterTokens = this.estimateTokens(conversationMessages);
-          console.log(`[TaskProcessor] Post-restore compression: ${beforeCount} → ${compressed.length} messages, ${resumeTokens} → ${afterTokens} tokens`);
+          console.log(`[TaskProcessor] Post-restore compression: ${beforeCount} → ${compressed.length} messages, ${resumeTokens} → ${afterTokens} tokens (target: ${resumeTargetBudget})`);
         }
       }
     }
@@ -1736,18 +1746,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
 
         // CPU budget yield: Cloudflare DOs have a ~30s CPU time limit per event.
-        // Check BEFORE starting a new iteration to ensure we don't die mid-stream.
-        // Primary trigger: iteration count (provider-specific threshold).
-        // Secondary trigger: active time safety net (for CPU-heavy single iterations).
+        // Check BEFORE starting a new iteration to yield if we've done enough work.
+        // Streaming I/O doesn't count toward CF CPU limits (empirically tested:
+        // 195s streaming with no eviction), so yield is only needed for very long
+        // multi-iteration runs to prevent wall-clock staleness.
         // Only yield if R2 is available (needed to save/load checkpoint for resume).
-        const taskProvider = getProvider(task.modelAlias);
-        const isDirectApi = taskProvider === 'anthropic' || taskProvider === 'deepseek'
-          || taskProvider === 'moonshot' || taskProvider === 'dashscope';
-        const iterYieldThreshold = isDirectApi
-          ? MAX_ITERATIONS_BEFORE_YIELD_DIRECT
-          : MAX_ITERATIONS_BEFORE_YIELD_DEFAULT;
         const shouldYield = this.r2
-          && (task.iterations >= iterYieldThreshold
+          && (task.iterations >= MAX_ITERATIONS_BEFORE_YIELD
             || cumulativeActiveMs > MAX_ACTIVE_TIME_BEFORE_YIELD_MS)
           && task.iterations > 0;
         if (shouldYield) {
@@ -1762,7 +1767,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           // Store minimal task state (no messages) with yield flag
           task.lastUpdate = Date.now();
           task.yieldPending = true;
-          await this.doState.storage.put('task', task);
+          await this.doState.storage.put('task', taskForStorage(task));
           // Schedule immediate alarm for resume with fresh CPU budget
           await this.doState.storage.setAlarm(Date.now() + 100);
           this.isRunning = false;
@@ -1788,7 +1793,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         task.lastUpdate = Date.now();
         currentTool = null;
         currentToolContext = null;
-        await this.doState.storage.put('task', task);
+        await this.doState.storage.put('task', taskForStorage(task));
 
         // Send progress update (throttled to every 15s)
         await sendProgressUpdate();
@@ -1865,7 +1870,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             const waitMs = Math.min(60000 - elapsedInWindow + 2000, 65000);
             console.log(`[TaskProcessor] Anthropic rate limit pacing: ${anthropicWindowTokens} tokens used in ${Math.round(elapsedInWindow / 1000)}s, next ~${estimatedNext} tokens — waiting ${Math.round(waitMs / 1000)}s`);
             task.lastUpdate = Date.now();
-            await this.doState.storage.put('task', task);
+            await this.doState.storage.put('task', taskForStorage(task));
             iterSleepMs += waitMs; // Track sleep time for CPU budget accounting
             await new Promise(r => setTimeout(r, waitMs));
             this.lastHeartbeatMs = Date.now();
@@ -1976,7 +1981,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               let progressCount = 0;
               const orFlushInterval = setInterval(() => {
                 task.lastUpdate = Date.now();
-                this.doState.storage.put('task', task).catch(() => {});
+                this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
               }, 55000);
               try {
                 result = await client.chatCompletionStreamingWithTools(
@@ -2111,7 +2116,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // keeping task.lastUpdate fresh in durable storage.
               const streamingFlushInterval = setInterval(() => {
                 task.lastUpdate = Date.now();
-                this.doState.storage.put('task', task).catch(() => {});
+                this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
                 console.log(`[TaskProcessor] Streaming storage flush (${directProgressCount} chunks so far)`);
               }, 55000);
 
@@ -2148,7 +2153,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 // Keep heartbeat and storage alive during rate limit sleep
                 // to prevent watchdog from triggering false auto-resume
                 task.lastUpdate = Date.now();
-                await this.doState.storage.put('task', task);
+                await this.doState.storage.put('task', taskForStorage(task));
                 this.lastHeartbeatMs = Date.now();
                 iterSleepMs += waitSecs * 1000; // Track sleep time for CPU budget accounting
                 await new Promise(r => setTimeout(r, waitSecs * 1000));
@@ -2244,7 +2249,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             const prevAlias = task.modelAlias;
             task.modelAlias = nextAlias;
             task.lastUpdate = Date.now();
-            await this.doState.storage.put('task', task);
+            await this.doState.storage.put('task', taskForStorage(task));
 
             const reason = isInputValidation ? 'context too large (400)' : isContentFilter ? 'content filtered' : isModelGone ? 'unavailable (404)' : 'busy';
             const isEmergency = EMERGENCY_CORE_ALIASES.includes(nextAlias) && rotationIndex > MAX_FREE_ROTATIONS - EMERGENCY_CORE_ALIASES.length;
@@ -2437,7 +2442,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             }
           }
 
-          await this.doState.storage.put('task', task);
+          await this.doState.storage.put('task', taskForStorage(task));
           console.log(`[TaskProcessor] Phase transition: plan → work (iteration ${task.iterations})`);
         }
 
@@ -2651,7 +2656,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               task.status = 'failed';
               task.error = `Model cannot format tool call arguments correctly (${consecutiveInvalidArgsIterations} consecutive failures). Try a more capable model like /flash, /sonnet, or /deep.`;
               task.result = `Tool calling failed: the model produced invalid JSON arguments for ${consecutiveInvalidArgsIterations} consecutive iterations. No tools were successfully executed.`;
-              await this.doState.storage.put('task', task);
+              await this.doState.storage.put('task', taskForStorage(task));
 
               if (task.telegramToken) {
                 await this.sendTelegramMessageWithButtons(
@@ -2763,7 +2768,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // Update lastUpdate and refresh watchdog alarm
           task.lastUpdate = Date.now();
-          await this.doState.storage.put('task', task);
+          await this.doState.storage.put('task', taskForStorage(task));
           await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
 
           const iterDurationMs = Date.now() - iterStartTime;
@@ -2802,7 +2807,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             // Use whatever content we have as the final response
             task.status = 'completed';
             task.result = content.trim() + '\n\n_(Model did not use tools — response may be incomplete)_';
-            await this.doState.storage.put('task', task);
+            await this.doState.storage.put('task', taskForStorage(task));
             await this.doState.storage.deleteAlarm();
             if (statusMessageId) {
               await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
@@ -2826,7 +2831,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           // No content at all after N iterations — fail
           task.status = 'failed';
           task.error = `Model stalled: ${consecutiveNoToolIterations} iterations without tool calls or useful output.`;
-          await this.doState.storage.put('task', task);
+          await this.doState.storage.put('task', taskForStorage(task));
           await this.doState.storage.deleteAlarm();
           if (statusMessageId) {
             await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
@@ -2879,7 +2884,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.modelAlias = nextAlias;
             task.lastUpdate = Date.now();
             emptyContentRetries = 0; // Reset retries for new model
-            await this.doState.storage.put('task', task);
+            await this.doState.storage.put('task', taskForStorage(task));
 
             console.log(`[TaskProcessor] Empty response rotation: /${prevAlias} → /${nextAlias} (${rotationIndex}/${MAX_FREE_ROTATIONS}, task: ${taskCategory})`);
 
@@ -2954,7 +2959,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             role: 'user',
             content: nudge,
           });
-          await this.doState.storage.put('task', task);
+          await this.doState.storage.put('task', taskForStorage(task));
           continue;
         }
 
@@ -2965,7 +2970,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             const verification = verifyWorkPhase(conversationMessages, choice.message.content || '');
             if (!verification.passed) {
               task.coveRetried = true;
-              await this.doState.storage.put('task', task);
+              await this.doState.storage.put('task', taskForStorage(task));
               console.log(`[TaskProcessor] CoVe verification FAILED: ${verification.failures.length} issue(s) — retrying work phase`);
               for (const f of verification.failures) {
                 console.log(`[TaskProcessor]   [${f.type}] ${f.tool}: ${f.message.substring(0, 100)}`);
@@ -3000,7 +3005,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.phaseStartIteration = task.iterations;
             task.reviewerAlias = reviewerAlias;
             phaseStartTime = Date.now();
-            await this.doState.storage.put('task', task);
+            await this.doState.storage.put('task', taskForStorage(task));
 
             // Send progress update showing reviewer model
             currentTool = null;
@@ -3042,7 +3047,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.phase = 'review';
             task.phaseStartIteration = task.iterations;
             phaseStartTime = Date.now();
-            await this.doState.storage.put('task', task);
+            await this.doState.storage.put('task', taskForStorage(task));
             console.log(`[TaskProcessor] Phase transition: work → review (iteration ${task.iterations})`);
 
             // Select review prompt: orchestra > coding > general
@@ -3136,7 +3141,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           task.result += `\n🔍 Reviewed by ${reviewerName}`;
         }
 
-        await this.doState.storage.put('task', task);
+        await this.doState.storage.put('task', taskForStorage(task));
 
         // Cancel watchdog alarm - task completed successfully
         await this.doState.storage.deleteAlarm();
@@ -3435,7 +3440,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       task.status = 'completed';
       task.result = 'Task hit iteration limit (100). Last response may be incomplete.';
-      await this.doState.storage.put('task', task);
+      await this.doState.storage.put('task', taskForStorage(task));
 
       // Cancel watchdog alarm
       await this.doState.storage.deleteAlarm();
@@ -3465,7 +3470,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Backdating by stuckThreshold ensures the very next alarm (≤90s) fires auto-resume.
         const stuckThreshold = getWatchdogStuckThreshold(task.modelAlias);
         task.lastUpdate = Date.now() - stuckThreshold;
-        await this.doState.storage.put('task', task);
+        await this.doState.storage.put('task', taskForStorage(task));
 
         // Save checkpoint so alarm handler can resume from here
         // Sanitize messages to fix orphaned tool_calls from budget interruption
@@ -3493,7 +3498,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       task.status = 'failed';
       task.error = error instanceof Error ? error.message : String(error);
-      await this.doState.storage.put('task', task);
+      await this.doState.storage.put('task', taskForStorage(task));
 
       // Cancel watchdog alarm - we're handling the error here
       await this.doState.storage.deleteAlarm();
