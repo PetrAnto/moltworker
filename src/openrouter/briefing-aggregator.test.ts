@@ -1020,8 +1020,8 @@ describe('Phase 2.5.8 — Geolocation Tool', () => {
 // ============================================================================
 
 describe('Test 18 — /help and /start message verification', () => {
-  it('should have exactly 16 tools in AVAILABLE_TOOLS', () => {
-    expect(AVAILABLE_TOOLS.length).toBe(16);
+  it('should have exactly 17 tools in AVAILABLE_TOOLS', () => {
+    expect(AVAILABLE_TOOLS.length).toBe(17);
   });
 
   it('should list all expected tools', () => {
@@ -1041,6 +1041,7 @@ describe('Test 18 — /help and /start message verification', () => {
       'web_search',
       'browse_url',
       'github_create_pr',
+      'github_push_files',
       'sandbox_exec',
       'cloudflare_api',
     ];

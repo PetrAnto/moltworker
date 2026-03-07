@@ -2437,7 +2437,7 @@ describe('github_create_pr tool', () => {
   it('should be included in AVAILABLE_TOOLS', () => {
     const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'github_create_pr');
     expect(tool).toBeDefined();
-    expect(tool!.function.parameters.required).toEqual(['owner', 'repo', 'title', 'branch', 'changes']);
+    expect(tool!.function.parameters.required).toEqual(['owner', 'repo', 'title', 'branch']);
   });
 
   it('description explains action types including patch', () => {
@@ -2615,7 +2615,14 @@ describe('github_create_pr tool', () => {
     expect(result.content).toContain('Invalid changes JSON');
   });
 
-  it('should fail with empty changes array', async () => {
+  it('should fail with empty changes array when branch does not exist (PR-only mode)', async () => {
+    // Empty changes triggers PR-only mode, which checks if branch exists
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => 'Not Found',
+    });
+
     const result = await executeTool({
       id: 'call_pr_5',
       type: 'function',
@@ -2631,7 +2638,7 @@ describe('github_create_pr tool', () => {
       },
     }, { githubToken: 'test-token' });
 
-    expect(result.content).toContain('non-empty array');
+    expect(result.content).toContain('does not exist');
   });
 
   it('should fail with path traversal in file path', async () => {
@@ -2804,6 +2811,15 @@ describe('github_create_pr tool', () => {
     const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : '';
       const method = init?.method || 'GET';
+
+      // Early branch existence check (target branch doesn't exist yet)
+      if (method === 'GET' && urlStr.includes('/git/ref/heads/bot/')) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve('Not Found'),
+        });
+      }
 
       // File content fetch for patch resolution
       if (method === 'GET' && urlStr.includes('/contents/src%2Fapp.js')) {
@@ -2988,6 +3004,10 @@ describe('github_create_pr tool', () => {
       const urlStr = typeof url === 'string' ? url : '';
       const method = init?.method || 'GET';
 
+      // Early branch existence check (target branch doesn't exist yet)
+      if (method === 'GET' && urlStr.includes('/git/ref/heads/bot/')) {
+        return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('Not Found') });
+      }
       if (method === 'GET' && urlStr.includes('/contents/')) {
         return Promise.resolve({
           ok: true,
@@ -3050,6 +3070,15 @@ describe('github_create_pr tool', () => {
       const urlStr = typeof url === 'string' ? url : '';
       const method = init?.method || 'GET';
 
+      // Early branch existence check (target branch doesn't exist yet)
+      if (method === 'GET' && urlStr.includes('/git/ref/heads/bot/')) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve('Not Found'),
+        });
+      }
+
       // File size check for "update" actions (safety guardrail)
       if (method === 'GET' && urlStr.includes('/contents/')) {
         return Promise.resolve({
@@ -3058,7 +3087,7 @@ describe('github_create_pr tool', () => {
         });
       }
 
-      // GET ref
+      // GET ref (base branch)
       if (method === 'GET' && urlStr.includes('/git/ref/')) {
         return Promise.resolve({
           ok: true,
@@ -3156,11 +3185,12 @@ describe('github_create_pr tool', () => {
     const mockFetch = vi.fn().mockImplementation(() => {
       fetchCallIndex++;
       switch (fetchCallIndex) {
-        case 1: return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'base-sha' } }) });
-        case 2: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree-sha' }) }); // tree (no blob for delete)
-        case 3: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit-sha' }) });
-        case 4: return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/del-branch' }) });
-        case 5: return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/1', number: 1 }) });
+        case 1: return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }); // early branch check (doesn't exist)
+        case 2: return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'base-sha' } }) }); // base ref
+        case 3: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree-sha' }) }); // tree (no blob for delete)
+        case 4: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit-sha' }) }); // commit
+        case 5: return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/del-branch' }) }); // create ref
+        case 6: return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/1', number: 1 }) }); // PR
         default: return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
       }
     });
@@ -3185,8 +3215,8 @@ describe('github_create_pr tool', () => {
     expect(result.content).toContain('delete: old-file.ts');
 
     // For delete, no blob API call should be made
-    // Calls: GET ref, POST tree, POST commit, POST ref, POST pull = 5
-    expect(mockFetch).toHaveBeenCalledTimes(5);
+    // Calls: early branch check + GET ref + POST tree + POST commit + POST ref + POST pull = 6
+    expect(mockFetch).toHaveBeenCalledTimes(6);
   });
 
   it('should auto-prefix branch with bot/ if not already prefixed', async () => {
@@ -3194,12 +3224,13 @@ describe('github_create_pr tool', () => {
     const mockFetch = vi.fn().mockImplementation(() => {
       fetchCallIndex++;
       switch (fetchCallIndex) {
-        case 1: return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) });
-        case 2: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob' }) });
-        case 3: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree' }) });
-        case 4: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit' }) });
-        case 5: return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/my-feature' }) });
-        case 6: return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/1', number: 1 }) });
+        case 1: return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }); // early branch check
+        case 2: return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) }); // base ref
+        case 3: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob' }) });
+        case 4: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree' }) });
+        case 5: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit' }) });
+        case 6: return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/my-feature' }) });
+        case 7: return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/1', number: 1 }) });
         default: return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
       }
     });
@@ -3228,12 +3259,13 @@ describe('github_create_pr tool', () => {
     const mockFetch = vi.fn().mockImplementation(() => {
       fetchCallIndex++;
       switch (fetchCallIndex) {
-        case 1: return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) });
-        case 2: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob' }) });
-        case 3: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree' }) });
-        case 4: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit' }) });
-        case 5: return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/already-prefixed' }) });
-        case 6: return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/2', number: 2 }) });
+        case 1: return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }); // early branch check
+        case 2: return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) }); // base ref
+        case 3: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob' }) });
+        case 4: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree' }) });
+        case 5: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit' }) });
+        case 6: return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'refs/heads/bot/already-prefixed' }) });
+        case 7: return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/2', number: 2 }) });
         default: return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
       }
     });
@@ -3264,12 +3296,13 @@ describe('github_create_pr tool', () => {
     const mockFetch = vi.fn().mockImplementation(() => {
       fetchCallIndex++;
       switch (fetchCallIndex) {
-        case 1: return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) });
-        case 2: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob' }) });
-        case 3: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree' }) });
-        case 4: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit' }) });
-        case 5: return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'r' }) });
-        case 6: return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/3', number: 3 }) });
+        case 1: return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }); // early branch check
+        case 2: return Promise.resolve({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) }); // base ref
+        case 3: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'blob' }) });
+        case 4: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'tree' }) });
+        case 5: return Promise.resolve({ ok: true, json: () => Promise.resolve({ sha: 'commit' }) });
+        case 6: return Promise.resolve({ ok: true, json: () => Promise.resolve({ ref: 'r' }) });
+        case 7: return Promise.resolve({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/o/r/pull/3', number: 3 }) });
         default: return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
       }
     });
@@ -3290,9 +3323,9 @@ describe('github_create_pr tool', () => {
       },
     }, { githubToken: 'token' });
 
-    // First call should be to /git/ref/heads/main (default)
-    const firstCallUrl = mockFetch.mock.calls[0][0];
-    expect(firstCallUrl).toContain('/git/ref/heads/main');
+    // First call is early branch check, second call should be to /git/ref/heads/main (default)
+    const allCalls = mockFetch.mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(allCalls.some((u: string) => u.includes('/git/ref/heads/main'))).toBe(true);
   });
 
   it('should handle API error on get ref', async () => {
@@ -3324,7 +3357,7 @@ describe('github_create_pr tool', () => {
   // --- Safety guardrail tests ---
 
   it('should block binary file writes (images, fonts, etc)', async () => {
-    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }));
 
     const changes = [
       { path: 'src/assets/logo.png', content: 'fake-binary-data', action: 'create' },
@@ -3347,12 +3380,12 @@ describe('github_create_pr tool', () => {
 
     expect(result.content).toContain('Cannot write binary file');
     expect(result.content).toContain('logo.png');
-    // No API calls should have been made
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    // Only the early branch existence check should have been made (no git data API calls)
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
   it('should block binary file updates too', async () => {
-    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }));
 
     const changes = [
       { path: 'public/banner.jpg', content: 'corrupted-data', action: 'update' },
@@ -3378,7 +3411,7 @@ describe('github_create_pr tool', () => {
   });
 
   it('should block comment-only stub replacing code file', async () => {
-    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }));
 
     const changes = [
       { path: 'src/App.jsx', content: '// Updated with component splitting and optimizations', action: 'update' },
@@ -3410,6 +3443,10 @@ describe('github_create_pr tool', () => {
       const urlStr = typeof url === 'string' ? url : '';
       const method = init?.method || 'GET';
 
+      // Early branch existence check (target branch doesn't exist yet)
+      if (method === 'GET' && urlStr.includes('/git/ref/heads/bot/')) {
+        return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('Not Found') });
+      }
       if (method === 'GET' && urlStr.includes('/contents/')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve({ size: 50 }) });
       }
@@ -3557,7 +3594,7 @@ describe('github_create_pr tool', () => {
   });
 
   it('should block multiple binary extensions (woff2, gif, pdf)', async () => {
-    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }));
 
     for (const ext of ['woff2', 'gif', 'pdf', 'mp4', 'zip']) {
       const result = await executeTool({
@@ -3580,7 +3617,7 @@ describe('github_create_pr tool', () => {
   });
 
   it('should block multi-line comment stubs in code files', async () => {
-    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('Not Found') }));
 
     const changes = [
       {
