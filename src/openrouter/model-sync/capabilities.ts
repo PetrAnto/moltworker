@@ -129,8 +129,12 @@ function detectReasoning(
  */
 function isMandatoryReasoningPattern(combined: string): boolean {
   // o-series: "openai/o1", "openai/o3", "openai/o4-mini" etc.
-  // gpt-5 reasoning models: "openai/gpt-5-nano", "openai/gpt-5-mini"
-  return /\bopenai\/o[1-4]\b/.test(combined) || /\bopenai\/gpt-5-(nano|mini)\b/.test(combined);
+  if (/\bopenai\/o[1-4]\b/.test(combined)) return true;
+  // gpt-5 small reasoning models: "openai/gpt-5-nano", "openai/gpt-5-mini"
+  if (/\bopenai\/gpt-5-(nano|mini)\b/.test(combined)) return true;
+  // gpt-5.x codex models: "openai/gpt-5.1-codex-mini" etc. — cannot disable reasoning
+  if (/\bopenai\/gpt-5\.\d.*codex/.test(combined)) return true;
+  return false;
 }
 
 function detectImageGen(

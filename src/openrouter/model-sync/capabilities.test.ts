@@ -198,6 +198,23 @@ describe('detectCapabilities', () => {
       const caps = detectCapabilities(model);
       expect(caps.reasoning.value).toBe('configurable');
     });
+
+    it('detects mandatory reasoning for gpt-5.1-codex-mini', () => {
+      const model = makeModel({
+        id: 'openai/gpt-5.1-codex-mini-2025-11-13',
+        supported_parameters: ['reasoning_effort'],
+      });
+      const caps = detectCapabilities(model);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('high');
+    });
+
+    it('detects mandatory reasoning for gpt-5.1-codex-mini without params', () => {
+      const model = makeModel({ id: 'openai/gpt-5.1-codex-mini' });
+      const caps = detectCapabilities(model);
+      expect(caps.reasoning.value).toBe('mandatory');
+      expect(caps.reasoning.confidence).toBe('medium');
+    });
   });
 
   describe('image gen detection', () => {
