@@ -2031,8 +2031,18 @@ export function getRankedOrchestraModels(taskHint?: {
   const maxScore = Math.max(...scored.map(s => s.score), 1);
   const minScore = Math.min(...scored.map(s => s.score));
 
-  return scored
-    .sort((a, b) => b.score - a.score)
+  // Deduplicate: when multiple aliases point to the same underlying model ID
+  // (e.g. /opus direct + /claudeopus46 via OpenRouter), keep only the highest-scored one.
+  const sorted = scored.sort((a, b) => b.score - a.score);
+  const seenModelIds = new Set<string>();
+  const deduped = sorted.filter(s => {
+    const baseId = s.model.id.toLowerCase();
+    if (seenModelIds.has(baseId)) return false;
+    seenModelIds.add(baseId);
+    return true;
+  });
+
+  return deduped
     .map(s => {
       // Map raw score to 0-100% confidence
       // Top scorer gets ~95%, linear scale down, minimum 5%

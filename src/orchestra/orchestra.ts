@@ -315,6 +315,8 @@ files: {comma-separated changed files}
 summary: {one sentence}
 \`\`\`
 
+**IMPORTANT: Do NOT output a plan, outline, or list of steps. CALL the tools directly. Your first action must be a github_read_file tool call.**
+
 Begin now. Read the roadmap first.`;
 }
 
@@ -407,6 +409,8 @@ summary: {one sentence}
 
 The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FAILED\`.
 ${historyContext}
+
+**IMPORTANT: Do NOT output a plan or outline. CALL tools directly. Your first action must be a github_read_file tool call.**
 
 Begin now. Read the roadmap first.`;
 }
@@ -532,6 +536,7 @@ summary: {1-2 sentence summary}
 - **USE "patch" ACTION for editing existing files** — never regenerate entire files from memory. Never delete work log entries or roadmap tasks.
 - Use "${modelAlias}" in branch names and commit messages.
 - You MUST produce an ORCHESTRA_RESULT: block with a real PR URL — the task is NOT complete without it
+- **Do NOT output a plan, outline, or list of steps.** CALL tools directly. Your first action must be a github_read_file tool call.
 ${historyContext}`;
 }
 

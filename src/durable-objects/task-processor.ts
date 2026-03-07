@@ -3000,6 +3000,28 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // No more tool calls - check if we have actual content
         const hasContent = choice.message.content && choice.message.content.trim() !== '';
 
+        // Orchestra zero-tool nudge: if the model returned text (e.g. a "plan") without
+        // ever calling any tools, push it back to actually execute. This catches models
+        // like Qwen3 Coder that output JSON plans instead of calling tools.
+        // Allow up to 2 nudges before giving up (stall detection handles the rest).
+        if (hasContent && task.toolsUsed.length === 0 && consecutiveNoToolIterations <= 2) {
+          const systemMsg0chk = request.messages.find(m => m.role === 'system');
+          const sysTextChk = typeof systemMsg0chk?.content === 'string' ? systemMsg0chk.content : '';
+          const isOrchestraChk = sysTextChk.includes('Orchestra RUN Mode') || sysTextChk.includes('Orchestra INIT Mode') || sysTextChk.includes('Orchestra REDO Mode');
+          if (isOrchestraChk) {
+            console.log(`[TaskProcessor] Orchestra zero-tool nudge (attempt ${consecutiveNoToolIterations}): model returned text without calling any tools — nudging`);
+            conversationMessages.push({
+              role: 'assistant',
+              content: choice.message.content || '',
+            });
+            conversationMessages.push({
+              role: 'user',
+              content: '[STOP PLANNING. You MUST call tools, not describe steps. Call github_read_file RIGHT NOW to read the roadmap. Do NOT output any text — only tool calls.]',
+            });
+            continue;
+          }
+        }
+
         if (!hasContent && task.toolsUsed.length > 0) {
           // --- EMPTY RESPONSE RECOVERY ---
           // Model returned empty after tool calls. This usually means the context
