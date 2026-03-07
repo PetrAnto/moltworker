@@ -1637,9 +1637,52 @@ async function githubCreatePr(
                 const otherFileContents = changes
                   .filter(c => c.path !== change.path && c.content && CODE_EXTENSIONS.test(c.path))
                   .map(c => c.content as string);
-                const relocated = missing.filter(id =>
+                let relocated = missing.filter(id =>
                   otherFileContents.some(content => content.includes(id))
                 );
+
+                // If branch already has files from github_push_files, also check those.
+                // This handles the batched workflow where new modules were pushed in earlier
+                // commits and aren't in the current changes array.
+                if (branchAlreadyExists && relocated.length < missing.length * 0.7) {
+                  const stillMissing = missing.filter(id => !otherFileContents.some(c => c.includes(id)));
+                  // Fetch recently created/modified files from the branch to check for relocated identifiers
+                  try {
+                    const branchFilesResponse = await fetch(`${apiBase}/git/trees/${fullBranch}?recursive=1`, { headers });
+                    if (branchFilesResponse.ok) {
+                      const treeData = await branchFilesResponse.json() as { tree: Array<{ path: string; type: string; sha: string }> };
+                      const codeFiles = treeData.tree.filter(f =>
+                        f.type === 'blob' && CODE_EXTENSIONS.test(f.path) && f.path !== change.path
+                      );
+                      // Check up to 15 code files on the branch for relocated identifiers
+                      for (const file of codeFiles.slice(0, 15)) {
+                        if (stillMissing.length === 0) break;
+                        try {
+                          const contentResp = await fetch(`${apiBase}/contents/${encodeURIComponent(file.path)}?ref=${fullBranch}`, { headers });
+                          if (contentResp.ok) {
+                            const contentData = await contentResp.json() as { content?: string; encoding?: string };
+                            if (contentData.content && contentData.encoding === 'base64') {
+                              const branchFileContent = decodeBase64Utf8(contentData.content);
+                              const found = stillMissing.filter(id => branchFileContent.includes(id));
+                              if (found.length > 0) {
+                                relocated = [...relocated, ...found];
+                                for (const id of found) {
+                                  const idx = stillMissing.indexOf(id);
+                                  if (idx >= 0) stillMissing.splice(idx, 1);
+                                }
+                              }
+                            }
+                          }
+                        } catch {
+                          // Skip files we can't read
+                        }
+                      }
+                    }
+                  } catch {
+                    // If tree fetch fails, proceed with what we have
+                  }
+                }
+
                 const relocatedRate = missing.length > 0 ? relocated.length / missing.length : 0;
 
                 // If >70% of missing identifiers are found in other PR files, this is a
@@ -1773,7 +1816,10 @@ async function githubCreatePr(
   // 6. Net deletion ratio guard: block PRs where total deleted lines vastly exceed added lines.
   //    This catches the pattern where a bot "adds 5 destinations" but deletes 600+ lines.
   //    Only applies when there are update actions on code files (docs are exempt).
-  {
+  //    SKIP for file-split PRs: when the PR creates new code files or the branch has files
+  //    from github_push_files, net deletion in the original file is expected and correct.
+  const isFileSplitPR = createdCodeFiles.length > 0 || branchAlreadyExists;
+  if (!isFileSplitPR) {
     let totalOriginalLines = 0;
     let totalNewLines = 0;
     let codeUpdateCount = 0;
@@ -1826,6 +1872,8 @@ async function githubCreatePr(
         );
       }
     }
+  } else {
+    console.log(`[github_create_pr] Net deletion guard skipped: file-split PR (${createdCodeFiles.length} new files, branch ${branchAlreadyExists ? 'exists' : 'new'})`);
   }
 
   // 7. Audit trail protection: WORK_LOG.md is append-only, ROADMAP.md changes are validated.
