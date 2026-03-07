@@ -5,6 +5,37 @@
 ---
 
 
+## Session: 2026-03-07 | TaskProcessor stall/disconnect hardening (Session: codex-orch-stall-audit-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Audited `/orch next` stall behavior from production logs and hardened TaskProcessor resume reliability for long Anthropic streaming runs.
+
+### Changes Made
+- Added `clampDirectProviderMaxTokens()` and enforced Anthropic direct safety caps for tool-enabled phases.
+- Unified all background `processTask()` launches through `runTaskInBackground()` to preserve watchdog/Telegram crash handling across initial run and all resume paths.
+- Added targeted tests for the new token clamp behavior.
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Targeted task processor tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Validate in production that long Claude tool calls no longer loop into repeated auto-resume without progress.
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

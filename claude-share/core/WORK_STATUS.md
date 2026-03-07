@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (Codex: TaskProcessor stall/disconnect hardening)
 
 ---
 
@@ -174,6 +174,11 @@
 | 2.3 | Acontext integration | ~~API key~~ | ✅ Key configured in Cloudflare — UNBLOCKED |
 
 ---
+
+
+### Notes for Other Agents
+
+- 2026-03-07 (Codex): Added Anthropic direct tool-call max token caps (8192 work/plan, 4096 review) and centralized background resume error handling in `runTaskInBackground()` to reduce repeated `/orch next` auto-resume loops after streaming disconnects.
 
 ## Next Priorities Queue
 
