@@ -63,6 +63,7 @@ import {
   getFreeToolModels,
   formatOrchestraModelRecs,
   getOrchestraRecommendations,
+  getRankedOrchestraModels,
   categorizeModel,
   getValueTier,
   resolveTaskModel,
@@ -1677,45 +1678,66 @@ export class TelegramHandler {
         const isHeavyCoding = /refactor|split|migrat|rewrite|architect|complex|multi.?file|test suite/i.test(taskLower);
         const isSimple = /add comment|update readme|rename|typo|config|bump|version/i.test(taskLower);
 
-        const recs = getOrchestraRecommendations();
+        const ranked = getRankedOrchestraModels({ isHeavyCoding, isSimple });
         const lines: string[] = [
-          `🔍 Next task: ${nextTask.title}`,
-          `📁 Phase: ${nextTask.phase}`,
+          `🔍 **Next task:** ${nextTask.title}`,
+          `📁 **Phase:** ${nextTask.phase}`,
           '',
         ];
 
         if (isHeavyCoding) {
-          lines.push('🔴 Complex task — use a strong coding model:');
+          lines.push('🔴 Complex coding task — strong model recommended');
         } else if (isSimple) {
-          lines.push('🟢 Simple task — a free model should work:');
+          lines.push('🟢 Simple task — free model should suffice');
         } else {
-          lines.push('🟡 Standard task — recommended models:');
+          lines.push('🟡 Standard task');
+        }
+        lines.push('');
+
+        // Show all capable models grouped by tier
+        const paidModels = ranked.filter(r => !r.isFree);
+        const freeModels = ranked.filter(r => r.isFree);
+
+        if (paidModels.length > 0) {
+          lines.push('💰 **Paid models:**');
+          for (const r of paidModels) {
+            const bar = r.confidence >= 80 ? '🟩' : r.confidence >= 50 ? '🟨' : '🟥';
+            const hl = r.highlights ? ` [${r.highlights}]` : '';
+            lines.push(`${bar} ${r.confidence}% /${r.alias} (${r.cost}) — ${r.name}${hl}`);
+          }
+          lines.push('');
         }
 
-        // Build buttons: for simple tasks prioritize free, for complex prioritize paid
-        const buttons: { text: string; callback_data: string }[][] = [];
-        if (isSimple || !isHeavyCoding) {
-          const freeRow = recs.free.slice(0, 3).map(r => ({
-            text: `/${r.alias} (free)`, callback_data: `orchgo:${r.alias}`,
-          }));
-          if (freeRow.length > 0) buttons.push(freeRow);
+        if (freeModels.length > 0) {
+          lines.push('🆓 **Free models:**');
+          for (const r of freeModels) {
+            const bar = r.confidence >= 80 ? '🟩' : r.confidence >= 50 ? '🟨' : '🟥';
+            const hl = r.highlights ? ` [${r.highlights}]` : '';
+            lines.push(`${bar} ${r.confidence}% /${r.alias} — ${r.name}${hl}`);
+          }
         }
-        if (isHeavyCoding || !isSimple) {
-          const paidRow = recs.paid.slice(0, 3).map(r => ({
-            text: `/${r.alias} ${r.cost}`, callback_data: `orchgo:${r.alias}`,
-          }));
-          if (paidRow.length > 0) buttons.push(paidRow);
+
+        // Build buttons: top 3 paid + top 3 free
+        const buttons: { text: string; callback_data: string }[][] = [];
+        const topPaid = paidModels.slice(0, 3).map(r => ({
+          text: `/${r.alias} ${r.confidence}%`, callback_data: `orchgo:${r.alias}`,
+        }));
+        const topFree = freeModels.slice(0, 3).map(r => ({
+          text: `/${r.alias} ${r.confidence}%`, callback_data: `orchgo:${r.alias}`,
+        }));
+        if (isSimple) {
+          if (topFree.length > 0) buttons.push(topFree);
+          if (topPaid.length > 0) buttons.push(topPaid);
+        } else {
+          if (topPaid.length > 0) buttons.push(topPaid);
+          if (topFree.length > 0) buttons.push(topFree);
         }
 
         // Store pending orchestra params so buttons work
         await this.storage.setPendingOrchestra(userId, { mode: 'run', repo: lockedRepo, prompt: '', chatId });
 
-        // Add recommendation details
-        for (const r of [...recs.free.slice(0, 2), ...recs.paid.slice(0, 2)]) {
-          lines.push(`  /${r.alias} — ${r.why}`);
-        }
-
         await this.bot.sendMessage(chatId, lines.join('\n'), {
+          parseMode: 'Markdown',
           reply_markup: { inline_keyboard: buttons },
         });
       } catch (error) {

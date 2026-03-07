@@ -574,6 +574,47 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     maxContext: 200000,
   },
+  gpt54: {
+    id: 'openai/gpt-5.4',
+    alias: 'gpt54',
+    name: 'GPT-5.4',
+    specialty: 'Paid Flagship Unified (Codex+GPT)',
+    score: 'AA Index (57), 57.7% SWE-Bench Pro, 1M context, computer use',
+    cost: '$2.50/$20',
+    supportsVision: true,
+    supportsTools: true,
+    parallelCalls: true,
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 1000000,
+  },
+  gemini31pro: {
+    id: 'google/gemini-3.1-pro-preview',
+    alias: 'gemini31pro',
+    name: 'Gemini 3.1 Pro',
+    specialty: 'Paid Frontier Reasoning/Agentic',
+    score: 'AA Index (57), top reasoning + SWE, 1M context',
+    cost: '$2/$12',
+    supportsVision: true,
+    supportsTools: true,
+    parallelCalls: true,
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 1048576,
+  },
+  deepspeciale: {
+    id: 'deepseek/deepseek-v3.2-speciale',
+    alias: 'deepspeciale',
+    name: 'DeepSeek V3.2 Speciale',
+    specialty: 'Paid High-Compute Reasoning/Agentic',
+    score: 'AA Index (~54), IMO gold, ICPC top-10, 164K context',
+    cost: '$0.56/$1.68',
+    supportsTools: true,
+    parallelCalls: true,
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 163840,
+  },
   opus: {
     id: 'claude-opus-4-6',
     alias: 'opus',
@@ -1880,6 +1921,132 @@ export function getOrchestraRecommendations(): {
     paid: paidScored.slice(0, 3).map(formatRec),
     avoid: avoidList,
   };
+}
+
+/** Ranked model entry with confidence score for /orch advise */
+export interface RankedOrchestraModel {
+  alias: string;
+  name: string;
+  cost: string;
+  isFree: boolean;
+  confidence: number; // 0-100% estimated success probability
+  score: number; // raw scoring value
+  highlights: string; // key capabilities summary
+}
+
+/**
+ * Get ALL orchestra-capable models ranked by confidence to complete a task.
+ * Returns models sorted by confidence descending, with raw scores converted
+ * to a 0-100% confidence estimate.
+ */
+export function getRankedOrchestraModels(taskHint?: {
+  isHeavyCoding?: boolean;
+  isSimple?: boolean;
+}): RankedOrchestraModel[] {
+  const all = getAllModels();
+  const toolModels = Object.values(all).filter(m =>
+    m.supportsTools && !m.isImageGen && m.alias !== 'auto'
+  );
+
+  const scored = toolModels.map(m => {
+    let score = 0;
+    const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
+    const highlights: string[] = [];
+
+    // === AA Benchmark Data ===
+    if (m.intelligenceIndex) {
+      if (m.intelligenceIndex >= 55) { score += 30; highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`); }
+      else if (m.intelligenceIndex >= 50) { score += 20; highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`); }
+      else if (m.intelligenceIndex >= 45) { score += 12; highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`); }
+      else if (m.intelligenceIndex >= 40) { score += 5; highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`); }
+      else score -= 10;
+    }
+    if (m.benchmarks?.coding) {
+      if (m.benchmarks.coding >= 50) { score += 20; highlights.push(`Code:${m.benchmarks.coding.toFixed(0)}`); }
+      else if (m.benchmarks.coding >= 40) score += 10;
+      else if (m.benchmarks.coding < 25) score -= 10;
+    }
+    if (m.benchmarks?.livecodebench) {
+      if (m.benchmarks.livecodebench >= 50) { score += 10; highlights.push(`LCB:${m.benchmarks.livecodebench.toFixed(0)}`); }
+      else if (m.benchmarks.livecodebench >= 40) score += 5;
+    }
+
+    // === Heuristic fallback ===
+    const hasAAData = !!(m.intelligenceIndex || m.benchmarks?.coding);
+    if (!hasAAData) {
+      let heuristicBonus = 0;
+      if (/agentic/i.test(lower)) heuristicBonus += 15;
+      if (/multi-?file|swe-?bench/i.test(lower)) heuristicBonus += 10;
+      if (/coding/i.test(lower)) heuristicBonus += 10;
+      const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
+      if (sweMatch) {
+        const sweScore = parseFloat(sweMatch[1]);
+        if (sweScore >= 70) heuristicBonus += 15;
+        else if (sweScore >= 60) heuristicBonus += 5;
+      }
+      score += Math.min(heuristicBonus, 25);
+      score -= 10;
+    }
+
+    // === Universal signals ===
+    if ((m.maxContext || 0) >= 200000) score += 10;
+    else if ((m.maxContext || 0) >= 128000) score += 5;
+
+    if (/dense/i.test(lower)) score += 15;
+    if (/\b(mini|small|flash|lite|nano)\b/i.test(m.name)) score -= 20;
+    if (/\b\d+B active\b/i.test(m.score)) {
+      const activeMatch = m.score.match(/(\d+)B active/i);
+      if (activeMatch) {
+        const activeB = parseInt(activeMatch[1], 10);
+        if (activeB < 20) score -= 15;
+        if (activeB >= 40) score += 10;
+      }
+    }
+
+    if (m.provider && m.provider !== 'openrouter') { score += 10; highlights.push('Direct'); }
+    if (m.parallelCalls) score += 5;
+
+    const modelId = m.id.toLowerCase();
+    if (modelId.includes('anthropic') || modelId.includes('claude')) { score += 12; highlights.push('Anthropic'); }
+    else if (modelId.includes('openai') || modelId.includes('gpt')) { score += 10; highlights.push('OpenAI'); }
+    else if (modelId.includes('qwen') || modelId.includes('alibaba')) { score += 8; highlights.push('Qwen'); }
+    else if (modelId.includes('deepseek')) { score += 6; highlights.push('DeepSeek'); }
+    else if (modelId.includes('google') || modelId.includes('gemini')) { score += 8; highlights.push('Google'); }
+
+    if (m.orchestraReady) score += 10;
+
+    // Task-specific adjustments
+    if (taskHint?.isHeavyCoding) {
+      if (m.benchmarks?.coding && m.benchmarks.coding >= 50) score += 10;
+      if ((m.maxContext || 0) >= 200000) score += 5;
+    }
+    if (taskHint?.isSimple && m.isFree) {
+      score += 10; // Free models get a boost for simple tasks
+    }
+
+    return { model: m, score, highlights };
+  });
+
+  // Find score range for confidence mapping
+  const maxScore = Math.max(...scored.map(s => s.score), 1);
+  const minScore = Math.min(...scored.map(s => s.score));
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .map(s => {
+      // Map raw score to 0-100% confidence
+      // Top scorer gets ~95%, linear scale down, minimum 5%
+      const normalized = maxScore === minScore ? 50 : ((s.score - minScore) / (maxScore - minScore)) * 90 + 5;
+      return {
+        alias: s.model.alias,
+        name: s.model.name,
+        cost: s.model.cost,
+        isFree: !!s.model.isFree,
+        confidence: Math.round(Math.min(95, Math.max(5, normalized))),
+        score: s.score,
+        highlights: s.highlights.join(', '),
+      };
+    });
 }
 
 /**

@@ -105,7 +105,7 @@ export function computeOrchestraReady(
 
   // Known strong orchestra models by family
   const idLower = model.id.toLowerCase();
-  if (/claude-(sonnet|opus)|gpt-4o|gemini-3-(pro|flash)|grok-4|deepseek-(v3|chat)|devstral|qwen3-coder|minimax-m2/.test(idLower)) {
+  if (/claude-(sonnet|opus)|gpt-(4o|5\.4)|gemini-3(\.\d)?-(pro|flash)|grok-4|deepseek-(v3|chat)|devstral|qwen3-coder|minimax-m2/.test(idLower)) {
     return true;
   }
 
