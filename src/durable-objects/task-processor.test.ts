@@ -695,6 +695,59 @@ describe('TaskProcessor phases', () => {
       // Model should have been rotated from free1 to free2
       expect(task.modelAlias).toBe('free2');
     });
+
+    it('should rotate to next free model on 499 client disconnected error', async () => {
+      const mockState = createMockState();
+      const { getModel, getFreeToolModels } = await import('../openrouter/models');
+
+      const freeModelMap: Record<string, ReturnType<typeof getModel>> = {
+        free1: { id: 'test-free1', alias: 'free1', isFree: true, supportsTools: true, name: 'Free1', specialty: '', score: '', cost: 'FREE' },
+        free2: { id: 'test-free2', alias: 'free2', isFree: true, supportsTools: true, name: 'Free2', specialty: '', score: '', cost: 'FREE' },
+      };
+      vi.mocked(getModel).mockImplementation((alias: string) => freeModelMap[alias]);
+      vi.mocked(getFreeToolModels).mockReturnValue(['free1', 'free2']);
+
+      let apiCallCount = 0;
+      vi.stubGlobal('fetch', vi.fn((url: string | Request) => {
+        const urlStr = typeof url === 'string' ? url : url.url;
+        if (urlStr.includes('api.telegram.org')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ ok: true, result: { message_id: 999 } }),
+            text: () => Promise.resolve(JSON.stringify({ ok: true, result: { message_id: 999 } })),
+          });
+        }
+
+        apiCallCount++;
+        // Exhaust local retries on free1, then rotate to free2
+        if (apiCallCount <= 3) {
+          return Promise.resolve({
+            ok: false,
+            status: 499,
+            text: () => Promise.resolve('{"error":{"message":"Client disconnected"}}'),
+          });
+        }
+        return Promise.resolve(buildSSEResponse({ content: 'Done.' }));
+      }));
+
+      const processor = new TaskProcessorClass(mockState as never, {} as never);
+      await processor.fetch(new Request('https://do/process', {
+        method: 'POST',
+        body: JSON.stringify(createTaskRequest({ modelAlias: 'free1' })),
+      }));
+
+      await vi.waitFor(
+        () => {
+          const task = mockState.storage._store.get('task') as Record<string, unknown> | undefined;
+          if (!task || task.status !== 'completed') throw new Error('not completed yet');
+        },
+        { timeout: 15000, interval: 50 }
+      );
+
+      const task = mockState.storage._store.get('task') as Record<string, unknown>;
+      expect(task.status).toBe('completed');
+      expect(task.modelAlias).toBe('free2');
+    });
   });
 
   describe('phase persistence', () => {
