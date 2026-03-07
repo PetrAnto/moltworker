@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-07 (Codex watchdog heartbeat fix for `/orch next` false-stuck auto-resumes + Wrangler config cleanup)
+**Last Updated:** 2026-03-07 (Codex follow-up fix for `/orch next` provider 499 disconnects caused by fetch timeout scope regression)
 
 ---
 
@@ -481,6 +481,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-07 | Codex (GPT-5.2-Codex) (Session: codex-orch-499-timeout-20260307) | fix(task-processor): clear direct-provider fetch timeout immediately after response headers to avoid aborting healthy long streams (provider 499); add regression test to assert timer is cleared before parser completes | src/durable-objects/task-processor.ts, src/durable-objects/task-processor-lifecycle.test.ts
 2026-03-07 | Codex (GPT-5.2-Codex) (Session: codex-orch-watchdog-20260307) | fix(task-processor): prevent false stuck auto-resume by flushing durable heartbeat while waiting for direct-provider stream start; test delayed-provider lifecycle; remove invalid wrangler usage_model warning | src/durable-objects/task-processor.ts, src/durable-objects/task-processor-lifecycle.test.ts, wrangler.jsonc
 2026-03-01 | Claude Opus 4.6 (Session: session_019DBbA1BWV4dbdZZrrDzrK5) | fix(syncall): sanitize hyphenated aliases + improve display — sanitizeAlias() strips non-alphanumeric from R2 aliasMap (self-heals), HTML parseMode, compact 1-line layout, model name in buttons, escapeHtml export | src/openrouter/model-sync/alias.ts, src/openrouter/model-sync/alias.test.ts, src/telegram/handler.ts, src/utils/telegram-format.ts
 2026-03-01 | PetrAnto | fix(security,task-processor): strip secrets from DO /status API — defense-in-depth (destructure at DO + allowlist at simulate), defer premature orchestra review (≥3 iterations) | src/durable-objects/task-processor.ts, src/routes/simulate.ts

@@ -4,6 +4,38 @@
 
 ---
 
+## Session: 2026-03-07 | /orch next follow-up: 499 disconnect timeout fix (Session: codex-orch-499-timeout-20260307)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Addressed regression in previous watchdog fix: direct-provider fetch header timeout was accidentally kept active during streaming, causing aborts (provider 499 client disconnected) on long Anthropic responses.
+
+### Changes Made
+- Restored fetch timeout semantics to header-wait only by clearing timeout immediately after response headers
+- Kept timeout cleanup on fetch failure path while preserving durable heartbeat interval logic
+- Added regression lifecycle test asserting header-timeout is cleared before streaming parser resolves
+- Retained prior durable heartbeat test coverage for delayed stream start
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor-lifecycle.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass (`npm test`)
+- [x] Typecheck passes (`npm run typecheck`)
+
+### Notes for Next Session
+Production-verify `/orch next` with `/sonnet` on long (>5m) streams and confirm Claude dashboard stops showing 499 "Client disconnected" rows for normal completed runs.
+
+---
+
 ## Session: 2026-03-07 | /orch next watchdog false-stuck fix (Session: codex-orch-watchdog-20260307)
 
 **AI:** Codex (GPT-5.2-Codex)

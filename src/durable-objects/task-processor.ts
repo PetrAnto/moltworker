@@ -2100,6 +2100,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   body: JSON.stringify(requestBody),
                   signal: abortController.signal,
                 });
+                // Header timeout only: once we have a response body, streaming idle
+                // time is governed by parseSSEStream/parseAnthropicSSEStream.
+                // Keeping this timer alive during active streaming can abort healthy
+                // long runs and surface as provider-side 499 "Client disconnected".
+                clearTimeout(fetchTimeout);
                 console.log(`[TaskProcessor] ${provider} streaming response: ${response.status}`);
                 if (!response.ok) {
                   const errorText = await response.text().catch(() => 'unknown error');
@@ -2131,8 +2136,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     useTools ? specExec.onToolCallReady : undefined,
                   );
                 }
-              } finally {
+              } catch (fetchError) {
+                // If fetch itself fails before headers, prevent timer leak.
                 clearTimeout(fetchTimeout);
+                throw fetchError;
+              } finally {
                 clearInterval(directProviderFlushInterval);
               }
 
