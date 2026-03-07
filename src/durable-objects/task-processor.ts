@@ -2621,7 +2621,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           // alarm handler can detect this as spinning even though tool count increases.
           if (!task.toolSignatures) task.toolSignatures = [];
           for (const tc of choice.message.tool_calls) {
-            task.toolSignatures.push(`${tc.function.name}:${tc.function.arguments}`);
+            // Hash arguments to avoid storing large payloads (e.g. patch_file diffs)
+            const argsStr = tc.function.arguments || '';
+            let hash = 0;
+            for (let i = 0; i < argsStr.length; i++) {
+              hash = ((hash << 5) - hash + argsStr.charCodeAt(i)) | 0;
+            }
+            task.toolSignatures.push(`${tc.function.name}:${hash.toString(36)}`);
           }
           // Cap at 100 to avoid unbounded growth in long tasks
           if (task.toolSignatures.length > 100) {
