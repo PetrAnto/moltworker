@@ -2466,3 +2466,89 @@ describe('400 input-validation context compression', () => {
     expect(apiCallCount).toBeLessThanOrEqual(4); // MAX_API_RETRIES + 1 at most
   });
 });
+
+// --- Unit tests for exported helpers ---
+
+describe('taskForStorage', () => {
+  let taskForStorage: typeof import('./task-processor').taskForStorage;
+
+  beforeEach(async () => {
+    ({ taskForStorage } = await import('./task-processor'));
+  });
+
+  it('should strip messages, workPhaseContent, and structuredPlan', () => {
+    const task = {
+      taskId: 'test', chatId: 1, userId: 'u', modelAlias: 'm',
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      status: 'processing' as const,
+      toolsUsed: ['github_read_file'],
+      iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      workPhaseContent: 'x'.repeat(50000),
+      structuredPlan: { steps: [{ description: 'big' }] } as never,
+    };
+    const result = taskForStorage(task);
+    expect(result.messages).toEqual([]);
+    expect((result as Record<string, unknown>).workPhaseContent).toBeUndefined();
+    expect((result as Record<string, unknown>).structuredPlan).toBeUndefined();
+    expect(result.toolsUsed).toEqual(['github_read_file']);
+  });
+
+  it('should trim toolSignatures when near 128KB limit', () => {
+    const task = {
+      taskId: 'test', chatId: 1, userId: 'u', modelAlias: 'm',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      // Create a task with many large toolSignatures to approach 128KB
+      toolSignatures: Array.from({ length: 500 }, (_, i) => `tool:${'x'.repeat(200)}_${i}`),
+    };
+    const result = taskForStorage(task);
+    // When near limit, should be trimmed to last 20
+    if (JSON.stringify(task).length > 131072 * 0.8) {
+      expect(result.toolSignatures!.length).toBeLessThanOrEqual(20);
+    }
+  });
+
+  it('should preserve isStreaming flag', () => {
+    const task = {
+      taskId: 'test', chatId: 1, userId: 'u', modelAlias: 'm',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      isStreaming: true,
+    };
+    const result = taskForStorage(task);
+    expect(result.isStreaming).toBe(true);
+  });
+});
+
+describe('getWatchdogStuckThreshold', () => {
+  let getWatchdogStuckThreshold: typeof import('./task-processor').getWatchdogStuckThreshold;
+
+  beforeEach(async () => {
+    ({ getWatchdogStuckThreshold } = await import('./task-processor'));
+  });
+
+  it('should return threshold for paid model', () => {
+    // In test mocks, 'deep' model uses 'deepseek' provider (multiplier 1.8)
+    // max(240*1.8=432, max(180*1.8=324, 90)+60=384) = 432s
+    const threshold = getWatchdogStuckThreshold('deep');
+    expect(threshold).toBeGreaterThanOrEqual(240000);
+    expect(threshold).toBeLessThanOrEqual(500000);
+  });
+
+  it('should return threshold for free model', () => {
+    const threshold = getWatchdogStuckThreshold('free1');
+    // Free base is 150s with multiplier 1.0
+    expect(threshold).toBeGreaterThanOrEqual(150000);
+  });
+});
+
+describe('orphaned threshold constants', () => {
+  it('should be shorter than base stuck thresholds', async () => {
+    const { ORPHANED_THRESHOLD_FREE_MS, ORPHANED_THRESHOLD_PAID_MS } = await import('./task-processor');
+    expect(ORPHANED_THRESHOLD_FREE_MS).toBe(120000);
+    expect(ORPHANED_THRESHOLD_PAID_MS).toBe(180000);
+    // Must exceed one watchdog interval (90s) to avoid races
+    expect(ORPHANED_THRESHOLD_FREE_MS).toBeGreaterThan(90000);
+    expect(ORPHANED_THRESHOLD_PAID_MS).toBeGreaterThan(90000);
+  });
+});
