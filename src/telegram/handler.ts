@@ -1694,26 +1694,34 @@ export class TelegramHandler {
         }
         lines.push('');
 
-        // Show all capable models grouped by tier
+        // Show top models grouped by tier (limit to keep output readable)
+        const MAX_PAID = 5;
+        const MAX_FREE = 3;
         const paidModels = ranked.filter(r => !r.isFree);
         const freeModels = ranked.filter(r => r.isFree);
 
         if (paidModels.length > 0) {
           lines.push('💰 **Paid models:**');
-          for (const r of paidModels) {
+          for (const r of paidModels.slice(0, MAX_PAID)) {
             const bar = r.confidence >= 80 ? '🟩' : r.confidence >= 50 ? '🟨' : '🟥';
-            const hl = r.highlights ? ` [${r.highlights}]` : '';
-            lines.push(`${bar} ${r.confidence}% /${r.alias} (${r.cost}) — ${r.name}${hl}`);
+            const hl = r.highlights ? ` ${r.highlights}` : '';
+            lines.push(`${bar} ${r.confidence}% /${r.alias} (${r.cost}) — ${r.name} ${hl}`);
+          }
+          if (paidModels.length > MAX_PAID) {
+            lines.push(`   _+${paidModels.length - MAX_PAID} more_`);
           }
           lines.push('');
         }
 
         if (freeModels.length > 0) {
           lines.push('🆓 **Free models:**');
-          for (const r of freeModels) {
+          for (const r of freeModels.slice(0, MAX_FREE)) {
             const bar = r.confidence >= 80 ? '🟩' : r.confidence >= 50 ? '🟨' : '🟥';
-            const hl = r.highlights ? ` [${r.highlights}]` : '';
-            lines.push(`${bar} ${r.confidence}% /${r.alias} — ${r.name}${hl}`);
+            const hl = r.highlights ? ` ${r.highlights}` : '';
+            lines.push(`${bar} ${r.confidence}% /${r.alias} — ${r.name} ${hl}`);
+          }
+          if (freeModels.length > MAX_FREE) {
+            lines.push(`   _+${freeModels.length - MAX_FREE} more_`);
           }
         }
 
