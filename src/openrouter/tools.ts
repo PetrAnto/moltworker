@@ -390,7 +390,11 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'github_create_pr',
-      description: 'Create a GitHub Pull Request with file changes. Creates a branch, commits file changes, and opens a PR. Authentication is handled automatically. Supports 4 action types:\n\n' +
+      description: 'Create a GitHub Pull Request with file changes. Creates a branch, commits file changes, and opens a PR. Authentication is handled automatically.\n\n' +
+        'Two modes:\n' +
+        '1. ALL-IN-ONE: Pass "changes" to create branch + commit + PR in one call (for small tasks)\n' +
+        '2. PR-ONLY: Omit "changes" when branch already exists (created by github_push_files) — just opens the PR\n\n' +
+        'Supports 4 action types for "changes":\n' +
         '• "create" — new file with full content\n' +
         '• "update" — replace entire file (read first with github_read_file, provide COMPLETE new content)\n' +
         '• "patch" — PREFERRED for editing existing files. Surgical find/replace without rewriting the whole file. Provide "patches" array of {"find":"exact text to find","replace":"replacement text"} pairs. Each "find" must match exactly once. Use this for files >100 lines to avoid regeneration errors.\n' +
@@ -431,7 +435,50 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
             description: 'PR description in markdown (optional)',
           },
         },
-        required: ['owner', 'repo', 'title', 'branch', 'changes'],
+        required: ['owner', 'repo', 'title', 'branch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_push_files',
+      description: 'Push file changes to a GitHub branch WITHOUT creating a PR. Use this to batch large changes across multiple calls before opening a PR with github_create_pr.\n\n' +
+        'First call creates the branch + initial commit. Subsequent calls add commits to the same branch.\n' +
+        'Supports same actions as github_create_pr: "create", "update", "patch", "delete".\n\n' +
+        'Typical workflow for large refactors:\n' +
+        '1. github_push_files — batch 1 (2-3 new files)\n' +
+        '2. github_push_files — batch 2 (2-3 more files)\n' +
+        '3. github_create_pr — open PR on the existing branch (with ROADMAP/WORK_LOG patches)',
+      parameters: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner (username or organization)',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          branch: {
+            type: 'string',
+            description: 'Branch name (will be prefixed with bot/ automatically). Creates if new, adds commit if exists.',
+          },
+          base: {
+            type: 'string',
+            description: 'Base branch (default: main). Only used when creating a new branch.',
+          },
+          message: {
+            type: 'string',
+            description: 'Commit message for this batch of changes',
+          },
+          changes: {
+            type: 'string',
+            description: 'JSON array of file changes (same format as github_create_pr). Keep batches to 3-4 files to avoid timeouts.',
+          },
+        },
+        required: ['owner', 'repo', 'branch', 'message', 'changes'],
       },
     },
   },
@@ -596,6 +643,17 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
           args.changes,
           args.base,
           args.body,
+          githubToken
+        );
+        break;
+      case 'github_push_files':
+        result = await githubPushFiles(
+          args.owner,
+          args.repo,
+          args.branch,
+          args.message,
+          args.changes,
+          args.base,
           githubToken
         );
         break;
@@ -1010,6 +1068,212 @@ interface GitPullResponse {
 }
 
 /**
+ * Push file changes to a GitHub branch without creating a PR.
+ * Creates the branch on first call; adds commits on subsequent calls.
+ * Used to batch large changes across multiple tool calls to avoid output token exhaustion.
+ */
+async function githubPushFiles(
+  owner: string,
+  repo: string,
+  branch: string,
+  message: string,
+  changesInput: string | FileChange[],
+  base?: string,
+  token?: string
+): Promise<string> {
+  if (!token) {
+    throw new Error('GitHub token is required. Configure GITHUB_TOKEN in the bot settings.');
+  }
+
+  if (!/^[a-zA-Z0-9_.-]+$/.test(owner) || !/^[a-zA-Z0-9_.-]+$/.test(repo)) {
+    throw new Error(`Invalid owner/repo format: "${owner}/${repo}".`);
+  }
+  if (!/^[a-zA-Z0-9_/.@-]+$/.test(branch) || branch.includes('..')) {
+    throw new Error(`Invalid branch name: "${branch}".`);
+  }
+
+  const fullBranch = branch.startsWith('bot/') ? branch : `bot/${branch}`;
+  const baseBranch = base || 'main';
+
+  // Parse changes
+  let changes: FileChange[];
+  if (Array.isArray(changesInput)) {
+    changes = changesInput;
+  } else if (typeof changesInput === 'string') {
+    try {
+      changes = JSON.parse(changesInput);
+    } catch {
+      throw new Error('Invalid changes JSON.');
+    }
+  } else {
+    throw new Error('Changes must be a JSON string or an array.');
+  }
+
+  if (!Array.isArray(changes) || changes.length === 0) {
+    throw new Error('Changes must be a non-empty array.');
+  }
+  if (changes.length > 10) {
+    throw new Error(`Too many files (${changes.length}). Keep batches to ≤10 files.`);
+  }
+
+  const headers: Record<string, string> = {
+    'User-Agent': 'MoltworkerBot/1.0',
+    'Accept': 'application/vnd.github.v3+json',
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
+  const apiBase = `https://api.github.com/repos/${owner}/${repo}`;
+
+  // Check if branch already exists
+  let parentSha: string;
+  let branchExists = false;
+  const branchRefResponse = await fetch(`${apiBase}/git/ref/heads/${fullBranch}`, { headers });
+  if (branchRefResponse.ok) {
+    // Branch exists — get its HEAD as parent
+    const branchRef = await branchRefResponse.json() as GitRefResponse;
+    parentSha = branchRef.object.sha;
+    branchExists = true;
+  } else {
+    // Branch doesn't exist — use base branch as parent
+    const baseRefResponse = await fetch(`${apiBase}/git/ref/heads/${baseBranch}`, { headers });
+    if (!baseRefResponse.ok) {
+      throw new Error(`Base branch "${baseBranch}" not found (${baseRefResponse.status}).`);
+    }
+    const baseRef = await baseRefResponse.json() as GitRefResponse;
+    parentSha = baseRef.object.sha;
+  }
+
+  // Resolve patches: for "patch" actions, fetch the file from the correct branch and apply
+  const fetchBranch = branchExists ? fullBranch : baseBranch;
+  for (let ci = 0; ci < changes.length; ci++) {
+    const change = changes[ci];
+    if (change.action !== 'patch' || !change.patches) continue;
+
+    const fileResponse = await fetch(
+      `${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${fetchBranch}`,
+      { headers }
+    );
+    if (!fileResponse.ok) {
+      throw new Error(`Cannot patch "${change.path}": file not found on "${fetchBranch}" (${fileResponse.status}).`);
+    }
+    const fileData = await fileResponse.json() as { content?: string; encoding?: string };
+    if (!fileData.content || fileData.encoding !== 'base64') {
+      throw new Error(`Cannot patch "${change.path}": unable to decode content.`);
+    }
+
+    let fileContent = decodeBase64Utf8(fileData.content);
+    for (let pi = 0; pi < change.patches.length; pi++) {
+      const patch = change.patches[pi];
+      const idx = fileContent.indexOf(patch.find);
+      if (idx === -1) {
+        throw new Error(
+          `PATCH FAILED for "${change.path}" (patch #${pi + 1}): ` +
+          `"find" string not found. Use github_read_file to get exact content.`
+        );
+      }
+      if (fileContent.indexOf(patch.find, idx + 1) !== -1) {
+        throw new Error(
+          `PATCH FAILED for "${change.path}" (patch #${pi + 1}): ` +
+          `"find" matches multiple times. Include more context.`
+        );
+      }
+      fileContent = fileContent.substring(0, idx) + patch.replace + fileContent.substring(idx + patch.find.length);
+    }
+    console.log(`[github_push_files] Resolved patch for "${change.path}": ${change.patches.length} patch(es) applied`);
+    changes[ci] = { path: change.path, content: fileContent, action: 'update' };
+  }
+
+  // Validate content
+  for (const change of changes) {
+    if (!change.path || change.path.includes('..') || change.path.startsWith('/')) {
+      throw new Error(`Invalid file path: "${change.path}".`);
+    }
+    if (!['create', 'update', 'delete', 'patch'].includes(change.action)) {
+      throw new Error(`Invalid action "${change.action}" for "${change.path}".`);
+    }
+    if (change.action !== 'delete' && !change.content) {
+      throw new Error(`Missing content for ${change.action} on "${change.path}".`);
+    }
+  }
+
+  console.log(`[github_push_files] Pushing ${changes.length} file(s) to ${fullBranch} (${branchExists ? 'existing' : 'new'} branch)`);
+
+  // Create blobs
+  const treeItems: Array<{ path: string; mode: string; type: string; sha: string | null }> = [];
+  for (const change of changes) {
+    if (change.action === 'delete') {
+      treeItems.push({ path: change.path, mode: '100644', type: 'blob', sha: null });
+    } else {
+      const blobResponse = await fetch(`${apiBase}/git/blobs`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ content: change.content, encoding: 'utf-8' }),
+      });
+      if (!blobResponse.ok) {
+        throw new Error(`Failed to create blob for "${change.path}": ${blobResponse.status}`);
+      }
+      const blobData = await blobResponse.json() as GitBlobResponse;
+      treeItems.push({ path: change.path, mode: '100644', type: 'blob', sha: blobData.sha });
+    }
+  }
+
+  // Create tree
+  const treeResponse = await fetch(`${apiBase}/git/trees`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ base_tree: parentSha, tree: treeItems }),
+  });
+  if (!treeResponse.ok) {
+    throw new Error(`Failed to create tree: ${treeResponse.status}`);
+  }
+  const treeData = await treeResponse.json() as GitTreeResponse;
+
+  // Create commit
+  const commitResponse = await fetch(`${apiBase}/git/commits`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message, tree: treeData.sha, parents: [parentSha] }),
+  });
+  if (!commitResponse.ok) {
+    throw new Error(`Failed to create commit: ${commitResponse.status}`);
+  }
+  const commitData = await commitResponse.json() as GitCommitResponse;
+
+  if (branchExists) {
+    // Update existing branch ref
+    const updateRefResponse = await fetch(`${apiBase}/git/refs/heads/${fullBranch}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ sha: commitData.sha }),
+    });
+    if (!updateRefResponse.ok) {
+      throw new Error(`Failed to update branch "${fullBranch}": ${updateRefResponse.status}`);
+    }
+  } else {
+    // Create new branch ref
+    const createRefResponse = await fetch(`${apiBase}/git/refs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ref: `refs/heads/${fullBranch}`, sha: commitData.sha }),
+    });
+    if (!createRefResponse.ok) {
+      throw new Error(`Failed to create branch "${fullBranch}": ${createRefResponse.status}`);
+    }
+  }
+
+  const summary = [
+    `✅ Files pushed to branch ${fullBranch}`,
+    `Commit: ${commitData.sha.substring(0, 8)}`,
+    `Changes: ${changes.length} file(s)`,
+    ...changes.map(c => `  - ${c.action}: ${c.path}`),
+    ``,
+    `Branch is ready. Use github_push_files for more batches, or github_create_pr to open the PR.`,
+  ];
+
+  return summary.join('\n');
+}
+
+/**
  * Extract meaningful code identifiers from source code.
  * Returns unique names of exported functions, classes, constants, and top-level declarations.
  * Used by rewrite detection to verify that key symbols survive across file updates.
@@ -1078,7 +1342,7 @@ async function githubCreatePr(
   repo: string,
   title: string,
   branch: string,
-  changesInput: string | FileChange[],
+  changesInput: string | FileChange[] | undefined,
   base?: string,
   body?: string,
   token?: string
@@ -1101,6 +1365,50 @@ async function githubCreatePr(
   // Auto-prefix with bot/ to avoid conflicts
   const fullBranch = branch.startsWith('bot/') ? branch : `bot/${branch}`;
   const baseBranch = base || 'main';
+
+  // --- PR-only mode: no changes, branch already exists (created by github_push_files) ---
+  if (!changesInput || (typeof changesInput === 'string' && changesInput.trim() === '') || (typeof changesInput === 'string' && changesInput.trim() === '[]') || (Array.isArray(changesInput) && changesInput.length === 0)) {
+    const headers: Record<string, string> = {
+      'User-Agent': 'MoltworkerBot/1.0',
+      'Accept': 'application/vnd.github.v3+json',
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
+    const apiBase = `https://api.github.com/repos/${owner}/${repo}`;
+
+    // Verify branch exists
+    const branchCheck = await fetch(`${apiBase}/git/ref/heads/${fullBranch}`, { headers });
+    if (!branchCheck.ok) {
+      throw new Error(`Branch "${fullBranch}" does not exist. Use github_push_files to create it first, or provide "changes" to create branch + PR in one call.`);
+    }
+
+    // Open PR on existing branch
+    console.log(`[github_create_pr] PR-only mode: opening PR on existing branch ${fullBranch}`);
+    const prResponse = await fetch(`${apiBase}/pulls`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        title,
+        head: fullBranch,
+        base: baseBranch,
+        body: body || `Automated PR created by Moltworker bot.`,
+      }),
+    });
+
+    if (!prResponse.ok) {
+      const err = await prResponse.text();
+      throw new Error(`Failed to create PR: ${prResponse.status} ${err}`);
+    }
+
+    const prData = await prResponse.json() as GitPullResponse;
+    return [
+      `✅ Pull Request created successfully!`,
+      ``,
+      `PR: ${prData.html_url}`,
+      `Branch: ${fullBranch} → ${baseBranch}`,
+      `Mode: PR-only (files were pushed via github_push_files)`,
+    ].join('\n');
+  }
 
   // Parse changes — accept both JSON string and native array
   let changes: FileChange[];
@@ -1171,14 +1479,20 @@ async function githubCreatePr(
 
   const apiBase = `https://api.github.com/repos/${owner}/${repo}`;
 
+  // Check early if target branch already exists (from github_push_files)
+  // so patch resolution fetches from the correct ref
+  const earlyBranchCheck = await fetch(`${apiBase}/git/ref/heads/${fullBranch}`, { headers });
+  const branchAlreadyExists = earlyBranchCheck.ok;
+  const patchFetchRef = branchAlreadyExists ? fullBranch : baseBranch;
+
   // --- Resolve "patch" actions: fetch original file, apply find/replace, convert to "update" ---
   for (let ci = 0; ci < changes.length; ci++) {
     const change = changes[ci];
     if (change.action !== 'patch' || !change.patches) continue;
 
-    // Fetch the original file content from the base branch
+    // Fetch the original file content from the correct branch
     const fileResponse = await fetch(
-      `${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${baseBranch}`,
+      `${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`,
       { headers }
     );
     if (!fileResponse.ok) {
@@ -1282,7 +1596,7 @@ async function githubCreatePr(
     if (change.action !== 'update' || !change.content) continue;
 
     try {
-      const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${baseBranch}`, { headers });
+      const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
       if (fileResponse.ok) {
         const fileData = await fileResponse.json() as { size: number; content?: string; encoding?: string };
         const originalSize = fileData.size;
@@ -1477,7 +1791,7 @@ async function githubCreatePr(
 
       // Fetch original line count
       try {
-        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${baseBranch}`, { headers });
+        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
@@ -1523,7 +1837,7 @@ async function githubCreatePr(
     // 7a. WORK_LOG.md — rows can be added but existing rows must not be deleted
     if (fileName === 'WORK_LOG.MD') {
       try {
-        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${baseBranch}`, { headers });
+        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
@@ -1596,7 +1910,7 @@ async function githubCreatePr(
     // 7b. ROADMAP.md — block unchecking tasks ([ ] ← [x]) and deleting task lines
     if (fileName === 'ROADMAP.MD') {
       try {
-        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${baseBranch}`, { headers });
+        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
@@ -1683,14 +1997,27 @@ async function githubCreatePr(
     console.log(`  ${change.action}: ${change.path} (${change.content?.length || 0} bytes, ${change.content?.split('\n').length || 0} lines)`);
   }
 
-  // --- Step 1: Get base branch SHA ---
-  const refResponse = await fetch(`${apiBase}/git/ref/heads/${baseBranch}`, { headers });
-  if (!refResponse.ok) {
-    const err = await refResponse.text();
-    throw new Error(`Failed to get base branch "${baseBranch}": ${refResponse.status} ${err}`);
+  // --- Step 1: Get parent SHA ---
+  // Use early branch check result to avoid duplicate API call
+  let baseSha: string;
+  if (branchAlreadyExists) {
+    // Branch exists — re-fetch current HEAD (may have changed since early check)
+    const branchRefResponse = await fetch(`${apiBase}/git/ref/heads/${fullBranch}`, { headers });
+    if (!branchRefResponse.ok) {
+      throw new Error(`Branch "${fullBranch}" disappeared between check and commit.`);
+    }
+    const branchRef = await branchRefResponse.json() as GitRefResponse;
+    baseSha = branchRef.object.sha;
+    console.log(`[github_create_pr] Branch ${fullBranch} exists (from github_push_files), adding commit on top`);
+  } else {
+    const refResponse = await fetch(`${apiBase}/git/ref/heads/${baseBranch}`, { headers });
+    if (!refResponse.ok) {
+      const err = await refResponse.text();
+      throw new Error(`Failed to get base branch "${baseBranch}": ${refResponse.status} ${err}`);
+    }
+    const refData = await refResponse.json() as GitRefResponse;
+    baseSha = refData.object.sha;
   }
-  const refData = await refResponse.json() as GitRefResponse;
-  const baseSha = refData.object.sha;
 
   // --- Step 2: Create blobs for each file ---
   const treeItems: Array<{
@@ -1770,19 +2097,32 @@ async function githubCreatePr(
 
   const commitData = await commitResponse.json() as GitCommitResponse;
 
-  // --- Step 5: Create branch ref ---
-  const createRefResponse = await fetch(`${apiBase}/git/refs`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      ref: `refs/heads/${fullBranch}`,
-      sha: commitData.sha,
-    }),
-  });
-
-  if (!createRefResponse.ok) {
-    const err = await createRefResponse.text();
-    throw new Error(`Failed to create branch "${fullBranch}": ${createRefResponse.status} ${err}`);
+  // --- Step 5: Create or update branch ref ---
+  if (branchAlreadyExists) {
+    // Update existing branch to point to new commit
+    const updateRefResponse = await fetch(`${apiBase}/git/refs/heads/${fullBranch}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ sha: commitData.sha }),
+    });
+    if (!updateRefResponse.ok) {
+      const err = await updateRefResponse.text();
+      throw new Error(`Failed to update branch "${fullBranch}": ${updateRefResponse.status} ${err}`);
+    }
+  } else {
+    // Create new branch
+    const createRefResponse = await fetch(`${apiBase}/git/refs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ref: `refs/heads/${fullBranch}`,
+        sha: commitData.sha,
+      }),
+    });
+    if (!createRefResponse.ok) {
+      const err = await createRefResponse.text();
+      throw new Error(`Failed to create branch "${fullBranch}": ${createRefResponse.status} ${err}`);
+    }
   }
 
   // --- Step 6: Create pull request ---

@@ -17,6 +17,7 @@ const GUARDED_TOOLS = new Set([
   'sandbox_exec',
   'github_api',
   'github_create_pr',
+  'github_push_files',
   'cloudflare_api',
 ]);
 

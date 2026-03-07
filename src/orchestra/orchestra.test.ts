@@ -371,10 +371,10 @@ describe('repo health check in buildRunPrompt', () => {
     expect(prompt).toContain('split');
   });
 
-  it('instructs to use github_create_pr for splitting with all files in one call', () => {
+  it('instructs to use github_create_pr and github_push_files for splitting', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     expect(prompt).toContain('github_create_pr');
-    expect(prompt).toContain('SINGLE');
+    expect(prompt).toContain('github_push_files');
     expect(prompt).toContain('identifier check allows splits');
   });
 
