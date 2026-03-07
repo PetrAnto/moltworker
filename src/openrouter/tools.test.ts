@@ -4125,6 +4125,10 @@ describe('net deletion ratio guard in github_create_pr', () => {
       const urlStr = typeof url === 'string' ? url : '';
       const method = init?.method || 'GET';
 
+      // Early branch existence check — branch doesn't exist (NOT a file-split PR)
+      if (method === 'GET' && urlStr.includes('/git/ref/heads/bot/')) {
+        return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('Not Found') });
+      }
       if (method === 'GET' && urlStr.includes('/contents/')) {
         return Promise.resolve({
           ok: true,

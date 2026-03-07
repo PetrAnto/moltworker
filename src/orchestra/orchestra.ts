@@ -299,7 +299,9 @@ For "create" action: \`{"path":"file.js","action":"create","content":"full conte
 **If creating 4+ new files** (e.g. file splitting): batch with \`github_push_files\`:
 1. \`github_push_files\` — batch 1 (2-3 files), branch=\`${branch}\`, message="batch 1: ..."
 2. \`github_push_files\` — batch 2 (2-3 more files), same branch
-3. \`github_create_pr\` — opens PR on the existing branch. Include ROADMAP/WORK_LOG patches + any remaining source patches in "changes".
+3. \`github_create_pr\` — opens PR on the existing branch. Include ROADMAP/WORK_LOG patches + source file patches in "changes".
+
+When splitting files: DELETE the extracted code from the original file. Do NOT rename it or leave dead code.
 
 All calls use branch \`${branch}\` (bot/ prefix added automatically). Title ends with [${modelAlias}].
 **After calling github_create_pr, CHECK THE RESULT.** If error, fix and retry.
@@ -386,7 +388,11 @@ This prevents output token exhaustion on large refactors. Each batch generates a
 
 ### File splitting (if task requires it)
 1. New module files with action "create" (use github_push_files in batches of 2-3)
-2. Updated original file with action "patch" (import from new modules, re-export) — include in final github_create_pr
+2. Updated original file with action "patch" — include in final github_create_pr:
+   - ADD import statements for the new modules at the top
+   - DELETE the extracted code (functions, constants, components) from the original file using patches
+   - Re-export from the new modules if needed for backwards compatibility
+   - **DO NOT leave dead code** — the extracted code MUST be removed, not renamed or commented out
 
 **After calling github_create_pr, CHECK THE RESULT.** If error (422, 403), fix and retry with a different branch name. NEVER claim success if the tool returned an error.
 
@@ -487,9 +493,13 @@ This prevents output token exhaustion. Each \`github_push_files\` creates a comm
 1. Read the original file with \`github_read_file\`
 2. Plan the split: identify logical groups of functions/components to extract
 3. Push new module files in batches of 2-3 via \`github_push_files\` (action "create")
-4. Final \`github_create_pr\`: patch the original file (import from new modules, re-export) + ROADMAP + WORK_LOG
-The identifier check allows splits: identifiers moved to other files in the same PR are not counted as lost.
-**CRITICAL**: The updated original file MUST import from and re-export the new modules so nothing breaks for consumers.
+4. Final \`github_create_pr\`: patch the original file + ROADMAP + WORK_LOG. The patches MUST:
+   - ADD import statements for the new modules at the top
+   - DELETE the extracted code from the original file (remove the actual functions/constants/components that were moved)
+   - Re-export from new modules if needed for backwards compatibility
+   - **NEVER leave dead code** — do NOT rename extracted code to _MOVED or comment it out. DELETE it entirely.
+The identifier check allows splits: identifiers moved to other files on the same branch are not counted as lost.
+**CRITICAL**: The original file's line count should DROP significantly after a split. If it barely changed, you left dead code.
 
 **Other rules:**
 - Follow existing code conventions, proper types (no \`any\`)
