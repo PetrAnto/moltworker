@@ -306,11 +306,11 @@ const STUCK_THRESHOLD_PAID_MS = 240000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max iterations per event before yielding to a fresh alarm event.
-// Direct API providers (Anthropic, DeepSeek, Moonshot, DashScope): yield after
-// EVERY iteration (1). The DO holds the TCP connection directly, so if the 30s
-// CPU limit kills the DO mid-stream → 499 client disconnect. Each iteration
-// (streaming response + tool execution) can consume significant CPU.
-// OpenRouter: relaxed (8) because it proxies the connection server-side.
+// Direct API providers (DeepSeek, Moonshot, DashScope): yield after EVERY
+// iteration (1). The DO holds the TCP connection directly, so if the 30s CPU
+// limit kills the DO mid-stream → 499 client disconnect.
+// Note: Anthropic models are rerouted through OpenRouter to avoid this issue.
+// OpenRouter + rerouted Anthropic: relaxed (8) — proxied connection.
 const MAX_ITERATIONS_BEFORE_YIELD_DIRECT = 1;
 const MAX_ITERATIONS_BEFORE_YIELD_DEFAULT = 8;
 // Safety net: yield if cumulative active time exceeds this regardless of
@@ -1741,7 +1741,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Secondary trigger: active time safety net (for CPU-heavy single iterations).
         // Only yield if R2 is available (needed to save/load checkpoint for resume).
         const taskProvider = getProvider(task.modelAlias);
-        const isDirectApi = taskProvider === 'anthropic' || taskProvider === 'deepseek'
+        // Anthropic models are rerouted through OpenRouter in the DO (see below),
+        // so only remaining direct API providers need the aggressive yield threshold.
+        const isDirectApi = taskProvider === 'deepseek'
           || taskProvider === 'moonshot' || taskProvider === 'dashscope';
         const iterYieldThreshold = isDirectApi
           ? MAX_ITERATIONS_BEFORE_YIELD_DIRECT
@@ -1801,8 +1803,21 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // This reduces CPU usage from redundant JSON.stringify operations
 
         // Determine which provider/API to use (uses task.modelAlias for rotation support)
-        const provider = getProvider(task.modelAlias);
+        let provider = getProvider(task.modelAlias);
         const providerConfig = getProviderConfig(task.modelAlias);
+
+        // CRITICAL: Route Anthropic models through OpenRouter in the DO.
+        // Anthropic direct API requires the DO to hold the raw TCP connection and
+        // parse the full SSE stream. With large contexts (40K+ input tokens) and
+        // long responses (13K+ output tokens), the cumulative CPU from SSE parsing
+        // exceeds CF's 30s CPU limit → DO eviction → 499 "Client disconnected".
+        // OpenRouter proxies the streaming connection server-side, so the DO only
+        // receives pre-parsed chunks with minimal CPU overhead.
+        const rerouteAnthropicViaOpenRouter = provider === 'anthropic' && !!request.openrouterKey;
+        if (rerouteAnthropicViaOpenRouter) {
+          console.log(`[TaskProcessor] Rerouting Anthropic model via OpenRouter to avoid DO 499 evictions`);
+          provider = 'openrouter';
+        }
 
         // Get the appropriate API key for the provider
         let apiKey: string;
@@ -1978,6 +1993,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 task.lastUpdate = Date.now();
                 this.doState.storage.put('task', task).catch(() => {});
               }, 55000);
+              // When rerouting Anthropic via OpenRouter, prefix the native model ID
+              // (e.g. "claude-sonnet-4-6" → "anthropic/claude-sonnet-4-6")
+              const orModelIdOverride = rerouteAnthropicViaOpenRouter
+                ? `anthropic/${getModelId(task.modelAlias)}`
+                : undefined;
+
               try {
                 result = await client.chatCompletionStreamingWithTools(
                   task.modelAlias, // Pass alias - method will resolve to model ID (supports rotation)
@@ -1990,6 +2011,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     idleTimeoutMs: idleTimeout, // Scaled by context size (45s-120s)
                     reasoningLevel: request.reasoningLevel,
                     responseFormat: request.responseFormat,
+                    modelIdOverride: orModelIdOverride,
                     onProgress: () => {
                       progressCount++;
                       this.lastHeartbeatMs = Date.now();
