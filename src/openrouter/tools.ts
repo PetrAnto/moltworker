@@ -1813,6 +1813,50 @@ async function githubCreatePr(
     );
   }
 
+  // 5b. Incomplete file-split guard: if new code files were created AND an existing code file
+  //     was updated, verify the updated source file actually shrank. If it grew or barely
+  //     changed, the model added imports but never deleted the extracted definitions — the
+  //     new modules are dead code duplicates.
+  if (createdCodeFiles.length > 0 && updatedCodeFiles.length > 0) {
+    for (const change of updatedCodeFiles) {
+      if (!change.content) continue;
+      const newLineCount = change.content.split('\n').length;
+
+      try {
+        const origResp = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
+        if (origResp.ok) {
+          const origData = await origResp.json() as { content?: string; encoding?: string };
+          if (origData.content && origData.encoding === 'base64') {
+            const originalContent = decodeBase64Utf8(origData.content);
+            const originalLineCount = originalContent.split('\n').length;
+
+            // For a meaningful file split, the source file should shrink by at least 10%
+            // relative to the total lines moved out (approximated by created files' content).
+            // Simple heuristic: if source didn't shrink by at least 10%, it's suspicious.
+            const shrinkage = originalLineCount - newLineCount;
+            const shrinkPercent = originalLineCount > 0 ? (shrinkage / originalLineCount) * 100 : 0;
+
+            if (shrinkPercent < 10 && originalLineCount > 100) {
+              const direction = newLineCount > originalLineCount ? 'GREW' : 'barely changed';
+              throw new Error(
+                `INCOMPLETE SPLIT blocked for "${change.path}": file ${direction} ` +
+                `(${originalLineCount} → ${newLineCount} lines, ${shrinkPercent.toFixed(0)}% reduction) ` +
+                `despite ${createdCodeFiles.length} new module(s) being created ` +
+                `(${createdCodeFiles.map(c => c.path).join(', ')}). ` +
+                `You added imports but NEVER DELETED the original definitions from the source file. ` +
+                `The extracted code (functions, components, constants) MUST be removed from "${change.path}" — ` +
+                `use patch action with find/replace to DELETE the definitions that were moved to new modules.`
+              );
+            }
+          }
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('INCOMPLETE SPLIT')) throw e;
+        console.log(`[github_create_pr] Could not check line count for "${change.path}": ${e}`);
+      }
+    }
+  }
+
   // 6. Net deletion ratio guard: block PRs where total deleted lines vastly exceed added lines.
   //    This catches the pattern where a bot "adds 5 destinations" but deletes 600+ lines.
   //    Only applies when there are update actions on code files (docs are exempt).
