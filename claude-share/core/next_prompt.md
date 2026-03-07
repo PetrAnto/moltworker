@@ -3,13 +3,18 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (/orch next watchdog audit + recovery fix)
 
 ---
 
 ## Current Task: Choose Next Direction
 
 ### Context
+
+
+### Operational Note (2026-03-07)
+
+A production `/orch next` run showed delayed auto-resume after provider disconnects. Watchdog logic now applies a faster threshold for orphaned processing tasks (`isRunning=false`) and includes a lifecycle regression test. Keep this behavior in mind when tuning resume settings.
 
 **Phase 5.1 Multi-Agent Review is COMPLETE!** Routes review phase to a different model for independent verification. Phase 7 also fully done.
 

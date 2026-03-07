@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (watchdog orphaned-task recovery fix + wrangler warning cleanup)
 
 ---
 
@@ -74,6 +74,12 @@
 | 5.1 | Multi-Agent Review — cross-family reviewer for independent verification (1458 tests) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-psdEX` |
 
 ---
+
+
+
+### Notes for Other Agents
+
+- 2026-03-07 (Codex): `/orch next` audit found long dead-time before watchdog resume when a processing task was orphaned (`isRunning=false`). Added a fast orphaned threshold in `TaskProcessor.alarmInner()` and a lifecycle regression test.
 
 ### Parallel Work Tracking
 

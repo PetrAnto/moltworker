@@ -721,4 +721,53 @@ describe('TaskProcessor lifecycle', () => {
       expect(taskPuts.length).toBeLessThanOrEqual(6);
     });
   });
+
+  describe('orphaned task recovery', () => {
+    it('should auto-resume orphaned processing task using fast threshold', async () => {
+      const mockState = createMockState();
+
+      // First API call after resume should complete immediately
+      vi.stubGlobal('fetch', buildApiResponses([
+        { content: 'Recovered and completed.' },
+      ]));
+
+      const processor = new TaskProcessorClass(mockState as never, {} as never);
+
+      // Seed storage with a "processing" task that has stale lastUpdate,
+      // but not stale enough for the old provider-aware threshold.
+      const now = Date.now();
+      await mockState.storage.put('task', {
+        taskId: 'test-task-1',
+        chatId: 12345,
+        userId: 'user-1',
+        modelAlias: 'deep',
+        messages: [
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'user', content: 'Continue.' },
+        ],
+        status: 'processing',
+        createdAt: now - 300000,
+        updatedAt: now - 300000,
+        startTime: now - 300000,
+        lastUpdate: now - 200000, // > orphaned threshold (180s), < old deepseek threshold (~432s)
+        autoResume: true,
+        autoResumeCount: 0,
+        toolsUsed: [],
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+        iterations: 0,
+        telegramToken: 'fake-token',
+        openrouterKey: 'fake-key',
+        deepseekKey: 'fake-deepseek-key',
+      });
+
+      await processor.alarm();
+
+      // alarm() should spawn a resume process via waitUntil
+      expect(mockState.waitUntil).toHaveBeenCalled();
+
+      await waitForStatus(mockState.storage, 'completed', 10000);
+    });
+  });
 });

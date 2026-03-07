@@ -303,6 +303,12 @@ const WATCHDOG_INTERVAL_MS = 90000;
 //   handle larger contexts and deserve more patience)
 const STUCK_THRESHOLD_FREE_MS = 150000;
 const STUCK_THRESHOLD_PAID_MS = 240000;
+// Faster crash recovery for orphaned processing tasks.
+// If the current DO instance is no longer running processTask() (isRunning=false)
+// but storage still says "processing", we should resume sooner than provider
+// max-idle thresholds to avoid long dead time after evictions/disconnects.
+const ORPHANED_TASK_RESUME_THRESHOLD_FREE_MS = 120000;
+const ORPHANED_TASK_RESUME_THRESHOLD_PAID_MS = 180000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max iterations per event before yielding to a fresh alarm event.
@@ -413,6 +419,16 @@ function getWatchdogStuckThreshold(modelAlias: string): number {
 
   // Stuck threshold must exceed max idle timeout + buffer to avoid false alarms
   return Math.max(baseThreshold * providerMultiplier, maxIdleTimeout + 60000);
+}
+
+/**
+ * Threshold for "orphaned" processing tasks (status=processing, isRunning=false).
+ * This case means the active loop died/was evicted, so waiting for the full
+ * provider-aware stuck threshold only delays recovery.
+ */
+function getOrphanedResumeThreshold(modelAlias: string): number {
+  const isPaidModel = getModel(modelAlias)?.isFree !== true;
+  return isPaidModel ? ORPHANED_TASK_RESUME_THRESHOLD_PAID_MS : ORPHANED_TASK_RESUME_THRESHOLD_FREE_MS;
 }
 
 /**
@@ -812,8 +828,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       ? Date.now() - this.lastHeartbeatMs
       : Infinity; // No heartbeat recorded → fall through to storage check
 
+    // Faster recovery for orphaned tasks: once the in-memory lock is gone
+    // (isRunning=false), use a shorter threshold to detect dead loops quickly.
+    const effectiveThreshold = Math.min(stuckThreshold, getOrphanedResumeThreshold(task.modelAlias));
+
     // If either the storage timestamp or in-memory heartbeat is recent, task is alive
-    if (timeSinceUpdate < stuckThreshold || timeSinceHeartbeat < stuckThreshold) {
+    if (timeSinceUpdate < effectiveThreshold || timeSinceHeartbeat < effectiveThreshold) {
       const source = timeSinceHeartbeat < timeSinceUpdate ? 'in-memory heartbeat' : 'storage lastUpdate';
       console.log(`[TaskProcessor] Task still active (${source}), rescheduling watchdog`);
       await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
