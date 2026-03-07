@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { TaskPhase } from './task-processor';
+import { estimateIterationActiveMs } from './task-processor';
 
 // Mock cloudflare:workers before importing TaskProcessor
 vi.mock('cloudflare:workers', () => ({
@@ -239,6 +240,16 @@ function buildApiResponses(responses: Array<{
 }
 
 // --- Tests ---
+
+describe('iteration active time accounting', () => {
+  it('subtracts sleep and API wall time from total iteration duration', () => {
+    expect(estimateIterationActiveMs(12000, 2000, 7000)).toBe(3000);
+  });
+
+  it('clamps negative results to zero', () => {
+    expect(estimateIterationActiveMs(4000, 2000, 5000)).toBe(0);
+  });
+});
 
 describe('TaskProcessor phases', () => {
   let TaskProcessorClass: typeof import('./task-processor').TaskProcessor;
