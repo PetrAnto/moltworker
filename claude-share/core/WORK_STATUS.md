@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (Orchestra stall/499 mitigation shipped by Codex)
 
 ---
 
@@ -80,7 +80,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | 5.1 Multi-Agent Review COMPLETE | `claude/execute-next-prompt-psdEX` | 2026-02-23 |
-| Codex | — | — | — |
+| Codex | Orchestra stall + Anthropic 499 mitigation | `work` | 2026-03-07 |
 | Other | — | — | — |
 
 ---
@@ -89,6 +89,7 @@
 
 | Task ID | Description | Completed By | Date | Branch |
 |---------|-------------|-------------|------|--------|
+| BUG-23 | Anthropic 499 disconnect loops on long /orch runs (implicit thinking + oversized streams) | Codex (GPT-5.2-Codex) | 2026-03-07 | `work` |
 | 0.1 | Enable Gemini Flash tool support | Previous PR | 2026-02-06 | main |
 | 0.2 | Add GPT-OSS-120B model | Claude Opus 4.6 | 2026-02-07 | `claude/analyze-tool-calling-5ee5w` |
 | 0.3 | Add GLM 4.7 model | Claude Opus 4.6 | 2026-02-07 | `claude/analyze-tool-calling-5ee5w` |

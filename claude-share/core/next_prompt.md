@@ -3,13 +3,15 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-07 (Orchestra stall/499 mitigation released)
 
 ---
 
 ## Current Task: Choose Next Direction
 
 ### Context
+
+**Fresh update (2026-03-07):** Codex shipped mitigation for `/orch` stall loops seen with Anthropic 499 disconnects (reduced Anthropic max output budget + no implicit thinking unless requested). Next session should validate with 3-5 real `/orch next` runs and compare latency/chunk counts before deciding on further fallback logic.
 
 **Phase 5.1 Multi-Agent Review is COMPLETE!** Routes review phase to a different model for independent verification. Phase 7 also fully done.
 
