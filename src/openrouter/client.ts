@@ -783,13 +783,17 @@ export class OpenRouterClient {
         messages: cachedMessages,
         max_tokens: options?.maxTokens || 4096,
         temperature: options?.temperature ?? 0.7,
-        tools: options?.tools,
-        tool_choice: options?.toolChoice ?? 'auto',
         stream: true,
         stream_options: { include_usage: true },
         transforms: [],
         plugins: [],
       };
+      // Only send tools/tool_choice when tools are provided — some models
+      // (e.g. Grok) reject tool_choice when no tools are defined
+      if (options?.tools && options.tools.length > 0) {
+        requestBody.tools = options.tools;
+        requestBody.tool_choice = options?.toolChoice ?? 'auto';
+      }
       if (reasoning) {
         requestBody.reasoning = reasoning;
       }
