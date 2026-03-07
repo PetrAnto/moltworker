@@ -404,7 +404,7 @@ function getWatchdogStuckThreshold(modelAlias: string): number {
   const providerMultiplier = provider === 'moonshot' ? 2.5
     : provider === 'deepseek' ? 1.8
     : provider === 'dashscope' ? 1.5
-    : provider === 'anthropic' ? 3.0
+    : provider === 'anthropic' ? 1.5 // Was 3.0 — reduced since keepAliveSleep keeps storage fresh during pacing
     : 1.0;
 
   const baseThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
@@ -1814,9 +1814,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             conversationMessages, task.toolsUsed, task.iterations,
             request.prompt, 'latest', false, task.phase, task.modelAlias
           );
-          // Store minimal task state (no messages) with yield flag
+          // Store minimal task state (no messages) with yield flag.
+          // Reset stall counter: CPU yield proves real work happened, so if the
+          // post-yield resume gets evicted, it shouldn't count against stall limit.
           task.lastUpdate = Date.now();
           task.yieldPending = true;
+          task.noProgressResumes = 0;
+          task.toolCountAtLastResume = task.toolsUsed.length;
           await this.doState.storage.put('task', taskForStorage(task));
           // Schedule immediate alarm for resume with fresh CPU budget
           await this.doState.storage.setAlarm(Date.now() + 100);
@@ -2163,11 +2167,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // synchronous callbacks get abandoned if the DO is evicted mid-stream.
               // setInterval fires between await points in the streaming parser,
               // keeping task.lastUpdate fresh in durable storage.
+              // 15s interval keeps the DO pinned via I/O — 55s was too long and
+              // allowed CF to evict the DO between flushes (499 client disconnect).
               const streamingFlushInterval = setInterval(() => {
                 task.lastUpdate = Date.now();
                 this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
                 console.log(`[TaskProcessor] Streaming storage flush (${directProgressCount} chunks so far)`);
-              }, 55000);
+              }, 15000);
 
               try {
                 if (provider === 'anthropic') {
