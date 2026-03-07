@@ -307,6 +307,11 @@ const WATCHDOG_INTERVAL_MS = 90000;
 //   handle larger contexts and deserve more patience)
 const STUCK_THRESHOLD_FREE_MS = 150000;
 const STUCK_THRESHOLD_PAID_MS = 240000;
+// Orphaned task threshold: when isRunning=false (DO was evicted), we KNOW the
+// processing loop is dead. No need to wait the full provider-aware threshold
+// — resume faster. Must still exceed one watchdog interval to avoid races.
+const ORPHANED_THRESHOLD_FREE_MS = 120000;
+const ORPHANED_THRESHOLD_PAID_MS = 180000;
 // Save checkpoint every N tools (more frequent = less lost progress on crash)
 const CHECKPOINT_EVERY_N_TOOLS = 3;
 // Max iterations per event before yielding to a fresh alarm event.
@@ -830,11 +835,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     const timeSinceUpdate = Date.now() - task.lastUpdate;
-    // If the task was streaming when storage was last updated, use a shorter
-    // threshold — stream eviction is detectable faster because the 15s flush
-    // means lastUpdate goes stale quickly after eviction.
+    // Use shorter threshold when we can prove the loop is dead:
+    // - isStreaming: 15s flush means lastUpdate goes stale quickly after eviction → 90s
+    // - isRunning=false checked below: DO was evicted → use orphaned threshold
     const baseThreshold = getWatchdogStuckThreshold(task.modelAlias);
-    const stuckThreshold = task.isStreaming ? Math.min(baseThreshold, 90_000) : baseThreshold;
+    const orphanedThreshold = (getModel(task.modelAlias)?.isFree !== true)
+      ? ORPHANED_THRESHOLD_PAID_MS : ORPHANED_THRESHOLD_FREE_MS;
+    const stuckThreshold = task.isStreaming
+      ? Math.min(baseThreshold, 90_000)
+      : Math.min(baseThreshold, orphanedThreshold);
     const elapsedMs = Date.now() - task.startTime;
     const elapsed = Math.round(elapsedMs / 1000);
     console.log(`[TaskProcessor] Time since last update: ${timeSinceUpdate}ms, elapsed: ${elapsed}s (threshold: ${stuckThreshold / 1000}s${task.isStreaming ? ', streaming' : ''})`);
@@ -1885,6 +1894,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         const iterStartTime = Date.now();
         let iterSleepMs = 0; // Track time spent sleeping (pacing, rate limit waits)
+        let iterApiWallMs = 0; // Track time spent waiting on API (streaming is not CPU work)
         console.log(`[TaskProcessor] Iteration ${task.iterations} START - tools: ${task.toolsUsed.length}, messages: ${conversationMessages.length}`);
 
         // Note: Checkpoint is saved after tool execution, not before API call
@@ -2053,6 +2063,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         let reasoningOverride: ReturnType<typeof buildFallbackReasoningParam> | undefined;
 
         for (let attempt = 1; attempt <= MAX_API_RETRIES; attempt++) {
+          const apiCallStart = Date.now();
           try {
             console.log(`[TaskProcessor] Starting API call (attempt ${attempt}/${MAX_API_RETRIES})...`);
 
@@ -2159,6 +2170,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 }
               }
 
+              // Start heartbeat BEFORE fetch — covers TTFT blind spot where
+              // watchdog sees stale lastUpdate during 10-30s wait for first byte.
+              const preFetchHeartbeat = setInterval(() => {
+                task.lastUpdate = Date.now();
+                this.lastHeartbeatMs = Date.now();
+                this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
+              }, 15000);
+
               let response: Response;
               try {
                 response = await fetch(providerConfig.baseUrl, {
@@ -2167,10 +2186,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   body: JSON.stringify(requestBody),
                   signal: abortController.signal,
                 });
+                // Clear connect timeout after headers arrive — don't kill active streams
                 clearTimeout(fetchTimeout);
                 console.log(`[TaskProcessor] ${provider} streaming response: ${response.status}`);
               } catch (fetchError) {
                 clearTimeout(fetchTimeout);
+                clearInterval(preFetchHeartbeat);
                 if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
                   throw new Error(`${provider} API timeout (${Math.round((idleTimeout + 30000) / 1000)}s) — connection aborted`);
                 }
@@ -2178,14 +2199,18 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               }
 
               if (!response.ok) {
+                clearInterval(preFetchHeartbeat);
                 const errorText = await response.text().catch(() => 'unknown error');
                 const providerErr = parseProviderError(response.status, errorText);
                 throw new Error(`${provider} API error (${providerErr.status}): ${providerErr.message}`);
               }
 
               if (!response.body) {
+                clearInterval(preFetchHeartbeat);
                 throw new Error(`${provider} API returned no response body`);
               }
+              // Pre-fetch heartbeat no longer needed — streaming flush takes over
+              clearInterval(preFetchHeartbeat);
 
               // Parse SSE stream — Anthropic uses different event format
               let directProgressCount = 0;
@@ -2217,6 +2242,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 console.log(`[TaskProcessor] Streaming storage flush (${directProgressCount} chunks so far)`);
               }, 15000);
 
+              // Hard stream timeout — prevents runaway streams that keep dribbling
+              // tiny chunks for minutes. Max 5 min (or 3× idle timeout, whichever is larger).
+              const hardStreamTimeoutMs = Math.min(Math.max(idleTimeout * 3, 180_000), 300_000);
+              const hardStreamTimeout = setTimeout(() => {
+                console.log(`[TaskProcessor] Hard stream timeout (${Math.round(hardStreamTimeoutMs / 1000)}s) — aborting`);
+                abortController.abort();
+              }, hardStreamTimeoutMs);
+
               try {
                 if (provider === 'anthropic') {
                   result = await parseAnthropicSSEStream(
@@ -2230,6 +2263,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   );
                 }
               } finally {
+                clearTimeout(hardStreamTimeout);
                 clearInterval(streamingFlushInterval);
                 task.isStreaming = false;
               }
@@ -2325,6 +2359,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               continue;
             }
             // All retries exhausted — don't throw yet, try model rotation below
+          } finally {
+            // Track API wall time (streaming wait is NOT CPU work)
+            iterApiWallMs += Math.max(0, Date.now() - apiCallStart);
           }
         }
 
@@ -2868,8 +2905,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
 
           const iterDurationMs = Date.now() - iterStartTime;
-          const iterActiveMs = Math.max(0, iterDurationMs - iterSleepMs);
-          console.log(`[TaskProcessor] Iteration ${task.iterations} COMPLETE - total time: ${iterDurationMs}ms (active: ${iterActiveMs}ms)`);
+          const iterActiveMs = Math.max(0, iterDurationMs - iterSleepMs - iterApiWallMs);
+          console.log(`[TaskProcessor] Iteration ${task.iterations} COMPLETE - total time: ${iterDurationMs}ms (active: ${iterActiveMs}ms, api: ${iterApiWallMs}ms)`);
 
           // Accumulate active time for CPU budget tracking (excludes pacing sleeps)
           cumulativeActiveMs += iterActiveMs;
