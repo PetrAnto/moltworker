@@ -2022,7 +2022,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // Non-OpenRouter providers: use SSE streaming
               // This prevents DO termination during long API calls
               const abortController = new AbortController();
-              const fetchTimeout = setTimeout(() => abortController.abort(), idleTimeout + 30000);
+              // Two timeout layers:
+              // 1) Connect timeout: fail if headers never arrive
+              // 2) Hard stream cap: prevent endless streams from running for tens of minutes
+              //    when a provider keeps dribbling tiny chunks (or synthetic keepalives)
+              //    without making real progress.
+              const connectTimeout = setTimeout(() => abortController.abort(), idleTimeout + 30000);
+              const hardStreamTimeoutMs = Math.min(Math.max(idleTimeout * 3, 180000), 420000);
+              const hardStreamTimeout = setTimeout(() => abortController.abort(), hardStreamTimeoutMs);
 
               // Inject cache_control on system messages for Anthropic models (prompt caching)
               const sanitized = sanitizeMessages(conversationMessages);
@@ -2085,10 +2092,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   body: JSON.stringify(requestBody),
                   signal: abortController.signal,
                 });
-                clearTimeout(fetchTimeout);
+                clearTimeout(connectTimeout);
                 console.log(`[TaskProcessor] ${provider} streaming response: ${response.status}`);
               } catch (fetchError) {
-                clearTimeout(fetchTimeout);
+                clearTimeout(connectTimeout);
+                clearTimeout(hardStreamTimeout);
                 if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
                   throw new Error(`${provider} API timeout (${Math.round((idleTimeout + 30000) / 1000)}s) — connection aborted`);
                 }
@@ -2140,6 +2148,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 }
               } finally {
                 clearInterval(streamingFlushInterval);
+                clearTimeout(hardStreamTimeout);
               }
 
               console.log(`[TaskProcessor] ${provider} streaming complete: ${directProgressCount} chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);
@@ -2168,6 +2177,18 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 continue;
               }
               console.log('[TaskProcessor] 429 rate limit retries exhausted — failing');
+              break;
+            }
+
+            // 499 client disconnected (Anthropic edge) — transient transport issue.
+            // Retry quickly; for free models this can also trigger rotation below.
+            if (/\b499\b/.test(lastError.message) || /client disconnected/i.test(lastError.message)) {
+              if (attempt < MAX_API_RETRIES) {
+                console.log('[TaskProcessor] Upstream client_disconnect (499) — retrying in 2 seconds');
+                await new Promise(r => setTimeout(r, 2000));
+                continue;
+              }
+              console.log('[TaskProcessor] Upstream client_disconnect retries exhausted');
               break;
             }
 
@@ -2240,7 +2261,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // If API call failed after all retries, try rotating to another free model
         if (!result && lastError) {
-          const isRateLimited = /429|503|rate.?limit|overloaded|capacity|busy/i.test(lastError.message);
+          const isRateLimited = /429|499|503|rate.?limit|overloaded|capacity|busy|client disconnected/i.test(lastError.message);
           const isQuotaExceeded = /\b402\b/.test(lastError.message);
           const isModelGone = /\b404\b/.test(lastError.message);
           const isContentFilter = /inappropriate.?content|data_inspection_failed/i.test(lastError.message);

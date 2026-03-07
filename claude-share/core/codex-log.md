@@ -5,6 +5,40 @@
 ---
 
 
+
+## Session: 2026-03-07 | Orchestra stall audit + 499 resilience fix (Session: codex-orch-stall-499-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Audited `/orch next` failure logs showing repeated auto-resume loops and Anthropic 499 disconnects, then hardened TaskProcessor retry/timeout handling to fail faster and rotate free models on transport disconnects.
+
+### Changes Made
+- Added direct-provider hard stream cap timeout (in addition to connect timeout) to prevent very long endless streaming runs
+- Added explicit 499/client-disconnect retry branch in API error handling
+- Included 499/client disconnected in free-model rotation triggers
+- Added regression test to verify free-model rotation on 499 responses
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Targeted tests pass (`task-processor.test.ts`)
+- [x] Full test suite pass (`npm test`)
+- [x] Typecheck pass (`npm run typecheck`)
+
+### Notes for Next Session
+Validate in production logs whether 499 rotation reduces stall frequency for `/sonnet` orchestra runs; if long streaming still occurs, add semantic-progress watchdog (e.g., tool/output delta) beyond chunk heartbeat.
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)
