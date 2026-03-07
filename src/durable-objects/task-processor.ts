@@ -257,6 +257,10 @@ interface TaskState {
   // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
   // The alarm handler resumes immediately without stall detection or auto-resume counting.
   yieldPending?: boolean;
+  // Set true when an API streaming response is in progress.
+  // If watchdog finds isStreaming=true but isRunning=false, the DO was evicted mid-stream
+  // — resume faster (90s) and don't count as a model stall.
+  isStreaming?: boolean;
 }
 
 // Task request from the worker
@@ -351,7 +355,21 @@ const MAX_TOTAL_TOOLS_PAID = 100;
  */
 function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & { messages: never[] } {
   const { messages: _msgs, workPhaseContent: _wpc, structuredPlan: _sp, ...rest } = task;
-  return { ...rest, messages: [] as never[] };
+  const result = { ...rest, messages: [] as never[] };
+  // Guard against 128KB DO storage limit — truncate growable arrays if needed
+  const MAX_DO_VALUE_BYTES = 131072;
+  const serialized = JSON.stringify(result);
+  if (serialized.length > MAX_DO_VALUE_BYTES * 0.8) {
+    console.log(`[TaskProcessor] WARNING: task storage near limit (${serialized.length} bytes), trimming arrays`);
+    // Trim the largest growable arrays to fit
+    if (result.toolSignatures && result.toolSignatures.length > 20) {
+      result.toolSignatures = result.toolSignatures.slice(-20);
+    }
+    if (result.lastToolErrors && result.lastToolErrors.length > 3) {
+      result.lastToolErrors = result.lastToolErrors.slice(-3);
+    }
+  }
+  return result;
 }
 
 /** Get the auto-resume limit based on model cost */
@@ -812,10 +830,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     const timeSinceUpdate = Date.now() - task.lastUpdate;
-    const stuckThreshold = getWatchdogStuckThreshold(task.modelAlias);
+    // If the task was streaming when storage was last updated, use a shorter
+    // threshold — stream eviction is detectable faster because the 15s flush
+    // means lastUpdate goes stale quickly after eviction.
+    const baseThreshold = getWatchdogStuckThreshold(task.modelAlias);
+    const stuckThreshold = task.isStreaming ? Math.min(baseThreshold, 90_000) : baseThreshold;
     const elapsedMs = Date.now() - task.startTime;
     const elapsed = Math.round(elapsedMs / 1000);
-    console.log(`[TaskProcessor] Time since last update: ${timeSinceUpdate}ms, elapsed: ${elapsed}s (threshold: ${stuckThreshold / 1000}s)`);
+    console.log(`[TaskProcessor] Time since last update: ${timeSinceUpdate}ms, elapsed: ${elapsed}s (threshold: ${stuckThreshold / 1000}s${task.isStreaming ? ', streaming' : ''})`);
 
     // In-memory execution lock: if processTask() is still running in this DO instance,
     // the task is NOT stuck — it's just waiting on a slow external API call (await yields
@@ -841,9 +863,17 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       return;
     }
 
-    // Task appears stuck - DO was evicted/crashed (isRunning is false because
-    // in-memory state was lost), and lastUpdate is stale.
-    console.log('[TaskProcessor] Task appears stuck (isRunning=false, no recent updates)');
+    // Distinguish stream eviction from true stuck state.
+    // If isStreaming=true in storage but isRunning=false, the DO was evicted mid-stream
+    // (Anthropic sees 499 "Client disconnected"). This is infrastructure failure, not model
+    // failure — don't count as a stall and resume faster.
+    const wasStreamingWhenEvicted = task.isStreaming === true;
+    if (wasStreamingWhenEvicted) {
+      console.log('[TaskProcessor] DO evicted mid-stream (isStreaming=true, isRunning=false)');
+      task.isStreaming = false; // Clear for next resume
+    } else {
+      console.log('[TaskProcessor] Task appears stuck (isRunning=false, no recent updates)');
+    }
 
     // Delete stale status message if it exists
     if (task.telegramToken && task.statusMessageId) {
@@ -863,6 +893,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // 1. Raw tool count: no new tool calls at all → obvious stall
       // 2. Tool signature dedup: new tool calls, but all are duplicates of previous
       //    calls → model is spinning (re-calling get_weather("Prague") each resume)
+      // Stream evictions are NOT stalls — the model was actively producing output.
       const toolCountNow = task.toolsUsed.length;
       const toolCountAtLastResume = task.toolCountAtLastResume ?? 0;
       const newTools = toolCountNow - toolCountAtLastResume;
@@ -891,7 +922,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         task.lastCompressionToolCount = 0;
       }
 
-      if ((newTools === 0 || allNewToolsDuplicate) && resumeCount > 0) {
+      if ((newTools === 0 || allNewToolsDuplicate) && resumeCount > 0 && !wasStreamingWhenEvicted) {
         noProgressResumes++;
         const reason = allNewToolsDuplicate ? 'duplicate tools' : 'no new tools';
         console.log(`[TaskProcessor] No real progress since last resume: ${reason} (stall ${noProgressResumes}/${MAX_NO_PROGRESS_RESUMES})`);
@@ -2032,10 +2063,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               // Use streaming with progress callback for heartbeat
               let progressCount = 0;
+              task.isStreaming = true;
+              task.lastUpdate = Date.now();
+              await this.doState.storage.put('task', taskForStorage(task));
               const orFlushInterval = setInterval(() => {
                 task.lastUpdate = Date.now();
                 this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
-              }, 55000);
+              }, 15000);
               try {
                 result = await client.chatCompletionStreamingWithTools(
                   task.modelAlias, // Pass alias - method will resolve to model ID (supports rotation)
@@ -2060,6 +2094,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 );
               } finally {
                 clearInterval(orFlushInterval);
+                task.isStreaming = false;
               }
 
               console.log(`[TaskProcessor] Streaming completed: ${progressCount} total chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);
@@ -2162,6 +2197,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 }
               };
 
+              // Mark streaming in storage so watchdog can distinguish
+              // "evicted mid-stream" from "model stuck" — enables faster detection
+              // and smarter stall handling (stream eviction ≠ model failure).
+              task.isStreaming = true;
+              task.lastUpdate = Date.now();
+              await this.doState.storage.put('task', taskForStorage(task));
+
               // Periodic storage flush during long streaming — uses setInterval
               // instead of in-callback storage.put() because unawaited puts from
               // synchronous callbacks get abandoned if the DO is evicted mid-stream.
@@ -2189,6 +2231,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 }
               } finally {
                 clearInterval(streamingFlushInterval);
+                task.isStreaming = false;
               }
 
               console.log(`[TaskProcessor] ${provider} streaming complete: ${directProgressCount} chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);
