@@ -19,6 +19,15 @@ import type { ReasoningParam } from './models';
 
 // --- Request conversion ---
 
+/**
+ * Sanitize a tool ID to match Anthropic's required pattern: ^[a-zA-Z0-9_-]+$
+ * OpenRouter and other providers may generate IDs with dots, colons, or other
+ * characters that Anthropic rejects. Replace invalid chars with underscores.
+ */
+function sanitizeToolId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 interface AnthropicMessage {
   role: 'user' | 'assistant';
   content: string | AnthropicContentBlock[];
@@ -148,7 +157,7 @@ function convertMessages(messages: ChatMessage[]): AnthropicMessage[] {
           }
           blocks.push({
             type: 'tool_use',
-            id: tc.id,
+            id: sanitizeToolId(tc.id),
             name: tc.function.name,
             input,
           });
@@ -166,7 +175,7 @@ function convertMessages(messages: ChatMessage[]): AnthropicMessage[] {
       // Tool results become user messages with tool_result content blocks
       const block: AnthropicContentBlock = {
         type: 'tool_result',
-        tool_use_id: msg.tool_call_id || '',
+        tool_use_id: sanitizeToolId(msg.tool_call_id || ''),
         content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
       };
 
