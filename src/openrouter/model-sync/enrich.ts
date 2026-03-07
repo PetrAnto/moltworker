@@ -80,6 +80,10 @@ export function computeOrchestraReady(
   // Image gen models are never orchestra-ready
   if (model.isImageGen) return false;
 
+  // Codex models support tools in metadata but don't use them in practice
+  // (they output code/plans as text instead of making function calls)
+  if (/codex/i.test(model.id)) return false;
+
   // Context must be >= 64K
   if ((model.maxContext || 0) < 64000) return false;
 

@@ -89,6 +89,17 @@ describe('computeOrchestraReady', () => {
     expect(computeOrchestraReady(model)).toBe(false);
   });
 
+  it('rejects codex models even with good benchmarks', () => {
+    const model = makeModel({
+      id: 'openai/gpt-5.1-codex-mini-2025-11-13',
+      supportsTools: true,
+      maxContext: 200000,
+      name: 'GPT-5.1 Codex Mini',
+    });
+    const aa = makeAAData({ codingScore: 60, intelligenceIndex: 50 });
+    expect(computeOrchestraReady(model, aa)).toBe(false);
+  });
+
   it('rejects models with low AA scores and no heuristic match', () => {
     const model = makeModel({
       id: 'unknown/weak-model',
