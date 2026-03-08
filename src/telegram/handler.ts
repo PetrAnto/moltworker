@@ -1700,12 +1700,19 @@ export class TelegramHandler {
         const paidModels = ranked.filter(r => !r.isFree);
         const freeModels = ranked.filter(r => r.isFree);
 
+        // Format model line with value indicator
+        const fmtModel = (r: typeof ranked[0], showCost: boolean) => {
+          const bar = r.confidence >= 80 ? '🟩' : r.confidence >= 50 ? '🟨' : '🟥';
+          const value = r.valueTier === 'best' ? ' ⚡' : r.valueTier === 'premium' ? ' 💎' : '';
+          const cost = showCost ? ` (${r.cost})` : '';
+          const hl = r.highlights ? ` · ${r.highlights}` : '';
+          return `${bar} ${r.confidence}% /${r.alias}${cost}${hl}${value}`;
+        };
+
         if (paidModels.length > 0) {
-          lines.push('💰 **Paid models:**');
+          lines.push('💰 **Paid models** _(⚡=best value, 💎=premium)_:');
           for (const r of paidModels.slice(0, MAX_PAID)) {
-            const bar = r.confidence >= 80 ? '🟩' : r.confidence >= 50 ? '🟨' : '🟥';
-            const hl = r.highlights ? ` ${r.highlights}` : '';
-            lines.push(`${bar} ${r.confidence}% /${r.alias} (${r.cost}) — ${r.name} ${hl}`);
+            lines.push(fmtModel(r, true));
           }
           if (paidModels.length > MAX_PAID) {
             lines.push(`   _+${paidModels.length - MAX_PAID} more_`);
@@ -1716,9 +1723,7 @@ export class TelegramHandler {
         if (freeModels.length > 0) {
           lines.push('🆓 **Free models:**');
           for (const r of freeModels.slice(0, MAX_FREE)) {
-            const bar = r.confidence >= 80 ? '🟩' : r.confidence >= 50 ? '🟨' : '🟥';
-            const hl = r.highlights ? ` ${r.highlights}` : '';
-            lines.push(`${bar} ${r.confidence}% /${r.alias} — ${r.name} ${hl}`);
+            lines.push(fmtModel(r, false));
           }
           if (freeModels.length > MAX_FREE) {
             lines.push(`   _+${freeModels.length - MAX_FREE} more_`);
