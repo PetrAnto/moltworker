@@ -319,7 +319,7 @@ export async function parseAnthropicSSEStream(
   idleTimeoutMs = 45000,
   onProgress?: () => void,
   onToolCallReady?: (toolCall: ToolCall) => void,
-  onKeepAlive?: () => Promise<void>,
+  onKeepAlive?: () => Promise<boolean>,
 ): Promise<{
   choices: Array<{
     message: {
@@ -397,11 +397,15 @@ export async function parseAnthropicSSEStream(
       chunksReceived++;
       if (onProgress) onProgress();
 
-      // Awaited keepalive I/O — keeps DO pinned by performing real I/O in the
-      // main execution flow, not a fire-and-forget setInterval side-channel.
+      // Periodic keepalive — returns false to signal graceful stream split.
       if (onKeepAlive && Date.now() - lastKeepAliveMs >= 10_000) {
-        await onKeepAlive();
+        const shouldContinue = await onKeepAlive();
         lastKeepAliveMs = Date.now();
+        if (!shouldContinue) {
+          console.log(`[parseAnthropicSSE] Stream split after ${chunksReceived} chunks, content: ${content.length} chars`);
+          finishReason = 'stream_split';
+          break;
+        }
       }
 
       buffer += decoder.decode(value, { stream: true });
@@ -522,6 +526,28 @@ export async function parseAnthropicSSEStream(
     throw err;
   }
 
+  // On stream split, finalize any in-progress tool call and filter
+  // tool calls with incomplete JSON arguments (truncated mid-stream).
+  let validToolCalls = [...toolCalls];
+  if (finishReason === 'stream_split') {
+    // Finalize in-progress tool call (may have incomplete args)
+    if (currentBlockType === 'tool_use' && currentToolCallId) {
+      validToolCalls.push({
+        id: currentToolCallId,
+        type: 'function',
+        function: { name: currentToolCallName, arguments: currentToolCallArgs },
+      });
+    }
+    const before = validToolCalls.length;
+    validToolCalls = validToolCalls.filter(tc => {
+      if (!tc.id || !tc.function.name) return false;
+      try { JSON.parse(tc.function.arguments); return true; } catch { return false; }
+    });
+    if (validToolCalls.length < before) {
+      console.log(`[parseAnthropicSSE] Filtered ${before - validToolCalls.length} incomplete tool calls after stream split`);
+    }
+  }
+
   const message: {
     role: string;
     content: string | null;
@@ -530,14 +556,14 @@ export async function parseAnthropicSSEStream(
   } = {
     role: 'assistant',
     content: content || null,
-    tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+    tool_calls: validToolCalls.length > 0 ? validToolCalls : undefined,
   };
 
   if (reasoningContent) {
     message.reasoning_content = reasoningContent;
   }
 
-  console.log(`[parseAnthropicSSE] Complete: ${chunksReceived} chunks, content: ${content.length} chars, tools: ${toolCalls.length}${model ? `, model: ${model}` : ''}`);
+  console.log(`[parseAnthropicSSE] Complete: ${chunksReceived} chunks, content: ${content.length} chars, tools: ${validToolCalls.length}${finishReason === 'stream_split' ? ' (split)' : ''}${model ? `, model: ${model}` : ''}`);
 
   return {
     choices: [{ message, finish_reason: finishReason }],

@@ -79,7 +79,7 @@ export async function parseSSEStream(
   idleTimeoutMs = 45000,
   onProgress?: () => void,
   onToolCallReady?: (toolCall: ToolCall) => void,
-  onKeepAlive?: () => Promise<void>,
+  onKeepAlive?: () => Promise<boolean>,
 ): Promise<ChatCompletionResponse> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -131,12 +131,18 @@ export async function parseSSEStream(
       chunksReceived++;
       if (onProgress) onProgress();
 
-      // Awaited keepalive I/O — keeps DO pinned by performing real I/O in the
-      // main execution flow, not a fire-and-forget setInterval side-channel.
-      // 10s interval is well within CF's ~55s idle eviction threshold.
+      // Periodic keepalive — returns false to signal graceful stream split.
+      // When the DO has been streaming too long, the caller signals stop to
+      // prevent CF infrastructure eviction. We return whatever accumulated
+      // so far (partial response) and the caller continues in the next iteration.
       if (onKeepAlive && Date.now() - lastKeepAliveMs >= 10_000) {
-        await onKeepAlive();
+        const shouldContinue = await onKeepAlive();
         lastKeepAliveMs = Date.now();
+        if (!shouldContinue) {
+          console.log(`[parseSSEStream] Stream split after ${chunksReceived} chunks, content: ${content.length} chars`);
+          finishReason = 'stream_split';
+          break;
+        }
       }
 
       buffer += decoder.decode(value, { stream: true });
@@ -271,18 +277,30 @@ export async function parseSSEStream(
     throw err;
   }
 
+  // Filter tool calls: remove undefined entries and, on stream split,
+  // discard tool calls with incomplete JSON arguments (truncated mid-stream).
+  let validToolCalls = toolCalls.filter((tc): tc is ToolCall => tc !== undefined);
+  if (finishReason === 'stream_split' && validToolCalls.length > 0) {
+    const before = validToolCalls.length;
+    validToolCalls = validToolCalls.filter(tc => {
+      if (!tc.id || !tc.function.name) return false;
+      try { JSON.parse(tc.function.arguments); return true; } catch { return false; }
+    });
+    if (validToolCalls.length < before) {
+      console.log(`[parseSSEStream] Filtered ${before - validToolCalls.length} incomplete tool calls after stream split`);
+    }
+  }
+
   const message: ChatCompletionResponse['choices'][0]['message'] = {
     role: 'assistant',
     content: content || null,
-    tool_calls: toolCalls.length > 0
-      ? toolCalls.filter((tc): tc is ToolCall => tc !== undefined)
-      : undefined,
+    tool_calls: validToolCalls.length > 0 ? validToolCalls : undefined,
   };
   if (reasoningContent) {
     message.reasoning_content = reasoningContent;
   }
 
-  console.log(`[parseSSEStream] Complete: ${chunksReceived} chunks, content: ${content.length} chars, tools: ${toolCalls.length}${created ? `, model: ${model}` : ''}`);
+  console.log(`[parseSSEStream] Complete: ${chunksReceived} chunks, content: ${content.length} chars, tools: ${validToolCalls.length}${finishReason === 'stream_split' ? ' (split)' : ''}${created ? `, model: ${model}` : ''}`);
 
   return {
     id: id || `stream-${Date.now()}`,
@@ -762,7 +780,7 @@ export class OpenRouterClient {
       idleTimeoutMs?: number;
       onProgress?: () => void; // Called when chunks received - use for heartbeat
       onToolCallReady?: (toolCall: ToolCall) => void; // 7B.1: Called when a tool_call is complete during streaming
-      onKeepAlive?: () => Promise<void>; // Awaited periodic I/O to prevent DO eviction
+      onKeepAlive?: () => Promise<boolean>; // Returns false to gracefully split the stream
       reasoningLevel?: ReasoningLevel;
       responseFormat?: ResponseFormat;
       modelIdOverride?: string; // Override model ID (e.g. for rerouting Anthropic via OpenRouter)

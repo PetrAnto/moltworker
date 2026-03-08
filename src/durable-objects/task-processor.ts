@@ -350,6 +350,15 @@ const MAX_TOTAL_TOOLS_FREE = 50;
 const MAX_TOTAL_TOOLS_PAID = 100;
 
 /**
+ * Stream split timeout: gracefully stop reading the SSE stream after this
+ * duration and return whatever accumulated so far. CF evicts DOs during long
+ * streams regardless of keepalive I/O — this controlled split prevents
+ * uncontrolled eviction and lost work. The model continues in the next
+ * iteration with the partial results.
+ */
+const STREAM_SPLIT_TIMEOUT_MS = 90_000;
+
+/**
  * Create a storage-safe copy of TaskState by stripping large transient fields.
  * Messages are stored in R2 checkpoints — keeping them in DO storage too
  * causes the value to exceed CF's 128KB storage.put() limit once context
@@ -2081,6 +2090,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               task.isStreaming = true;
               task.lastUpdate = Date.now();
               await this.doState.storage.put('task', taskForStorage(task));
+              const streamStartMs = Date.now();
 
               // Hard stream timeout for OpenRouter — same as direct API path.
               // Prevents runaway streams that keep dribbling chunks.
@@ -2106,14 +2116,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                         }
                       },
                       onToolCallReady: useTools ? specExec.onToolCallReady : undefined,
-                      // Awaited keepalive: storage.put() in the main execution flow
-                      // prevents CF from evicting the DO during long streams.
-                      // Unlike the old setInterval approach, this is awaited I/O that
-                      // CF definitively counts as activity.
+                      // Keepalive + stream split: update storage periodically to keep
+                      // watchdog happy, and signal graceful stop after STREAM_SPLIT_TIMEOUT_MS.
+                      // CF evicts DOs during long streams regardless of I/O — this controlled
+                      // split returns partial results before eviction can happen.
                       onKeepAlive: async () => {
                         task.lastUpdate = Date.now();
                         await this.doState.storage.put('task', taskForStorage(task));
-                        console.log(`[TaskProcessor] Streaming keepalive (${progressCount} chunks so far)`);
+                        const elapsed = Date.now() - streamStartMs;
+                        console.log(`[TaskProcessor] Streaming keepalive (${progressCount} chunks, ${Math.round(elapsed / 1000)}s)`);
+                        return elapsed < STREAM_SPLIT_TIMEOUT_MS;
                       },
                     }
                   ),
@@ -2245,16 +2257,18 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               task.isStreaming = true;
               task.lastUpdate = Date.now();
               await this.doState.storage.put('task', taskForStorage(task));
+              const directStreamStartMs = Date.now();
 
-              // Awaited keepalive callback — called by the SSE parser every ~10s.
-              // Unlike the old setInterval + fire-and-forget storage.put(), this is
-              // awaited I/O in the main execution flow, which CF definitively counts
-              // as activity. The old approach used unawaited puts that CF could ignore,
-              // leading to DO evictions during long streams (499 client disconnect).
-              const onKeepAlive = async () => {
+              // Keepalive + stream split: update storage periodically and signal
+              // graceful stop after STREAM_SPLIT_TIMEOUT_MS. CF evicts DOs during
+              // long streams regardless of I/O — this controlled split returns
+              // partial results before eviction can happen.
+              const onKeepAlive = async (): Promise<boolean> => {
                 task.lastUpdate = Date.now();
                 await this.doState.storage.put('task', taskForStorage(task));
-                console.log(`[TaskProcessor] Streaming keepalive (${directProgressCount} chunks so far)`);
+                const elapsed = Date.now() - directStreamStartMs;
+                console.log(`[TaskProcessor] Streaming keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s)`);
+                return elapsed < STREAM_SPLIT_TIMEOUT_MS;
               };
 
               // Hard stream timeout — prevents runaway streams that keep dribbling
@@ -2536,6 +2550,33 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             });
             continue;
           }
+        }
+
+        // Handle stream_split — the stream was gracefully stopped before CF could
+        // evict the DO. The parser already filtered incomplete tool calls. If there
+        // are valid complete tool calls, process them normally (they'll be executed
+        // below). If there are none, nudge the model to continue.
+        if (choice.finish_reason === 'stream_split') {
+          console.log(`[TaskProcessor] Stream split — ` +
+            `content: ${(choice.message.content || '').length} chars, ` +
+            `tools: ${choice.message.tool_calls?.length ?? 0}`);
+
+          if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
+            // No complete tool calls — add partial text and nudge to continue
+            if (choice.message.content) {
+              conversationMessages.push({
+                role: 'assistant',
+                content: choice.message.content,
+              });
+            }
+            conversationMessages.push({
+              role: 'user',
+              content: '[Your response was interrupted by a streaming timeout. Continue exactly where you left off. If you were about to call a tool, call it now.]',
+            });
+            continue;
+          }
+          // Has complete tool calls — fall through to normal tool execution below.
+          // The model will see the results and continue naturally in the next iteration.
         }
 
         // Phase transition: plan → work after first model response
