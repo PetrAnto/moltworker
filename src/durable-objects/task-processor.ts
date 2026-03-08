@@ -2081,10 +2081,6 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               task.isStreaming = true;
               task.lastUpdate = Date.now();
               await this.doState.storage.put('task', taskForStorage(task));
-              const orFlushInterval = setInterval(() => {
-                task.lastUpdate = Date.now();
-                this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
-              }, 15000);
 
               // Hard stream timeout for OpenRouter — same as direct API path.
               // Prevents runaway streams that keep dribbling chunks.
@@ -2110,6 +2106,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                         }
                       },
                       onToolCallReady: useTools ? specExec.onToolCallReady : undefined,
+                      // Awaited keepalive: storage.put() in the main execution flow
+                      // prevents CF from evicting the DO during long streams.
+                      // Unlike the old setInterval approach, this is awaited I/O that
+                      // CF definitively counts as activity.
+                      onKeepAlive: async () => {
+                        task.lastUpdate = Date.now();
+                        await this.doState.storage.put('task', taskForStorage(task));
+                        console.log(`[TaskProcessor] Streaming keepalive (${progressCount} chunks so far)`);
+                      },
                     }
                   ),
                   new Promise<never>((_, reject) =>
@@ -2117,7 +2122,6 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   ),
                 ]);
               } finally {
-                clearInterval(orFlushInterval);
                 task.isStreaming = false;
               }
 
@@ -2242,18 +2246,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               task.lastUpdate = Date.now();
               await this.doState.storage.put('task', taskForStorage(task));
 
-              // Periodic storage flush during long streaming — uses setInterval
-              // instead of in-callback storage.put() because unawaited puts from
-              // synchronous callbacks get abandoned if the DO is evicted mid-stream.
-              // setInterval fires between await points in the streaming parser,
-              // keeping task.lastUpdate fresh in durable storage.
-              // 15s interval keeps the DO pinned via I/O — 55s was too long and
-              // allowed CF to evict the DO between flushes (499 client disconnect).
-              const streamingFlushInterval = setInterval(() => {
+              // Awaited keepalive callback — called by the SSE parser every ~10s.
+              // Unlike the old setInterval + fire-and-forget storage.put(), this is
+              // awaited I/O in the main execution flow, which CF definitively counts
+              // as activity. The old approach used unawaited puts that CF could ignore,
+              // leading to DO evictions during long streams (499 client disconnect).
+              const onKeepAlive = async () => {
                 task.lastUpdate = Date.now();
-                this.doState.storage.put('task', taskForStorage(task)).catch(() => {});
-                console.log(`[TaskProcessor] Streaming storage flush (${directProgressCount} chunks so far)`);
-              }, 15000);
+                await this.doState.storage.put('task', taskForStorage(task));
+                console.log(`[TaskProcessor] Streaming keepalive (${directProgressCount} chunks so far)`);
+              };
 
               // Hard stream timeout — prevents runaway streams that keep dribbling
               // tiny chunks for minutes. Max 5 min (or 3× idle timeout, whichever is larger).
@@ -2268,16 +2270,17 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   result = await parseAnthropicSSEStream(
                     response.body, idleTimeout, onStreamProgress,
                     useTools ? specExec.onToolCallReady : undefined,
+                    onKeepAlive,
                   );
                 } else {
                   result = await parseSSEStream(
                     response.body, idleTimeout, onStreamProgress,
                     useTools ? specExec.onToolCallReady : undefined,
+                    onKeepAlive,
                   );
                 }
               } finally {
                 clearTimeout(hardStreamTimeout);
-                clearInterval(streamingFlushInterval);
                 task.isStreaming = false;
               }
 

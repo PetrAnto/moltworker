@@ -79,10 +79,12 @@ export async function parseSSEStream(
   idleTimeoutMs = 45000,
   onProgress?: () => void,
   onToolCallReady?: (toolCall: ToolCall) => void,
+  onKeepAlive?: () => Promise<void>,
 ): Promise<ChatCompletionResponse> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let lastKeepAliveMs = Date.now();
 
   // Accumulated state
   let id = '';
@@ -128,6 +130,14 @@ export async function parseSSEStream(
 
       chunksReceived++;
       if (onProgress) onProgress();
+
+      // Awaited keepalive I/O — keeps DO pinned by performing real I/O in the
+      // main execution flow, not a fire-and-forget setInterval side-channel.
+      // 10s interval is well within CF's ~55s idle eviction threshold.
+      if (onKeepAlive && Date.now() - lastKeepAliveMs >= 10_000) {
+        await onKeepAlive();
+        lastKeepAliveMs = Date.now();
+      }
 
       buffer += decoder.decode(value, { stream: true });
 
@@ -752,6 +762,7 @@ export class OpenRouterClient {
       idleTimeoutMs?: number;
       onProgress?: () => void; // Called when chunks received - use for heartbeat
       onToolCallReady?: (toolCall: ToolCall) => void; // 7B.1: Called when a tool_call is complete during streaming
+      onKeepAlive?: () => Promise<void>; // Awaited periodic I/O to prevent DO eviction
       reasoningLevel?: ReasoningLevel;
       responseFormat?: ResponseFormat;
       modelIdOverride?: string; // Override model ID (e.g. for rerouting Anthropic via OpenRouter)
@@ -841,7 +852,7 @@ export class OpenRouterClient {
         }
       }
 
-      return await parseSSEStream(response.body, idleTimeoutMs, options?.onProgress, options?.onToolCallReady);
+      return await parseSSEStream(response.body, idleTimeoutMs, options?.onProgress, options?.onToolCallReady, options?.onKeepAlive);
 
     } catch (err: unknown) {
       clearTimeout(fetchTimeout);

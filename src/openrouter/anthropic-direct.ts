@@ -319,6 +319,7 @@ export async function parseAnthropicSSEStream(
   idleTimeoutMs = 45000,
   onProgress?: () => void,
   onToolCallReady?: (toolCall: ToolCall) => void,
+  onKeepAlive?: () => Promise<void>,
 ): Promise<{
   choices: Array<{
     message: {
@@ -346,6 +347,7 @@ export async function parseAnthropicSSEStream(
   let finishReason = '';
   let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
   let chunksReceived = 0;
+  let lastKeepAliveMs = Date.now();
 
   // Track current content block for streaming
   let currentBlockType: string | null = null;
@@ -394,6 +396,13 @@ export async function parseAnthropicSSEStream(
 
       chunksReceived++;
       if (onProgress) onProgress();
+
+      // Awaited keepalive I/O — keeps DO pinned by performing real I/O in the
+      // main execution flow, not a fire-and-forget setInterval side-channel.
+      if (onKeepAlive && Date.now() - lastKeepAliveMs >= 10_000) {
+        await onKeepAlive();
+        lastKeepAliveMs = Date.now();
+      }
 
       buffer += decoder.decode(value, { stream: true });
 
