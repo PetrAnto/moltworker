@@ -1695,8 +1695,8 @@ export class TelegramHandler {
         lines.push('');
 
         // Show top models grouped by tier (limit to keep output readable)
-        const MAX_PAID = 5;
-        const MAX_FREE = 3;
+        const MAX_PAID = 8;
+        const MAX_FREE = 5;
         const paidModels = ranked.filter(r => !r.isFree);
         const freeModels = ranked.filter(r => r.isFree);
 
@@ -4246,7 +4246,7 @@ Smart modes (auto-fetch from OpenRouter):
 
 Manual mode:
   /modelupdate sonnet cost=$3/$15 score="81% SWE, 200K ctx"
-  /modelupdate opus45 revert
+  /modelupdate haiku revert
 
 Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, supportsVision, parallelCalls, structuredOutput, reasoning`);
       return;
