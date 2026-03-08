@@ -520,11 +520,11 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 200000,
   },
   geminipro: {
-    id: 'google/gemini-3-pro-preview',
+    id: 'google/gemini-3.1-pro-preview',
     alias: 'geminipro',
-    name: 'Gemini 3 Pro',
-    specialty: 'Paid Advanced Reasoning/Vision',
-    score: 'SOTA reasoning, 1M context',
+    name: 'Gemini 3.1 Pro',
+    specialty: 'Paid Frontier Reasoning/Agentic',
+    score: 'AA Index (57), top reasoning + SWE, 1M context',
     cost: '$2/$12',
     supportsVision: true,
     supportsTools: true,
@@ -560,20 +560,7 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     maxContext: 1000000,
   },
-  opus45: {
-    id: 'claude-opus-4-5',
-    alias: 'opus45',
-    name: 'Claude Opus 4.5',
-    specialty: 'Paid Premium (Previous Gen)',
-    score: '80.9% SWE-Bench, 200K context',
-    cost: '$5/$25',
-    provider: 'anthropic',
-    supportsVision: true,
-    supportsTools: true,
-    parallelCalls: true,
-    structuredOutput: true,
-    maxContext: 200000,
-  },
+  // opus45 removed — Opus 4.6 is same price ($5/$25) with better performance (AA #1, 1M ctx)
   gpt54: {
     id: 'openai/gpt-5.4',
     alias: 'gpt54',
@@ -588,6 +575,7 @@ export const MODELS: Record<string, ModelInfo> = {
     reasoning: 'configurable',
     maxContext: 1000000,
   },
+  // gemini31pro alias → redirects to geminipro (both point to Gemini 3.1 Pro)
   gemini31pro: {
     id: 'google/gemini-3.1-pro-preview',
     alias: 'gemini31pro',
