@@ -1920,12 +1920,19 @@ export interface RankedOrchestraModel {
   confidence: number; // 0-100% estimated success probability
   score: number; // raw scoring value
   highlights: string; // key capabilities summary
+  valueTier: 'best' | 'good' | 'premium'; // cost-effectiveness tier
+}
+
+/** Parse output cost per million tokens from cost string like "$1.00/$5.00" */
+function parseOutputCost(cost: string): number {
+  const m = cost.match(/\$[\d.]+\/\$([\d.]+)/);
+  return m ? parseFloat(m[1]) : Infinity;
 }
 
 /**
  * Get ALL orchestra-capable models ranked by confidence to complete a task.
- * Returns models sorted by confidence descending, with raw scores converted
- * to a 0-100% confidence estimate.
+ * Scoring prioritizes agentic ability: SWE-Bench, tool reliability, multi-step
+ * execution, and proven orchestra track record — over raw intelligence benchmarks.
  */
 export function getRankedOrchestraModels(taskHint?: {
   isHeavyCoding?: boolean;
@@ -1941,75 +1948,89 @@ export function getRankedOrchestraModels(taskHint?: {
     const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
     const highlights: string[] = [];
 
-    // === AA Benchmark Data ===
+    // ── 1. Agentic ability (UNIVERSAL — most important for orchestra) ──
+
+    // SWE-Bench: the single best predictor of autonomous coding ability.
+    // Parse from score field (e.g. "80.9% SWE-Bench") — works for all models.
+    const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
+    const sweScore = sweMatch ? parseFloat(sweMatch[1]) : 0;
+    if (sweScore >= 75) { score += 30; highlights.push(`SWE ${sweScore}%`); }
+    else if (sweScore >= 65) { score += 20; highlights.push(`SWE ${sweScore}%`); }
+    else if (sweScore >= 50) { score += 10; highlights.push(`SWE ${sweScore}%`); }
+    else if (sweScore > 0) { highlights.push(`SWE ${sweScore}%`); }
+
+    // "Agentic" in specialty/description — model is designed for multi-step tool use
+    if (/agentic/i.test(lower)) { score += 15; highlights.push('Agentic'); }
+
+    // Proven orchestra track record
+    if (m.orchestraReady) { score += 15; highlights.push('Proven'); }
+
+    // Tool-calling reliability signals
+    if (m.parallelCalls) score += 5;
+    if (m.structuredOutput) score += 3;
+
+    // Direct API — lower latency, better reliability for long tasks
+    if (m.provider && m.provider !== 'openrouter') { score += 8; highlights.push('Direct'); }
+
+    // ── 2. Intelligence benchmarks (secondary — smart but can't use tools = useless) ──
+
     if (m.intelligenceIndex) {
-      if (m.intelligenceIndex >= 55) { score += 30; highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`); }
-      else if (m.intelligenceIndex >= 50) { score += 20; highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`); }
-      else if (m.intelligenceIndex >= 45) { score += 12; highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`); }
-      else if (m.intelligenceIndex >= 40) { score += 5; highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`); }
-      else score -= 10;
+      if (m.intelligenceIndex >= 55) score += 15;
+      else if (m.intelligenceIndex >= 50) score += 10;
+      else if (m.intelligenceIndex >= 45) score += 5;
+      else if (m.intelligenceIndex < 35) score -= 10;
     }
     if (m.benchmarks?.coding) {
-      if (m.benchmarks.coding >= 50) { score += 20; highlights.push(`Code:${m.benchmarks.coding.toFixed(0)}`); }
-      else if (m.benchmarks.coding >= 40) score += 10;
+      if (m.benchmarks.coding >= 50) score += 12;
+      else if (m.benchmarks.coding >= 40) score += 6;
       else if (m.benchmarks.coding < 25) score -= 10;
     }
     if (m.benchmarks?.livecodebench) {
-      if (m.benchmarks.livecodebench >= 50) { score += 10; highlights.push(`LCB:${m.benchmarks.livecodebench.toFixed(0)}`); }
-      else if (m.benchmarks.livecodebench >= 40) score += 5;
+      if (m.benchmarks.livecodebench >= 50) score += 5;
+      else if (m.benchmarks.livecodebench >= 40) score += 3;
     }
 
-    // === Heuristic fallback ===
-    const hasAAData = !!(m.intelligenceIndex || m.benchmarks?.coding);
-    if (!hasAAData) {
-      let heuristicBonus = 0;
-      if (/agentic/i.test(lower)) heuristicBonus += 15;
-      if (/multi-?file|swe-?bench/i.test(lower)) heuristicBonus += 10;
-      if (/coding/i.test(lower)) heuristicBonus += 10;
-      const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
-      if (sweMatch) {
-        const sweScore = parseFloat(sweMatch[1]);
-        if (sweScore >= 70) heuristicBonus += 15;
-        else if (sweScore >= 60) heuristicBonus += 5;
-      }
-      score += Math.min(heuristicBonus, 25);
+    // Penalty for models with no benchmarks AND no SWE-Bench — unknown capability
+    const hasData = !!(m.intelligenceIndex || m.benchmarks?.coding || sweScore > 0);
+    if (!hasData) {
+      // Still reward coding-related keywords, but with uncertainty penalty
+      if (/coding/i.test(lower)) score += 5;
+      if (/multi-?file|refactor/i.test(lower)) score += 5;
       score -= 10;
     }
 
-    // === Universal signals ===
-    if ((m.maxContext || 0) >= 200000) score += 10;
-    else if ((m.maxContext || 0) >= 128000) score += 5;
+    // ── 3. Architecture signals ──
 
-    if (/dense/i.test(lower)) score += 15;
-    if (/\b(mini|small|flash|lite|nano)\b/i.test(m.name)) score -= 20;
+    // Context window — critical for multi-file tasks
+    if ((m.maxContext || 0) >= 500000) { score += 10; highlights.push(`${Math.round((m.maxContext || 0) / 1000)}K ctx`); }
+    else if ((m.maxContext || 0) >= 200000) { score += 7; highlights.push(`${Math.round((m.maxContext || 0) / 1000)}K ctx`); }
+    else if ((m.maxContext || 0) >= 128000) score += 3;
+
+    // Dense models follow instructions better than tiny-active MoE
+    if (/dense/i.test(lower)) score += 10;
     if (/\b\d+B active\b/i.test(m.score)) {
       const activeMatch = m.score.match(/(\d+)B active/i);
       if (activeMatch) {
         const activeB = parseInt(activeMatch[1], 10);
         if (activeB < 20) score -= 15;
-        if (activeB >= 40) score += 10;
+        else if (activeB >= 40) score += 5;
       }
     }
 
-    if (m.provider && m.provider !== 'openrouter') { score += 10; highlights.push('Direct'); }
-    if (m.parallelCalls) score += 5;
+    // Penalize models known to struggle with complex multi-step instructions
+    if (/\b(mini|small|lite|nano)\b/i.test(m.name)) score -= 20;
+    // Flash models get smaller penalty — some (Gemini Flash) are decent
+    if (/\bflash\b/i.test(m.name)) score -= 10;
 
-    const modelId = m.id.toLowerCase();
-    if (modelId.includes('anthropic') || modelId.includes('claude')) { score += 12; highlights.push('Anthropic'); }
-    else if (modelId.includes('openai') || modelId.includes('gpt')) { score += 10; highlights.push('OpenAI'); }
-    else if (modelId.includes('qwen') || modelId.includes('alibaba')) { score += 8; highlights.push('Qwen'); }
-    else if (modelId.includes('deepseek')) { score += 6; highlights.push('DeepSeek'); }
-    else if (modelId.includes('google') || modelId.includes('gemini')) { score += 8; highlights.push('Google'); }
+    // ── 4. Task-specific adjustments ──
 
-    if (m.orchestraReady) score += 10;
-
-    // Task-specific adjustments
     if (taskHint?.isHeavyCoding) {
-      if (m.benchmarks?.coding && m.benchmarks.coding >= 50) score += 10;
+      if (sweScore >= 65) score += 10;
       if ((m.maxContext || 0) >= 200000) score += 5;
+      if (m.benchmarks?.coding && m.benchmarks.coding >= 50) score += 5;
     }
     if (taskHint?.isSimple && m.isFree) {
-      score += 10; // Free models get a boost for simple tasks
+      score += 15; // Free models get a significant boost for simple tasks
     }
 
     return { model: m, score, highlights };
@@ -2033,8 +2054,19 @@ export function getRankedOrchestraModels(taskHint?: {
   return deduped
     .map(s => {
       // Map raw score to 0-100% confidence
-      // Top scorer gets ~95%, linear scale down, minimum 5%
       const normalized = maxScore === minScore ? 50 : ((s.score - minScore) / (maxScore - minScore)) * 90 + 5;
+      // Value tier: score-per-dollar for paid, always 'best' for free
+      const outputCost = parseOutputCost(s.model.cost);
+      let valueTier: 'best' | 'good' | 'premium';
+      if (s.model.isFree) {
+        valueTier = 'best';
+      } else if (outputCost <= 3) {
+        valueTier = 'best';   // Under $3/M output — great bang for buck
+      } else if (outputCost <= 12) {
+        valueTier = 'good';   // $3-12/M — solid mid-tier
+      } else {
+        valueTier = 'premium'; // $12+/M — expensive
+      }
       return {
         alias: s.model.alias,
         name: s.model.name,
@@ -2043,6 +2075,7 @@ export function getRankedOrchestraModels(taskHint?: {
         confidence: Math.round(Math.min(95, Math.max(5, normalized))),
         score: s.score,
         highlights: s.highlights.join(', '),
+        valueTier,
       };
     });
 }
