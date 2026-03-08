@@ -356,7 +356,7 @@ const MAX_TOTAL_TOOLS_PAID = 100;
  * uncontrolled eviction and lost work. The model continues in the next
  * iteration with the partial results.
  */
-const STREAM_SPLIT_TIMEOUT_MS = 90_000;
+const STREAM_SPLIT_TIMEOUT_MS = 75_000;
 
 /**
  * Create a storage-safe copy of TaskState by stripping large transient fields.
@@ -2562,16 +2562,25 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             `tools: ${choice.message.tool_calls?.length ?? 0}`);
 
           if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
-            // No complete tool calls — add partial text and nudge to continue
-            if (choice.message.content) {
+            // No complete tool calls — add partial text and nudge to continue.
+            // Include the tail of the truncated text so the model can pick up
+            // exactly where it left off without repeating.
+            const partialText = choice.message.content || '';
+            if (partialText) {
               conversationMessages.push({
                 role: 'assistant',
-                content: choice.message.content,
+                content: partialText,
               });
             }
+            const tail = partialText.length > 300
+              ? partialText.slice(-300)
+              : partialText;
+            const nudge = tail
+              ? `[Your response was cut short by a streaming limit. Continue EXACTLY where you left off — do not repeat anything. Your last output ended with:\n\n${tail}\n\nContinue from there. If you were about to call a tool, call it now.]`
+              : '[Your response was cut short by a streaming limit. Continue exactly where you left off. If you were about to call a tool, call it now.]';
             conversationMessages.push({
               role: 'user',
-              content: '[Your response was interrupted by a streaming timeout. Continue exactly where you left off. If you were about to call a tool, call it now.]',
+              content: nudge,
             });
             continue;
           }
