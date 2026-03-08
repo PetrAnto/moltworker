@@ -245,11 +245,10 @@ export const MODELS: Record<string, ModelInfo> = {
     id: 'moonshotai/kimi-k2:free',
     alias: 'kimifree',
     name: 'Kimi K2 (Free)',
-    specialty: 'Free General/Long Context',
-    score: 'Agent tasks, long context',
+    specialty: 'Free Agentic/Long Context',
+    score: 'Agent tasks, long context, tool calling',
     cost: 'FREE',
-    // Note: OpenRouter lists tool support but multiple IDEs report it as broken
-    // (model responds in plain text instead of invoking tools). Omitting supportsTools.
+    supportsTools: true, // Re-enabled: Kimi K2 tool support works on OpenRouter as of 2026-03
     isFree: true,
     maxContext: 131072,
   },

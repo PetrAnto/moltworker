@@ -18,7 +18,7 @@ import { UserStorage } from '../openrouter/storage';
 import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
-import { checkPhaseBudget, PhaseBudgetExceededError } from './phase-budget';
+import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
 import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, type ToolErrorTracker } from '../guardrails/tool-validator';
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
 import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
@@ -131,6 +131,32 @@ export function isToolCallParallelSafe(toolCall: ToolCall): boolean {
   }
 
   return false;
+}
+
+/**
+ * Strip reasoning_content from all but the most recent assistant message.
+ * Reasoning traces (Kimi thinking, DeepSeek CoT) are one-shot: the model never
+ * reads its own previous reasoning_content. Keeping them wastes 5-10K tokens per
+ * iteration, which is the #1 cause of context exhaustion on Kimi/DeepSeek tasks.
+ */
+function stripOldReasoningContent(messages: ChatMessage[]): ChatMessage[] {
+  // Find the last message with reasoning_content
+  let lastReasoningIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].reasoning_content) {
+      lastReasoningIdx = i;
+      break;
+    }
+  }
+  if (lastReasoningIdx <= 0) return messages; // Nothing to strip
+
+  return messages.map((msg, i) => {
+    if (i < lastReasoningIdx && msg.reasoning_content) {
+      const { reasoning_content: _, ...rest } = msg;
+      return rest as ChatMessage;
+    }
+    return msg;
+  });
 }
 
 // Task category for capability-aware model rotation
@@ -1061,9 +1087,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Without this, Sonnet's 1M context allows 50KB per result × 5 reads = 250KB
     // per iteration, which bloats checkpoints and causes the read-loop stall.
     const contextBudget = this.getContextBudget(modelAlias);
-    // Total budget: ~20% of context budget in chars (~4 chars/token), shared across all results
-    // 100K budget → 80K total → 16K each for 5 tools, 40K each for 2 tools
-    const totalBudget = Math.floor(contextBudget * 0.20 * 4);
+    // Total budget: ~25% of context budget in chars (~4 chars/token), shared across all results.
+    // Increased from 20% → 25%: reasoning_content stripping frees up context space,
+    // and orchestra/coding tasks need more room for code file contents.
+    // 100K budget → 100K total → 20K each for 5 tools, 50K each for 2 tools
+    const totalBudget = Math.floor(contextBudget * 0.25 * 4);
     const perResult = Math.floor(totalBudget / Math.max(1, batchSize));
     return Math.min(MAX_TOOL_RESULT_LENGTH, Math.max(4000, perResult));
   }
@@ -1211,7 +1239,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * @param keepRecent - Minimum recent messages to always keep (default: 6)
    */
   private compressContext(messages: ChatMessage[], modelAlias: string, keepRecent: number = 6): ChatMessage[] {
-    const compressed = compressContextBudgeted(messages, this.getContextBudget(modelAlias), keepRecent);
+    // Strip reasoning_content from older messages before compression.
+    // Reasoning traces (Kimi/DeepSeek thinking) are never sent back to the model
+    // and can be 5-10K tokens each, massively bloating context across iterations.
+    // Keep only the most recent reasoning trace for continuity.
+    const stripped = stripOldReasoningContent(messages);
+    const compressed = compressContextBudgeted(stripped, this.getContextBudget(modelAlias), keepRecent);
     // Ensure tool message pairs remain valid after compression
     return sanitizeToolPairs(compressed);
   }
@@ -1963,8 +1996,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const useTools = modelSupportsTools(task.modelAlias);
 
         // Phase budget circuit breaker: check before API call
+        // Pass provider so slow APIs (Moonshot/Kimi, DeepSeek) get scaled budgets
         if (task.phase) {
-          checkPhaseBudget(task.phase, phaseStartTime);
+          checkPhaseBudget(task.phase, phaseStartTime, provider);
         }
 
         // Anthropic rate limit pacing: with a 30K input tokens/min limit,
@@ -2663,7 +2697,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // Phase budget circuit breaker: check before tool execution
           if (task.phase) {
-            checkPhaseBudget(task.phase, phaseStartTime);
+            checkPhaseBudget(task.phase, phaseStartTime, provider);
           }
 
           const toolNames = choice.message.tool_calls.map(tc => tc.function.name);
