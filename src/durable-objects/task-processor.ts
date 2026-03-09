@@ -550,12 +550,44 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * Consumed at the top of each iteration in processTask().
    */
   private steerMessages: string[] = [];
+
   /**
-   * Workspace: files staged via workspace_write_file, waiting for workspace_commit.
-   * Keyed by file path. Stored in DO memory (not storage.put) since files can be large
-   * and workspace is transient — cleared after commit or on DO eviction (task auto-resumes).
+   * Get a workspace manager bound to a specific task ID.
+   * Uses DO persistent storage (not in-memory) so workspace survives evictions
+   * and auto-resumes. Each file is stored as a separate key with prefix
+   * `ws:{taskId}:{path}` to respect CF's 128KB per-value limit.
    */
-  private workspaceFiles = new Map<string, WorkspaceFile>();
+  private getWorkspaceManager(taskId: string) {
+    const prefix = `ws:${taskId}:`;
+    const storage = this.doState.storage;
+    return {
+      writeFile: async (file: WorkspaceFile) => {
+        // Store action + content as JSON to preserve the action type
+        await storage.put(prefix + file.path, JSON.stringify({
+          action: file.action,
+          content: file.content,
+        }));
+        console.log(`[TaskProcessor] Workspace: staged ${file.action} "${file.path}" (${file.content.length} chars) [persistent]`);
+      },
+      listFiles: async (): Promise<WorkspaceFile[]> => {
+        const entries = await storage.list<string>({ prefix });
+        const files: WorkspaceFile[] = [];
+        for (const [key, value] of entries.entries()) {
+          const path = key.slice(prefix.length);
+          const data = JSON.parse(value) as { action: WorkspaceFile['action']; content: string };
+          files.push({ path, action: data.action, content: data.content });
+        }
+        return files;
+      },
+      clear: async () => {
+        const entries = await storage.list({ prefix });
+        if (entries.size > 0) {
+          await storage.delete(Array.from(entries.keys()));
+          console.log(`[TaskProcessor] Workspace: cleared ${entries.size} staged file(s) [persistent]`);
+        }
+      },
+    };
+  }
 
   constructor(state: DurableObjectState, env: TaskProcessorEnv) {
     super(state, env);
@@ -1632,24 +1664,17 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     await this.doState.storage.put('task', taskForStorage(task));
 
     const client = createOpenRouterClient(request.openrouterKey);
-    // Clear workspace from any previous run (DO may have been reused)
-    this.workspaceFiles.clear();
+    // Workspace manager persists staged files in DO storage (survives evictions/auto-resumes)
+    const workspace = this.getWorkspaceManager(task.taskId);
 
     const toolContext: ToolContext = {
       githubToken: request.githubToken,
       braveSearchKey: request.braveSearchKey,
       cloudflareApiToken: request.cloudflareApiToken,
-      // Workspace callbacks — stage files in DO memory, commit atomically
-      workspaceWrite: async (file: WorkspaceFile) => {
-        this.workspaceFiles.set(file.path, file);
-        console.log(`[TaskProcessor] Workspace: staged ${file.action} "${file.path}" (${this.workspaceFiles.size} total, ${file.content.length} chars)`);
-      },
-      workspaceList: async () => Array.from(this.workspaceFiles.values()),
-      workspaceClear: async () => {
-        const count = this.workspaceFiles.size;
-        this.workspaceFiles.clear();
-        console.log(`[TaskProcessor] Workspace: cleared ${count} staged file(s)`);
-      },
+      // Workspace callbacks — persist to DO storage, not in-memory
+      workspaceWrite: (file: WorkspaceFile) => workspace.writeFile(file),
+      workspaceList: () => workspace.listFiles(),
+      workspaceClear: () => workspace.clear(),
     };
 
     // Load dynamic + auto-synced model catalogs from R2 so the DO knows about
