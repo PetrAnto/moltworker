@@ -42,14 +42,18 @@ describe('detectModelFamily', () => {
 // ─── selectReviewerModel ────────────────────────────────────────────────────
 
 describe('selectReviewerModel', () => {
-  it('selects Sonnet for non-Anthropic worker', () => {
-    expect(selectReviewerModel('grok', 'coding')).toBe('sonnet');
-    expect(selectReviewerModel('mini', 'coding')).toBe('sonnet');
-    expect(selectReviewerModel('flash', 'coding')).toBe('sonnet');
+  it('selects Grok for non-Anthropic/non-x-ai worker (sonnet skipped: direct API)', () => {
+    // sonnet has provider: 'anthropic' (direct API), so it's skipped — reviewer uses OpenRouter
+    expect(selectReviewerModel('mini', 'coding')).toBe('grok');
+    expect(selectReviewerModel('flash', 'coding')).toBe('grok');
   });
 
   it('selects Grok for Anthropic worker (avoids same family)', () => {
     expect(selectReviewerModel('sonnet', 'coding')).toBe('grok');
+  });
+
+  it('selects GeminiPro for x-ai worker (grok skipped: same family)', () => {
+    expect(selectReviewerModel('grok', 'coding')).toBe('geminipro');
   });
 
   it('avoids selecting same alias as worker', () => {
@@ -63,15 +67,15 @@ describe('selectReviewerModel', () => {
     // Should not be another Google model
     expect(result).not.toBe('flash');
     expect(result).not.toBe('geminipro');
-    // Should be Sonnet (first non-Google candidate)
-    expect(result).toBe('sonnet');
+    // Sonnet skipped (direct API), Grok is first valid non-Google candidate
+    expect(result).toBe('grok');
   });
 
-  it('returns null for unknown models (fallback gracefully)', () => {
+  it('returns Grok for unknown models (fallback gracefully)', () => {
     // For an unknown model, family detection returns the alias itself
-    // so it won't match any candidate's families — first candidate (sonnet) is selected
+    // so it won't match any candidate's families — sonnet skipped (direct API), grok is first
     const result = selectReviewerModel('totally-unknown-model', 'general');
-    expect(result).toBe('sonnet');
+    expect(result).toBe('grok');
   });
 
   it('passes task category through (does not crash)', () => {

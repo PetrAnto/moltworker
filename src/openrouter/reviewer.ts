@@ -94,6 +94,11 @@ export function selectReviewerModel(
     const model = getModel(candidate.alias);
     if (!model) continue;
 
+    // Skip models that use direct API providers (not OpenRouter).
+    // The reviewer always calls through OpenRouter, so model IDs like
+    // "claude-sonnet-4-6" (Anthropic direct) will fail with "not a valid model ID".
+    if (model.provider && model.provider !== 'openrouter') continue;
+
     return candidate.alias;
   }
 
