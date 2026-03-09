@@ -364,8 +364,8 @@ const CHECKPOINT_EARLY_THRESHOLD = 3;
 // Checkpoints with a different version are skipped on resume to avoid crashes.
 const CHECKPOINT_VERSION = 2;
 // Max auto-resume attempts before requiring manual intervention
-const MAX_AUTO_RESUMES_DEFAULT = 5; // Was 10 — 10 resumes lets bad situations drag on for 30min
-const MAX_AUTO_RESUMES_FREE = 5; // Was 8 — aligned with paid; 5 is enough for legitimate complex tasks
+const MAX_AUTO_RESUMES_DEFAULT = 10; // Raised from 5 — complex refactors with slow-streaming models exhaust 5 resumes at 95% completion
+const MAX_AUTO_RESUMES_FREE = 5; // Free tier stays conservative
 // Elapsed time limits removed — other guards (max tool calls, stall detection,
 // auto-resume limits) are sufficient to prevent runaway tasks.
 // Max consecutive resumes with no new tool calls before declaring stall
@@ -385,13 +385,19 @@ const MAX_TOTAL_TOOLS_PAID = 100;
  * uncontrolled eviction and lost work. The model continues in the next
  * iteration with the partial results.
  *
- * Increased from 75s → 90s: production logs show DOs survive streams past
- * 80s without eviction. When tool calls are in-flight, this is doubled to
- * 180s to avoid the "split-kills-tool-call" death loop where the model
- * retries the same large tool call (e.g. github_push_files with full file
- * content) and gets split again every time.
+ * Hardcapped at 85s: CF DO eviction observed at ~95s. A software timeout
+ * must never exceed its hardware boundary. For in-flight tool calls we no
+ * longer double this — losing a workspace_write_file is recoverable on
+ * resume, while a silent DO eviction at 180s destroys uncommitted context.
  */
-const STREAM_SPLIT_TIMEOUT_MS = 90_000;
+const STREAM_SPLIT_TIMEOUT_MS = 85_000;
+/**
+ * Absolute maximum stream timeout, even when tool calls are in-flight.
+ * Previously 2x (180s) which exceeded CF's ~95s eviction window.
+ * Now capped at 85s — it's safer to aggressively split and force a retry
+ * on resume than to let the DO die silently holding uncommitted state.
+ */
+const STREAM_SPLIT_MAX_MS = 85_000;
 
 /**
  * Create a storage-safe copy of TaskState by stripping large transient fields.
@@ -2264,11 +2270,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                         task.lastUpdate = Date.now();
                         await this.doState.storage.put('task', taskForStorage(task));
                         const elapsed = Date.now() - streamStartMs;
-                        // Extend timeout when tool calls are being streamed — splitting mid-tool-call
-                        // discards the incomplete JSON args, causing a death loop where the model
-                        // retries the same large tool call and gets split again every time.
+                        // When tool calls are in-flight, use the max timeout to avoid splitting
+                        // mid-tool-call (which discards incomplete JSON args). But never exceed
+                        // STREAM_SPLIT_MAX_MS — CF evicts DOs at ~95s regardless.
                         const effectiveTimeout = ctx.hasInFlightToolCalls
-                          ? STREAM_SPLIT_TIMEOUT_MS * 2 // 2x for in-flight tool calls
+                          ? STREAM_SPLIT_MAX_MS
                           : STREAM_SPLIT_TIMEOUT_MS;
                         console.log(`[TaskProcessor] Streaming keepalive (${progressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
                         return elapsed < effectiveTimeout;
@@ -2413,9 +2419,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 task.lastUpdate = Date.now();
                 await this.doState.storage.put('task', taskForStorage(task));
                 const elapsed = Date.now() - directStreamStartMs;
-                // Extend timeout when tool calls are being streamed (same as OpenRouter path)
+                // Same as OpenRouter path — hardcapped at STREAM_SPLIT_MAX_MS
                 const effectiveTimeout = ctx.hasInFlightToolCalls
-                  ? STREAM_SPLIT_TIMEOUT_MS * 2
+                  ? STREAM_SPLIT_MAX_MS
                   : STREAM_SPLIT_TIMEOUT_MS;
                 console.log(`[TaskProcessor] Streaming keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
                 return elapsed < effectiveTimeout;

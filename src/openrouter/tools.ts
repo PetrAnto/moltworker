@@ -1451,8 +1451,9 @@ async function workspaceCommit(
 
   // Workspace commits happen server-side (files are in DO storage, not streamed through
   // model output tokens), so we can safely handle more files than the model-facing
-  // github_push_files limit of 10.
-  const result = await githubPushFiles(owner, repo, branch, message, changes, base, token, 30);
+  // github_push_files limit of 10. The GitHub Tree API handles hundreds of files per
+  // commit — 100 accommodates heavy framework migrations without arbitrary failure.
+  const result = await githubPushFiles(owner, repo, branch, message, changes, base, token, 100);
 
   // Clear workspace after successful commit
   await context.workspaceClear();
