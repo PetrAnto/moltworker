@@ -385,19 +385,25 @@ const MAX_TOTAL_TOOLS_PAID = 100;
  * uncontrolled eviction and lost work. The model continues in the next
  * iteration with the partial results.
  *
- * Hardcapped at 85s: CF DO eviction observed at ~95s. A software timeout
- * must never exceed its hardware boundary. For in-flight tool calls we no
- * longer double this — losing a workspace_write_file is recoverable on
- * resume, while a silent DO eviction at 180s destroys uncommitted context.
+ * Base: 85s for standard text/reasoning blocks. CF DO evictions are driven
+ * by cumulative CPU exhaustion (30s CPU limit), not a strict wall-clock
+ * cutoff, but 85s provides a safe margin under observed ~95s evictions.
  */
 const STREAM_SPLIT_TIMEOUT_MS = 85_000;
 /**
- * Absolute maximum stream timeout, even when tool calls are in-flight.
- * Previously 2x (180s) which exceeded CF's ~95s eviction window.
- * Now capped at 85s — it's safer to aggressively split and force a retry
- * on resume than to let the DO die silently holding uncommitted state.
+ * Elastic timeout for in-flight tool calls. When the parser detects an open
+ * tool_call payload, the timeout expands to 120s. This prevents the infinite
+ * truncation trap: slow models (~40 tok/s) need ~125s to stream a 5000-token
+ * workspace_write_file — an 85s cap would truncate it every time, exhausting
+ * all auto-resumes in a death loop.
+ *
+ * 120s is safe because I/O-bound SSE reads don't accumulate CPU time the way
+ * computation does — DOs sustain I/O streams well past 85s when CPU budget
+ * isn't exhausted by prior iterations. The original 180s (2x) was too
+ * aggressive; 120s gives slow models enough room while staying under the
+ * observed eviction envelope.
  */
-const STREAM_SPLIT_MAX_MS = 85_000;
+const STREAM_SPLIT_MAX_MS = 120_000;
 
 /**
  * Create a storage-safe copy of TaskState by stripping large transient fields.
@@ -2270,9 +2276,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                         task.lastUpdate = Date.now();
                         await this.doState.storage.put('task', taskForStorage(task));
                         const elapsed = Date.now() - streamStartMs;
-                        // When tool calls are in-flight, use the max timeout to avoid splitting
-                        // mid-tool-call (which discards incomplete JSON args). But never exceed
-                        // STREAM_SPLIT_MAX_MS — CF evicts DOs at ~95s regardless.
+                        // Elastic timeout: expand to STREAM_SPLIT_MAX_MS (120s) when tool calls
+                        // are in-flight to avoid the truncation trap where slow models get split
+                        // mid-tool-call repeatedly. 85s base for standard text.
                         const effectiveTimeout = ctx.hasInFlightToolCalls
                           ? STREAM_SPLIT_MAX_MS
                           : STREAM_SPLIT_TIMEOUT_MS;
@@ -2419,7 +2425,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 task.lastUpdate = Date.now();
                 await this.doState.storage.put('task', taskForStorage(task));
                 const elapsed = Date.now() - directStreamStartMs;
-                // Same as OpenRouter path — hardcapped at STREAM_SPLIT_MAX_MS
+                // Elastic timeout — same as OpenRouter path (85s base, 120s in-flight)
                 const effectiveTimeout = ctx.hasInFlightToolCalls
                   ? STREAM_SPLIT_MAX_MS
                   : STREAM_SPLIT_TIMEOUT_MS;
