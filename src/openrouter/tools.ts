@@ -516,7 +516,7 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
           },
           content: {
             type: 'string',
-            description: 'Full file content. Required for "create" and "update" actions.',
+            description: 'Full file content. Required for "create" and "update" actions. Pass empty string for "delete".',
           },
           action: {
             type: 'string',
@@ -524,7 +524,7 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
             enum: ['create', 'update', 'delete'],
           },
         },
-        required: ['path', 'action'],
+        required: ['path', 'content', 'action'],
       },
     },
   },

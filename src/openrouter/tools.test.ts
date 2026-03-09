@@ -4817,7 +4817,7 @@ describe('workspace_write_file tool', () => {
   it('should be included in AVAILABLE_TOOLS and TOOLS_WITHOUT_BROWSER', () => {
     const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'workspace_write_file');
     expect(tool).toBeDefined();
-    expect(tool!.function.parameters.required).toEqual(['path', 'action']);
+    expect(tool!.function.parameters.required).toEqual(['path', 'content', 'action']);
 
     const doTool = TOOLS_WITHOUT_BROWSER.find(t => t.function.name === 'workspace_write_file');
     expect(doTool).toBeDefined();
