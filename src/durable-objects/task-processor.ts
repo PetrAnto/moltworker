@@ -6,7 +6,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { createOpenRouterClient, parseSSEStream, type ChatMessage, type ResponseFormat } from '../openrouter/client';
-import { executeTool, AVAILABLE_TOOLS, githubReadFile, type ToolContext, type ToolCall, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools } from '../openrouter/tools';
+import { executeTool, AVAILABLE_TOOLS, githubReadFile, type ToolContext, type ToolCall, type WorkspaceFile, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools } from '../openrouter/tools';
 import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isReasoningMandatoryError, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, getOrchestraRecommendations, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { injectCacheControl } from '../openrouter/prompt-cache';
@@ -95,6 +95,9 @@ const EMERGENCY_CORE_ALIASES = ['qwencoderfree', 'gptoss', 'devstral'];
 // Mutation tools (github_api, github_create_pr, sandbox_exec) must run sequentially.
 // Note: browse_url and sandbox_exec are already excluded from DO via TOOLS_WITHOUT_BROWSER,
 // but sandbox_exec is listed here for completeness in case the filter changes.
+// workspace_write_file has side effects (staging files in memory) so it's NOT parallel-safe
+// (caching would skip the write). workspace_commit is a mutation (pushes to GitHub).
+// Both workspace tools run sequentially.
 export const PARALLEL_SAFE_TOOLS = new Set([
   'fetch_url',
   'browse_url',
@@ -547,6 +550,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * Consumed at the top of each iteration in processTask().
    */
   private steerMessages: string[] = [];
+  /**
+   * Workspace: files staged via workspace_write_file, waiting for workspace_commit.
+   * Keyed by file path. Stored in DO memory (not storage.put) since files can be large
+   * and workspace is transient — cleared after commit or on DO eviction (task auto-resumes).
+   */
+  private workspaceFiles = new Map<string, WorkspaceFile>();
 
   constructor(state: DurableObjectState, env: TaskProcessorEnv) {
     super(state, env);
@@ -1623,10 +1632,24 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     await this.doState.storage.put('task', taskForStorage(task));
 
     const client = createOpenRouterClient(request.openrouterKey);
+    // Clear workspace from any previous run (DO may have been reused)
+    this.workspaceFiles.clear();
+
     const toolContext: ToolContext = {
       githubToken: request.githubToken,
       braveSearchKey: request.braveSearchKey,
       cloudflareApiToken: request.cloudflareApiToken,
+      // Workspace callbacks — stage files in DO memory, commit atomically
+      workspaceWrite: async (file: WorkspaceFile) => {
+        this.workspaceFiles.set(file.path, file);
+        console.log(`[TaskProcessor] Workspace: staged ${file.action} "${file.path}" (${this.workspaceFiles.size} total, ${file.content.length} chars)`);
+      },
+      workspaceList: async () => Array.from(this.workspaceFiles.values()),
+      workspaceClear: async () => {
+        const count = this.workspaceFiles.size;
+        this.workspaceFiles.clear();
+        console.log(`[TaskProcessor] Workspace: cleared ${count} staged file(s)`);
+      },
     };
 
     // Load dynamic + auto-synced model catalogs from R2 so the DO knows about
@@ -2894,6 +2917,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 if (toolName === 'github_read_file' && args.path) {
                   if (!task.filesRead) task.filesRead = [];
                   if (!task.filesRead.includes(args.path)) task.filesRead.push(args.path);
+                } else if (toolName === 'workspace_write_file' && args.path) {
+                  if (!task.filesModified) task.filesModified = [];
+                  if (!task.filesModified.includes(args.path)) task.filesModified.push(args.path);
                 } else if (toolName === 'github_create_pr' && args.changes) {
                   if (!task.filesModified) task.filesModified = [];
                   const changes = typeof args.changes === 'string' ? JSON.parse(args.changes) : args.changes;
