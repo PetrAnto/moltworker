@@ -1182,7 +1182,8 @@ async function githubPushFiles(
   message: string,
   changesInput: string | FileChange[],
   base?: string,
-  token?: string
+  token?: string,
+  maxFiles = 10
 ): Promise<string> {
   if (!token) {
     throw new Error('GitHub token is required. Configure GITHUB_TOKEN in the bot settings.');
@@ -1215,8 +1216,8 @@ async function githubPushFiles(
   if (!Array.isArray(changes) || changes.length === 0) {
     throw new Error('Changes must be a non-empty array.');
   }
-  if (changes.length > 10) {
-    throw new Error(`Too many files (${changes.length}). Keep batches to ≤10 files.`);
+  if (changes.length > maxFiles) {
+    throw new Error(`Too many files (${changes.length}). Keep batches to ≤${maxFiles} files.`);
   }
 
   const headers: Record<string, string> = {
@@ -1448,7 +1449,10 @@ async function workspaceCommit(
 
   console.log(`[workspace_commit] Committing ${changes.length} staged file(s) to ${branch}`);
 
-  const result = await githubPushFiles(owner, repo, branch, message, changes, base, token);
+  // Workspace commits happen server-side (files are in DO storage, not streamed through
+  // model output tokens), so we can safely handle more files than the model-facing
+  // github_push_files limit of 10.
+  const result = await githubPushFiles(owner, repo, branch, message, changes, base, token, 30);
 
   // Clear workspace after successful commit
   await context.workspaceClear();
