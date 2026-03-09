@@ -563,10 +563,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     return {
       writeFile: async (file: WorkspaceFile) => {
         // Store action + content as JSON to preserve the action type
-        await storage.put(prefix + file.path, JSON.stringify({
+        const value = JSON.stringify({
           action: file.action,
           content: file.content,
-        }));
+        });
+        // CF DO storage enforces 128KB per value. Catch oversized files gracefully
+        // instead of crashing the entire TaskProcessor loop.
+        const MAX_STORAGE_VALUE_BYTES = 128 * 1024;
+        if (new TextEncoder().encode(value).byteLength > MAX_STORAGE_VALUE_BYTES) {
+          throw new Error(
+            `File "${file.path}" is too large for workspace staging (${Math.round(file.content.length / 1024)}KB). ` +
+            `Split it into smaller files (<100KB each) and stage them individually.`
+          );
+        }
+        await storage.put(prefix + file.path, value);
         console.log(`[TaskProcessor] Workspace: staged ${file.action} "${file.path}" (${file.content.length} chars) [persistent]`);
       },
       listFiles: async (): Promise<WorkspaceFile[]> => {
@@ -1520,6 +1530,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // Cancel watchdog alarm
         await this.doState.storage.deleteAlarm();
+
+        // Clean up any orphaned workspace files
+        try {
+          const ws = this.getWorkspaceManager(task.taskId);
+          await ws.clear();
+        } catch { /* best-effort */ }
 
         // Try to send cancellation message
         if (task.telegramToken && task.chatId) {
@@ -3953,6 +3969,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       }
     } finally {
       this.isRunning = false;
+      // Clean up any orphaned workspace files to prevent storage leaks.
+      // Staged files are only useful until workspace_commit; if the task
+      // completes, fails, stalls, or is cancelled, leftover files are waste.
+      try {
+        await workspace.clear();
+      } catch {
+        // Best-effort cleanup — don't mask the real error
+      }
     }
   }
 
