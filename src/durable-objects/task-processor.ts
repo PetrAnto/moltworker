@@ -95,9 +95,9 @@ const EMERGENCY_CORE_ALIASES = ['qwencoderfree', 'gptoss', 'devstral'];
 // Mutation tools (github_api, github_create_pr, sandbox_exec) must run sequentially.
 // Note: browse_url and sandbox_exec are already excluded from DO via TOOLS_WITHOUT_BROWSER,
 // but sandbox_exec is listed here for completeness in case the filter changes.
-// workspace_write_file has side effects (staging files in memory) so it's NOT parallel-safe
-// (caching would skip the write). workspace_commit is a mutation (pushes to GitHub).
-// Both workspace tools run sequentially.
+// workspace_write_file and workspace_delete_file have side effects (staging files) so they're
+// NOT parallel-safe (caching would skip the write). workspace_commit is a mutation (pushes to GitHub).
+// All workspace tools run sequentially.
 export const PARALLEL_SAFE_TOOLS = new Set([
   'fetch_url',
   'browse_url',
@@ -1798,6 +1798,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const MAX_INVALID_ARGS_BAIL = 8; // After 8, bail out — model can't format tool calls
     // P2 guardrails: track tool errors for "No Fake Success" enforcement
     const toolErrorTracker = createToolErrorTracker();
+    // Error threshold guardrail: if the same tool returns the same error 3 consecutive times,
+    // force-abort the tool to prevent burning iterations on a static validation error.
+    let lastToolErrorSig = '';
+    let consecutiveIdenticalErrors = 0;
+    const MAX_IDENTICAL_ERRORS = 3;
 
     let conversationMessages: ChatMessage[] = [...request.messages];
     const maxIterations = 100; // Very high limit for complex tasks
@@ -2980,6 +2985,28 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               const shortError = toolResult.content.slice(0, 120).replace(/\n/g, ' ');
               task.lastToolErrors.push(`${toolName}: ${shortError}`);
               if (task.lastToolErrors.length > 5) task.lastToolErrors = task.lastToolErrors.slice(-5);
+
+              // Error threshold guardrail: detect identical errors repeating
+              const errorSig = `${toolName}:${toolResult.content.slice(0, 200)}`;
+              if (errorSig === lastToolErrorSig) {
+                consecutiveIdenticalErrors++;
+                if (consecutiveIdenticalErrors >= MAX_IDENTICAL_ERRORS) {
+                  console.log(`[TaskProcessor] Error threshold hit: ${toolName} returned same error ${consecutiveIdenticalErrors} times — injecting hard abort`);
+                  conversationMessages.push({
+                    role: 'user',
+                    content: `[SYSTEM ABORT] The tool ${toolName} has failed ${consecutiveIdenticalErrors} times with the identical error:\n"${shortError}"\n\nThis approach CANNOT work. You MUST abandon this tool and use a completely different strategy. If you were trying to create files with workspace_write_file, ensure you pass ALL required parameters (path AND content). If you cannot proceed differently, provide your best answer with the information gathered so far.`,
+                  });
+                  consecutiveIdenticalErrors = 0;
+                  lastToolErrorSig = '';
+                }
+              } else {
+                lastToolErrorSig = errorSig;
+                consecutiveIdenticalErrors = 1;
+              }
+            } else {
+              // Successful tool call — reset error tracking
+              consecutiveIdenticalErrors = 0;
+              lastToolErrorSig = '';
             }
 
             // Track files read/modified for progress display
@@ -2989,7 +3016,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 if (toolName === 'github_read_file' && args.path) {
                   if (!task.filesRead) task.filesRead = [];
                   if (!task.filesRead.includes(args.path)) task.filesRead.push(args.path);
-                } else if (toolName === 'workspace_write_file' && args.path) {
+                } else if ((toolName === 'workspace_write_file' || toolName === 'workspace_delete_file') && args.path) {
                   if (!task.filesModified) task.filesModified = [];
                   if (!task.filesModified.includes(args.path)) task.filesModified.push(args.path);
                 } else if (toolName === 'github_create_pr' && args.changes) {

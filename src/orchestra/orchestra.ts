@@ -297,10 +297,11 @@ For "create" action: \`{"path":"file.js","action":"create","content":"full conte
 
 ### Creating files — USE WORKSPACE PATTERN (prevents timeout/streaming failures)
 **ALWAYS use workspace_write_file + workspace_commit instead of github_push_files for new files:**
-1. \`workspace_write_file\` — stage file A (path, content, action="create")
+1. \`workspace_write_file\` — stage file A (path, content)
 2. \`workspace_write_file\` — stage file B
-3. \`workspace_commit\` — push all staged files to branch \`${branch}\` in one commit
-4. \`github_create_pr\` — open PR on existing branch with ROADMAP/WORK_LOG patches
+3. \`workspace_delete_file\` — stage file removal (if needed)
+4. \`workspace_commit\` — push all staged files to branch \`${branch}\` in one commit
+5. \`github_create_pr\` — open PR on existing branch with ROADMAP/WORK_LOG patches
 
 Each workspace_write_file is a tiny tool call (just path + content). No streaming risk.
 
@@ -386,9 +387,10 @@ Use "create" for new files.
 
 ### CRITICAL: Creating files — USE WORKSPACE PATTERN (prevents streaming timeouts)
 **ALWAYS use workspace_write_file + workspace_commit for creating new files:**
-1. \`workspace_write_file\` — stage each new file one at a time (path, content, action="create")
-2. \`workspace_commit\` — push ALL staged files to branch \`${branch}\` in one atomic commit
-3. \`github_create_pr\` — open PR on existing branch with ROADMAP/WORK_LOG patches
+1. \`workspace_write_file\` — stage each new file one at a time (path, content)
+2. \`workspace_delete_file\` — stage file removals (if needed)
+3. \`workspace_commit\` — push ALL staged files to branch \`${branch}\` in one atomic commit
+4. \`github_create_pr\` — open PR on existing branch with ROADMAP/WORK_LOG patches
 
 Each \`workspace_write_file\` call is tiny (just the file content as a tool argument), so there's no risk of streaming timeout. The commit happens server-side with no large payloads.
 
@@ -491,9 +493,10 @@ Example patch: \`{"path":"src/App.jsx","action":"patch","patches":[{"find":"cons
 
 ### CRITICAL: Creating files — USE WORKSPACE PATTERN (prevents streaming timeouts)
 **ALWAYS use workspace_write_file + workspace_commit for creating new files:**
-1. Call \`workspace_write_file\` for EACH new file (path, content, action="create"). Each call is tiny — no streaming risk.
-2. Call \`workspace_commit\` ONCE to push ALL staged files to branch \`${branch}\` in one atomic commit.
-3. Call \`github_create_pr\` to open the PR on the existing branch with ROADMAP/WORK_LOG patches.
+1. Call \`workspace_write_file\` for EACH new file (path, content). Each call is tiny — no streaming risk.
+2. Call \`workspace_delete_file\` to stage file removals (if needed).
+3. Call \`workspace_commit\` ONCE to push ALL staged files to branch \`${branch}\` in one atomic commit.
+4. Call \`github_create_pr\` to open the PR on the existing branch with ROADMAP/WORK_LOG patches.
 
 This is MUCH safer than github_push_files because each workspace_write_file sends only one file as a tool argument. No giant JSON arrays, no streaming timeout risk.
 
@@ -502,7 +505,7 @@ This is MUCH safer than github_push_files because each workspace_write_file send
 **FILE SPLITTING — How to split a large file into modules:**
 1. Read the original file with \`github_read_file\`
 2. Plan the split: identify logical groups of functions/components to extract
-3. Stage each new module file via \`workspace_write_file\` (action "create"), then \`workspace_commit\`
+3. Stage each new module file via \`workspace_write_file\`, then \`workspace_commit\`
 4. Final \`github_create_pr\`: patch the original file + ROADMAP + WORK_LOG. The patches MUST:
    - ADD import statements for the new modules at the top
    - DELETE the extracted code from the original file (remove the actual functions/constants/components that were moved)
