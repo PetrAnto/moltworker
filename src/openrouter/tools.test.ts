@@ -4817,7 +4817,7 @@ describe('workspace_write_file tool', () => {
   it('should be included in AVAILABLE_TOOLS and TOOLS_WITHOUT_BROWSER', () => {
     const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'workspace_write_file');
     expect(tool).toBeDefined();
-    expect(tool!.function.parameters.required).toEqual(['path', 'content', 'action']);
+    expect(tool!.function.parameters.required).toEqual(['path', 'content']);
 
     const doTool = TOOLS_WITHOUT_BROWSER.find(t => t.function.name === 'workspace_write_file');
     expect(doTool).toBeDefined();
@@ -4841,7 +4841,6 @@ describe('workspace_write_file tool', () => {
         arguments: JSON.stringify({
           path: 'src/utils/helpers.ts',
           content: 'export function hello() { return "hi"; }',
-          action: 'create',
         }),
       },
     }, context);
@@ -4861,7 +4860,6 @@ describe('workspace_write_file tool', () => {
         arguments: JSON.stringify({
           path: 'src/foo.ts',
           content: 'content',
-          action: 'create',
         }),
       },
     });
@@ -4884,7 +4882,6 @@ describe('workspace_write_file tool', () => {
         arguments: JSON.stringify({
           path: '../etc/passwd',
           content: 'evil',
-          action: 'create',
         }),
       },
     }, context);
@@ -4892,7 +4889,7 @@ describe('workspace_write_file tool', () => {
     expect(result.content).toContain('Invalid file path');
   });
 
-  it('should reject missing content for create action', async () => {
+  it('should reject missing content', async () => {
     const context = {
       workspaceWrite: async () => {},
       workspaceList: async () => [],
@@ -4906,15 +4903,25 @@ describe('workspace_write_file tool', () => {
         name: 'workspace_write_file',
         arguments: JSON.stringify({
           path: 'src/foo.ts',
-          action: 'create',
         }),
       },
     }, context);
 
     expect(result.content).toContain('Content is required');
   });
+});
 
-  it('should allow delete without content', async () => {
+describe('workspace_delete_file tool', () => {
+  it('should be included in AVAILABLE_TOOLS and TOOLS_WITHOUT_BROWSER', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'workspace_delete_file');
+    expect(tool).toBeDefined();
+    expect(tool!.function.parameters.required).toEqual(['path']);
+
+    const doTool = TOOLS_WITHOUT_BROWSER.find(t => t.function.name === 'workspace_delete_file');
+    expect(doTool).toBeDefined();
+  });
+
+  it('should stage a file deletion', async () => {
     const staged = new Map<string, WorkspaceFile>();
     const context: ToolContext = {
       workspaceWrite: async (file: WorkspaceFile) => {
@@ -4925,19 +4932,19 @@ describe('workspace_write_file tool', () => {
     };
 
     const result = await executeTool({
-      id: 'ws_5',
+      id: 'ws_del_1',
       type: 'function',
       function: {
-        name: 'workspace_write_file',
+        name: 'workspace_delete_file',
         arguments: JSON.stringify({
           path: 'old-file.ts',
-          action: 'delete',
         }),
       },
     }, context);
 
     expect(result.content).toContain('✅ Staged: delete old-file.ts');
     expect(staged.has('old-file.ts')).toBe(true);
+    expect(staged.get('old-file.ts')!.action).toBe('delete');
   });
 });
 

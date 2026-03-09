@@ -499,7 +499,7 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'workspace_write_file',
-      description: 'Stage a file in the local workspace for later commit. Does NOT call GitHub — the file is held in memory until you call workspace_commit.\n\n' +
+      description: 'Stage a file for creation or update in the local workspace. Does NOT call GitHub — the file is held in storage until you call workspace_commit.\n\n' +
         'Use this instead of github_push_files when creating or updating multiple files. ' +
         'Each call is tiny and fast (no streaming risk). When all files are staged, call workspace_commit once to push them all.\n\n' +
         'Typical workflow:\n' +
@@ -516,15 +516,27 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
           },
           content: {
             type: 'string',
-            description: 'Full file content. Required for "create" and "update" actions. Pass empty string for "delete".',
-          },
-          action: {
-            type: 'string',
-            description: 'File action: "create" (new file), "update" (replace existing), or "delete" (remove file)',
-            enum: ['create', 'update', 'delete'],
+            description: 'Full file content to create or update',
           },
         },
-        required: ['path', 'content', 'action'],
+        required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_delete_file',
+      description: 'Stage a file for deletion in the local workspace. The file will be removed from the repository when you call workspace_commit.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'File path relative to repo root to delete (e.g. "src/old-file.ts")',
+          },
+        },
+        required: ['path'],
       },
     },
   },
@@ -740,7 +752,10 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         );
         break;
       case 'workspace_write_file':
-        result = await workspaceWriteFile(args.path, args.content, args.action, context);
+        result = await workspaceWriteFile(args.path, args.content, args.action || 'create', context);
+        break;
+      case 'workspace_delete_file':
+        result = await workspaceWriteFile(args.path, '', 'delete', context);
         break;
       case 'workspace_commit':
         result = await workspaceCommit(args.owner, args.repo, args.branch, args.message, args.base, githubToken, context);
@@ -1381,7 +1396,7 @@ async function workspaceWriteFile(
 
   const validActions = ['create', 'update', 'delete'];
   if (!validActions.includes(action)) {
-    throw new Error(`Invalid action "${action}". Must be one of: ${validActions.join(', ')}`);
+    action = 'create'; // Default to create for write operations
   }
 
   if (action !== 'delete' && !content) {
