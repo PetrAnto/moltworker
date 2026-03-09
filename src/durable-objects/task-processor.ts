@@ -2991,49 +2991,75 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               if (errorSig === lastToolErrorSig) {
                 consecutiveIdenticalErrors++;
                 if (consecutiveIdenticalErrors >= MAX_IDENTICAL_ERRORS) {
-                  console.log(`[TaskProcessor] Error threshold hit: ${toolName} returned same error ${consecutiveIdenticalErrors} times — splicing failed context`);
+                  console.log(`[TaskProcessor] Error threshold hit: ${toolName} returned same error ${consecutiveIdenticalErrors} times — symmetrical pruning`);
 
-                  // Context splicing: remove the contiguous block of failed tool calls
-                  // and their error responses from conversation history. This prevents
-                  // context anchoring where the model re-reads its previous failed calls
-                  // and reflexively generates the same invalid JSON payload.
+                  // Symmetrical pruning: surgically remove failed tool calls while
+                  // maintaining tool_call_id parity required by the API.
+                  //
+                  // A flat splice would break parallel tool call sequences where one
+                  // tool succeeds but another fails — deleting the tool result orphans
+                  // the ID in the assistant message (→ 400), and deleting the assistant
+                  // message orphans successful tool results (→ 400).
+                  //
+                  // Instead: collect failed tool_call_ids, then for each message either
+                  // remove it (tool result) or mutate it (assistant tool_calls array).
                   const failedToolName = toolName;
                   const failedErrorPrefix = toolResult.content.slice(0, 80);
-                  let spliceStart = -1;
-                  let spliceEnd = conversationMessages.length;
+                  const failedToolCallIds = new Set<string>();
 
-                  // Scan backward to find the contiguous block of failed tool calls
-                  for (let i = conversationMessages.length - 1; i >= 0; i--) {
-                    const msg = conversationMessages[i];
-
-                    // Stop scanning at non-tool messages that aren't part of the failed block
-                    if (msg.role === 'user' || (msg.role === 'system')) {
-                      break;
-                    }
-
-                    // Match assistant messages with tool_calls for the failing tool
-                    if (msg.role === 'assistant' && msg.tool_calls) {
-                      const hasFailingTool = msg.tool_calls.some(
-                        (tc: { function: { name: string } }) => tc.function.name === failedToolName
-                      );
-                      if (hasFailingTool) {
-                        spliceStart = i;
-                      } else {
-                        break; // Different tool call — stop
-                      }
-                    }
-
-                    // Match tool result messages with the same error
-                    if (msg.role === 'tool' && typeof msg.content === 'string' &&
+                  // Pass 1: identify tool result messages that match the error pattern
+                  for (const msg of conversationMessages) {
+                    if (msg.role === 'tool' && msg.tool_call_id &&
+                        typeof msg.content === 'string' &&
                         msg.content.startsWith(failedErrorPrefix)) {
-                      if (spliceStart === -1) spliceStart = i;
+                      failedToolCallIds.add(msg.tool_call_id);
                     }
                   }
 
-                  if (spliceStart >= 0) {
-                    const removedCount = spliceEnd - spliceStart;
-                    conversationMessages.splice(spliceStart, removedCount);
-                    console.log(`[TaskProcessor] Spliced ${removedCount} messages (indices ${spliceStart}-${spliceEnd - 1}) from failed ${failedToolName} loop`);
+                  if (failedToolCallIds.size > 0) {
+                    // Pass 2: prune — iterate backward for safe in-place mutation
+                    let removedToolResults = 0;
+                    let mutatedAssistantMsgs = 0;
+                    let removedAssistantMsgs = 0;
+
+                    for (let i = conversationMessages.length - 1; i >= 0; i--) {
+                      const msg = conversationMessages[i];
+
+                      // Remove matching tool result messages
+                      if (msg.role === 'tool' && msg.tool_call_id &&
+                          failedToolCallIds.has(msg.tool_call_id)) {
+                        conversationMessages.splice(i, 1);
+                        removedToolResults++;
+                        continue;
+                      }
+
+                      // Mutate assistant messages: remove failed tool_call entries
+                      if (msg.role === 'assistant' && msg.tool_calls) {
+                        const before = msg.tool_calls.length;
+                        msg.tool_calls = msg.tool_calls.filter(
+                          (tc: ToolCall) => !failedToolCallIds.has(tc.id)
+                        );
+
+                        if (msg.tool_calls.length < before) {
+                          mutatedAssistantMsgs++;
+                          // If tool_calls is now empty AND no text content, remove entire message
+                          if (msg.tool_calls.length === 0) {
+                            const hasContent = msg.content && (typeof msg.content === 'string'
+                              ? msg.content.trim() !== ''
+                              : true);
+                            if (!hasContent) {
+                              conversationMessages.splice(i, 1);
+                              removedAssistantMsgs++;
+                            } else {
+                              // Keep message for its text content, drop empty tool_calls
+                              msg.tool_calls = undefined;
+                            }
+                          }
+                        }
+                      }
+                    }
+
+                    console.log(`[TaskProcessor] Symmetrical prune: removed ${removedToolResults} tool results, mutated ${mutatedAssistantMsgs} assistant msgs (${removedAssistantMsgs} fully removed), pruned ${failedToolCallIds.size} ${failedToolName} call IDs`);
                   }
 
                   // Append redirect prompt on the clean slate
