@@ -319,7 +319,7 @@ export async function parseAnthropicSSEStream(
   idleTimeoutMs = 45000,
   onProgress?: () => void,
   onToolCallReady?: (toolCall: ToolCall) => void,
-  onKeepAlive?: () => Promise<boolean>,
+  onKeepAlive?: (ctx: { hasInFlightToolCalls: boolean }) => Promise<boolean>,
 ): Promise<{
   choices: Array<{
     message: {
@@ -399,10 +399,11 @@ export async function parseAnthropicSSEStream(
 
       // Periodic keepalive — returns false to signal graceful stream split.
       if (onKeepAlive && Date.now() - lastKeepAliveMs >= 10_000) {
-        const shouldContinue = await onKeepAlive();
+        const hasInFlightToolCalls = currentBlockType === 'tool_use' && currentToolCallId !== '';
+        const shouldContinue = await onKeepAlive({ hasInFlightToolCalls });
         lastKeepAliveMs = Date.now();
         if (!shouldContinue) {
-          console.log(`[parseAnthropicSSE] Stream split after ${chunksReceived} chunks, content: ${content.length} chars`);
+          console.log(`[parseAnthropicSSE] Stream split after ${chunksReceived} chunks, content: ${content.length} chars${hasInFlightToolCalls ? ', had in-flight tool calls' : ''}`);
           finishReason = 'stream_split';
           break;
         }

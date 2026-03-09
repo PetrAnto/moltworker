@@ -79,7 +79,7 @@ export async function parseSSEStream(
   idleTimeoutMs = 45000,
   onProgress?: () => void,
   onToolCallReady?: (toolCall: ToolCall) => void,
-  onKeepAlive?: () => Promise<boolean>,
+  onKeepAlive?: (ctx: { hasInFlightToolCalls: boolean }) => Promise<boolean>,
 ): Promise<ChatCompletionResponse> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -136,10 +136,14 @@ export async function parseSSEStream(
       // prevent CF infrastructure eviction. We return whatever accumulated
       // so far (partial response) and the caller continues in the next iteration.
       if (onKeepAlive && Date.now() - lastKeepAliveMs >= 10_000) {
-        const shouldContinue = await onKeepAlive();
+        // Tell the caller if tool calls are being streamed but not yet complete.
+        // This lets the caller extend the split timeout to avoid discarding large
+        // tool call arguments (e.g. github_push_files with full file content).
+        const hasInFlightToolCalls = toolCalls.length > 0 && finishReason === null;
+        const shouldContinue = await onKeepAlive({ hasInFlightToolCalls });
         lastKeepAliveMs = Date.now();
         if (!shouldContinue) {
-          console.log(`[parseSSEStream] Stream split after ${chunksReceived} chunks, content: ${content.length} chars`);
+          console.log(`[parseSSEStream] Stream split after ${chunksReceived} chunks, content: ${content.length} chars${hasInFlightToolCalls ? ', had in-flight tool calls' : ''}`);
           finishReason = 'stream_split';
           break;
         }
@@ -780,7 +784,7 @@ export class OpenRouterClient {
       idleTimeoutMs?: number;
       onProgress?: () => void; // Called when chunks received - use for heartbeat
       onToolCallReady?: (toolCall: ToolCall) => void; // 7B.1: Called when a tool_call is complete during streaming
-      onKeepAlive?: () => Promise<boolean>; // Returns false to gracefully split the stream
+      onKeepAlive?: (ctx: { hasInFlightToolCalls: boolean }) => Promise<boolean>; // Returns false to gracefully split the stream
       reasoningLevel?: ReasoningLevel;
       responseFormat?: ResponseFormat;
       modelIdOverride?: string; // Override model ID (e.g. for rerouting Anthropic via OpenRouter)

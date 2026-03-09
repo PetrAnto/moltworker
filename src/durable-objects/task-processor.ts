@@ -381,8 +381,14 @@ const MAX_TOTAL_TOOLS_PAID = 100;
  * streams regardless of keepalive I/O — this controlled split prevents
  * uncontrolled eviction and lost work. The model continues in the next
  * iteration with the partial results.
+ *
+ * Increased from 75s → 90s: production logs show DOs survive streams past
+ * 80s without eviction. When tool calls are in-flight, this is doubled to
+ * 180s to avoid the "split-kills-tool-call" death loop where the model
+ * retries the same large tool call (e.g. github_push_files with full file
+ * content) and gets split again every time.
  */
-const STREAM_SPLIT_TIMEOUT_MS = 75_000;
+const STREAM_SPLIT_TIMEOUT_MS = 90_000;
 
 /**
  * Create a storage-safe copy of TaskState by stripping large transient fields.
@@ -2154,12 +2160,18 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                       // watchdog happy, and signal graceful stop after STREAM_SPLIT_TIMEOUT_MS.
                       // CF evicts DOs during long streams regardless of I/O — this controlled
                       // split returns partial results before eviction can happen.
-                      onKeepAlive: async () => {
+                      onKeepAlive: async (ctx: { hasInFlightToolCalls: boolean }) => {
                         task.lastUpdate = Date.now();
                         await this.doState.storage.put('task', taskForStorage(task));
                         const elapsed = Date.now() - streamStartMs;
-                        console.log(`[TaskProcessor] Streaming keepalive (${progressCount} chunks, ${Math.round(elapsed / 1000)}s)`);
-                        return elapsed < STREAM_SPLIT_TIMEOUT_MS;
+                        // Extend timeout when tool calls are being streamed — splitting mid-tool-call
+                        // discards the incomplete JSON args, causing a death loop where the model
+                        // retries the same large tool call and gets split again every time.
+                        const effectiveTimeout = ctx.hasInFlightToolCalls
+                          ? STREAM_SPLIT_TIMEOUT_MS * 2 // 2x for in-flight tool calls
+                          : STREAM_SPLIT_TIMEOUT_MS;
+                        console.log(`[TaskProcessor] Streaming keepalive (${progressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
+                        return elapsed < effectiveTimeout;
                       },
                     }
                   ),
@@ -2297,12 +2309,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // graceful stop after STREAM_SPLIT_TIMEOUT_MS. CF evicts DOs during
               // long streams regardless of I/O — this controlled split returns
               // partial results before eviction can happen.
-              const onKeepAlive = async (): Promise<boolean> => {
+              const onKeepAlive = async (ctx: { hasInFlightToolCalls: boolean }): Promise<boolean> => {
                 task.lastUpdate = Date.now();
                 await this.doState.storage.put('task', taskForStorage(task));
                 const elapsed = Date.now() - directStreamStartMs;
-                console.log(`[TaskProcessor] Streaming keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s)`);
-                return elapsed < STREAM_SPLIT_TIMEOUT_MS;
+                // Extend timeout when tool calls are being streamed (same as OpenRouter path)
+                const effectiveTimeout = ctx.hasInFlightToolCalls
+                  ? STREAM_SPLIT_TIMEOUT_MS * 2
+                  : STREAM_SPLIT_TIMEOUT_MS;
+                console.log(`[TaskProcessor] Streaming keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
+                return elapsed < effectiveTimeout;
               };
 
               // Hard stream timeout — prevents runaway streams that keep dribbling
@@ -2340,8 +2356,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
             console.log(`[TaskProcessor] API call failed (attempt ${attempt}): ${lastError.message}`);
 
-            // 429 rate limit on paid model — wait longer and retry (per-minute limits)
+            // 429 rate limit on paid model — distinguish daily vs per-minute limits.
+            // Daily (TPD) limits won't reset with short waits — fail fast and suggest alternatives.
+            // Per-minute (TPM/RPM) limits are transient — backoff and retry.
             if (/\b429\b/.test(lastError.message) && !(getModel(task.modelAlias)?.isFree === true)) {
+              // Detect daily/quota limits: Moonshot uses "TPD rate limit", others may use similar patterns
+              const isDailyLimit = /\bTPD\b|tokens?.per.day|daily.*(limit|quota|cap)|quota.*exceeded/i.test(lastError.message);
+              if (isDailyLimit) {
+                console.log(`[TaskProcessor] 429 DAILY rate limit for ${task.modelAlias} — failing fast (no point retrying)`);
+                // Surface a clear error so the user knows to switch models
+                lastError = new Error(`${task.modelAlias} daily token quota exceeded (${lastError.message}). Try /kimi (OpenRouter) or another model.`);
+                break;
+              }
+
               if (rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
                 rateLimitRetries++;
                 const waitSecs = Math.min(15 * Math.pow(2, rateLimitRetries - 1), 60);
