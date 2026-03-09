@@ -572,8 +572,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const MAX_STORAGE_VALUE_BYTES = 128 * 1024;
         if (new TextEncoder().encode(value).byteLength > MAX_STORAGE_VALUE_BYTES) {
           throw new Error(
-            `File "${file.path}" is too large for workspace staging (${Math.round(file.content.length / 1024)}KB). ` +
-            `Split it into smaller files (<100KB each) and stage them individually.`
+            `File "${file.path}" exceeds 128KB storage limit (${Math.round(file.content.length / 1024)}KB). ` +
+            `Do NOT chunk the text. You must logically refactor this file into smaller discrete ` +
+            `functional modules (e.g., extract separate hooks, utilities, or sub-components) ` +
+            `and stage each module individually with workspace_write_file.`
           );
         }
         await storage.put(prefix + file.path, value);
@@ -876,6 +878,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.status = 'failed';
       task.error = 'Task abandoned: exceeded 1-hour lifetime (likely stale from previous deployment)';
       await this.doState.storage.put('task', taskForStorage(task));
+      try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
       return;
     }
 
@@ -1039,6 +1042,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           task.error = `${stallReason}. The model may not be capable of this task.`;
           await this.doState.storage.put('task', taskForStorage(task));
 
+          // Terminal state — clean up workspace staging to prevent storage leaks
+          try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
+
           // Update orchestra history so failed tasks don't stay at 'started' forever
           await this.updateOrchestraHistoryOnFailure(task, stallReason);
 
@@ -1111,6 +1117,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.status = 'failed';
     task.error = failureReason;
     await this.doState.storage.put('task', taskForStorage(task));
+
+    // Terminal state — clean up workspace staging to prevent storage leaks
+    try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
 
     // Update orchestra history so failed tasks don't stay at 'started' forever
     await this.updateOrchestraHistoryOnFailure(task, failureReason);
@@ -3142,6 +3151,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.result = content.trim() + '\n\n_(Model did not use tools — response may be incomplete)_';
             await this.doState.storage.put('task', taskForStorage(task));
             await this.doState.storage.deleteAlarm();
+            try { await workspace.clear(); } catch { /* best-effort */ }
             if (statusMessageId) {
               await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
             }
@@ -3501,6 +3511,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Cancel watchdog alarm - task completed successfully
         await this.doState.storage.deleteAlarm();
 
+        // Terminal state — clean up workspace staging to prevent storage leaks
+        try { await workspace.clear(); } catch { /* best-effort */ }
+
         // Save final checkpoint (marked as completed) so user can /saveas it
         if (this.r2) {
           await this.saveCheckpoint(
@@ -3797,6 +3810,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.result = 'Task hit iteration limit (100). Last response may be incomplete.';
       await this.doState.storage.put('task', taskForStorage(task));
 
+      // Terminal state — clean up workspace staging to prevent storage leaks
+      try { await workspace.clear(); } catch { /* best-effort */ }
+
       // Cancel watchdog alarm
       await this.doState.storage.deleteAlarm();
 
@@ -3857,6 +3873,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       task.status = 'failed';
       task.error = error instanceof Error ? error.message : String(error);
+
+      // Terminal state — clean up workspace staging to prevent storage leaks
+      try { await workspace.clear(); } catch { /* best-effort */ }
 
       // Wrap storage writes in try/catch to prevent zombie loops:
       // If the original error was QuotaExceededError, blindly calling storage.put
@@ -3969,14 +3988,6 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       }
     } finally {
       this.isRunning = false;
-      // Clean up any orphaned workspace files to prevent storage leaks.
-      // Staged files are only useful until workspace_commit; if the task
-      // completes, fails, stalls, or is cancelled, leftover files are waste.
-      try {
-        await workspace.clear();
-      } catch {
-        // Best-effort cleanup — don't mask the real error
-      }
     }
   }
 
