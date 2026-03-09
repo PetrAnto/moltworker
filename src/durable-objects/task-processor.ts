@@ -2340,8 +2340,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
             console.log(`[TaskProcessor] API call failed (attempt ${attempt}): ${lastError.message}`);
 
-            // 429 rate limit on paid model — wait longer and retry (per-minute limits)
+            // 429 rate limit on paid model — distinguish daily vs per-minute limits.
+            // Daily (TPD) limits won't reset with short waits — fail fast and suggest alternatives.
+            // Per-minute (TPM/RPM) limits are transient — backoff and retry.
             if (/\b429\b/.test(lastError.message) && !(getModel(task.modelAlias)?.isFree === true)) {
+              // Detect daily/quota limits: Moonshot uses "TPD rate limit", others may use similar patterns
+              const isDailyLimit = /\bTPD\b|tokens?.per.day|daily.*(limit|quota|cap)|quota.*exceeded/i.test(lastError.message);
+              if (isDailyLimit) {
+                console.log(`[TaskProcessor] 429 DAILY rate limit for ${task.modelAlias} — failing fast (no point retrying)`);
+                // Surface a clear error so the user knows to switch models
+                lastError = new Error(`${task.modelAlias} daily token quota exceeded (${lastError.message}). Try /kimi (OpenRouter) or another model.`);
+                break;
+              }
+
               if (rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
                 rateLimitRetries++;
                 const waitSecs = Math.min(15 * Math.pow(2, rateLimitRetries - 1), 60);
