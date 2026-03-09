@@ -879,6 +879,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.error = 'Task abandoned: exceeded 1-hour lifetime (likely stale from previous deployment)';
       await this.doState.storage.put('task', taskForStorage(task));
       try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
+      try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
       return;
     }
 
@@ -1044,6 +1045,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // Terminal state — clean up workspace staging to prevent storage leaks
           try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
+      try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
 
           // Update orchestra history so failed tasks don't stay at 'started' forever
           await this.updateOrchestraHistoryOnFailure(task, stallReason);
@@ -1083,13 +1085,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}`
       );
 
-      // Reconstruct TaskRequest and trigger resume
+      // Reconstruct TaskRequest and trigger resume.
+      // task.messages is always [] (taskForStorage strips them to stay under 128KB).
+      // Prefer the original request messages stored in DO storage — these contain
+      // the system prompt and user message, which are essential for context.
+      // processTask will overwrite these with checkpoint data from R2 if available,
+      // but if no checkpoint exists yet (e.g. task died before first tool call),
+      // having the originals prevents the model from losing all context.
+      const storedOriginalMessages = await this.doState.storage.get<ChatMessage[]>(`originalMessages:${task.taskId}`);
+      const resumeMessages = storedOriginalMessages && storedOriginalMessages.length > 0
+        ? storedOriginalMessages
+        : task.messages; // fallback to empty [] if originalMessages somehow missing
       const taskRequest: TaskRequest = {
         taskId: task.taskId,
         chatId: task.chatId,
         userId: task.userId,
         modelAlias: task.modelAlias,
-        messages: task.messages,
+        messages: resumeMessages,
         telegramToken: task.telegramToken,
         openrouterKey: task.openrouterKey || '',
         githubToken: task.githubToken,
@@ -1672,6 +1684,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.toolSignatures = existingTask.toolSignatures;
     }
     await this.doState.storage.put('task', taskForStorage(task));
+
+    // Persist the original request messages (system prompt + user message) so
+    // the alarm handler can reconstruct context even if no R2 checkpoint was
+    // saved yet (e.g. model outputs a plan on iteration 1 with no tool calls,
+    // then DO gets evicted before any checkpoint is written).
+    // taskForStorage() strips messages to [] to stay under 128KB, so without
+    // this the alarm handler would pass empty messages → no system prompt.
+    if (!isResumingSameTask) {
+      await this.doState.storage.put(`originalMessages:${task.taskId}`, request.messages);
+    }
 
     // Set watchdog alarm to detect if DO is terminated
     await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
@@ -3152,6 +3174,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             await this.doState.storage.put('task', taskForStorage(task));
             await this.doState.storage.deleteAlarm();
             try { await workspace.clear(); } catch { /* best-effort */ }
+            try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
             if (statusMessageId) {
               await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
             }
@@ -3209,6 +3232,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               role: 'user',
               content: '[STOP PLANNING. You MUST call tools, not describe steps. Call github_read_file RIGHT NOW to read the roadmap. Do NOT output any text — only tool calls.]',
             });
+            // Save checkpoint before continuing — without this, a DO eviction after
+            // a non-tool iteration (e.g. plan output) loses all conversation state
+            // because checkpoints were only saved inside the tool execution block.
+            if (this.r2) {
+              await this.saveCheckpoint(this.r2, request.userId, request.taskId,
+                conversationMessages, task.toolsUsed, task.iterations, request.prompt,
+                'latest', false, task.phase, request.modelAlias);
+            }
             continue;
           }
         }
@@ -3236,6 +3267,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               role: 'user',
               content: '[Your last response was empty. Please provide a concise answer based on the tool results above. Keep it brief and focused.]',
             });
+            if (this.r2) {
+              await this.saveCheckpoint(this.r2, request.userId, request.taskId,
+                conversationMessages, task.toolsUsed, task.iterations, request.prompt,
+                'latest', false, task.phase, request.modelAlias);
+            }
             continue;
           }
 
@@ -3432,6 +3468,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               role: 'user',
               content: `[REVIEW PHASE] ${reviewPrompt}\n\nIMPORTANT: If everything checks out, respond with exactly "LGTM". If there are issues, provide a REVISED version of your complete answer (not a review checklist). Do NOT output a review checklist — either say "LGTM" or give the corrected answer.`,
             });
+            // Checkpoint before review iteration — preserves work-phase output
+            if (this.r2) {
+              await this.saveCheckpoint(this.r2, request.userId, request.taskId,
+                conversationMessages, task.toolsUsed, task.iterations, request.prompt,
+                'latest', false, task.phase, request.modelAlias);
+            }
             continue; // One more iteration for the review response
           }
         }
@@ -3513,6 +3555,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // Terminal state — clean up workspace staging to prevent storage leaks
         try { await workspace.clear(); } catch { /* best-effort */ }
+        try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
 
         // Save final checkpoint (marked as completed) so user can /saveas it
         if (this.r2) {
@@ -3812,6 +3855,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       // Terminal state — clean up workspace staging to prevent storage leaks
       try { await workspace.clear(); } catch { /* best-effort */ }
+      try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
 
       // Cancel watchdog alarm
       await this.doState.storage.deleteAlarm();
@@ -3876,6 +3920,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       // Terminal state — clean up workspace staging to prevent storage leaks
       try { await workspace.clear(); } catch { /* best-effort */ }
+      try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
 
       // Wrap storage writes in try/catch to prevent zombie loops:
       // If the original error was QuotaExceededError, blindly calling storage.put
