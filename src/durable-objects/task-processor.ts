@@ -1083,13 +1083,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}`
       );
 
-      // Reconstruct TaskRequest and trigger resume
+      // Reconstruct TaskRequest and trigger resume.
+      // task.messages is always [] (taskForStorage strips them to stay under 128KB).
+      // Prefer the original request messages stored in DO storage — these contain
+      // the system prompt and user message, which are essential for context.
+      // processTask will overwrite these with checkpoint data from R2 if available,
+      // but if no checkpoint exists yet (e.g. task died before first tool call),
+      // having the originals prevents the model from losing all context.
+      const storedOriginalMessages = await this.doState.storage.get<ChatMessage[]>('originalMessages');
+      const resumeMessages = storedOriginalMessages && storedOriginalMessages.length > 0
+        ? storedOriginalMessages
+        : task.messages; // fallback to empty [] if originalMessages somehow missing
       const taskRequest: TaskRequest = {
         taskId: task.taskId,
         chatId: task.chatId,
         userId: task.userId,
         modelAlias: task.modelAlias,
-        messages: task.messages,
+        messages: resumeMessages,
         telegramToken: task.telegramToken,
         openrouterKey: task.openrouterKey || '',
         githubToken: task.githubToken,
@@ -1672,6 +1682,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.toolSignatures = existingTask.toolSignatures;
     }
     await this.doState.storage.put('task', taskForStorage(task));
+
+    // Persist the original request messages (system prompt + user message) so
+    // the alarm handler can reconstruct context even if no R2 checkpoint was
+    // saved yet (e.g. model outputs a plan on iteration 1 with no tool calls,
+    // then DO gets evicted before any checkpoint is written).
+    // taskForStorage() strips messages to [] to stay under 128KB, so without
+    // this the alarm handler would pass empty messages → no system prompt.
+    if (!isResumingSameTask) {
+      await this.doState.storage.put('originalMessages', request.messages);
+    }
 
     // Set watchdog alarm to detect if DO is terminated
     await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
