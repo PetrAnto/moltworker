@@ -295,11 +295,16 @@ Read only the files you need to implement the task. Stop reading when you have e
 For "patch" action: \`{"path":"file.js","action":"patch","patches":[{"find":"exact text","replace":"new text"}]}\`
 For "create" action: \`{"path":"file.js","action":"create","content":"full content"}\`
 
-**If creating ≤3 new files**: use ONE \`github_create_pr\` call with all changes.
-**If creating 4+ new files** (e.g. file splitting): batch with \`github_push_files\`:
-1. \`github_push_files\` — batch 1 (2-3 files), branch=\`${branch}\`, message="batch 1: ..."
-2. \`github_push_files\` — batch 2 (2-3 more files), same branch
-3. \`github_create_pr\` — opens PR on the existing branch. Include ROADMAP/WORK_LOG patches + source file patches in "changes".
+### Creating files — USE WORKSPACE PATTERN (prevents timeout/streaming failures)
+**ALWAYS use workspace_write_file + workspace_commit instead of github_push_files for new files:**
+1. \`workspace_write_file\` — stage file A (path, content, action="create")
+2. \`workspace_write_file\` — stage file B
+3. \`workspace_commit\` — push all staged files to branch \`${branch}\` in one commit
+4. \`github_create_pr\` — open PR on existing branch with ROADMAP/WORK_LOG patches
+
+Each workspace_write_file is a tiny tool call (just path + content). No streaming risk.
+
+**If creating ≤3 small files** (<100 lines each): ONE \`github_create_pr\` with all changes is also OK.
 
 When splitting files: DELETE the extracted code from the original file. Do NOT rename it or leave dead code.
 
@@ -379,17 +384,18 @@ For existing files (especially >100 lines), use action \`"patch"\`:
 Only use "update" (full content) for small files (<100 lines) or when >50% of the file changes.
 Use "create" for new files.
 
-### CRITICAL: Batching large changes to avoid timeouts
-**If creating ≤3 new files**: use ONE \`github_create_pr\` call with all changes (source + ROADMAP + WORK_LOG).
-**If creating 4+ new files** (e.g. file splitting): use \`github_push_files\` to batch:
-1. \`github_push_files\` — batch 1 (2-3 files), branch=\`${branch}\`, message="batch 1: ..."
-2. \`github_push_files\` — batch 2 (2-3 more files), same branch
-3. \`github_create_pr\` — opens PR on existing branch. Include ROADMAP/WORK_LOG patches + remaining source patches in "changes".
+### CRITICAL: Creating files — USE WORKSPACE PATTERN (prevents streaming timeouts)
+**ALWAYS use workspace_write_file + workspace_commit for creating new files:**
+1. \`workspace_write_file\` — stage each new file one at a time (path, content, action="create")
+2. \`workspace_commit\` — push ALL staged files to branch \`${branch}\` in one atomic commit
+3. \`github_create_pr\` — open PR on existing branch with ROADMAP/WORK_LOG patches
 
-This prevents output token exhaustion on large refactors. Each batch generates a separate commit on the same branch.
+Each \`workspace_write_file\` call is tiny (just the file content as a tool argument), so there's no risk of streaming timeout. The commit happens server-side with no large payloads.
+
+**If creating ≤3 small files** (<100 lines each): one \`github_create_pr\` with all changes is also OK.
 
 ### File splitting (if task requires it)
-1. New module files with action "create" (use github_push_files in batches of 2-3)
+1. Stage new module files via \`workspace_write_file\` (one call per file), then \`workspace_commit\`
 2. Updated original file with action "patch" — include in final github_create_pr:
    - ADD import statements for the new modules at the top
    - DELETE the extracted code (functions, constants, components) from the original file using patches
@@ -483,20 +489,20 @@ If any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you can split it 
 
 Example patch: \`{"path":"src/App.jsx","action":"patch","patches":[{"find":"const data = [...]","replace":"import { data } from './data'"}]}\`
 
-### CRITICAL: Batching large changes (prevents timeout/499 errors)
-**If creating ≤3 new files**: use ONE \`github_create_pr\` call with all changes.
-**If creating 4+ new files** (e.g. file splitting): use \`github_push_files\` to batch commits:
-1. \`github_push_files\` — push batch 1 (2-3 new files), branch=\`${branch}\`, message="batch 1: ..."
-2. \`github_push_files\` — push batch 2 (2-3 more files), same branch (adds a commit)
-3. Continue batching until all new files are pushed
-4. \`github_create_pr\` — opens PR on the existing branch. Include ROADMAP.md + WORK_LOG.md patches + original file patches in "changes".
+### CRITICAL: Creating files — USE WORKSPACE PATTERN (prevents streaming timeouts)
+**ALWAYS use workspace_write_file + workspace_commit for creating new files:**
+1. Call \`workspace_write_file\` for EACH new file (path, content, action="create"). Each call is tiny — no streaming risk.
+2. Call \`workspace_commit\` ONCE to push ALL staged files to branch \`${branch}\` in one atomic commit.
+3. Call \`github_create_pr\` to open the PR on the existing branch with ROADMAP/WORK_LOG patches.
 
-This prevents output token exhaustion. Each \`github_push_files\` creates a commit; \`github_create_pr\` adds the final commit and opens the PR.
+This is MUCH safer than github_push_files because each workspace_write_file sends only one file as a tool argument. No giant JSON arrays, no streaming timeout risk.
+
+**If creating ≤3 small files** (<100 lines each): one \`github_create_pr\` with all changes is also OK.
 
 **FILE SPLITTING — How to split a large file into modules:**
 1. Read the original file with \`github_read_file\`
 2. Plan the split: identify logical groups of functions/components to extract
-3. Push new module files in batches of 2-3 via \`github_push_files\` (action "create")
+3. Stage each new module file via \`workspace_write_file\` (action "create"), then \`workspace_commit\`
 4. Final \`github_create_pr\`: patch the original file + ROADMAP + WORK_LOG. The patches MUST:
    - ADD import statements for the new modules at the top
    - DELETE the extracted code from the original file (remove the actual functions/constants/components that were moved)

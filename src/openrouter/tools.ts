@@ -65,6 +65,15 @@ export interface SandboxLike {
 }
 
 /**
+ * A file staged in the workspace, waiting to be committed via workspace_commit.
+ */
+export interface WorkspaceFile {
+  path: string;
+  content: string;
+  action: 'create' | 'update' | 'delete';
+}
+
+/**
  * Context for tool execution (holds secrets like GitHub token)
  */
 export interface ToolContext {
@@ -73,6 +82,10 @@ export interface ToolContext {
   browser?: Fetcher; // Cloudflare Browser Rendering binding
   sandbox?: SandboxLike; // Sandbox container for code execution
   cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
+  // Workspace operations — callbacks provided by TaskProcessor DO
+  workspaceWrite?: (file: WorkspaceFile) => Promise<void>;
+  workspaceList?: () => Promise<WorkspaceFile[]>;
+  workspaceClear?: () => Promise<void>;
 }
 
 /**
@@ -485,6 +498,75 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'workspace_write_file',
+      description: 'Stage a file in the local workspace for later commit. Does NOT call GitHub — the file is held in memory until you call workspace_commit.\n\n' +
+        'Use this instead of github_push_files when creating or updating multiple files. ' +
+        'Each call is tiny and fast (no streaming risk). When all files are staged, call workspace_commit once to push them all.\n\n' +
+        'Typical workflow:\n' +
+        '1. workspace_write_file — stage file A\n' +
+        '2. workspace_write_file — stage file B\n' +
+        '3. workspace_write_file — stage file C\n' +
+        '4. workspace_commit — push all staged files to GitHub branch in one commit',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'File path relative to repo root (e.g. "src/utils/helpers.ts")',
+          },
+          content: {
+            type: 'string',
+            description: 'Full file content. Required for "create" and "update" actions.',
+          },
+          action: {
+            type: 'string',
+            description: 'File action: "create" (new file), "update" (replace existing), or "delete" (remove file)',
+            enum: ['create', 'update', 'delete'],
+          },
+        },
+        required: ['path', 'action'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_commit',
+      description: 'Commit all files staged via workspace_write_file to a GitHub branch in a single atomic commit.\n\n' +
+        'This pushes all staged files at once — no large streaming payloads. After commit, the workspace is cleared.\n' +
+        'Creates the branch on first call; adds a commit if branch already exists.\n\n' +
+        'Use workspace_write_file to stage files first, then call this once.',
+      parameters: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner (username or organization)',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          branch: {
+            type: 'string',
+            description: 'Branch name (will be prefixed with bot/ automatically)',
+          },
+          message: {
+            type: 'string',
+            description: 'Commit message for this batch',
+          },
+          base: {
+            type: 'string',
+            description: 'Base branch (default: main). Only used when creating a new branch.',
+          },
+        },
+        required: ['owner', 'repo', 'branch', 'message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'sandbox_exec',
       description: 'Execute shell commands in a sandbox container for complex code tasks. Use for multi-file refactors, build/test workflows, or tasks that need git CLI. The container has git, node, npm, and common dev tools. Commands run sequentially. Use github_create_pr for simple file changes instead.',
       parameters: {
@@ -656,6 +738,12 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
           args.base,
           githubToken
         );
+        break;
+      case 'workspace_write_file':
+        result = await workspaceWriteFile(args.path, args.content, args.action, context);
+        break;
+      case 'workspace_commit':
+        result = await workspaceCommit(args.owner, args.repo, args.branch, args.message, args.base, githubToken, context);
         break;
       case 'sandbox_exec':
         result = await sandboxExec(args.commands, args.timeout, context?.sandbox, githubToken);
@@ -1271,6 +1359,89 @@ async function githubPushFiles(
   ];
 
   return summary.join('\n');
+}
+
+/**
+ * Stage a file in the workspace (DO memory). No GitHub API calls.
+ * Each call produces a tiny tool result, making it immune to stream splits.
+ */
+async function workspaceWriteFile(
+  path: string,
+  content: string | undefined,
+  action: string,
+  context?: ToolContext
+): Promise<string> {
+  if (!context?.workspaceWrite) {
+    throw new Error('workspace_write_file is only available in Durable Object tasks. Use github_push_files instead.');
+  }
+
+  if (!path || path.includes('..') || path.startsWith('/')) {
+    throw new Error(`Invalid file path: "${path}".`);
+  }
+
+  const validActions = ['create', 'update', 'delete'];
+  if (!validActions.includes(action)) {
+    throw new Error(`Invalid action "${action}". Must be one of: ${validActions.join(', ')}`);
+  }
+
+  if (action !== 'delete' && !content) {
+    throw new Error(`Content is required for "${action}" action on "${path}".`);
+  }
+
+  await context.workspaceWrite({
+    path,
+    content: content || '',
+    action: action as 'create' | 'update' | 'delete',
+  });
+
+  const sizeInfo = content ? ` (${content.length} chars)` : '';
+  return `✅ Staged: ${action} ${path}${sizeInfo}. Call workspace_commit when all files are ready.`;
+}
+
+/**
+ * Commit all workspace-staged files to a GitHub branch in one atomic commit.
+ * Reads staged files from DO state, creates blobs/tree/commit via GitHub API,
+ * then clears the workspace.
+ */
+async function workspaceCommit(
+  owner: string,
+  repo: string,
+  branch: string,
+  message: string,
+  base: string | undefined,
+  token: string | undefined,
+  context?: ToolContext
+): Promise<string> {
+  if (!context?.workspaceList || !context?.workspaceClear) {
+    throw new Error('workspace_commit is only available in Durable Object tasks. Use github_push_files instead.');
+  }
+  if (!token) {
+    throw new Error('GitHub token is required. Configure GITHUB_TOKEN in the bot settings.');
+  }
+
+  const stagedFiles = await context.workspaceList();
+  if (stagedFiles.length === 0) {
+    throw new Error('No files staged in workspace. Use workspace_write_file first.');
+  }
+
+  // Delegate to githubPushFiles with the staged files as FileChange[]
+  const changes: FileChange[] = stagedFiles.map(f => ({
+    path: f.path,
+    content: f.content,
+    action: f.action,
+  }));
+
+  console.log(`[workspace_commit] Committing ${changes.length} staged file(s) to ${branch}`);
+
+  const result = await githubPushFiles(owner, repo, branch, message, changes, base, token);
+
+  // Clear workspace after successful commit
+  await context.workspaceClear();
+
+  return result.replace(
+    'Branch is ready. Use github_push_files for more batches, or github_create_pr to open the PR.',
+    'Workspace cleared. Use workspace_write_file to stage more files, or github_create_pr to open the PR.'
+  );
 }
 
 /**

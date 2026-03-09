@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, type SandboxLike, type SandboxProcess } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -4806,5 +4806,292 @@ describe('JSON argument repair via executeTool', () => {
 
     // Valid JSON goes through the normal JSON.parse path, no repair needed
     expect(result.content).not.toContain('Error: Invalid JSON arguments');
+  });
+});
+
+// ============================================================
+// Workspace tools (workspace_write_file + workspace_commit)
+// ============================================================
+
+describe('workspace_write_file tool', () => {
+  it('should be included in AVAILABLE_TOOLS and TOOLS_WITHOUT_BROWSER', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'workspace_write_file');
+    expect(tool).toBeDefined();
+    expect(tool!.function.parameters.required).toEqual(['path', 'action']);
+
+    const doTool = TOOLS_WITHOUT_BROWSER.find(t => t.function.name === 'workspace_write_file');
+    expect(doTool).toBeDefined();
+  });
+
+  it('should stage a file via workspaceWrite callback', async () => {
+    const staged = new Map<string, WorkspaceFile>();
+    const context: ToolContext = {
+      workspaceWrite: async (file: WorkspaceFile) => {
+        staged.set(file.path, file);
+      },
+      workspaceList: async () => Array.from(staged.values()),
+      workspaceClear: async () => staged.clear(),
+    };
+
+    const result = await executeTool({
+      id: 'ws_1',
+      type: 'function',
+      function: {
+        name: 'workspace_write_file',
+        arguments: JSON.stringify({
+          path: 'src/utils/helpers.ts',
+          content: 'export function hello() { return "hi"; }',
+          action: 'create',
+        }),
+      },
+    }, context);
+
+    expect(result.content).toContain('✅ Staged: create src/utils/helpers.ts');
+    expect(result.content).toContain('chars');
+    expect(staged.has('src/utils/helpers.ts')).toBe(true);
+    expect(staged.get('src/utils/helpers.ts')!.content).toBe('export function hello() { return "hi"; }');
+  });
+
+  it('should error without workspace context (Worker mode)', async () => {
+    const result = await executeTool({
+      id: 'ws_2',
+      type: 'function',
+      function: {
+        name: 'workspace_write_file',
+        arguments: JSON.stringify({
+          path: 'src/foo.ts',
+          content: 'content',
+          action: 'create',
+        }),
+      },
+    });
+
+    expect(result.content).toContain('only available in Durable Object tasks');
+  });
+
+  it('should reject invalid paths', async () => {
+    const context = {
+      workspaceWrite: async () => {},
+      workspaceList: async () => [],
+      workspaceClear: async () => {},
+    };
+
+    const result = await executeTool({
+      id: 'ws_3',
+      type: 'function',
+      function: {
+        name: 'workspace_write_file',
+        arguments: JSON.stringify({
+          path: '../etc/passwd',
+          content: 'evil',
+          action: 'create',
+        }),
+      },
+    }, context);
+
+    expect(result.content).toContain('Invalid file path');
+  });
+
+  it('should reject missing content for create action', async () => {
+    const context = {
+      workspaceWrite: async () => {},
+      workspaceList: async () => [],
+      workspaceClear: async () => {},
+    };
+
+    const result = await executeTool({
+      id: 'ws_4',
+      type: 'function',
+      function: {
+        name: 'workspace_write_file',
+        arguments: JSON.stringify({
+          path: 'src/foo.ts',
+          action: 'create',
+        }),
+      },
+    }, context);
+
+    expect(result.content).toContain('Content is required');
+  });
+
+  it('should allow delete without content', async () => {
+    const staged = new Map<string, WorkspaceFile>();
+    const context: ToolContext = {
+      workspaceWrite: async (file: WorkspaceFile) => {
+        staged.set(file.path, file);
+      },
+      workspaceList: async () => Array.from(staged.values()),
+      workspaceClear: async () => staged.clear(),
+    };
+
+    const result = await executeTool({
+      id: 'ws_5',
+      type: 'function',
+      function: {
+        name: 'workspace_write_file',
+        arguments: JSON.stringify({
+          path: 'old-file.ts',
+          action: 'delete',
+        }),
+      },
+    }, context);
+
+    expect(result.content).toContain('✅ Staged: delete old-file.ts');
+    expect(staged.has('old-file.ts')).toBe(true);
+  });
+});
+
+describe('workspace_commit tool', () => {
+  it('should be included in AVAILABLE_TOOLS and TOOLS_WITHOUT_BROWSER', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'workspace_commit');
+    expect(tool).toBeDefined();
+    expect(tool!.function.parameters.required).toEqual(['owner', 'repo', 'branch', 'message']);
+
+    const doTool = TOOLS_WITHOUT_BROWSER.find(t => t.function.name === 'workspace_commit');
+    expect(doTool).toBeDefined();
+  });
+
+  it('should error without workspace context', async () => {
+    const result = await executeTool({
+      id: 'wc_1',
+      type: 'function',
+      function: {
+        name: 'workspace_commit',
+        arguments: JSON.stringify({
+          owner: 'PetrAnto',
+          repo: 'test',
+          branch: 'test-branch',
+          message: 'test commit',
+        }),
+      },
+    });
+
+    expect(result.content).toContain('only available in Durable Object tasks');
+  });
+
+  it('should error with empty workspace', async () => {
+    const context = {
+      githubToken: 'ghp_test123',
+      workspaceWrite: async () => {},
+      workspaceList: async () => [],
+      workspaceClear: async () => {},
+    };
+
+    const result = await executeTool({
+      id: 'wc_2',
+      type: 'function',
+      function: {
+        name: 'workspace_commit',
+        arguments: JSON.stringify({
+          owner: 'PetrAnto',
+          repo: 'test',
+          branch: 'test-branch',
+          message: 'test commit',
+        }),
+      },
+    }, context);
+
+    expect(result.content).toContain('No files staged');
+  });
+
+  it('should error without GitHub token', async () => {
+    const context = {
+      workspaceWrite: async () => {},
+      workspaceList: async () => [{ path: 'foo.ts', content: 'bar', action: 'create' as const }],
+      workspaceClear: async () => {},
+    };
+
+    const result = await executeTool({
+      id: 'wc_3',
+      type: 'function',
+      function: {
+        name: 'workspace_commit',
+        arguments: JSON.stringify({
+          owner: 'PetrAnto',
+          repo: 'test',
+          branch: 'test-branch',
+          message: 'test commit',
+        }),
+      },
+    }, context);
+
+    expect(result.content).toContain('GitHub token is required');
+  });
+
+  it('should commit staged files and clear workspace on success', async () => {
+    const staged = new Map<string, { path: string; content: string; action: 'create' | 'update' | 'delete' }>();
+    staged.set('src/a.ts', { path: 'src/a.ts', content: 'export const a = 1;', action: 'create' });
+    staged.set('src/b.ts', { path: 'src/b.ts', content: 'export const b = 2;', action: 'create' });
+
+    let cleared = false;
+    const context = {
+      githubToken: 'ghp_test123',
+      workspaceWrite: async (file: { path: string; content: string; action: 'create' | 'update' | 'delete' }) => {
+        staged.set(file.path, file);
+      },
+      workspaceList: async () => Array.from(staged.values()),
+      workspaceClear: async () => { cleared = true; staged.clear(); },
+    };
+
+    // Mock GitHub API calls that githubPushFiles makes:
+    // 1. Check branch existence (404 = new)
+    // 2. Get base branch ref
+    // 3. Create blob × 2
+    // 4. Create tree
+    // 5. Create commit
+    // 6. Create branch ref
+    const fetchCalls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      fetchCalls.push(`${init?.method || 'GET'} ${url}`);
+
+      // Branch check — 404 (doesn't exist yet)
+      if (url.includes('/git/ref/heads/bot/')) {
+        return { ok: false, status: 404 };
+      }
+      // Base branch ref
+      if (url.includes('/git/ref/heads/main')) {
+        return { ok: true, json: async () => ({ object: { sha: 'abc123parent' } }) };
+      }
+      // Create blob
+      if (url.includes('/git/blobs') && init?.method === 'POST') {
+        return { ok: true, json: async () => ({ sha: `blob_${fetchCalls.length}` }) };
+      }
+      // Create tree
+      if (url.includes('/git/trees') && init?.method === 'POST') {
+        return { ok: true, json: async () => ({ sha: 'tree_sha_1' }) };
+      }
+      // Create commit
+      if (url.includes('/git/commits') && init?.method === 'POST') {
+        return { ok: true, json: async () => ({ sha: 'commit_sha_abcdef12' }) };
+      }
+      // Create branch ref
+      if (url.includes('/git/refs') && init?.method === 'POST') {
+        return { ok: true, json: async () => ({ ref: 'refs/heads/bot/test-branch' }) };
+      }
+      return { ok: false, status: 404 };
+    }));
+
+    const result = await executeTool({
+      id: 'wc_4',
+      type: 'function',
+      function: {
+        name: 'workspace_commit',
+        arguments: JSON.stringify({
+          owner: 'PetrAnto',
+          repo: 'test',
+          branch: 'test-branch',
+          message: 'feat: add files from workspace',
+        }),
+      },
+    }, context);
+
+    expect(result.content).toContain('✅ Files pushed to branch bot/test-branch');
+    expect(result.content).toContain('2 file(s)');
+    expect(result.content).toContain('src/a.ts');
+    expect(result.content).toContain('src/b.ts');
+    expect(result.content).toContain('Workspace cleared');
+    expect(cleared).toBe(true);
+    // Verify GitHub API was called (branch check + base ref + 2 blobs + tree + commit + create ref)
+    expect(fetchCalls.length).toBe(7);
   });
 });
