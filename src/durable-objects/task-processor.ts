@@ -2991,11 +2991,57 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               if (errorSig === lastToolErrorSig) {
                 consecutiveIdenticalErrors++;
                 if (consecutiveIdenticalErrors >= MAX_IDENTICAL_ERRORS) {
-                  console.log(`[TaskProcessor] Error threshold hit: ${toolName} returned same error ${consecutiveIdenticalErrors} times — injecting hard abort`);
+                  console.log(`[TaskProcessor] Error threshold hit: ${toolName} returned same error ${consecutiveIdenticalErrors} times — splicing failed context`);
+
+                  // Context splicing: remove the contiguous block of failed tool calls
+                  // and their error responses from conversation history. This prevents
+                  // context anchoring where the model re-reads its previous failed calls
+                  // and reflexively generates the same invalid JSON payload.
+                  const failedToolName = toolName;
+                  const failedErrorPrefix = toolResult.content.slice(0, 80);
+                  let spliceStart = -1;
+                  let spliceEnd = conversationMessages.length;
+
+                  // Scan backward to find the contiguous block of failed tool calls
+                  for (let i = conversationMessages.length - 1; i >= 0; i--) {
+                    const msg = conversationMessages[i];
+
+                    // Stop scanning at non-tool messages that aren't part of the failed block
+                    if (msg.role === 'user' || (msg.role === 'system')) {
+                      break;
+                    }
+
+                    // Match assistant messages with tool_calls for the failing tool
+                    if (msg.role === 'assistant' && msg.tool_calls) {
+                      const hasFailingTool = msg.tool_calls.some(
+                        (tc: { function: { name: string } }) => tc.function.name === failedToolName
+                      );
+                      if (hasFailingTool) {
+                        spliceStart = i;
+                      } else {
+                        break; // Different tool call — stop
+                      }
+                    }
+
+                    // Match tool result messages with the same error
+                    if (msg.role === 'tool' && typeof msg.content === 'string' &&
+                        msg.content.startsWith(failedErrorPrefix)) {
+                      if (spliceStart === -1) spliceStart = i;
+                    }
+                  }
+
+                  if (spliceStart >= 0) {
+                    const removedCount = spliceEnd - spliceStart;
+                    conversationMessages.splice(spliceStart, removedCount);
+                    console.log(`[TaskProcessor] Spliced ${removedCount} messages (indices ${spliceStart}-${spliceEnd - 1}) from failed ${failedToolName} loop`);
+                  }
+
+                  // Append redirect prompt on the clean slate
                   conversationMessages.push({
                     role: 'user',
-                    content: `[SYSTEM ABORT] The tool ${toolName} has failed ${consecutiveIdenticalErrors} times with the identical error:\n"${shortError}"\n\nThis approach CANNOT work. You MUST abandon this tool and use a completely different strategy. If you were trying to create files with workspace_write_file, ensure you pass ALL required parameters (path AND content). If you cannot proceed differently, provide your best answer with the information gathered so far.`,
+                    content: `[SYSTEM] Your previous ${consecutiveIdenticalErrors} attempts to call ${failedToolName} all failed with: "${shortError}". Those failed calls have been removed from context. You must use a DIFFERENT approach. Do NOT retry ${failedToolName} with the same arguments. If you need to create files, ensure you pass all required parameters. If you cannot proceed, provide your best answer with information gathered so far.`,
                   });
+
                   consecutiveIdenticalErrors = 0;
                   lastToolErrorSig = '';
                 }
