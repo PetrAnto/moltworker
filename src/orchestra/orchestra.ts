@@ -146,7 +146,7 @@ Key rules for the roadmap:
 - Use \`- [ ]\` for pending tasks, \`- [x]\` for completed
 - Task titles should be specific enough to act on (e.g., "Add JWT auth middleware" not "Handle auth")
 - Include file hints so the next run knows where to work
-- Include dependency info so tasks execute in order
+- Include dependency info so tasks execute in order. Always extract leaf modules first (modules that no other modules depend on) before extracting parent modules.
 - 3-6 phases is typical, each with 2-5 tasks
 
 **CRITICAL — ATOMIC REFACTORING TASKS (prevents dead code / incomplete splits):**
