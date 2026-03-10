@@ -25,6 +25,10 @@ export interface ExtractionCheck {
   newFiles: string[];
   /** Identifiers (function/const/component names) that were extracted */
   extractedNames: string[];
+  /** Initial line count of source file from github_read_file (if available) */
+  sourceInitialLineCount: number | null;
+  /** Line count of new module file from workspace_write_file content (if available) */
+  newFileLineCount: number | null;
 }
 
 export interface ExtractionVerification {
@@ -70,6 +74,8 @@ export function detectExtractionDetails(
 
   // Track source file initial line counts from github_read_file results
   const fileLineCounts = new Map<string, number>();
+  // Track new file line counts from workspace_write_file content
+  const newFileLineCounts = new Map<string, number>();
 
   for (const msg of messages) {
     // Scan assistant messages for tool calls
@@ -84,39 +90,57 @@ export function detectExtractionDetails(
 
         if (tc.function.name === 'workspace_write_file') {
           const path = args.path as string | undefined;
-          const action = (args.action as string | undefined) || 'create';
-          if (path && action === 'create') {
+          if (path) {
             createdFiles.add(path);
+            // Track line count from the content being written
+            const content = args.content as string | undefined;
+            if (content) {
+              newFileLineCounts.set(path, content.split('\n').length);
+            }
           }
         }
 
         if (tc.function.name === 'github_push_files' || tc.function.name === 'github_create_pr') {
-          const changes = args.changes as Array<Record<string, unknown>> | undefined;
-          if (Array.isArray(changes)) {
-            for (const change of changes) {
-              const path = change.path as string;
-              const action = change.action as string;
-              if (!path) continue;
+          // IMPORTANT: `changes` is a JSON string, not an array — the tool schema
+          // defines it as type: 'string' containing a JSON array
+          const changesRaw = args.changes;
+          let changes: Array<Record<string, unknown>> = [];
+          if (typeof changesRaw === 'string') {
+            try {
+              changes = JSON.parse(changesRaw);
+            } catch { /* malformed JSON */ }
+          } else if (Array.isArray(changesRaw)) {
+            // Some models may pass it as a direct array
+            changes = changesRaw;
+          }
 
-              if (action === 'create') {
-                createdFiles.add(path);
-              } else if (action === 'patch') {
-                patchedFiles.add(path);
-                // Extract identifier names from patch "find" strings
-                const patches = change.patches as Array<Record<string, string>> | undefined;
-                if (Array.isArray(patches)) {
-                  for (const patch of patches) {
-                    const findStr = patch.find || '';
-                    // Look for function/const/class/component declarations being deleted
-                    const identifiers = extractIdentifiersFromCode(findStr);
-                    for (const id of identifiers) {
-                      extractedNames.add(id);
-                    }
+          for (const change of changes) {
+            const path = change.path as string;
+            const action = change.action as string;
+            if (!path) continue;
+
+            if (action === 'create') {
+              createdFiles.add(path);
+              const content = change.content as string | undefined;
+              if (content) {
+                newFileLineCounts.set(path, content.split('\n').length);
+              }
+            } else if (action === 'patch') {
+              patchedFiles.add(path);
+              // Extract identifier names from patch "find" strings
+              const patches = change.patches as Array<Record<string, string>> | undefined;
+              if (Array.isArray(patches)) {
+                for (const patch of patches) {
+                  const findStr = patch.find || '';
+                  // Look for function/const/class/component declarations being deleted
+                  const identifiers = extractIdentifiersFromCode(findStr);
+                  for (const id of identifiers) {
+                    extractedNames.add(id);
                   }
                 }
-              } else if (action === 'update') {
-                patchedFiles.add(path);
               }
+            } else if (action === 'update') {
+              patchedFiles.add(path);
             }
           }
         }
@@ -125,10 +149,7 @@ export function detectExtractionDetails(
 
     // Track line counts from github_read_file results
     if (msg.role === 'tool' && typeof msg.content === 'string') {
-      const lineCount = msg.content.split('\n').length;
-      // Try to associate with the tool call that produced it
       if (msg.tool_call_id) {
-        // Find the matching tool call
         for (const prevMsg of messages) {
           if (prevMsg.role === 'assistant' && prevMsg.tool_calls) {
             for (const tc of prevMsg.tool_calls) {
@@ -136,7 +157,7 @@ export function detectExtractionDetails(
                 try {
                   const a = JSON.parse(tc.function.arguments);
                   if (a.path) {
-                    fileLineCounts.set(a.path, lineCount);
+                    fileLineCounts.set(a.path, msg.content.split('\n').length);
                   }
                 } catch { /* ignore */ }
               }
@@ -159,10 +180,23 @@ export function detectExtractionDetails(
 
   if (codeSourceFiles.length === 0) return null;
 
+  const primarySource = codeSourceFiles[0];
+  const newFiles = [...createdFiles];
+
+  // Get best available line counts
+  const sourceInitialLineCount = fileLineCounts.get(primarySource) ?? null;
+  // Sum new file line counts for the expected delta
+  let totalNewFileLines = 0;
+  for (const nf of newFiles) {
+    totalNewFileLines += newFileLineCounts.get(nf) ?? 0;
+  }
+
   return {
-    sourceFile: codeSourceFiles[0], // Primary source file
-    newFiles: [...createdFiles],
+    sourceFile: primarySource,
+    newFiles,
     extractedNames: [...extractedNames],
+    sourceInitialLineCount,
+    newFileLineCount: totalNewFileLines > 0 ? totalNewFileLines : null,
   };
 }
 
@@ -262,7 +296,24 @@ export async function verifyExtraction(
     }
   }
 
-  // 4. Check that import statement exists in source file for new modules
+  // 4. Line count delta check — the source file should have shrunk meaningfully
+  const postEditLineCount = sourceContent.split('\n').length;
+  if (extraction.sourceInitialLineCount !== null) {
+    const linesDelta = extraction.sourceInitialLineCount - postEditLineCount;
+    // If we know how many lines were extracted, use that as the expected minimum
+    const expectedMinDrop = extraction.newFileLineCount !== null
+      ? Math.floor(extraction.newFileLineCount * 0.5) // At least 50% of new file content should have come from source
+      : 10; // Minimum meaningful extraction
+    if (linesDelta < expectedMinDrop) {
+      issues.push(
+        `INSUFFICIENT LINE REDUCTION: Source file "${extraction.sourceFile}" went from ${extraction.sourceInitialLineCount} to ${postEditLineCount} lines ` +
+        `(delta: ${linesDelta}). Expected at least ~${expectedMinDrop} lines removed for this extraction. ` +
+        `The extracted code may still be in the source file as dead/orphaned code.`,
+      );
+    }
+  }
+
+  // 5. Check that import statement exists in source file for new modules
   const newFileBasenames = extraction.newFiles.map(f => {
     const base = f.split('/').pop() || f;
     return base.replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/, '');
