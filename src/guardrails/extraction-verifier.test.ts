@@ -61,12 +61,12 @@ describe('isExtractionTask', () => {
 // ─── detectExtractionDetails ────────────────────────────────────────────────
 
 describe('detectExtractionDetails', () => {
-  it('detects workspace_write_file + github_create_pr with patch as extraction', () => {
+  it('detects workspace_write_file + github_create_pr with changes as JSON string', () => {
     const messages: ChatMessage[] = [
       assistantWithTools(null, [{
         id: 'tc1',
         name: 'workspace_write_file',
-        args: JSON.stringify({ path: 'src/utils.js', content: 'export function clamp(v) { return v; }', action: 'create' }),
+        args: JSON.stringify({ path: 'src/utils.js', content: 'export function clamp(v) { return v; }' }),
       }]),
       toolResult('tc1', 'File staged: src/utils.js'),
       assistantWithTools(null, [{
@@ -74,13 +74,14 @@ describe('detectExtractionDetails', () => {
         name: 'github_create_pr',
         args: JSON.stringify({
           owner: 'user', repo: 'app', branch: 'refactor',
-          changes: [{
+          // changes is a JSON STRING (matches real tool schema)
+          changes: JSON.stringify([{
             path: 'src/App.jsx',
             action: 'patch',
             patches: [
               { find: 'function clamp(v) { return v; }', replace: "import { clamp } from './utils'" },
             ],
-          }],
+          }]),
         }),
       }]),
       toolResult('tc2', 'PR created'),
@@ -93,12 +94,75 @@ describe('detectExtractionDetails', () => {
     expect(result!.extractedNames).toContain('clamp');
   });
 
+  it('also handles changes as direct array (some models pass it this way)', () => {
+    const messages: ChatMessage[] = [
+      assistantWithTools(null, [{
+        id: 'tc1',
+        name: 'workspace_write_file',
+        args: JSON.stringify({ path: 'src/utils.js', content: 'export function clamp(v) { return v; }' }),
+      }]),
+      toolResult('tc1', 'File staged'),
+      assistantWithTools(null, [{
+        id: 'tc2',
+        name: 'github_create_pr',
+        args: JSON.stringify({
+          owner: 'user', repo: 'app', branch: 'refactor',
+          // changes as direct array (legacy/alternative format)
+          changes: [{
+            path: 'src/App.jsx',
+            action: 'patch',
+            patches: [{ find: 'function clamp(v) {}', replace: "import { clamp } from './utils'" }],
+          }],
+        }),
+      }]),
+      toolResult('tc2', 'PR created'),
+    ];
+
+    const result = detectExtractionDetails(messages);
+    expect(result).not.toBeNull();
+    expect(result!.sourceFile).toBe('src/App.jsx');
+  });
+
+  it('tracks initial source file line count from github_read_file', () => {
+    const sourceContent = 'line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10';
+    const messages: ChatMessage[] = [
+      assistantWithTools(null, [{
+        id: 'read1',
+        name: 'github_read_file',
+        args: JSON.stringify({ owner: 'user', repo: 'app', path: 'src/App.jsx' }),
+      }]),
+      toolResult('read1', sourceContent),
+      assistantWithTools(null, [{
+        id: 'tc1',
+        name: 'workspace_write_file',
+        args: JSON.stringify({ path: 'src/utils.js', content: 'export const x = 1;\nexport const y = 2;\nexport const z = 3;' }),
+      }]),
+      toolResult('tc1', 'File staged'),
+      assistantWithTools(null, [{
+        id: 'tc2',
+        name: 'github_create_pr',
+        args: JSON.stringify({
+          owner: 'user', repo: 'app', branch: 'refactor',
+          changes: JSON.stringify([
+            { path: 'src/App.jsx', action: 'patch', patches: [{ find: 'old', replace: 'new' }] },
+          ]),
+        }),
+      }]),
+      toolResult('tc2', 'PR created'),
+    ];
+
+    const result = detectExtractionDetails(messages);
+    expect(result).not.toBeNull();
+    expect(result!.sourceInitialLineCount).toBe(10);
+    expect(result!.newFileLineCount).toBe(3);
+  });
+
   it('filters out ROADMAP.md and WORK_LOG.md from source files', () => {
     const messages: ChatMessage[] = [
       assistantWithTools(null, [{
         id: 'tc1',
         name: 'workspace_write_file',
-        args: JSON.stringify({ path: 'src/helpers.js', content: 'export const fmt = () => {}', action: 'create' }),
+        args: JSON.stringify({ path: 'src/helpers.js', content: 'export const fmt = () => {}' }),
       }]),
       toolResult('tc1', 'Staged'),
       assistantWithTools(null, [{
@@ -106,11 +170,11 @@ describe('detectExtractionDetails', () => {
         name: 'github_create_pr',
         args: JSON.stringify({
           owner: 'user', repo: 'app', branch: 'split',
-          changes: [
+          changes: JSON.stringify([
             { path: 'src/App.jsx', action: 'patch', patches: [{ find: 'const fmt = () => {}', replace: "import { fmt } from './helpers'" }] },
             { path: 'ROADMAP.md', action: 'patch', patches: [{ find: '- [ ]', replace: '- [x]' }] },
             { path: 'WORK_LOG.md', action: 'patch', patches: [{ find: '| ---', replace: '| --- |' }] },
-          ],
+          ]),
         }),
       }]),
       toolResult('tc2', 'PR created'),
@@ -128,7 +192,7 @@ describe('detectExtractionDetails', () => {
         name: 'github_create_pr',
         args: JSON.stringify({
           owner: 'user', repo: 'app', branch: 'fix',
-          changes: [{ path: 'src/App.jsx', action: 'patch', patches: [{ find: 'old', replace: 'new' }] }],
+          changes: JSON.stringify([{ path: 'src/App.jsx', action: 'patch', patches: [{ find: 'old', replace: 'new' }] }]),
         }),
       }]),
       toolResult('tc1', 'PR created'),
@@ -142,7 +206,7 @@ describe('detectExtractionDetails', () => {
       assistantWithTools(null, [{
         id: 'tc1',
         name: 'workspace_write_file',
-        args: JSON.stringify({ path: 'src/new-module.js', content: 'export default {}', action: 'create' }),
+        args: JSON.stringify({ path: 'src/new-module.js', content: 'export default {}' }),
       }]),
       toolResult('tc1', 'Staged'),
     ];
@@ -158,6 +222,8 @@ describe('verifyExtraction', () => {
     sourceFile: 'src/App.jsx',
     newFiles: ['src/utils.js'],
     extractedNames: ['clamp', 'fmt'],
+    sourceInitialLineCount: null,
+    newFileLineCount: null,
   };
 
   it('passes when extraction is correct — identifiers removed from source, present in new file', async () => {
@@ -235,6 +301,8 @@ describe('verifyExtraction', () => {
       sourceFile: 'src/App.jsx',
       newFiles: ['src/data.js'],
       extractedNames: [],
+      sourceInitialLineCount: null,
+      newFileLineCount: null,
     };
 
     const readFile = vi.fn(async (path: string) => {
@@ -244,6 +312,73 @@ describe('verifyExtraction', () => {
     });
 
     const result = await verifyExtraction(extraction, readFile);
+    expect(result.passed).toBe(true);
+  });
+
+  it('fails when source file barely shrank (line count delta check)', async () => {
+    // Source was 1000 lines, new file has 200 lines, but source only dropped to 990
+    const extraction: ExtractionCheck = {
+      sourceFile: 'src/App.jsx',
+      newFiles: ['src/destinations.js'],
+      extractedNames: ['INITIAL_DESTS'],
+      sourceInitialLineCount: 1000,
+      newFileLineCount: 200,
+    };
+
+    // Post-edit source still has 990 lines (only lost 10 lines instead of ~200)
+    const longSource = Array.from({ length: 990 }, (_, i) =>
+      i === 0 ? "import { INITIAL_DESTS } from './destinations'" : `  line ${i + 1}`,
+    ).join('\n');
+
+    const readFile = vi.fn(async (path: string) => {
+      if (path === 'src/App.jsx') return longSource;
+      if (path === 'src/destinations.js') return 'export const INITIAL_DESTS = [\n' + '  { id: "sofia" },\n'.repeat(198) + '];\n';
+      return null;
+    });
+
+    const result = await verifyExtraction(extraction, readFile);
+    expect(result.passed).toBe(false);
+    expect(result.issues.some(i => i.includes('INSUFFICIENT LINE REDUCTION'))).toBe(true);
+    expect(result.issues.some(i => i.includes('delta: 10'))).toBe(true);
+  });
+
+  it('passes line count check when source file shrank enough', async () => {
+    const extraction: ExtractionCheck = {
+      sourceFile: 'src/App.jsx',
+      newFiles: ['src/destinations.js'],
+      extractedNames: [],
+      sourceInitialLineCount: 1000,
+      newFileLineCount: 200,
+    };
+
+    // Post-edit source has 810 lines (lost 190, which is >50% of 200)
+    const source = Array.from({ length: 810 }, (_, i) =>
+      i === 0 ? "import { INITIAL_DESTS } from './destinations'" : `  line ${i + 1}`,
+    ).join('\n');
+
+    const readFile = vi.fn(async (path: string) => {
+      if (path === 'src/App.jsx') return source;
+      if (path === 'src/destinations.js') return 'export const INITIAL_DESTS = [];\n'.repeat(200);
+      return null;
+    });
+
+    const result = await verifyExtraction(extraction, readFile);
+    expect(result.passed).toBe(true);
+  });
+
+  it('skips line count check when no initial count is available', async () => {
+    // sourceInitialLineCount is null, so the check should be skipped
+    const readFile = vi.fn(async (path: string) => {
+      if (path === 'src/App.jsx') {
+        return "import { clamp, fmt } from './utils';\n\nfunction App() { return <div>{clamp(1)}</div>; }";
+      }
+      if (path === 'src/utils.js') {
+        return 'export function clamp(v) { return v; }\nexport const fmt = (x) => x.toFixed(2);';
+      }
+      return null;
+    });
+
+    const result = await verifyExtraction(baseExtraction, readFile);
     expect(result.passed).toBe(true);
   });
 });
