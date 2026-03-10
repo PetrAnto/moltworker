@@ -719,8 +719,9 @@ export function applyModelOverrides(overrides: Record<string, Partial<ModelInfo>
   let applied = 0;
   for (const [alias, patch] of Object.entries(overrides)) {
     const lower = alias.toLowerCase();
-    const base = MODELS[lower];
-    if (!base) continue; // Only override curated models
+    // Find base model from any registry: curated > synced
+    const base = MODELS[lower] || AUTO_SYNCED_MODELS[lower];
+    if (!base) continue;
     const merged: ModelInfo = { ...base, ...patch, alias: lower };
     DYNAMIC_MODELS[lower] = merged;
     applied++;
@@ -733,7 +734,8 @@ export function applyModelOverrides(overrides: Record<string, Partial<ModelInfo>
  */
 export function removeModelOverride(alias: string): boolean {
   const lower = alias.toLowerCase();
-  if (!(lower in MODELS)) return false; // Not a curated model
+  // Allow reverting overrides for curated or synced models
+  if (!(lower in MODELS) && !(lower in AUTO_SYNCED_MODELS)) return false;
   delete DYNAMIC_MODELS[lower];
   return true;
 }
@@ -744,7 +746,7 @@ export function removeModelOverride(alias: string): boolean {
 export function getModelOverride(alias: string): Partial<ModelInfo> | null {
   const lower = alias.toLowerCase();
   const dynamic = DYNAMIC_MODELS[lower];
-  const base = MODELS[lower];
+  const base = MODELS[lower] || AUTO_SYNCED_MODELS[lower];
   if (!dynamic || !base) return null;
   // Compute diff: only fields that differ from base
   const diff: Record<string, unknown> = {};
@@ -763,7 +765,8 @@ export function getModelOverride(alias: string): Partial<ModelInfo> | null {
 export function getAllModelOverrides(): Record<string, Partial<ModelInfo>> {
   const result: Record<string, Partial<ModelInfo>> = {};
   for (const alias of Object.keys(DYNAMIC_MODELS)) {
-    if (alias in MODELS) {
+    // Include overrides for both curated and synced models
+    if (alias in MODELS || alias in AUTO_SYNCED_MODELS) {
       const override = getModelOverride(alias);
       if (override) result[alias] = override;
     }
@@ -1072,6 +1075,29 @@ function parseCostForSort(cost: string): number {
  */
 export function isCuratedModel(alias: string): boolean {
   return alias.toLowerCase() in MODELS;
+}
+
+/**
+ * Resolve a user input (alias, model ID, or partial name) to a known model alias.
+ * Returns the alias string if found, undefined otherwise.
+ * Uses the same resolution logic as getModel() — exact, ID match, fuzzy.
+ */
+export function resolveToAlias(input: string): string | undefined {
+  const model = getModel(input);
+  return model?.alias;
+}
+
+/**
+ * Get the base ModelInfo for a model alias from ANY registry (curated, synced, dynamic).
+ * Unlike getModel() which returns the merged/overridden version, this returns the
+ * unpatched base entry from whichever registry owns it.
+ */
+export function getBaseModel(alias: string): { model: ModelInfo; source: 'curated' | 'dynamic' | 'synced' } | undefined {
+  const lower = alias.toLowerCase();
+  if (lower in MODELS) return { model: MODELS[lower], source: 'curated' };
+  if (lower in DYNAMIC_MODELS) return { model: DYNAMIC_MODELS[lower], source: 'dynamic' };
+  if (lower in AUTO_SYNCED_MODELS) return { model: AUTO_SYNCED_MODELS[lower], source: 'synced' };
+  return undefined;
 }
 
 /** Value tier emoji labels */

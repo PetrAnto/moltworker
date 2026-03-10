@@ -86,7 +86,7 @@ describe('generateAlias', () => {
     const existing = new Set<string>();
     const aliasMap: Record<string, string> = {};
     const alias = generateAlias('provider/super-ultra-mega-extremely-long-model-name-with-extra-details', existing, aliasMap);
-    expect(alias.length).toBeLessThanOrEqual(20);
+    expect(alias.length).toBeLessThanOrEqual(24);
   });
 
   it('handles model IDs without provider prefix', () => {
@@ -102,6 +102,56 @@ describe('generateAlias', () => {
     const aliasMap: Record<string, string> = {};
     const alias = generateAlias('google/gemini-3-pro-preview', existing, aliasMap);
     expect(alias).not.toContain('preview');
+  });
+
+  it('produces readable aliases for GPT codex models', () => {
+    const existing = new Set<string>();
+    const aliasMap: Record<string, string> = {};
+    const alias = generateAlias('openai/gpt-5.1-codex-mini', existing, aliasMap);
+    expect(alias).toContain('gpt');
+    expect(alias).toContain('codex');
+    expect(alias).toContain('mini');
+  });
+
+  it('produces readable aliases for Gemini flash lite', () => {
+    const existing = new Set<string>();
+    const aliasMap: Record<string, string> = {};
+    const alias = generateAlias('google/gemini-2.5-flash-lite-preview-09-2025', existing, aliasMap);
+    expect(alias).toContain('gem');
+    expect(alias).toContain('flash');
+    expect(alias).toContain('lite');
+    expect(alias).not.toContain('2025');
+    expect(alias).not.toContain('preview');
+  });
+
+  it('produces readable aliases for Claude models', () => {
+    const existing = new Set<string>();
+    const aliasMap: Record<string, string> = {};
+    const alias = generateAlias('anthropic/claude-opus-4.6', existing, aliasMap);
+    expect(alias).toContain('claude');
+    expect(alias).toContain('opus');
+  });
+
+  it('produces readable aliases for Qwen coder', () => {
+    const existing = new Set<string>();
+    const aliasMap: Record<string, string> = {};
+    const alias = generateAlias('qwen/qwen-3-coder', existing, aliasMap);
+    expect(alias).toContain('qwen');
+    expect(alias).toContain('coder');
+  });
+
+  it('handles DeepSeek models with family abbreviation', () => {
+    const existing = new Set<string>();
+    const aliasMap: Record<string, string> = {};
+    const alias = generateAlias('deepseek/deepseek-r1-0528', existing, aliasMap);
+    expect(alias).toContain('ds');
+  });
+
+  it('keeps size indicators like 70b', () => {
+    const existing = new Set<string>();
+    const aliasMap: Record<string, string> = {};
+    const alias = generateAlias('meta-llama/llama-4-70b', existing, aliasMap);
+    expect(alias).toContain('70b');
   });
 });
 
