@@ -162,23 +162,24 @@ BAD (causes failures — bot creates files but never deletes from source):
 GOOD (each task is self-contained and independently verifiable):
 \`\`\`
 - [ ] **Refactor 1.1**: Extract utility functions from App.jsx → src/utils.js
-  - Create src/utils.js with: clamp, fmt, fmtUsd, shortTax (lines 20-33)
-  - Add import to App.jsx, DELETE lines 20-33 from App.jsx
-  - Verify: App.jsx drops by ~14 lines, grep for "function clamp" returns 0 in App.jsx
+  - Create src/utils.js with: clamp(), fmt(), fmtUsd(), shortTax() (~lines 20-33)
+  - Add import to App.jsx, DELETE these functions from App.jsx
+  - Verify: grep for "function clamp" returns 0 in App.jsx, App.jsx drops by ~14 lines
 - [ ] **Refactor 1.2**: Extract destination data from App.jsx → src/destinations.js
-  - Create src/destinations.js with: INITIAL_DESTS array (lines 34-267)
-  - Add import to App.jsx, DELETE lines 34-267 from App.jsx
-  - Verify: App.jsx drops by ~234 lines
+  - Create src/destinations.js with: INITIAL_DESTS array (~lines 34-267)
+  - Add import to App.jsx, DELETE the INITIAL_DESTS definition from App.jsx
+  - Verify: grep for "INITIAL_DESTS =" returns 0 in App.jsx, App.jsx drops by ~234 lines
   - Depends on: Refactor 1.1
 \`\`\`
 
 Rules for refactoring tasks:
-1. **Use the word "DELETE"** — never say "modify" or "update" for code removal. Say "DELETE lines X-Y" or "DELETE function Foo from App.jsx"
+1. **Use the word "DELETE"** — never say "modify" or "update" for code removal. Say "DELETE function Foo from App.jsx" or "DELETE the INITIAL_DESTS definition"
 2. **Each task = create + import + DELETE** — all three actions in ONE task, ONE PR
-3. **Include function/const names AND line numbers** — e.g., "lines 674-737: Section, KPI, Slider"
-4. **Include a verification gate** — expected line count drop, or grep check returning 0
+3. **Anchor on function/const/component NAMES as primary identifiers** — e.g., "clamp(), fmt(), fmtUsd(), shortTax()". Include approximate line numbers only as a rough guide (e.g., "~lines 20-33") since line numbers shift after each extraction. The executor MUST locate code by name/signature, not line number.
+4. **Include a verification gate** — grep-based checks proving the code is gone (e.g., "grep for 'function clamp' returns 0 in App.jsx") plus expected line count drop as a secondary check
 5. **No deferred deletion** — never write "Depends on: X" where X is supposed to do the deletion later. Each task cleans up after itself.
 6. **One extraction per task** — don't combine multiple unrelated extractions. Each task extracts ONE logical group.
+7. **Topological extraction order** — extract leaf dependencies first (pure utility functions, data constants), then UI atoms, then components that import from those atoms. Never extract a component before its dependencies have been extracted. This prevents broken imports during multi-step splits.
 
 - **CRITICAL — Large file splitting:** If Step 1.5 found any large files (>${LARGE_FILE_THRESHOLD_LINES} lines) OR warning-zone files (>${LARGE_FILE_WARNING_LINES} lines), add self-contained extraction tasks EARLY in the roadmap (Phase 1 or as the first tasks in the phase that would modify the file). All tasks that modify that file MUST depend on the extraction tasks. Files in the warning zone WILL cross the threshold once features are added — split them proactively.
   **For splitting:** use \`github_create_pr\` with BOTH the new module files (action "create") AND the updated source file (action "update" or "patch") in a SINGLE PR call. The identifier check allows splits when moved identifiers are found in other files in the same PR.
@@ -340,12 +341,8 @@ Each workspace_write_file is a tiny tool call (just path + content). No streamin
 
 When splitting files: DELETE the extracted code from the original file. Do NOT rename it or leave dead code.
 
-### REFACTOR TASK INTERPRETATION
-If a task says "split", "extract", or "move" code into a new file, you MUST do ALL THREE in this task:
-1. **CREATE** the new module file with the extracted code
-2. **ADD** import statements to the source file
-3. **DELETE** the original code from the source file (the functions/constants/components that were moved)
-NEVER assume deletion is deferred to a later task. If the task says "extract X from App.jsx → utils.js", that means create utils.js AND delete X from App.jsx in the same PR. The source file's line count MUST drop significantly.
+### REFACTOR = CREATE + IMPORT + DELETE (all three, same PR)
+If a task says "split", "extract", or "move" code: CREATE the new file, ADD imports, DELETE the originals from the source file. Locate code by function/const name, not line number. Source file MUST shrink. Never defer deletion to a later task.
 
 All calls use branch \`${branch}\` (bot/ prefix added automatically). Title ends with [${modelAlias}].
 **After calling github_create_pr, CHECK THE RESULT.** If error, fix and retry.
@@ -447,7 +444,7 @@ If a task says "split", "extract", or "move" code into a new file, you MUST do A
 1. **CREATE** the new module file with the extracted code
 2. **ADD** import statements to the source file
 3. **DELETE** the original definitions from the source file
-NEVER assume deletion is deferred to a later task. The source file's line count MUST drop significantly after a split. If it barely changed, you left dead code — go back and delete the extracted definitions.
+Locate code to extract by **function/const/component name**, not line number (line numbers shift after prior extractions). NEVER assume deletion is deferred to a later task. The source file's line count MUST drop significantly after a split. If it barely changed, you left dead code — go back and delete the extracted definitions.
 
 **After calling github_create_pr, CHECK THE RESULT.** If error (422, 403), fix and retry with a different branch name. NEVER claim success if the tool returned an error.
 
@@ -564,6 +561,7 @@ If a task says "split", "extract", "move", or "refactor" code into new files, yo
 1. **CREATE** the new module file(s) with the extracted code
 2. **ADD** import statements to the source file
 3. **DELETE** the original definitions (functions, constants, components, data arrays) from the source file
+Locate code to extract by **function/const/component name and signature**, not line number — line numbers shift after prior extractions. Re-read the file to find the exact current location before editing.
 NEVER assume deletion will happen in a later task — even if the roadmap's dependency chain suggests it. Each extraction task MUST be self-contained: create + import + delete. If the source file's line count doesn't drop substantially, the task is NOT complete.
 
 **Other rules:**

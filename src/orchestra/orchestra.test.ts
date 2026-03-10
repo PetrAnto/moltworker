@@ -341,6 +341,7 @@ describe('buildRunPrompt', () => {
     expect(prompt).toContain('CREATE');
     expect(prompt).toContain('DELETE');
     expect(prompt).toContain('NEVER assume deletion will happen in a later task');
+    expect(prompt).toContain('function/const/component name');
   });
 });
 
@@ -433,6 +434,18 @@ describe('repo health check in buildInitPrompt', () => {
     expect(prompt).toContain('Use the word "DELETE"');
     expect(prompt).toContain('verification gate');
     expect(prompt).toContain('No deferred deletion');
+  });
+
+  it('anchors on function names over line numbers', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('Anchor on function/const/component NAMES as primary identifiers');
+    expect(prompt).toContain('approximate line numbers only as a rough guide');
+  });
+
+  it('includes topological extraction order rule', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('Topological extraction order');
+    expect(prompt).toContain('extract leaf dependencies first');
   });
 
   it('large file step comes before analysis step', () => {
