@@ -21,6 +21,7 @@ import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './co
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
 import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, type ToolErrorTracker } from '../guardrails/tool-validator';
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
+import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext } from '../guardrails/extraction-verifier';
 import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
 import { STRUCTURED_PLAN_PROMPT, parseStructuredPlan, prefetchPlanFiles, formatPlanSummary, awaitAndFormatPrefetchedFiles, type StructuredPlan } from './step-decomposition';
 import { formatProgressMessage, extractToolContext, shouldSendUpdate, type ProgressState } from './progress-formatter';
@@ -518,6 +519,44 @@ function sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
     // Non-tool assistant message with empty content
     return { ...msg, content: '(empty)' };
   });
+}
+
+/**
+ * Extract repo owner, name, and branch from tool call arguments in conversation.
+ * Scans for github_push_files, workspace_commit, or github_create_pr calls
+ * that contain owner/repo/branch info.
+ */
+function extractRepoAndBranch(messages: readonly ChatMessage[]): {
+  repoOwner: string | null;
+  repoName: string | null;
+  branch: string | null;
+} {
+  let repoOwner: string | null = null;
+  let repoName: string | null = null;
+  let branch: string | null = null;
+
+  // Scan tool calls in reverse — most recent call has the final branch
+  const reversed = [...messages].reverse();
+  for (const msg of reversed) {
+    if (msg.role !== 'assistant' || !msg.tool_calls) continue;
+    for (const tc of msg.tool_calls) {
+      const name = tc.function.name;
+      if (name !== 'github_push_files' && name !== 'workspace_commit'
+          && name !== 'github_create_pr') continue;
+      try {
+        const args = JSON.parse(tc.function.arguments);
+        if (args.owner && args.repo && args.branch) {
+          repoOwner = args.owner;
+          repoName = args.repo;
+          // Branch may have bot/ prefix added by the tool — use raw value
+          branch = args.branch.startsWith('bot/') ? args.branch : `bot/${args.branch}`;
+          return { repoOwner, repoName, branch };
+        }
+      } catch { /* ignore parse errors */ }
+    }
+  }
+
+  return { repoOwner, repoName, branch };
 }
 
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
@@ -3499,6 +3538,49 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               continue; // One more work iteration to fix issues
             } else {
               console.log('[TaskProcessor] CoVe verification PASSED');
+            }
+          }
+
+          // 7A.2: Post-execution extraction verification for orchestra tasks.
+          // Reads actual files from the branch to ground the model's summary in reality.
+          if (isOrchestraRun && isExtractionTask(task.toolsUsed) && request.githubToken) {
+            const extraction = detectExtractionDetails(conversationMessages);
+            if (extraction) {
+              // Extract repo owner/name and branch from tool call args in conversation
+              const { repoOwner, repoName: extractedRepo, branch: extractedBranch } =
+                extractRepoAndBranch(conversationMessages);
+              if (repoOwner && extractedRepo && extractedBranch) {
+                try {
+                  const token = request.githubToken;
+                  const readFile = async (path: string): Promise<string | null> => {
+                    try {
+                      const content = await githubReadFile(
+                        repoOwner, extractedRepo, path, extractedBranch, token,
+                      );
+                      return content;
+                    } catch {
+                      return null;
+                    }
+                  };
+                  const extractionResult = await verifyExtraction(extraction, readFile);
+                  const contextMsg = formatVerificationForContext(extractionResult);
+                  // Inject verification into context so the model's summary is grounded
+                  conversationMessages.push({
+                    role: 'assistant',
+                    content: choice.message.content || '',
+                  });
+                  conversationMessages.push({
+                    role: 'user',
+                    content: contextMsg,
+                  });
+                  console.log(`[TaskProcessor] Extraction verification: ${extractionResult.passed ? 'PASSED' : 'ISSUES'} ` +
+                    `(${extractionResult.issues.length} issue(s)) for ${extraction.sourceFile}`);
+                  // Don't block — continue to review phase with the injected context
+                  // The model will incorporate the verification in its ORCHESTRA_RESULT
+                } catch (verifyErr) {
+                  console.log(`[TaskProcessor] Extraction verification error (non-fatal): ${verifyErr}`);
+                }
+              }
             }
           }
 
