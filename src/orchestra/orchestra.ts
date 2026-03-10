@@ -148,8 +148,39 @@ Key rules for the roadmap:
 - Include file hints so the next run knows where to work
 - Include dependency info so tasks execute in order
 - 3-6 phases is typical, each with 2-5 tasks
-- **CRITICAL — Large file splitting:** If Step 1.5 found any large files (>${LARGE_FILE_THRESHOLD_LINES} lines) OR warning-zone files (>${LARGE_FILE_WARNING_LINES} lines), add a "Refactor: Split {filename} into modules" task EARLY in the roadmap (Phase 1 or as the first task in the phase that would modify the file). All tasks that modify that file MUST depend on the split task. Files in the warning zone WILL cross the threshold once features are added — split them proactively. Example:
-  \`- [ ] **Refactor**: Split src/App.tsx into route-level modules (~464 lines, approaching limit → ~6 files)\`
+
+**CRITICAL — ATOMIC REFACTORING TASKS (prevents dead code / incomplete splits):**
+When a task involves moving code from one file to new module files, the ENTIRE move (create new file + add imports + DELETE from source) MUST be ONE task. NEVER split "create modules" and "update source file" into separate tasks — the bot will only do the additive half and leave dead code.
+
+BAD (causes failures — bot creates files but never deletes from source):
+\`\`\`
+- [ ] **Refactor 1.1**: Split App.jsx into modules
+- [ ] **Refactor 1.2**: Extract financial calculations (Depends on: 1.1)
+- [ ] **Refactor 1.3**: Extract destination data (Depends on: 1.1)
+\`\`\`
+
+GOOD (each task is self-contained and independently verifiable):
+\`\`\`
+- [ ] **Refactor 1.1**: Extract utility functions from App.jsx → src/utils.js
+  - Create src/utils.js with: clamp, fmt, fmtUsd, shortTax (lines 20-33)
+  - Add import to App.jsx, DELETE lines 20-33 from App.jsx
+  - Verify: App.jsx drops by ~14 lines, grep for "function clamp" returns 0 in App.jsx
+- [ ] **Refactor 1.2**: Extract destination data from App.jsx → src/destinations.js
+  - Create src/destinations.js with: INITIAL_DESTS array (lines 34-267)
+  - Add import to App.jsx, DELETE lines 34-267 from App.jsx
+  - Verify: App.jsx drops by ~234 lines
+  - Depends on: Refactor 1.1
+\`\`\`
+
+Rules for refactoring tasks:
+1. **Use the word "DELETE"** — never say "modify" or "update" for code removal. Say "DELETE lines X-Y" or "DELETE function Foo from App.jsx"
+2. **Each task = create + import + DELETE** — all three actions in ONE task, ONE PR
+3. **Include function/const names AND line numbers** — e.g., "lines 674-737: Section, KPI, Slider"
+4. **Include a verification gate** — expected line count drop, or grep check returning 0
+5. **No deferred deletion** — never write "Depends on: X" where X is supposed to do the deletion later. Each task cleans up after itself.
+6. **One extraction per task** — don't combine multiple unrelated extractions. Each task extracts ONE logical group.
+
+- **CRITICAL — Large file splitting:** If Step 1.5 found any large files (>${LARGE_FILE_THRESHOLD_LINES} lines) OR warning-zone files (>${LARGE_FILE_WARNING_LINES} lines), add self-contained extraction tasks EARLY in the roadmap (Phase 1 or as the first tasks in the phase that would modify the file). All tasks that modify that file MUST depend on the extraction tasks. Files in the warning zone WILL cross the threshold once features are added — split them proactively.
   **For splitting:** use \`github_create_pr\` with BOTH the new module files (action "create") AND the updated source file (action "update" or "patch") in a SINGLE PR call. The identifier check allows splits when moved identifiers are found in other files in the same PR.
 
 ### Step 4: CREATE or UPDATE WORK_LOG.md
@@ -309,6 +340,13 @@ Each workspace_write_file is a tiny tool call (just path + content). No streamin
 
 When splitting files: DELETE the extracted code from the original file. Do NOT rename it or leave dead code.
 
+### REFACTOR TASK INTERPRETATION
+If a task says "split", "extract", or "move" code into a new file, you MUST do ALL THREE in this task:
+1. **CREATE** the new module file with the extracted code
+2. **ADD** import statements to the source file
+3. **DELETE** the original code from the source file (the functions/constants/components that were moved)
+NEVER assume deletion is deferred to a later task. If the task says "extract X from App.jsx → utils.js", that means create utils.js AND delete X from App.jsx in the same PR. The source file's line count MUST drop significantly.
+
 All calls use branch \`${branch}\` (bot/ prefix added automatically). Title ends with [${modelAlias}].
 **After calling github_create_pr, CHECK THE RESULT.** If error, fix and retry.
 
@@ -396,13 +434,20 @@ Each \`workspace_write_file\` call is tiny (just the file content as a tool argu
 
 **If creating ≤3 small files** (<100 lines each): one \`github_create_pr\` with all changes is also OK.
 
-### File splitting (if task requires it)
+### File splitting / extraction (if task requires it)
 1. Stage new module files via \`workspace_write_file\` (one call per file), then \`workspace_commit\`
 2. Updated original file with action "patch" — include in final github_create_pr:
    - ADD import statements for the new modules at the top
    - DELETE the extracted code (functions, constants, components) from the original file using patches
    - Re-export from the new modules if needed for backwards compatibility
    - **DO NOT leave dead code** — the extracted code MUST be removed, not renamed or commented out
+
+### REFACTOR TASK INTERPRETATION — CRITICAL
+If a task says "split", "extract", or "move" code into a new file, you MUST do ALL THREE in ONE PR:
+1. **CREATE** the new module file with the extracted code
+2. **ADD** import statements to the source file
+3. **DELETE** the original definitions from the source file
+NEVER assume deletion is deferred to a later task. The source file's line count MUST drop significantly after a split. If it barely changed, you left dead code — go back and delete the extracted definitions.
 
 **After calling github_create_pr, CHECK THE RESULT.** If error (422, 403), fix and retry with a different branch name. NEVER claim success if the tool returned an error.
 
@@ -513,6 +558,13 @@ This is MUCH safer than github_push_files because each workspace_write_file send
    - **NEVER leave dead code** — do NOT rename extracted code to _MOVED or comment it out. DELETE it entirely.
 The identifier check allows splits: identifiers moved to other files on the same branch are not counted as lost.
 **CRITICAL**: The original file's line count should DROP significantly after a split. If it barely changed, you left dead code.
+
+**REFACTOR TASK INTERPRETATION — CRITICAL (prevents the #1 bot failure mode):**
+If a task says "split", "extract", "move", or "refactor" code into new files, you MUST do ALL THREE in ONE PR:
+1. **CREATE** the new module file(s) with the extracted code
+2. **ADD** import statements to the source file
+3. **DELETE** the original definitions (functions, constants, components, data arrays) from the source file
+NEVER assume deletion will happen in a later task — even if the roadmap's dependency chain suggests it. Each extraction task MUST be self-contained: create + import + delete. If the source file's line count doesn't drop substantially, the task is NOT complete.
 
 **Other rules:**
 - Follow existing code conventions, proper types (no \`any\`)

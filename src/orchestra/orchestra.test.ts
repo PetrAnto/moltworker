@@ -334,6 +334,14 @@ describe('buildRunPrompt', () => {
     const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
     expect(prompt).toContain('ORCHESTRA_RESULT:');
   });
+
+  it('includes refactor task interpretation guardrail', () => {
+    const prompt = buildRunPrompt({ repo: 'o/r', modelAlias: 'deep', previousTasks: [] });
+    expect(prompt).toContain('REFACTOR TASK INTERPRETATION');
+    expect(prompt).toContain('CREATE');
+    expect(prompt).toContain('DELETE');
+    expect(prompt).toContain('NEVER assume deletion will happen in a later task');
+  });
 });
 
 // --- Large file health check constants ---
@@ -403,7 +411,7 @@ describe('repo health check in buildInitPrompt', () => {
     const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
     expect(prompt).toContain('Split');
     expect(prompt).toContain('Refactor');
-    expect(prompt).toContain('MUST depend on the split task');
+    expect(prompt).toContain('MUST depend on the extraction tasks');
   });
 
   it('includes warning zone guidance', () => {
@@ -416,6 +424,15 @@ describe('repo health check in buildInitPrompt', () => {
     const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
     expect(prompt).toContain('github_create_pr');
     expect(prompt).toContain('identifier check allows splits');
+  });
+
+  it('includes atomic refactoring rules to prevent dead code', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('ATOMIC REFACTORING TASKS');
+    expect(prompt).toContain('create + import + DELETE');
+    expect(prompt).toContain('Use the word "DELETE"');
+    expect(prompt).toContain('verification gate');
+    expect(prompt).toContain('No deferred deletion');
   });
 
   it('large file step comes before analysis step', () => {
