@@ -59,6 +59,8 @@ import {
   removeModelOverride,
   getAllModelOverrides,
   isCuratedModel,
+  resolveToAlias,
+  getBaseModel,
   detectToolIntent,
   getFreeToolModels,
   formatOrchestraModelRecs,
@@ -4232,7 +4234,7 @@ export class TelegramHandler {
    */
   private async handleModelUpdateCommand(chatId: number, args: string[]): Promise<void> {
     if (args.length === 0) {
-      await this.bot.sendMessage(chatId, `🔧 /modelupdate — Patch curated models without deploy
+      await this.bot.sendMessage(chatId, `🔧 /modelupdate — Patch any model (curated or synced) without deploy
 
 Usage:
   /modelupdate <alias> refresh
@@ -4265,22 +4267,27 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
         return;
       }
       const lines = ['📋 Active model overrides:\n'];
-      for (const [alias, patch] of Object.entries(overrides)) {
-        const base = MODELS[alias];
+      for (const [a, patch] of Object.entries(overrides)) {
+        const bi = getBaseModel(a);
+        const base = bi?.model;
+        const src = bi?.source === 'synced' ? ' (synced)' : '';
         const fields = Object.entries(patch)
           .map(([k, v]) => `  ${k}: ${(base as unknown as Record<string, unknown>)?.[k]} → ${v}`)
           .join('\n');
-        lines.push(`/${alias}:\n${fields}`);
+        lines.push(`/${a}${src}:\n${fields}`);
       }
       await this.bot.sendMessage(chatId, lines.join('\n\n'));
       return;
     }
 
-    const alias = args[0].replace(/^\//, '').toLowerCase();
+    const input = args[0].replace(/^\//, '').toLowerCase();
 
-    // Validate alias exists in static catalog
-    if (!isCuratedModel(alias)) {
-      await this.bot.sendMessage(chatId, `❌ /${alias} is not a curated model. Only static catalog models can be overridden.`);
+    // Resolve input to a known alias (supports alias, model ID, or fuzzy match)
+    const alias = resolveToAlias(input) || input;
+    const baseInfo = getBaseModel(alias);
+
+    if (!baseInfo) {
+      await this.bot.sendMessage(chatId, `❌ /${input} not found in any registry (curated, synced, or dynamic).\n\n💡 Try the alias (e.g. \`stepfree\`) or run /model list to find it.`);
       return;
     }
 
@@ -4291,10 +4298,9 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
         // Persist to R2
         const overrides = getAllModelOverrides();
         await this.storage.saveModelOverrides(overrides);
-        const base = MODELS[alias];
-        await this.bot.sendMessage(chatId, `✅ /${alias} reverted to static catalog.\nModel ID: ${base.id}\nName: ${base.name}`);
+        await this.bot.sendMessage(chatId, `✅ /${alias} reverted to ${baseInfo.source} catalog.\nModel ID: ${baseInfo.model.id}\nName: ${baseInfo.model.name}`);
       } else {
-        await this.bot.sendMessage(chatId, `ℹ️ /${alias} has no override — already using static catalog.`);
+        await this.bot.sendMessage(chatId, `ℹ️ /${alias} has no override — already using ${baseInfo.source} catalog.`);
       }
       return;
     }
@@ -4318,11 +4324,11 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
         // Don't override the alias or id (same model, just refreshing metadata)
         delete apiPatch.id;
 
-        // Compute what actually changed vs current state
-        const base = MODELS[alias];
+        // Compute what actually changed vs current state (compare against base from any registry)
+        const refreshBase = baseInfo.model;
         const actualChanges: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(apiPatch)) {
-          if (JSON.stringify(v) !== JSON.stringify((base as unknown as Record<string, unknown>)[k])) {
+          if (JSON.stringify(v) !== JSON.stringify((refreshBase as unknown as Record<string, unknown>)[k])) {
             actualChanges[k] = v;
           }
         }
@@ -4338,7 +4344,7 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
 
         const updatedModel = getModel(alias);
         const changes = Object.entries(actualChanges)
-          .map(([k, v]) => `  ${k}: ${(base as unknown as Record<string, unknown>)?.[k]} → ${v}`)
+          .map(([k, v]) => `  ${k}: ${(refreshBase as unknown as Record<string, unknown>)?.[k]} → ${v}`)
           .join('\n');
 
         await this.bot.sendMessage(chatId,
@@ -4429,9 +4435,8 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
 
     // Show result
     const updatedModel = getModel(alias);
-    const base = MODELS[alias];
     const changes = Object.entries(patch)
-      .map(([k, v]) => `  ${k}: ${(base as unknown as Record<string, unknown>)?.[k]} → ${v}`)
+      .map(([k, v]) => `  ${k}: ${(baseInfo.model as unknown as Record<string, unknown>)?.[k]} → ${v}`)
       .join('\n');
 
     await this.bot.sendMessage(chatId,
@@ -4455,8 +4460,8 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
     if (subAction === 'cost' && parts[2] && parts[3]) {
       const alias = parts[2];
       const newCost = parts.slice(3).join(':'); // Cost may contain $
-      if (!isCuratedModel(alias)) {
-        await this.bot.sendMessage(chatId, `❌ /${alias} is not a curated model.`);
+      if (!getBaseModel(alias)) {
+        await this.bot.sendMessage(chatId, `❌ /${alias} not found in any model registry.`);
         return;
       }
       applyModelOverrides({ [alias]: { cost: newCost } });
