@@ -1404,6 +1404,22 @@ async function workspaceWriteFile(
     throw new Error(`Content is required for "${action}" action on "${path}".`);
   }
 
+  // Guard: reject full-file overwrites for large files (>300 lines).
+  // When models "update" a 1000-line file from memory, they invariably introduce
+  // syntax errors, encoding changes, and silent truncation. Force patch instead.
+  if (action === 'update' && content) {
+    const lineCount = content.split('\n').length;
+    if (lineCount > 300) {
+      throw new Error(
+        `Cannot use workspace_write_file with action "update" for "${path}" — ` +
+        `the content is ${lineCount} lines (limit: 300 for full rewrites). ` +
+        `For files >300 lines, use github_create_pr or github_push_files with ` +
+        `action "patch" and a patches array of targeted find/replace pairs. ` +
+        `This prevents syntax errors from regenerating large files from memory.`,
+      );
+    }
+  }
+
   await context.workspaceWrite({
     path,
     content: content || '',

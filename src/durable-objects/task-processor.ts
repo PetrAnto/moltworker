@@ -524,6 +524,38 @@ function sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 /**
+ * Truncate large tool results in checkpoint messages to prevent context saturation.
+ * Replaces tool results over `maxChars` with a truncated version showing the first
+ * and last few lines, preserving enough context for the model to understand what
+ * was read without retaining 30KB of stale file content across resumes.
+ *
+ * Only truncates non-recent messages (skips last 6) to preserve active context.
+ */
+function truncateLargeToolResults(messages: ChatMessage[], maxChars: number): void {
+  const KEEP_RECENT = 6;
+  const cutoff = Math.max(0, messages.length - KEEP_RECENT);
+
+  let truncated = 0;
+  for (let i = 0; i < cutoff; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+    if (msg.content.length <= maxChars) continue;
+
+    const lines = msg.content.split('\n');
+    const headLines = lines.slice(0, 15).join('\n');
+    const tailLines = lines.slice(-5).join('\n');
+    messages[i] = {
+      ...msg,
+      content: `${headLines}\n\n[... ${lines.length - 20} lines truncated on resume — re-read file if needed ...]\n\n${tailLines}`,
+    };
+    truncated++;
+  }
+  if (truncated > 0) {
+    console.log(`[TaskProcessor] Truncated ${truncated} large tool result(s) (>${maxChars} chars) to reduce context saturation`);
+  }
+}
+
+/**
  * Extract repo owner, name, and branch from tool call arguments in conversation.
  * Scans for github_push_files, workspace_commit, or github_create_pr calls
  * that contain owner/repo/branch info.
@@ -1871,6 +1903,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       if (checkpoint && checkpoint.iterations > 0) {
         // Resume from checkpoint — sanitize to fix any orphaned tool_calls from interrupted checkpoints
         conversationMessages = sanitizeToolPairs(checkpoint.messages);
+
+        // Truncate stale large tool results (>4KB) to prevent context saturation.
+        // By the 3rd resume, 30KB github_read_file payloads accumulate and crowd out
+        // new tool results. Replace with truncated summaries showing first/last lines.
+        truncateLargeToolResults(conversationMessages, 4096);
+
         task.toolsUsed = checkpoint.toolsUsed;
         // Reset iteration counter to 0 — give a fresh budget of maxIterations.
         // The checkpoint preserves conversation state and tool results, so work
