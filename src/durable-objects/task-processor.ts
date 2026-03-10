@@ -21,7 +21,7 @@ import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './co
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
 import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, type ToolErrorTracker } from '../guardrails/tool-validator';
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
-import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext } from '../guardrails/extraction-verifier';
+import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext, scanCrossFileReferences } from '../guardrails/extraction-verifier';
 import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
 import { STRUCTURED_PLAN_PROMPT, parseStructuredPlan, prefetchPlanFiles, formatPlanSummary, awaitAndFormatPrefetchedFiles, type StructuredPlan } from './step-decomposition';
 import { formatProgressMessage, extractToolContext, shouldSendUpdate, type ProgressState } from './progress-formatter';
@@ -282,6 +282,8 @@ interface TaskState {
   structuredPlan?: StructuredPlan;
   // 7A.1: CoVe verification retry flag (only one retry allowed)
   coveRetried?: boolean;
+  // 7A.2: Extraction verification retry flag (only one retry allowed)
+  extractionRetried?: boolean;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
   // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
@@ -3543,10 +3545,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // 7A.2: Post-execution extraction verification for orchestra tasks.
           // Reads actual files from the branch to ground the model's summary in reality.
+          // BLOCKING: if verification fails, model gets one retry to fix the issues
+          // before transitioning to review.
           if (isOrchestraRun && isExtractionTask(task.toolsUsed) && request.githubToken) {
             const extraction = detectExtractionDetails(conversationMessages);
             if (extraction) {
-              // Extract repo owner/name and branch from tool call args in conversation
               const { repoOwner, repoName: extractedRepo, branch: extractedBranch } =
                 extractRepoAndBranch(conversationMessages);
               if (repoOwner && extractedRepo && extractedBranch) {
@@ -3554,17 +3557,68 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   const token = request.githubToken;
                   const readFile = async (path: string): Promise<string | null> => {
                     try {
-                      const content = await githubReadFile(
-                        repoOwner, extractedRepo, path, extractedBranch, token,
-                      );
-                      return content;
+                      return await githubReadFile(repoOwner, extractedRepo, path, extractedBranch, token);
                     } catch {
                       return null;
                     }
                   };
+                  const listFiles = async (dir: string): Promise<string[]> => {
+                    try {
+                      const url = `https://api.github.com/repos/${repoOwner}/${extractedRepo}/contents/${dir}?ref=${extractedBranch}`;
+                      const resp = await fetch(url, {
+                        headers: {
+                          'User-Agent': 'MoltworkerBot/1.0',
+                          'Authorization': `Bearer ${token}`,
+                          'Accept': 'application/vnd.github.v3+json',
+                        },
+                      });
+                      if (!resp.ok) return [];
+                      const items = await resp.json() as Array<{ path: string; type: string }>;
+                      return Array.isArray(items) ? items.filter(i => i.type === 'file').map(i => i.path) : [];
+                    } catch {
+                      return [];
+                    }
+                  };
                   const extractionResult = await verifyExtraction(extraction, readFile);
+
+                  // Also run cross-file reference scan (lightweight — reads up to 5 sibling files)
+                  const crossFileWarnings = await scanCrossFileReferences(extraction, readFile, listFiles);
+                  if (crossFileWarnings.length > 0) {
+                    for (const w of crossFileWarnings) extractionResult.issues.push(w);
+                    extractionResult.passed = false;
+                    extractionResult.summary += '\n' + crossFileWarnings.join('\n');
+                  }
+
+                  console.log(`[TaskProcessor] Extraction verification: ${extractionResult.passed ? 'PASSED' : 'ISSUES'} ` +
+                    `(${extractionResult.issues.length} issue(s)) for ${extraction.sourceFile}`);
+
+                  if (!extractionResult.passed && !task.extractionRetried) {
+                    // BLOCKING: inject failures and let the model retry
+                    task.extractionRetried = true;
+                    await this.doState.storage.put('task', taskForStorage(task));
+                    console.log('[TaskProcessor] Extraction verification FAILED — retrying work phase');
+                    for (const issue of extractionResult.issues) {
+                      console.log(`[TaskProcessor]   ${issue.substring(0, 120)}`);
+                    }
+                    conversationMessages.push({
+                      role: 'assistant',
+                      content: choice.message.content || '',
+                    });
+                    conversationMessages.push({
+                      role: 'user',
+                      content: `[EXTRACTION VERIFICATION FAILED — FIX REQUIRED]\n` +
+                        `The deterministic post-edit file check found these issues on branch "${extractedBranch}":\n\n` +
+                        extractionResult.issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n') + '\n\n' +
+                        `You MUST fix these issues before reporting ORCHESTRA_RESULT. ` +
+                        `Push a corrective commit to the same branch using github_push_files with patch action, ` +
+                        `then report your result. The source file on the branch was READ just now — ` +
+                        `trust this verification over your cached memory of the file.`,
+                    });
+                    continue; // One more work iteration to fix issues
+                  }
+
+                  // Inject verification context (even if passed) so the model's summary is grounded
                   const contextMsg = formatVerificationForContext(extractionResult);
-                  // Inject verification into context so the model's summary is grounded
                   conversationMessages.push({
                     role: 'assistant',
                     content: choice.message.content || '',
@@ -3573,10 +3627,6 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     role: 'user',
                     content: contextMsg,
                   });
-                  console.log(`[TaskProcessor] Extraction verification: ${extractionResult.passed ? 'PASSED' : 'ISSUES'} ` +
-                    `(${extractionResult.issues.length} issue(s)) for ${extraction.sourceFile}`);
-                  // Don't block — continue to review phase with the injected context
-                  // The model will incorporate the verification in its ORCHESTRA_RESULT
                 } catch (verifyErr) {
                   console.log(`[TaskProcessor] Extraction verification error (non-fatal): ${verifyErr}`);
                 }

@@ -9,6 +9,8 @@
  * 2. Those identifiers ARE present + exported in the new module file(s)
  * 3. Import statement for the new module exists in the source file
  * 4. Source file line count dropped by a meaningful amount
+ * 5. No unbalanced brackets/braces in the source file (syntax integrity)
+ * 6. No stale references to extracted identifiers in sibling files
  *
  * The result is injected into the model's context so the ORCHESTRA_RESULT
  * summary is grounded in reality, not stale cached reads.
@@ -313,7 +315,16 @@ export async function verifyExtraction(
     }
   }
 
-  // 5. Check that import statement exists in source file for new modules
+  // 5. Syntax integrity — check for unbalanced brackets/braces/parens in source
+  const syntaxIssue = checkBracketBalance(sourceContent);
+  if (syntaxIssue) {
+    issues.push(
+      `SYNTAX CORRUPTION in "${extraction.sourceFile}": ${syntaxIssue}. ` +
+      `The patch likely removed a declaration line but left the body (orphaned code).`,
+    );
+  }
+
+  // 6. Check that import statement exists in source file for new modules
   const newFileBasenames = extraction.newFiles.map(f => {
     const base = f.split('/').pop() || f;
     return base.replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/, '');
@@ -361,6 +372,182 @@ export function formatVerificationForContext(
     'IMPORTANT: Your ORCHESTRA_RESULT summary MUST reflect these findings. ' +
     'Do NOT claim the extraction was successful if issues were detected. ' +
     'If the extracted identifiers are still declared in the source file, report the extraction as incomplete.';
+}
+
+// ─── Cross-File Reference Scanner ───────────────────────────────────────────
+
+/**
+ * Scan sibling files in the same directory for stale references to extracted
+ * identifiers. When code is extracted from App.jsx → utils.js, other files
+ * that imported from App.jsx may still reference the moved identifiers and
+ * need their imports updated.
+ *
+ * @param extraction - Extraction metadata
+ * @param readFile - File reader (injected)
+ * @param listFiles - List files in a directory (injected)
+ * @returns Array of warning strings for stale references found
+ */
+export async function scanCrossFileReferences(
+  extraction: ExtractionCheck,
+  readFile: (path: string) => Promise<string | null>,
+  listFiles: (dir: string) => Promise<string[]>,
+): Promise<string[]> {
+  if (extraction.extractedNames.length === 0) return [];
+
+  const warnings: string[] = [];
+
+  // Get the directory of the source file
+  const sourceDir = extraction.sourceFile.includes('/')
+    ? extraction.sourceFile.substring(0, extraction.sourceFile.lastIndexOf('/'))
+    : '';
+
+  // List sibling files
+  let siblingFiles: string[];
+  try {
+    siblingFiles = await listFiles(sourceDir);
+  } catch {
+    return []; // Can't list files — skip cross-reference check
+  }
+
+  // Filter to code files, exclude source file and new files
+  const codeExtensions = new Set(['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs']);
+  const excludeFiles = new Set([
+    extraction.sourceFile,
+    ...extraction.newFiles,
+  ]);
+  const filesToScan = siblingFiles.filter(f => {
+    if (excludeFiles.has(f)) return false;
+    const ext = f.split('.').pop()?.toLowerCase() || '';
+    return codeExtensions.has(ext);
+  });
+
+  // Limit to 5 files to keep API calls lightweight
+  const scanTargets = filesToScan.slice(0, 5);
+
+  // Build source file basename for import detection (e.g., "App" from "src/App.jsx")
+  const sourceBasename = (extraction.sourceFile.split('/').pop() || '')
+    .replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/, '');
+
+  for (const filePath of scanTargets) {
+    const content = await readFile(filePath);
+    if (!content) continue;
+
+    // Check if this file imports from the source file
+    const importsFromSource = content.includes(sourceBasename);
+    if (!importsFromSource) continue;
+
+    // Check if any extracted identifiers are referenced
+    const staleRefs = extraction.extractedNames.filter(name =>
+      new RegExp(`\\b${escapeRegExp(name)}\\b`).test(content),
+    );
+
+    if (staleRefs.length > 0) {
+      warnings.push(
+        `STALE REFERENCES: "${filePath}" imports from "${sourceBasename}" and references ` +
+        `extracted identifiers [${staleRefs.join(', ')}] — these imports need updating to point ` +
+        `at the new module(s): ${extraction.newFiles.join(', ')}`,
+      );
+    }
+  }
+
+  return warnings;
+}
+
+// ─── Syntax Integrity ───────────────────────────────────────────────────────
+
+/**
+ * Lightweight bracket/brace/paren balance check for JS/JSX/TS/TSX.
+ * Catches the exact failure mode from PR #79: patch removes a `const X = [`
+ * line but leaves the array body, creating unbalanced brackets.
+ *
+ * Skips contents inside string literals and comments to avoid false positives.
+ * Returns null if balanced, or a description string if unbalanced.
+ */
+export function checkBracketBalance(source: string): string | null {
+  const stack: string[] = [];
+  const openToClose: Record<string, string> = { '{': '}', '[': ']', '(': ')' };
+  const closeToOpen: Record<string, string> = { '}': '{', ']': '[', ')': '(' };
+
+  let i = 0;
+  const len = source.length;
+
+  while (i < len) {
+    const ch = source[i];
+
+    // Skip single-line comments
+    if (ch === '/' && source[i + 1] === '/') {
+      while (i < len && source[i] !== '\n') i++;
+      continue;
+    }
+
+    // Skip multi-line comments
+    if (ch === '/' && source[i + 1] === '*') {
+      i += 2;
+      while (i < len - 1 && !(source[i] === '*' && source[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+
+    // Skip template literals
+    if (ch === '`') {
+      i++;
+      while (i < len && source[i] !== '`') {
+        if (source[i] === '\\') i++; // skip escaped chars
+        i++;
+      }
+      i++; // skip closing `
+      continue;
+    }
+
+    // Skip string literals
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      i++;
+      while (i < len && source[i] !== quote) {
+        if (source[i] === '\\') i++; // skip escaped chars
+        i++;
+      }
+      i++; // skip closing quote
+      continue;
+    }
+
+    // Skip regex literals (heuristic: / after = or ( or , or ; or { or [ or ! or & or | or :)
+    if (ch === '/' && i > 0) {
+      const prev = source.substring(Math.max(0, i - 5), i).trimEnd();
+      const lastChar = prev[prev.length - 1];
+      if (lastChar && '=({[,;!&|:?'.includes(lastChar)) {
+        i++;
+        while (i < len && source[i] !== '/') {
+          if (source[i] === '\\') i++;
+          i++;
+        }
+        i++; // skip closing /
+        continue;
+      }
+    }
+
+    if (openToClose[ch]) {
+      stack.push(ch);
+    } else if (closeToOpen[ch]) {
+      const expected = closeToOpen[ch];
+      if (stack.length === 0) {
+        return `Unexpected closing '${ch}' with no matching opening '${expected}'`;
+      }
+      const top = stack.pop()!;
+      if (top !== expected) {
+        return `Mismatched bracket: expected closing for '${top}' but found '${ch}'`;
+      }
+    }
+
+    i++;
+  }
+
+  if (stack.length > 0) {
+    const unclosed = stack.map(c => `'${c}'`).reverse().slice(0, 3).join(', ');
+    return `Unclosed brackets: ${unclosed} (${stack.length} total unclosed)`;
+  }
+
+  return null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

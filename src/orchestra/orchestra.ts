@@ -180,6 +180,8 @@ Rules for refactoring tasks:
 5. **No deferred deletion** — never write "Depends on: X" where X is supposed to do the deletion later. Each task cleans up after itself.
 6. **One extraction per task** — don't combine multiple unrelated extractions. Each task extracts ONE logical group.
 7. **Topological extraction order** — extract leaf dependencies first (pure utility functions, data constants), then UI atoms, then components that import from those atoms. Never extract a component before its dependencies have been extracted. This prevents broken imports during multi-step splits.
+8. **List ALL cross-file references** — if other files import/reference the extracted code, the task MUST update those files' imports to point at the new module. List them explicitly: "Update imports in Header.jsx, Dashboard.jsx to import from new module."
+9. **React/hooks: preserve context and dependencies** — when extracting components or hooks, ensure ALL required imports (useState, useEffect, context), prop types, and hook dependencies are copied to the new file. After extraction, the component must receive the same props/context it had inline.
 
 - **CRITICAL — Large file splitting:** If Step 1.5 found any large files (>${LARGE_FILE_THRESHOLD_LINES} lines) OR warning-zone files (>${LARGE_FILE_WARNING_LINES} lines), add self-contained extraction tasks EARLY in the roadmap (Phase 1 or as the first tasks in the phase that would modify the file). All tasks that modify that file MUST depend on the extraction tasks. Files in the warning zone WILL cross the threshold once features are added — split them proactively.
   **For splitting:** use \`github_create_pr\` with BOTH the new module files (action "create") AND the updated source file (action "update" or "patch") in a SINGLE PR call. The identifier check allows splits when moved identifiers are found in other files in the same PR.
@@ -339,10 +341,10 @@ Each workspace_write_file is a tiny tool call (just path + content). No streamin
 
 **If creating ≤3 small files** (<100 lines each): ONE \`github_create_pr\` with all changes is also OK.
 
-When splitting files: DELETE the extracted code from the original file. Do NOT rename it or leave dead code.
+When splitting files: DELETE the extracted code from the original file. Do NOT rename it or leave dead code. If other files import the extracted code from the original, update their imports too.
 
-### REFACTOR = CREATE + IMPORT + DELETE (all three, same PR)
-If a task says "split", "extract", or "move" code: CREATE the new file, ADD imports, DELETE the originals from the source file. Locate code by function/const name, not line number. Source file MUST shrink. Never defer deletion to a later task.
+### REFACTOR = CREATE + IMPORT + DELETE + UPDATE REFS (all four, same PR)
+If a task says "split", "extract", or "move" code: CREATE the new file, ADD imports, DELETE the originals from the source file, UPDATE imports in other files that referenced the extracted code. Locate code by function/const name, not line number. Source file MUST shrink. Never defer deletion to a later task.
 
 All calls use branch \`${branch}\` (bot/ prefix added automatically). Title ends with [${modelAlias}].
 **After calling github_create_pr, CHECK THE RESULT.** If error, fix and retry.
@@ -440,11 +442,13 @@ Each \`workspace_write_file\` call is tiny (just the file content as a tool argu
    - **DO NOT leave dead code** — the extracted code MUST be removed, not renamed or commented out
 
 ### REFACTOR TASK INTERPRETATION — CRITICAL
-If a task says "split", "extract", or "move" code into a new file, you MUST do ALL THREE in ONE PR:
+If a task says "split", "extract", or "move" code into a new file, you MUST do ALL FOUR in ONE PR:
 1. **CREATE** the new module file with the extracted code
 2. **ADD** import statements to the source file
 3. **DELETE** the original definitions from the source file
+4. **UPDATE** imports in any OTHER files that referenced the extracted code from the source file
 Locate code to extract by **function/const/component name**, not line number (line numbers shift after prior extractions). NEVER assume deletion is deferred to a later task. The source file's line count MUST drop significantly after a split. If it barely changed, you left dead code — go back and delete the extracted definitions.
+When extracting React components/hooks: copy ALL required imports (useState, useEffect, context providers), prop types, and hook dependencies to the new file.
 
 **After calling github_create_pr, CHECK THE RESULT.** If error (422, 403), fix and retry with a different branch name. NEVER claim success if the tool returned an error.
 
@@ -557,12 +561,14 @@ The identifier check allows splits: identifiers moved to other files on the same
 **CRITICAL**: The original file's line count should DROP significantly after a split. If it barely changed, you left dead code.
 
 **REFACTOR TASK INTERPRETATION — CRITICAL (prevents the #1 bot failure mode):**
-If a task says "split", "extract", "move", or "refactor" code into new files, you MUST do ALL THREE in ONE PR:
+If a task says "split", "extract", "move", or "refactor" code into new files, you MUST do ALL FOUR in ONE PR:
 1. **CREATE** the new module file(s) with the extracted code
 2. **ADD** import statements to the source file
 3. **DELETE** the original definitions (functions, constants, components, data arrays) from the source file
+4. **UPDATE** imports in any OTHER files that referenced the extracted code from the source file
 Locate code to extract by **function/const/component name and signature**, not line number — line numbers shift after prior extractions. Re-read the file to find the exact current location before editing.
-NEVER assume deletion will happen in a later task — even if the roadmap's dependency chain suggests it. Each extraction task MUST be self-contained: create + import + delete. If the source file's line count doesn't drop substantially, the task is NOT complete.
+NEVER assume deletion will happen in a later task — even if the roadmap's dependency chain suggests it. Each extraction task MUST be self-contained: create + import + delete + update refs. If the source file's line count doesn't drop substantially, the task is NOT complete.
+When extracting React components/hooks: copy ALL required imports (useState, useEffect, context providers, CSS modules), prop types, and hook dependencies to the new file. The component must work identically after extraction.
 
 **Other rules:**
 - Follow existing code conventions, proper types (no \`any\`)

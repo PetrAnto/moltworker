@@ -4,6 +4,8 @@ import {
   detectExtractionDetails,
   verifyExtraction,
   formatVerificationForContext,
+  scanCrossFileReferences,
+  checkBracketBalance,
   type ExtractionCheck,
   type ExtractionVerification,
 } from './extraction-verifier';
@@ -380,6 +382,179 @@ describe('verifyExtraction', () => {
 
     const result = await verifyExtraction(baseExtraction, readFile);
     expect(result.passed).toBe(true);
+  });
+});
+
+// ─── checkBracketBalance ────────────────────────────────────────────────────
+
+describe('checkBracketBalance', () => {
+  it('returns null for balanced code', () => {
+    expect(checkBracketBalance('function foo() { return [1, 2, 3]; }')).toBeNull();
+  });
+
+  it('returns null for balanced code with strings and comments', () => {
+    const code = `
+      // This has a { in a comment
+      const x = "{ not a real bracket }";
+      const y = \`template \${a + b}\`;
+      /* multi-line { comment */
+      function foo() { return [1]; }
+    `;
+    expect(checkBracketBalance(code)).toBeNull();
+  });
+
+  it('detects unclosed bracket (PR #79 failure mode)', () => {
+    // This is what happens when `const INITIAL_DESTS = [` is removed
+    // but the array body is left as orphaned syntax
+    const code = `
+      import { INITIAL_DESTS } from './destinations';
+      { id: 'sofia', name: 'Sofia' },
+      { id: 'lisbon', name: 'Lisbon' },
+      ];
+      function App() { return <div/>; }
+    `;
+    const result = checkBracketBalance(code);
+    expect(result).not.toBeNull();
+  });
+
+  it('detects unexpected closing bracket', () => {
+    const code = 'function foo() { return 1; }}';
+    const result = checkBracketBalance(code);
+    expect(result).not.toBeNull();
+  });
+
+  it('detects mismatched brackets', () => {
+    const code = 'function foo() { return [1, 2); }';
+    const result = checkBracketBalance(code);
+    expect(result).not.toBeNull();
+    expect(result).toContain('Mismatched');
+  });
+
+  it('handles empty code', () => {
+    expect(checkBracketBalance('')).toBeNull();
+  });
+
+  it('handles regex literals without false positives', () => {
+    const code = 'const re = /[a-z]{3}/g; const x = [1];';
+    expect(checkBracketBalance(code)).toBeNull();
+  });
+
+  it('handles escaped characters in strings', () => {
+    const code = "const x = 'it\\'s a \\\"test\\\"'; const y = [1];";
+    expect(checkBracketBalance(code)).toBeNull();
+  });
+});
+
+// ─── scanCrossFileReferences ────────────────────────────────────────────────
+
+describe('scanCrossFileReferences', () => {
+  const extraction: ExtractionCheck = {
+    sourceFile: 'src/App.jsx',
+    newFiles: ['src/utils.js'],
+    extractedNames: ['clamp', 'fmt'],
+    sourceInitialLineCount: null,
+    newFileLineCount: null,
+  };
+
+  it('detects stale references in sibling files', async () => {
+    const readFile = vi.fn(async (path: string) => {
+      if (path === 'src/Header.jsx') {
+        return "import { clamp } from './App';\nexport function Header() { return clamp(5); }";
+      }
+      return null;
+    });
+    const listFiles = vi.fn(async () => ['src/App.jsx', 'src/Header.jsx', 'src/utils.js']);
+
+    const warnings = await scanCrossFileReferences(extraction, readFile, listFiles);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('STALE REFERENCES');
+    expect(warnings[0]).toContain('Header.jsx');
+    expect(warnings[0]).toContain('clamp');
+  });
+
+  it('ignores files that do not import from source', async () => {
+    const readFile = vi.fn(async (path: string) => {
+      if (path === 'src/Unrelated.jsx') {
+        return "import React from 'react';\nexport function Unrelated() { return <div/>; }";
+      }
+      return null;
+    });
+    const listFiles = vi.fn(async () => ['src/App.jsx', 'src/Unrelated.jsx', 'src/utils.js']);
+
+    const warnings = await scanCrossFileReferences(extraction, readFile, listFiles);
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('skips source file and new files from scan', async () => {
+    const readFile = vi.fn(async () => null);
+    const listFiles = vi.fn(async () => ['src/App.jsx', 'src/utils.js']);
+
+    const warnings = await scanCrossFileReferences(extraction, readFile, listFiles);
+    expect(warnings).toHaveLength(0);
+    // readFile should NOT be called for excluded files
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it('returns empty array when no extracted names', async () => {
+    const noNames: ExtractionCheck = { ...extraction, extractedNames: [] };
+    const readFile = vi.fn(async () => null);
+    const listFiles = vi.fn(async () => ['src/Header.jsx']);
+
+    const warnings = await scanCrossFileReferences(noNames, readFile, listFiles);
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('limits scan to 5 files', async () => {
+    const readFile = vi.fn(async () => "import { something } from './App';");
+    const listFiles = vi.fn(async () => [
+      'src/App.jsx', 'src/utils.js', // excluded
+      'src/A.jsx', 'src/B.jsx', 'src/C.jsx', 'src/D.jsx', 'src/E.jsx', 'src/F.jsx', 'src/G.jsx',
+    ]);
+
+    await scanCrossFileReferences(extraction, readFile, listFiles);
+    // Should read at most 5 sibling files (7 total minus 2 excluded = 5, capped at 5)
+    expect(readFile.mock.calls.length).toBeLessThanOrEqual(5);
+  });
+
+  it('handles listFiles failure gracefully', async () => {
+    const readFile = vi.fn(async () => null);
+    const listFiles = vi.fn(async () => { throw new Error('API error'); });
+
+    const warnings = await scanCrossFileReferences(extraction, readFile, listFiles);
+    expect(warnings).toHaveLength(0);
+  });
+});
+
+// ─── verifyExtraction — syntax check ────────────────────────────────────────
+
+describe('verifyExtraction — syntax check', () => {
+  it('detects syntax corruption (orphaned array body, PR #79 pattern)', async () => {
+    const extraction: ExtractionCheck = {
+      sourceFile: 'src/App.jsx',
+      newFiles: ['src/destinations.js'],
+      extractedNames: [],
+      sourceInitialLineCount: null,
+      newFileLineCount: null,
+    };
+
+    const readFile = vi.fn(async (path: string) => {
+      if (path === 'src/App.jsx') {
+        // The `const INITIAL_DESTS = [` was removed but array body left behind
+        return `import { INITIAL_DESTS } from './destinations';
+  { id: 'sofia', name: 'Sofia', budget: 1200 },
+  { id: 'lisbon', name: 'Lisbon', budget: 1500 },
+];
+function App() { return <div/>; }`;
+      }
+      if (path === 'src/destinations.js') {
+        return 'export const INITIAL_DESTS = [{ id: "sofia" }];';
+      }
+      return null;
+    });
+
+    const result = await verifyExtraction(extraction, readFile);
+    expect(result.passed).toBe(false);
+    expect(result.issues.some(i => i.includes('SYNTAX CORRUPTION'))).toBe(true);
   });
 });
 
