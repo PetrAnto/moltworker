@@ -3944,6 +3944,18 @@ export class TelegramHandler {
           `🗑️ ${result.removedModels} removed`,
           `⚡ ${result.durationMs}ms`,
         ];
+
+        // Auto-enrich with AA benchmarks if key is available
+        if (this.aaKey) {
+          try {
+            const { runEnrichment } = await import('../openrouter/model-sync/enrich');
+            const enrichResult = await runEnrichment(this.r2Bucket, this.aaKey, this.openrouterKey);
+            lines.push(`\n🧠 Auto-enriched: ${enrichResult.enrichedCount}/${enrichResult.totalModels} models with AA benchmarks`);
+          } catch (enrichError) {
+            lines.push(`\n⚠️ AA enrichment failed: ${enrichError instanceof Error ? enrichError.message : String(enrichError)}`);
+          }
+        }
+
         await this.bot.sendMessage(chatId, lines.join('\n'));
 
         // Top 20 recommendations with buttons

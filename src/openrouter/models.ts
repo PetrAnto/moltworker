@@ -1368,13 +1368,15 @@ export function formatModelRanking(): string {
       x.m.supportsVision && '👁️',
       x.m.reasoning && '🧠',
     ].filter(Boolean).join('');
+    const route = x.r.isDirectApi ? '🔌' : '🌐';
     const ctx = x.m.maxContext
       ? x.m.maxContext >= 1048576
         ? `${(x.m.maxContext / 1048576).toFixed(0)}M`
         : `${Math.round(x.m.maxContext / 1024)}K`
       : '?';
     const conf = `${x.r.confidence}%`;
-    return `${tierMedal(globalIdx)} ${idx}. /${x.r.alias} ${caps} ${ctx} ${conf} ${x.m.cost}`;
+    const aa = x.m.intelligenceIndex ? `AA:${x.m.intelligenceIndex.toFixed(0)}` : '';
+    return `${tierMedal(globalIdx)} ${idx}. /${x.r.alias} ${route}${caps} ${ctx} ${aa} ${conf} ${x.m.cost}`.replace(/  +/g, ' ');
   };
 
   if (paidRanked.length > 0) {
@@ -1388,15 +1390,15 @@ export function formatModelRanking(): string {
   if (freeRanked.length > 0) {
     lines.push('🆓 FREE (best free options):');
     freeRanked.slice(0, 8).forEach((x, i) => {
-      // Global index continues from paid count for medal assignment
       lines.push(formatRankLine(x, i + 1, paidRanked.length + i));
     });
     lines.push('');
   }
 
   lines.push('━━━ Legend ━━━');
+  lines.push('🔌=direct API  🌐=OpenRouter');
   lines.push('⚡=parallel  📋=structured  👁️=vision  🧠=reasoning');
-  lines.push('% = confidence score (same as /orch advise)');
+  lines.push('AA = Artificial Analysis index · % = confidence');
   lines.push('🥇=top 5  🥈=top 10  🥉=top 18');
   lines.push('\nUse /model <alias> for full details');
   lines.push('Use /model enrich to update benchmark data');
@@ -1802,6 +1804,7 @@ export interface RankedOrchestraModel {
   name: string;
   cost: string;
   isFree: boolean;
+  isDirectApi: boolean; // true = direct provider API (not OpenRouter)
   confidence: number; // 0-100% estimated success probability
   score: number; // raw scoring value
   highlights: string; // key capabilities summary
@@ -1833,22 +1836,45 @@ export function getRankedOrchestraModels(taskHint?: {
     const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
     const highlights: string[] = [];
 
-    // ── 1. Agentic ability (UNIVERSAL — most important for orchestra) ──
+    // ── 1. AA Benchmarks (PRIMARY — hard data from Artificial Analysis) ──
+    // When available, AA data is the most reliable signal. Scale scores
+    // proportionally instead of using coarse thresholds.
 
-    // SWE-Bench: the single best predictor of autonomous coding ability.
-    // Parse from score field (e.g. "80.9% SWE-Bench") — works for all models.
+    const hasAA = !!(m.intelligenceIndex || m.benchmarks?.coding);
+
+    if (m.intelligenceIndex) {
+      // Intelligence index (0-100 composite): scale linearly from 35-70 → 0-30pts
+      // Top models score 60-70, mid-tier 45-55, weak <35
+      const iqPts = Math.max(0, Math.min(30, ((m.intelligenceIndex - 35) / 35) * 30));
+      score += Math.round(iqPts);
+      if (m.intelligenceIndex >= 50) highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`);
+    }
+    if (m.benchmarks?.coding) {
+      // Coding index: scale linearly from 25-60 → 0-25pts
+      const codePts = Math.max(0, Math.min(25, ((m.benchmarks.coding - 25) / 35) * 25));
+      score += Math.round(codePts);
+    }
+    if (m.benchmarks?.livecodebench) {
+      // LiveCodeBench: real-world coding signal, 30-60 → 0-10pts
+      const lcbPts = Math.max(0, Math.min(10, ((m.benchmarks.livecodebench - 30) / 30) * 10));
+      score += Math.round(lcbPts);
+    }
+
+    // ── 2. Agentic ability (augments AA data, primary when AA absent) ──
+
+    // SWE-Bench: from score description field (e.g. "80.9% SWE-Bench")
     const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
     const sweScore = sweMatch ? parseFloat(sweMatch[1]) : 0;
-    if (sweScore >= 75) { score += 30; highlights.push(`SWE ${sweScore}%`); }
-    else if (sweScore >= 65) { score += 20; highlights.push(`SWE ${sweScore}%`); }
-    else if (sweScore >= 50) { score += 10; highlights.push(`SWE ${sweScore}%`); }
+    if (sweScore >= 75) { score += 25; highlights.push(`SWE ${sweScore}%`); }
+    else if (sweScore >= 65) { score += 15; highlights.push(`SWE ${sweScore}%`); }
+    else if (sweScore >= 50) { score += 8; highlights.push(`SWE ${sweScore}%`); }
     else if (sweScore > 0) { highlights.push(`SWE ${sweScore}%`); }
 
     // "Agentic" in specialty/description — model is designed for multi-step tool use
-    if (/agentic/i.test(lower)) { score += 15; highlights.push('Agentic'); }
+    if (/agentic/i.test(lower)) { score += 12; highlights.push('Agentic'); }
 
-    // Proven orchestra track record
-    if (m.orchestraReady) { score += 15; highlights.push('Proven'); }
+    // Proven orchestra track record (from enrichment pipeline)
+    if (m.orchestraReady) { score += 12; highlights.push('Proven'); }
 
     // Tool-calling reliability signals
     if (m.parallelCalls) score += 5;
@@ -1857,31 +1883,18 @@ export function getRankedOrchestraModels(taskHint?: {
     // Direct API — lower latency, better reliability for long tasks
     if (m.provider && m.provider !== 'openrouter') { score += 8; highlights.push('Direct'); }
 
-    // ── 2. Intelligence benchmarks (secondary — smart but can't use tools = useless) ──
-
-    if (m.intelligenceIndex) {
-      if (m.intelligenceIndex >= 55) score += 15;
-      else if (m.intelligenceIndex >= 50) score += 10;
-      else if (m.intelligenceIndex >= 45) score += 5;
-      else if (m.intelligenceIndex < 35) score -= 10;
-    }
-    if (m.benchmarks?.coding) {
-      if (m.benchmarks.coding >= 50) score += 12;
-      else if (m.benchmarks.coding >= 40) score += 6;
-      else if (m.benchmarks.coding < 25) score -= 10;
-    }
-    if (m.benchmarks?.livecodebench) {
-      if (m.benchmarks.livecodebench >= 50) score += 5;
-      else if (m.benchmarks.livecodebench >= 40) score += 3;
-    }
-
-    // Penalty for models with no benchmarks AND no SWE-Bench — unknown capability
-    const hasData = !!(m.intelligenceIndex || m.benchmarks?.coding || sweScore > 0);
-    if (!hasData) {
-      // Still reward coding-related keywords, but with uncertainty penalty
-      if (/coding/i.test(lower)) score += 5;
-      if (/multi-?file|refactor/i.test(lower)) score += 5;
-      score -= 10;
+    // ── 3. Penalty for unknown models (no AA data AND no SWE-Bench) ──
+    const hasAnyData = hasAA || sweScore > 0;
+    if (!hasAnyData) {
+      // Unknown models get a steep penalty — we can't trust them for autonomous tasks.
+      // Keyword heuristics give minor uplift but capped to prevent unverified models
+      // from competing with benchmarked ones.
+      let heuristicBonus = 0;
+      if (/coding/i.test(lower)) heuristicBonus += 5;
+      if (/multi-?file|refactor/i.test(lower)) heuristicBonus += 5;
+      if (/agentic/i.test(lower)) heuristicBonus += 5; // Already scored above, but small extra
+      score += Math.min(heuristicBonus, 10); // Cap heuristics at +10
+      score -= 20; // Steep uncertainty penalty
     }
 
     // ── 3. Architecture signals ──
@@ -1957,6 +1970,7 @@ export function getRankedOrchestraModels(taskHint?: {
         name: s.model.name,
         cost: s.model.cost,
         isFree: !!s.model.isFree,
+        isDirectApi: !!s.model.provider && s.model.provider !== 'openrouter',
         confidence: Math.round(Math.min(95, Math.max(5, normalized))),
         score: s.score,
         highlights: s.highlights.join(', '),
