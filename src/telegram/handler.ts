@@ -791,8 +791,8 @@ export class TelegramHandler {
         break;
 
       case '/models':
-        // Legacy alias — same as /model list
-        await this.bot.sendMessage(chatId, formatModelsList());
+        // Legacy alias — now redirects to /model rank (ranked + buttons)
+        await this.sendModelRanking(chatId);
         break;
 
       case '/use':
@@ -945,8 +945,8 @@ export class TelegramHandler {
         break;
 
       case '/pick':
-        // Legacy alias — same as /model pick
-        await this.sendModelPicker(chatId);
+        // Legacy alias — now redirects to /model rank (ranked + buttons)
+        await this.sendModelRanking(chatId);
         break;
 
       case '/cancel':
@@ -2953,7 +2953,7 @@ export class TelegramHandler {
         if (payload === 'list') {
           await this.bot.sendMessage(chatId, formatModelsList());
         } else if (payload === 'rank') {
-          await this.bot.sendMessage(chatId, formatModelRanking());
+          await this.sendModelRanking(chatId);
         }
         break;
 
@@ -3469,7 +3469,45 @@ export class TelegramHandler {
   }
 
   /**
-   * Send a quick model picker
+   * Send ranked model list with inline switch buttons.
+   * Combines the old /model rank text view with /model pick buttons.
+   */
+  async sendModelRanking(chatId: number): Promise<void> {
+    const text = formatModelRanking();
+    const ranked = getRankedOrchestraModels();
+
+    const makeButton = (alias: string, name: string, isFree: boolean, confidence: number): InlineKeyboardButton => {
+      const prefix = isFree ? '🆓' : '💎';
+      const shortName = name.length > 14 ? name.slice(0, 13) + '…' : name;
+      return { text: `${prefix} ${shortName} ${confidence}%`, callback_data: `model:${alias}` };
+    };
+
+    // Top 4 paid + top 3 free as quick-switch buttons
+    const paidTop = ranked.filter(r => !r.isFree).slice(0, 4);
+    const freeTop = ranked.filter(r => r.isFree).slice(0, 3);
+
+    const buttons: InlineKeyboardButton[][] = [];
+    // 2 buttons per row
+    for (let i = 0; i < paidTop.length; i += 2) {
+      const row = [makeButton(paidTop[i].alias, paidTop[i].name, false, paidTop[i].confidence)];
+      if (i + 1 < paidTop.length) {
+        row.push(makeButton(paidTop[i + 1].alias, paidTop[i + 1].name, false, paidTop[i + 1].confidence));
+      }
+      buttons.push(row);
+    }
+    for (let i = 0; i < freeTop.length; i += 2) {
+      const row = [makeButton(freeTop[i].alias, freeTop[i].name, true, freeTop[i].confidence)];
+      if (i + 1 < freeTop.length) {
+        row.push(makeButton(freeTop[i + 1].alias, freeTop[i + 1].name, true, freeTop[i + 1].confidence));
+      }
+      buttons.push(row);
+    }
+
+    await this.bot.sendMessageWithButtons(chatId, text, buttons);
+  }
+
+  /**
+   * Send a quick model picker (legacy — now calls sendModelRanking)
    */
   async sendModelPicker(chatId: number): Promise<void> {
     const all = Object.values(getAllModels());
@@ -3906,6 +3944,18 @@ export class TelegramHandler {
           `🗑️ ${result.removedModels} removed`,
           `⚡ ${result.durationMs}ms`,
         ];
+
+        // Auto-enrich with AA benchmarks if key is available
+        if (this.aaKey) {
+          try {
+            const { runEnrichment } = await import('../openrouter/model-sync/enrich');
+            const enrichResult = await runEnrichment(this.r2Bucket, this.aaKey, this.openrouterKey);
+            lines.push(`\n🧠 Auto-enriched: ${enrichResult.enrichedCount}/${enrichResult.totalModels} models with AA benchmarks`);
+          } catch (enrichError) {
+            lines.push(`\n⚠️ AA enrichment failed: ${enrichError instanceof Error ? enrichError.message : String(enrichError)}`);
+          }
+        }
+
         await this.bot.sendMessage(chatId, lines.join('\n'));
 
         // Top 20 recommendations with buttons
@@ -4026,7 +4076,8 @@ export class TelegramHandler {
         break;
 
       case 'pick':
-        await this.sendModelPicker(chatId);
+        // Legacy — redirect to rank (which now includes buttons)
+        await this.sendModelRanking(chatId);
         break;
 
       case 'info':
@@ -4035,7 +4086,7 @@ export class TelegramHandler {
 
       case 'rank':
       case 'ranking':
-        await this.bot.sendMessage(chatId, formatModelRanking());
+        await this.sendModelRanking(chatId);
         break;
 
       case 'use':

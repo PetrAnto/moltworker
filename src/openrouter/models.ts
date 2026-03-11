@@ -1283,8 +1283,8 @@ export function formatModelHub(currentAlias: string): string {
 
   // Subcommands — organized by purpose
   lines.push('━━━ Browse & Switch ━━━');
+  lines.push('/model rank     — Ranked list + quick switch');
   lines.push('/model list     — Full catalog with prices');
-  lines.push('/model rank     — Capability ranking');
   lines.push('/model <alias>  — Model details (e.g. /model sonnet)');
 
   lines.push('\n━━━ Keep Up to Date ━━━');
@@ -1304,6 +1304,7 @@ export function formatModelHub(currentAlias: string): string {
 
 /**
  * Get top recommended models for hub buttons.
+ * Uses the unified orchestra scorer and buckets by value tier.
  * Returns { free, value, premium } arrays of ModelInfo.
  */
 export function getTopModelPicks(): {
@@ -1311,139 +1312,95 @@ export function getTopModelPicks(): {
   value: ModelInfo[];
   premium: ModelInfo[];
 } {
-  const all = Object.values(getAllModels());
-  const toolModels = all.filter(m => m.supportsTools && !m.isImageGen);
+  const ranked = getRankedOrchestraModels();
 
-  const score = (m: ModelInfo): number => {
-    let s = 0;
-    const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
-    const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
-    if (sweMatch) s += parseFloat(sweMatch[1]);
-    if (/agentic|coding/i.test(lower)) s += 15;
-    if ((m.maxContext || 0) >= 200000) s += 5;
-    if (m.supportsVision) s += 3;
-    if (m.parallelCalls) s += 2;
-    if (m.intelligenceIndex) s += m.intelligenceIndex;
-    return s;
-  };
-
-  const scored = toolModels.map(m => ({ m, s: score(m) }));
-
-  const free = scored
-    .filter(x => x.m.isFree)
-    .sort((a, b) => b.s - a.s)
+  const free = ranked
+    .filter(r => r.isFree)
     .slice(0, 4)
-    .map(x => x.m);
+    .map(r => getModel(r.alias)!)
+    .filter(Boolean);
 
-  const value = scored
-    .filter(x => !x.m.isFree && ['exceptional', 'great'].includes(getValueTier(x.m)))
-    .sort((a, b) => b.s - a.s)
+  const value = ranked
+    .filter(r => !r.isFree && r.valueTier === 'best')
     .slice(0, 4)
-    .map(x => x.m);
+    .map(r => getModel(r.alias)!)
+    .filter(Boolean);
 
-  const premium = scored
-    .filter(x => !x.m.isFree && ['good', 'premium'].includes(getValueTier(x.m)))
-    .sort((a, b) => b.s - a.s)
+  const premium = ranked
+    .filter(r => !r.isFree && (r.valueTier === 'good' || r.valueTier === 'premium'))
     .slice(0, 4)
-    .map(x => x.m);
+    .map(r => getModel(r.alias)!)
+    .filter(Boolean);
 
   return { free, value, premium };
 }
 
 /**
- * Format capability ranking — models sorted by orchestra readiness and intelligence.
- * Shows a clear tier list for demanding tasks.
+ * Format capability ranking — models sorted by unified orchestra score.
+ * Uses the same scorer as /orch advise for consistent ordering everywhere.
  */
 export function formatModelRanking(): string {
   const lines: string[] = [];
   lines.push('🏅 Model Ranking — Orchestra & Capability\n');
 
-  const all = Object.values(getAllModels());
-  const chatModels = all.filter(m => !m.isImageGen && m.supportsTools);
+  const ranked = getRankedOrchestraModels();
 
-  // Score each model comprehensively
-  interface RankedModel {
-    m: ModelInfo;
-    score: number;
-    tier: string;
-  }
+  // Resolve ModelInfo for each ranked entry
+  const withInfo = ranked
+    .map(r => ({ r, m: getModel(r.alias)! }))
+    .filter(x => x.m);
 
-  const ranked: RankedModel[] = chatModels.map(m => {
-    let score = 0;
-    const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
+  const paidRanked = withInfo.filter(x => !x.r.isFree);
+  const freeRanked = withInfo.filter(x => x.r.isFree);
 
-    // AA intelligence index (most reliable signal)
-    if (m.intelligenceIndex) score += m.intelligenceIndex * 2;
+  // Assign tier medals based on overall rank
+  const tierMedal = (globalIdx: number): string => {
+    if (globalIdx < 5) return '🥇';
+    if (globalIdx < 10) return '🥈';
+    if (globalIdx < 18) return '🥉';
+    return '  ';
+  };
 
-    // SWE-Bench (real-world coding benchmark)
-    const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
-    if (sweMatch) score += parseFloat(sweMatch[1]);
-
-    // Agentic capability
-    if (/agentic/i.test(lower)) score += 20;
-    if (/multi-?file/i.test(lower)) score += 15;
-    if (/coding/i.test(lower)) score += 10;
-
-    // Feature flags
-    if (m.parallelCalls) score += 5;
-    if (m.structuredOutput) score += 5;
-    if (m.supportsVision) score += 3;
-    if ((m.maxContext || 0) >= 200000) score += 5;
-    if (m.reasoning) score += 5;
-
-    // Penalty for small models
-    if (/\b(mini|small|lite|nano)\b/i.test(m.name)) score -= 15;
-
-    return { m, score, tier: '' };
-  });
-
-  ranked.sort((a, b) => b.score - a.score);
-
-  // Assign tiers
-  for (let i = 0; i < ranked.length; i++) {
-    if (i < 5) ranked[i].tier = '🥇';
-    else if (i < 10) ranked[i].tier = '🥈';
-    else if (i < 18) ranked[i].tier = '🥉';
-    else ranked[i].tier = '  ';
-  }
-
-  // Group: free vs paid
-  const freeRanked = ranked.filter(r => r.m.isFree);
-  const paidRanked = ranked.filter(r => !r.m.isFree);
-
-  const formatRankLine = (r: RankedModel, idx: number): string => {
+  const formatRankLine = (x: { r: RankedOrchestraModel; m: ModelInfo }, idx: number, globalIdx: number): string => {
     const caps = [
-      r.m.parallelCalls && '⚡',
-      r.m.structuredOutput && '📋',
-      r.m.supportsVision && '👁️',
-      r.m.reasoning && '🧠',
+      x.m.parallelCalls && '⚡',
+      x.m.structuredOutput && '📋',
+      x.m.supportsVision && '👁️',
+      x.m.reasoning && '🧠',
     ].filter(Boolean).join('');
-    const ctx = r.m.maxContext
-      ? r.m.maxContext >= 1048576
-        ? `${(r.m.maxContext / 1048576).toFixed(0)}M`
-        : `${Math.round(r.m.maxContext / 1024)}K`
+    const route = x.r.isDirectApi ? '🔌' : '🌐';
+    const ctx = x.m.maxContext
+      ? x.m.maxContext >= 1048576
+        ? `${(x.m.maxContext / 1048576).toFixed(0)}M`
+        : `${Math.round(x.m.maxContext / 1024)}K`
       : '?';
-    const aaStr = r.m.intelligenceIndex ? ` AA:${r.m.intelligenceIndex.toFixed(0)}` : '';
-    return `${r.tier} ${idx}. /${r.m.alias} ${caps} ${ctx}${aaStr} ${r.m.cost}`;
+    const conf = `${x.r.confidence}%`;
+    const aa = x.m.intelligenceIndex ? `AA:${x.m.intelligenceIndex.toFixed(0)}` : '';
+    return `${tierMedal(globalIdx)} ${idx}. /${x.r.alias} ${route}${caps} ${ctx} ${aa} ${conf} ${x.m.cost}`.replace(/  +/g, ' ');
   };
 
   if (paidRanked.length > 0) {
     lines.push('💎 PAID (best for orchestra/complex tasks):');
-    paidRanked.slice(0, 12).forEach((r, i) => lines.push(formatRankLine(r, i + 1)));
+    paidRanked.slice(0, 12).forEach((x, i) => {
+      lines.push(formatRankLine(x, i + 1, i));
+    });
     lines.push('');
   }
 
   if (freeRanked.length > 0) {
     lines.push('🆓 FREE (best free options):');
-    freeRanked.slice(0, 8).forEach((r, i) => lines.push(formatRankLine(r, i + 1)));
+    freeRanked.slice(0, 8).forEach((x, i) => {
+      lines.push(formatRankLine(x, i + 1, paidRanked.length + i));
+    });
     lines.push('');
   }
 
   lines.push('━━━ Legend ━━━');
+  lines.push('🔌=direct API  🌐=OpenRouter');
   lines.push('⚡=parallel  📋=structured  👁️=vision  🧠=reasoning');
-  lines.push('AA = Artificial Analysis Intelligence Index');
+  lines.push('AA = Artificial Analysis index · % = confidence');
   lines.push('🥇=top 5  🥈=top 10  🥉=top 18');
-  lines.push('\nUse /model info <alias> for full details');
+  lines.push('\nUse /model <alias> for full details');
   lines.push('Use /model enrich to update benchmark data');
 
   return lines.join('\n');
@@ -1803,135 +1760,40 @@ export interface OrchestraModelRec {
   why: string;
 }
 
+/**
+ * Get orchestra recommendations — top 3 free, top 3 paid, and avoid list.
+ * Uses the unified scorer (getRankedOrchestraModels) for consistent ordering.
+ */
 export function getOrchestraRecommendations(): {
   free: OrchestraModelRec[];
   paid: OrchestraModelRec[];
   avoid: string[];
 } {
-  const all = getAllModels();
-  const toolModels = Object.values(all).filter(m => m.supportsTools && !m.isImageGen);
+  const ranked = getRankedOrchestraModels();
 
-  // Score each model for orchestra suitability using AA benchmarks + heuristics
-  const scored = toolModels.map(m => {
-    let score = 0;
-    const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
-
-    // === AA Benchmark Data (most reliable signals) ===
-    if (m.intelligenceIndex) {
-      // Intelligence index is 0-100; strong models score 50+
-      if (m.intelligenceIndex >= 60) score += 25;
-      else if (m.intelligenceIndex >= 50) score += 15;
-      else if (m.intelligenceIndex >= 40) score += 5;
-      else score -= 10; // Low intelligence = risky for orchestra
-    }
-    if (m.benchmarks?.coding) {
-      // Coding index: orchestra tasks are primarily code changes
-      if (m.benchmarks.coding >= 50) score += 20;
-      else if (m.benchmarks.coding >= 40) score += 10;
-      else if (m.benchmarks.coding < 25) score -= 10;
-    }
-    if (m.benchmarks?.livecodebench) {
-      // LiveCodeBench: real-world coding signal
-      if (m.benchmarks.livecodebench >= 50) score += 10;
-      else if (m.benchmarks.livecodebench >= 40) score += 5;
-    }
-
-    // === Heuristic signals (fallback when no AA data) ===
-    const hasAAData = !!(m.intelligenceIndex || m.benchmarks?.coding);
-
-    if (!hasAAData) {
-      // Only use keyword heuristics when we have no benchmark data.
-      // Cap heuristic bonus to avoid unverified models outscoring benchmarked ones.
-      let heuristicBonus = 0;
-      if (/agentic/i.test(lower)) heuristicBonus += 15;
-      if (/multi-?file/i.test(lower)) heuristicBonus += 10;
-      if (/coding/i.test(lower)) heuristicBonus += 10;
-      if (/swe-?bench/i.test(lower)) heuristicBonus += 5;
-
-      // SWE-Bench score from description string
-      const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
-      if (sweMatch) {
-        const sweScore = parseFloat(sweMatch[1]);
-        if (sweScore >= 70) heuristicBonus += 15;
-        else if (sweScore >= 60) heuristicBonus += 5;
-      }
-
-      // Cap: unverified models shouldn't score higher than mid-tier benchmarked ones
-      score += Math.min(heuristicBonus, 25);
-
-      // Uncertainty penalty: no benchmarks means we can't trust reliability
-      score -= 10;
-    }
-
-    // === Universal signals (always apply) ===
-
-    // Positive: large context (orchestra tasks can be long)
-    if ((m.maxContext || 0) >= 200000) score += 10;
-    else if ((m.maxContext || 0) >= 128000) score += 5;
-
-    // Positive: dense models (all params active = better instruction following)
-    if (/dense/i.test(lower)) score += 15;
-
-    // Negative: small active parameter models (weak instruction following)
-    if (/\b(mini|small|flash|lite|nano)\b/i.test(m.name)) score -= 20;
-    if (/\b\d+B active\b/i.test(m.score)) {
-      const activeMatch = m.score.match(/(\d+)B active/i);
-      if (activeMatch) {
-        const activeB = parseInt(activeMatch[1], 10);
-        if (activeB < 20) score -= 15;
-        if (activeB >= 40) score += 10;
-      }
-    }
-
-    // Positive: direct API models (faster, more reliable, no OpenRouter overhead)
-    if (m.provider && m.provider !== 'openrouter') score += 10;
-
-    // Positive: parallel tool calls (orchestra uses many tools)
-    if (m.parallelCalls) score += 5;
-
-    // Tool-calling reliability: models from families with proven structured JSON tool output.
-    // Orchestra requires github_create_pr with complex JSON — models that struggle with
-    // structured tool arguments waste all their iterations on formatting errors.
-    // Use else-if to prevent double-counting (e.g. "anthropic/claude-..." matches both).
-    const modelId = m.id.toLowerCase();
-    if (modelId.includes('anthropic') || modelId.includes('claude')) score += 12;
-    else if (modelId.includes('openai') || modelId.includes('gpt')) score += 10;
-    else if (modelId.includes('qwen') || modelId.includes('alibaba')) score += 8;
-    else if (modelId.includes('deepseek')) score += 6;
-
-    // Use orchestraReady flag computed by enrichment pipeline
-    if (m.orchestraReady) score += 10;
-
-    return { model: m, score };
-  });
-
-  // Separate free vs paid
-  const freeScored = scored.filter(s => s.model.isFree).sort((a, b) => b.score - a.score);
-  const paidScored = scored.filter(s => !s.model.isFree).sort((a, b) => b.score - a.score);
-
-  // Models to avoid for orchestra (small active params, weak instruction following)
-  const avoidList = scored
-    .filter(s => s.score < -5)
-    .map(s => s.model.alias);
-
-  const formatRec = (s: { model: ModelInfo; score: number }): OrchestraModelRec => {
-    const specialty = s.model.specialty.replace(/^(Free|Paid)\s+/i, '');
-    // Append AA benchmark summary when available
+  const formatRec = (r: RankedOrchestraModel): OrchestraModelRec => {
+    const model = getModel(r.alias);
+    const specialty = model?.specialty.replace(/^(Free|Paid)\s+/i, '') || '';
     const aaHints: string[] = [];
-    if (s.model.intelligenceIndex) aaHints.push(`IQ:${s.model.intelligenceIndex.toFixed(0)}`);
-    if (s.model.benchmarks?.coding) aaHints.push(`Code:${s.model.benchmarks.coding.toFixed(0)}`);
+    if (model?.intelligenceIndex) aaHints.push(`IQ:${model.intelligenceIndex.toFixed(0)}`);
+    if (model?.benchmarks?.coding) aaHints.push(`Code:${model.benchmarks.coding.toFixed(0)}`);
     const aaStr = aaHints.length > 0 ? ` (${aaHints.join(', ')})` : '';
     return {
-      alias: s.model.alias,
-      name: s.model.name,
-      cost: s.model.cost,
+      alias: r.alias,
+      name: r.name,
+      cost: r.cost,
       why: specialty + aaStr,
     };
   };
 
+  const freeRanked = ranked.filter(r => r.isFree);
+  const paidRanked = ranked.filter(r => !r.isFree);
+  // Low-confidence models are not suited for orchestra
+  const avoidList = ranked.filter(r => r.confidence <= 15).map(r => r.alias);
+
   return {
-    free: freeScored.slice(0, 3).map(formatRec),
-    paid: paidScored.slice(0, 3).map(formatRec),
+    free: freeRanked.slice(0, 3).map(formatRec),
+    paid: paidRanked.slice(0, 3).map(formatRec),
     avoid: avoidList,
   };
 }
@@ -1942,6 +1804,7 @@ export interface RankedOrchestraModel {
   name: string;
   cost: string;
   isFree: boolean;
+  isDirectApi: boolean; // true = direct provider API (not OpenRouter)
   confidence: number; // 0-100% estimated success probability
   score: number; // raw scoring value
   highlights: string; // key capabilities summary
@@ -1973,22 +1836,45 @@ export function getRankedOrchestraModels(taskHint?: {
     const lower = (m.name + ' ' + m.specialty + ' ' + m.score).toLowerCase();
     const highlights: string[] = [];
 
-    // ── 1. Agentic ability (UNIVERSAL — most important for orchestra) ──
+    // ── 1. AA Benchmarks (PRIMARY — hard data from Artificial Analysis) ──
+    // When available, AA data is the most reliable signal. Scale scores
+    // proportionally instead of using coarse thresholds.
 
-    // SWE-Bench: the single best predictor of autonomous coding ability.
-    // Parse from score field (e.g. "80.9% SWE-Bench") — works for all models.
+    const hasAA = !!(m.intelligenceIndex || m.benchmarks?.coding);
+
+    if (m.intelligenceIndex) {
+      // Intelligence index (0-100 composite): scale linearly from 35-70 → 0-30pts
+      // Top models score 60-70, mid-tier 45-55, weak <35
+      const iqPts = Math.max(0, Math.min(30, ((m.intelligenceIndex - 35) / 35) * 30));
+      score += Math.round(iqPts);
+      if (m.intelligenceIndex >= 50) highlights.push(`IQ:${m.intelligenceIndex.toFixed(0)}`);
+    }
+    if (m.benchmarks?.coding) {
+      // Coding index: scale linearly from 25-60 → 0-25pts
+      const codePts = Math.max(0, Math.min(25, ((m.benchmarks.coding - 25) / 35) * 25));
+      score += Math.round(codePts);
+    }
+    if (m.benchmarks?.livecodebench) {
+      // LiveCodeBench: real-world coding signal, 30-60 → 0-10pts
+      const lcbPts = Math.max(0, Math.min(10, ((m.benchmarks.livecodebench - 30) / 30) * 10));
+      score += Math.round(lcbPts);
+    }
+
+    // ── 2. Agentic ability (augments AA data, primary when AA absent) ──
+
+    // SWE-Bench: from score description field (e.g. "80.9% SWE-Bench")
     const sweMatch = m.score.match(/(\d+(?:\.\d+)?)%\s*SWE/i);
     const sweScore = sweMatch ? parseFloat(sweMatch[1]) : 0;
-    if (sweScore >= 75) { score += 30; highlights.push(`SWE ${sweScore}%`); }
-    else if (sweScore >= 65) { score += 20; highlights.push(`SWE ${sweScore}%`); }
-    else if (sweScore >= 50) { score += 10; highlights.push(`SWE ${sweScore}%`); }
+    if (sweScore >= 75) { score += 25; highlights.push(`SWE ${sweScore}%`); }
+    else if (sweScore >= 65) { score += 15; highlights.push(`SWE ${sweScore}%`); }
+    else if (sweScore >= 50) { score += 8; highlights.push(`SWE ${sweScore}%`); }
     else if (sweScore > 0) { highlights.push(`SWE ${sweScore}%`); }
 
     // "Agentic" in specialty/description — model is designed for multi-step tool use
-    if (/agentic/i.test(lower)) { score += 15; highlights.push('Agentic'); }
+    if (/agentic/i.test(lower)) { score += 12; highlights.push('Agentic'); }
 
-    // Proven orchestra track record
-    if (m.orchestraReady) { score += 15; highlights.push('Proven'); }
+    // Proven orchestra track record (from enrichment pipeline)
+    if (m.orchestraReady) { score += 12; highlights.push('Proven'); }
 
     // Tool-calling reliability signals
     if (m.parallelCalls) score += 5;
@@ -1997,31 +1883,18 @@ export function getRankedOrchestraModels(taskHint?: {
     // Direct API — lower latency, better reliability for long tasks
     if (m.provider && m.provider !== 'openrouter') { score += 8; highlights.push('Direct'); }
 
-    // ── 2. Intelligence benchmarks (secondary — smart but can't use tools = useless) ──
-
-    if (m.intelligenceIndex) {
-      if (m.intelligenceIndex >= 55) score += 15;
-      else if (m.intelligenceIndex >= 50) score += 10;
-      else if (m.intelligenceIndex >= 45) score += 5;
-      else if (m.intelligenceIndex < 35) score -= 10;
-    }
-    if (m.benchmarks?.coding) {
-      if (m.benchmarks.coding >= 50) score += 12;
-      else if (m.benchmarks.coding >= 40) score += 6;
-      else if (m.benchmarks.coding < 25) score -= 10;
-    }
-    if (m.benchmarks?.livecodebench) {
-      if (m.benchmarks.livecodebench >= 50) score += 5;
-      else if (m.benchmarks.livecodebench >= 40) score += 3;
-    }
-
-    // Penalty for models with no benchmarks AND no SWE-Bench — unknown capability
-    const hasData = !!(m.intelligenceIndex || m.benchmarks?.coding || sweScore > 0);
-    if (!hasData) {
-      // Still reward coding-related keywords, but with uncertainty penalty
-      if (/coding/i.test(lower)) score += 5;
-      if (/multi-?file|refactor/i.test(lower)) score += 5;
-      score -= 10;
+    // ── 3. Penalty for unknown models (no AA data AND no SWE-Bench) ──
+    const hasAnyData = hasAA || sweScore > 0;
+    if (!hasAnyData) {
+      // Unknown models get a steep penalty — we can't trust them for autonomous tasks.
+      // Keyword heuristics give minor uplift but capped to prevent unverified models
+      // from competing with benchmarked ones.
+      let heuristicBonus = 0;
+      if (/coding/i.test(lower)) heuristicBonus += 5;
+      if (/multi-?file|refactor/i.test(lower)) heuristicBonus += 5;
+      if (/agentic/i.test(lower)) heuristicBonus += 5; // Already scored above, but small extra
+      score += Math.min(heuristicBonus, 10); // Cap heuristics at +10
+      score -= 20; // Steep uncertainty penalty
     }
 
     // ── 3. Architecture signals ──
@@ -2097,6 +1970,7 @@ export function getRankedOrchestraModels(taskHint?: {
         name: s.model.name,
         cost: s.model.cost,
         isFree: !!s.model.isFree,
+        isDirectApi: !!s.model.provider && s.model.provider !== 'openrouter',
         confidence: Math.round(Math.min(95, Math.max(5, normalized))),
         score: s.score,
         highlights: s.highlights.join(', '),
