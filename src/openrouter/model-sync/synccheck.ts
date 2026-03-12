@@ -97,7 +97,22 @@ export async function runSyncCheck(apiKey: string): Promise<SyncCheckResult> {
     }
 
     // 2. Find new models from tracked families not in curated catalog
+    //    Skip older versions of models we already curate (e.g., Claude 4.1/4.5 when we have 4.6)
     const newFamilyModels: NewFamilyModel[] = [];
+
+    // Build a set of curated model "base names" for deduplication.
+    // e.g., curated "claude-sonnet-4-6" → base stems ["claude-sonnet", "claude-opus", ...]
+    // This prevents showing Claude Opus 4.1, 4.5 etc. when we already curate the latest.
+    const curatedBaseStems = new Set<string>();
+    for (const model of Object.values(MODELS)) {
+      // Extract base stem: strip version numbers and suffixes from model ID
+      // "anthropic/claude-sonnet-4-6" → "claude-sonnet"
+      // "openai/gpt-5.4" → "gpt"
+      const shortId = model.id.split('/').pop() || model.id;
+      // Strip trailing version: -4-6, -4.5, -v3.2, -0528, etc.
+      const stem = shortId.replace(/[-.]?\d[\d.]*(-\d+)*$/, '').replace(/-+$/, '');
+      if (stem.length >= 3) curatedBaseStems.add(stem.toLowerCase());
+    }
 
     for (const live of liveModels) {
       if (curatedIds.has(live.id)) continue;
@@ -108,6 +123,11 @@ export async function runSyncCheck(apiKey: string): Promise<SyncCheckResult> {
       // Skip free variants of models we already have (e.g., model:free)
       const baseId = live.id.replace(/:free$/, '');
       if (curatedIds.has(baseId)) continue;
+
+      // Skip older/variant versions of curated models
+      const liveShortId = (live.id.split('/').pop() || live.id).toLowerCase();
+      const liveStem = liveShortId.replace(/[-.]?\d[\d.]*(-\d+)*$/, '').replace(/-+$/, '');
+      if (liveStem.length >= 3 && curatedBaseStems.has(liveStem)) continue;
 
       // Skip tiny context models
       if ((live.context_length || 0) < 4096) continue;

@@ -375,11 +375,42 @@ export async function runFullSync(
     const removedModels = Object.values(deprecations).filter(d => d.state === 'removed').length;
     const staleModels = Object.values(deprecations).filter(d => d.state === 'stale' || d.state === 'deprecated').length;
 
-    // 11. Build top-N model recommendations by heuristic score
-    const topModels: ScoredModel[] = scoredEntries
-      .filter(e => syncedModels[e.model.alias]) // Only include models still in catalog (not removed)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, TOP_MODELS_COUNT)
+    // 11. Build top-N model recommendations with provider diversity.
+    //     Ensure each provider gets at least 1 slot (if they have models),
+    //     then fill remaining slots by global score.
+    const eligible = scoredEntries
+      .filter(e => syncedModels[e.model.alias])
+      .sort((a, b) => b.score - a.score);
+
+    const topSelected: typeof eligible = [];
+    const selectedIds = new Set<string>();
+
+    // Pass 1: best model per provider (ensures NVIDIA, Cohere, etc. appear)
+    const seenProviders = new Set<string>();
+    for (const e of eligible) {
+      const provider = e.raw.id.split('/')[0];
+      if (!seenProviders.has(provider)) {
+        seenProviders.add(provider);
+        topSelected.push(e);
+        selectedIds.add(e.model.alias);
+        if (topSelected.length >= TOP_MODELS_COUNT) break;
+      }
+    }
+
+    // Pass 2: fill remaining slots by global score
+    if (topSelected.length < TOP_MODELS_COUNT) {
+      for (const e of eligible) {
+        if (selectedIds.has(e.model.alias)) continue;
+        topSelected.push(e);
+        selectedIds.add(e.model.alias);
+        if (topSelected.length >= TOP_MODELS_COUNT) break;
+      }
+    }
+
+    // Re-sort final selection by score for display
+    topSelected.sort((a, b) => b.score - a.score);
+
+    const topModels: ScoredModel[] = topSelected
       .map(e => ({
         alias: e.model.alias,
         name: e.model.name,
