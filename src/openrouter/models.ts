@@ -1088,6 +1088,88 @@ export function resolveToAlias(input: string): string | undefined {
 }
 
 /**
+ * Search all model registries (curated, dynamic, auto-synced) by query string.
+ * Matches against name, alias, model ID, specialty, and provider prefix.
+ * Returns up to `limit` results sorted by relevance (curated first, then by match quality).
+ */
+export function searchModels(query: string, limit = 15): Array<{ model: ModelInfo; source: 'curated' | 'dynamic' | 'synced' }> {
+  const q = query.toLowerCase().trim();
+  if (!q) return [];
+
+  const all = getAllModels();
+  const results: Array<{ model: ModelInfo; source: 'curated' | 'dynamic' | 'synced'; relevance: number }> = [];
+
+  for (const model of Object.values(all)) {
+    const alias = model.alias.toLowerCase();
+    const name = model.name.toLowerCase();
+    const id = model.id.toLowerCase();
+    const specialty = (model.specialty || '').toLowerCase();
+
+    let relevance = 0;
+
+    // Exact alias match
+    if (alias === q) relevance = 100;
+    // Provider prefix match (e.g. "nvidia" matches "nvidia/nemotron-...")
+    else if (id.startsWith(q + '/')) relevance = 90;
+    // Name contains query as whole word
+    else if (new RegExp(`\\b${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(name)) relevance = 80;
+    // Alias contains query
+    else if (alias.includes(q)) relevance = 70;
+    // Name contains query
+    else if (name.includes(q)) relevance = 60;
+    // Model ID contains query
+    else if (id.includes(q)) relevance = 50;
+    // Specialty contains query
+    else if (specialty.includes(q)) relevance = 40;
+    else continue;
+
+    const source = isCuratedModel(model.alias) ? 'curated' as const
+      : isAutoSyncedModel(model.alias) ? 'synced' as const
+      : 'dynamic' as const;
+
+    // Boost curated models
+    if (source === 'curated') relevance += 5;
+
+    results.push({ model, source, relevance });
+  }
+
+  return results
+    .sort((a, b) => b.relevance - a.relevance)
+    .slice(0, limit)
+    .map(({ model, source }) => ({ model, source }));
+}
+
+/**
+ * Format search results for Telegram display.
+ */
+export function formatSearchResults(query: string, results: ReturnType<typeof searchModels>): string {
+  if (results.length === 0) {
+    return `🔍 No models found for "${query}"\n\nTip: Try a provider name (nvidia, meta-llama), model name (nemotron, llama), or alias.`;
+  }
+
+  const lines: string[] = [`🔍 Search: "${query}" — ${results.length} result${results.length > 1 ? 's' : ''}\n`];
+
+  for (const { model, source } of results) {
+    const tag = source === 'curated' ? '⭐' : source === 'dynamic' ? '📌' : '🌐';
+    const tools = model.supportsTools ? '🔧' : '';
+    const vision = model.supportsVision ? '👁️' : '';
+    const caps = [tools, vision].filter(Boolean).join('');
+    const ctx = model.maxContext
+      ? model.maxContext >= 1048576
+        ? `${(model.maxContext / 1048576).toFixed(0)}M`
+        : `${Math.round(model.maxContext / 1024)}K`
+      : '';
+    lines.push(`${tag} /${model.alias} ${caps} — ${model.name}`);
+    lines.push(`   ${model.cost} · ${ctx} ctx · ${model.id}`);
+  }
+
+  lines.push('\n⭐=curated  🌐=auto-synced  📌=dynamic');
+  lines.push('Use /use <alias> to switch');
+
+  return lines.join('\n');
+}
+
+/**
  * Get the base ModelInfo for a model alias from ANY registry (curated, synced, dynamic).
  * Unlike getModel() which returns the merged/overridden version, this returns the
  * unpatched base entry from whichever registry owns it.

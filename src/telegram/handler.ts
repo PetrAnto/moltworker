@@ -4048,6 +4048,7 @@ export class TelegramHandler {
    *   info <alias>     — Detailed capability card
    *   <alias>          — Shortcut for info (e.g. /model sonnet)
    *   rank             — Orchestra/capability ranking
+   *   search <query>   — Search all models (curated + synced)
    *   use <alias>      — Switch model
    *   sync             — Fetch latest free models
    *   syncall          — Full catalog sync + recommendations
@@ -4124,6 +4125,19 @@ export class TelegramHandler {
       case 'enrich':
         await this.handleEnrichCommand(chatId);
         break;
+
+      case 'search':
+      case 'find': {
+        const query = args.slice(1).join(' ').trim();
+        if (!query) {
+          await this.bot.sendMessage(chatId, 'Usage: /model search <query>\n\nExamples:\n  /model search nvidia\n  /model search nemotron\n  /model search llama\n  /model search coding');
+        } else {
+          const { searchModels, formatSearchResults } = await import('../openrouter/models');
+          const results = searchModels(query);
+          await this.bot.sendMessage(chatId, formatSearchResults(query, results));
+        }
+        break;
+      }
 
       default:
         // Treat unknown subcommand as /model info <alias> for convenience
@@ -5000,6 +5014,7 @@ Each /orch next picks up where the last one left off.`;
 /model rank         — Capability/orchestra ranking
 /model <alias>      — Model details (e.g. /model sonnet)
 /model use <alias>  — Switch model
+/model search <q>   — Search all models (e.g. /model search nvidia)
 /model sync         — Fetch latest free models
 /model syncall      — Full catalog sync
 /model check        — Check for updates
