@@ -418,6 +418,88 @@
 
 ---
 
+### Prerequisites for Remaining Roadmap (Impact Analysis, Mar 13 2026)
+
+> Phase 9 changes are **compatible** with all remaining roadmap items, but 3 architectural
+> blockers must be addressed before launching major new features.
+
+#### Blocker 1: Per-User Rate Limiting (CRITICAL)
+
+**Status:** Does not exist. No per-user quota tracking anywhere.
+**Impact:** Without this, a single user can exhaust all API credits. Blocks F.8 (Long-Term Memory).
+**Effort:** 2-3 days
+**Scope:** Add quota fields to UserPreferences (tasksToday, tokensUsedToday, costToday, dailyLimit), handler checks before DO dispatch, usage tracking after task completion.
+**Files:** `storage.ts`, `handler.ts`, `task-processor.ts`
+
+#### Blocker 2: Handler Modularization (CRITICAL for Phase 6)
+
+**Status:** `handler.ts` is 5,148 lines with 100+ methods in a single switch statement.
+**Impact:** Adding Voice (6.3) + Calendar (6.4) + Email (6.5) would push it past 6,000+ lines. Untestable.
+**Effort:** 3-5 days
+**Scope:** Extract CommandHandler interface, create command modules per domain (ModelCommands, TaskCommands, SettingCommands, IntegrationCommands), main handler delegates.
+**Files:** `handler.ts` → `src/telegram/commands/*.ts`
+
+#### Blocker 3: Context Budget Increase
+
+**Status:** DEFAULT_CONTEXT_BUDGET = 60,000 tokens. Insufficient for voice + calendar + email simultaneously.
+**Impact:** Power users with long conversations + new modalities exceed budget.
+**Effort:** 1 day
+**Scope:** Increase to 100K, test compression, verify model compatibility (128K+ models handle it; smaller models need capping).
+**Files:** `context-budget.ts`, `task-processor.ts`
+
+#### Architectural Debt: MUTATION_TOOLS Duplication
+
+**Status:** MUTATION_TOOLS set is duplicated in 3 files and must be updated atomically for any new mutation tool.
+**Locations:** `tool-validator.ts:37`, `cove-verification.ts:45`, `destructive-op-guard.ts` (via GUARDED_TOOLS)
+**Fix:** Extract shared constant to `src/guardrails/constants.ts`, import from all 3 files.
+**Effort:** 1 hour
+
+#### Architectural Debt: tools.ts Size
+
+**Status:** 3,943 lines with 20 tools in single file + massive executeTool() switch.
+**Impact:** Adding 6+ new tools (voice, calendar, email) pushes past manageable limits.
+**Fix:** Optional but recommended — split into `src/openrouter/tools/` directory with per-domain modules.
+**Effort:** 3-5 days (optional)
+
+#### Feature Compatibility Matrix (Phase 9 → Future)
+
+| Future Feature | Phase 9 Conflicts | Storage | Timeout | Tool Budget | Prerequisites |
+|---------------|-------------------|---------|---------|-------------|---------------|
+| **Rate Limiting** | None | R2 (not DO) | N/A | N/A | — |
+| **Acontext Sandbox (5.3)** | None | R2 snapshots | 120s elastic OK | Normal | keepAlive heartbeats |
+| **Browser Enhancement (F.2)** | None | R2 for screenshots | May need 180s | Normal | — |
+| **Long-Term Memory (F.8)** | None | R2 two-tier | Normal | Normal | **Rate limiting, learnings redesign** |
+| **Voice (6.3)** | None | R2 transcripts | Normal | Parallel-safe | **Handler refactor, context budget** |
+| **Calendar (6.4)** | None | R2 events | Normal | create=mutation | **Handler refactor** |
+| **Email (6.5)** | None | R2 + Queue | Async send | send=mutation | **Handler refactor, queue infra** |
+| **WhatsApp (6.6)** | None | Reuses existing | Reuses existing | Reuses existing | Handler refactor (recommended) |
+
+#### Recommended Implementation Order
+
+```
+Week 1-2: Foundations
+  ├─ Per-user rate limiting ..................... 2-3 days  ← CRITICAL
+  ├─ MUTATION_TOOLS dedup ...................... 1 hour
+  ├─ Context budget increase (60K → 100K) ..... 1 day
+  └─ Handler modularization .................... 3-5 days  ← CRITICAL
+
+Week 3-4: High-ROI Features
+  ├─ Browser tool enhancement (F.2) ........... 1-2 days
+  ├─ Two-tier learnings archival (F.8 prereq) . 3-4 days
+  └─ Long-term memory (F.8) ................... 2-3 days
+
+Week 5-7: Multi-Modal (requires handler refactor)
+  ├─ Voice messages (6.3) ..................... 2 days
+  ├─ Calendar integration (6.4) .............. 2 days
+  └─ Email integration (6.5) ................. 3-4 days
+
+Week 8+: Platforms
+  ├─ WhatsApp (6.6) .......................... 1-2 days
+  └─ Slack ................................... 1-2 days
+```
+
+---
+
 ### Phase 6: Platform Expansion (Future)
 
 | ID | Task | Status | Owner | Notes |
