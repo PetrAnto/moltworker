@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-01 (Merged with MOLTWORKER_ROADMAP-claude_review.md — milestone gates, future phases, cross-repo deps, metrics — 1526 tests)
+**Last Updated:** 2026-03-13 (Phase 9 added — DO runtime stability, orchestra hardening, model scoring unification — 1708 tests)
 
 ---
 
@@ -190,7 +190,7 @@
 | 5.3 | Acontext Sandbox for code execution | 🔲 | Codex | Replaces roadmap Priority 3.2 |
 | 5.4 | Acontext Disk for file management | 🔲 | Codex | Replaces roadmap Priority 3.3 |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
-| 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
+| 5.6 | Multi-agent orchestration | ✅ | Claude | Orchestra INIT/RUN/REDO modes, name-based anchoring, topological sort, extraction verifier, cross-file scanner — hardened in Phase 9 |
 
 > 🧑 HUMAN CHECK 5.7: Evaluate MCP server hosting options (Sandbox vs. external) — ⏳ PENDING
 > 🧑 HUMAN CHECK 5.8: Security review of code execution sandbox — ⏳ PENDING
@@ -373,6 +373,51 @@
 
 ---
 
+### Phase 9: Runtime Stability & Orchestra Hardening (Mar 1–12, 2026)
+
+> **Goal:** Make DO task processing bulletproof under real-world conditions (slow providers, long streams,
+> storage limits) and ship production-ready orchestra mode. 114 commits, 182 new tests.
+
+#### 9A: DO Runtime Stability
+
+| ID | Task | Status | Owner | Notes |
+|----|------|--------|-------|-------|
+| 9A.1 | CPU budget yield — proactive yield between iterations to prevent mid-stream death | ✅ | Claude | Multiple iterations: yield BEFORE iteration, provider-specific thresholds, reset after rate limit sleeps |
+| 9A.2 | Stream splitting — prevent DO eviction during long streams | ✅ | Claude | Elastic timeout (85s base, 120s in-flight), awaited I/O replaces fire-and-forget keepalive |
+| 9A.3 | 128KB DO storage hardening — prevent crash loops | ✅ | Claude | Guard storage limit, strip large fields, fix compression, prevent zombie loops on QuotaExceededError |
+| 9A.4 | Rate limit handling — 429 backoff + TPD quota detection | ✅ | Claude | Per-paid-model backoff, daily token quota (TPD) fail-fast, rate pacing |
+| 9A.5 | Workspace persistence — incremental workspace in DO storage | ✅ | Claude | Staged files in DO storage (not in-memory Map), 128KB limit guards, cleanup on terminal states |
+| 9A.6 | Context saturation & overwrite wipeout bias fix | ✅ | Claude | Error threshold guardrail with context splicing, symmetrical pruning |
+| 9A.7 | Provider consistency — Anthropic direct routing, tool ID sanitization | ✅ | Claude | Route Anthropic via OpenRouter in DO, verified model IDs, sanitize tool IDs to match pattern |
+| 9A.8 | Original message persistence — survive auto-resume | ✅ | Claude | Namespace by taskId, checkpoint non-tool iterations, persist in DO storage |
+
+#### 9B: Orchestra Mode Hardening
+
+| ID | Task | Status | Owner | Notes |
+|----|------|--------|-------|-------|
+| 9B.1 | Agentic model ranking + value tiers | ✅ | Claude | Prioritize agentic ability, expand advise to 8 paid + 5 free, deduplicate models |
+| 9B.2 | Dead code prevention — block ambiguous refactoring + incomplete file splits | ✅ | Claude | Prevent plans-instead-of-tools, block file splits where source doesn't shrink |
+| 9B.3 | Name-based anchoring + topological sort + tier compression | ✅ | Claude | Applied Gemini+Grok review recommendations |
+| 9B.4 | Post-execution extraction verifier | ✅ | Claude | Parse JSON string changes, line count check for orchestra mode |
+| 9B.5 | Cross-file scanner + syntax check + blocking retry | ✅ | Claude | Prompt rules, syntax validation, retry on guardrail failure |
+| 9B.6 | Slow provider performance | ✅ | Claude | Optimized for Kimi, MiniMax, DeepSeek, Gemini review alignment |
+| 9B.7 | github_push_files — chunked commits for large changes | ✅ | Claude | Prevents 499 timeouts on multi-file PRs, file limit raised to 30 |
+
+#### 9C: Model Scoring & Catalog
+
+| ID | Task | Status | Owner | Notes |
+|----|------|--------|-------|-------|
+| 9C.1 | Unified scoring algorithm — one algorithm, consistent rankings | ✅ | Claude | Replaced multiple scoring paths with single source of truth |
+| 9C.2 | AA benchmark reweighting + direct API display | ✅ | Claude | Auto-enrich on syncall, show direct API providers |
+| 9C.3 | `/model` search command + Top 20 diversification | ✅ | Claude | Search by name/alias, fix synccheck noise, diversify recommendations |
+| 9C.4 | New models: GPT-5.4, Gemini 3.1 Pro, DeepSeek Speciale | ✅ | Claude | Plus gpt-5.1-codex-mini mandatory reasoning detection |
+| 9C.5 | Curated + synced model unification | ✅ | Claude | Unified update path, improved alias readability |
+
+> **Phase 9 Summary:** 57 non-merge commits. Test count: 1526 → 1708 (+182 tests).
+> Focused on production stability for orchestra mode and DO long-running tasks.
+
+---
+
 ### Phase 6: Platform Expansion (Future)
 
 | ID | Task | Status | Owner | Notes |
@@ -481,6 +526,17 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-12 | Claude | feat(models): /model search, synccheck noise fix, Top 20 diversification, AA benchmark scoring | src/openrouter/models.ts, src/telegram/handler.ts
+2026-03-11 | Claude | refactor(models): unify scoring — one algorithm, consistent rankings, auto-enrich on syncall | src/openrouter/models.ts, src/openrouter/model-sync/*.ts
+2026-03-10 | Claude | feat(guardrails): cross-file scanner, extraction verifier, syntax check, blocking retry for orchestra | src/guardrails/*.ts, src/orchestra/*.ts
+2026-03-10 | Claude | fix(orchestra): name-based anchoring, topological sort, dead code prevention | src/orchestra/orchestra.ts, src/openrouter/tools.ts
+2026-03-09 | Claude | fix(task-processor): elastic stream split, error threshold guardrail, context splicing | src/durable-objects/task-processor.ts
+2026-03-09 | Claude | feat(workspace): incremental workspace pattern, DO storage persistence, 128KB guards | src/openrouter/tools.ts, src/durable-objects/task-processor.ts
+2026-03-08 | Claude | fix(streaming): stream splitting to prevent DO eviction, awaited I/O in parser loop | src/openrouter/client.ts, src/durable-objects/task-processor.ts
+2026-03-08 | Claude | feat(orch): agentic model ranking, value tiers, expanded advise | src/orchestra/orchestra.ts, src/openrouter/models.ts
+2026-03-07 | Claude | feat(tools): github_push_files for chunked commits, dead code prevention | src/openrouter/tools.ts, src/orchestra/orchestra.ts
+2026-03-07 | Claude | fix(task-processor): zombie loop prevention, provider consistency, streaming eviction fixes | src/durable-objects/task-processor.ts
+2026-03-06 | Claude | fix(task-processor): CPU budget yield mechanisms, rate limit backoff, Anthropic routing | src/durable-objects/task-processor.ts, src/openrouter/client.ts
 2026-03-01 | Claude Opus 4.6 (Session: session_019DBbA1BWV4dbdZZrrDzrK5) | fix(syncall): sanitize hyphenated aliases + improve display — sanitizeAlias() strips non-alphanumeric from R2 aliasMap (self-heals), HTML parseMode, compact 1-line layout, model name in buttons, escapeHtml export | src/openrouter/model-sync/alias.ts, src/openrouter/model-sync/alias.test.ts, src/telegram/handler.ts, src/utils/telegram-format.ts
 2026-03-01 | PetrAnto | fix(security,task-processor): strip secrets from DO /status API — defense-in-depth (destructure at DO + allowlist at simulate), defer premature orchestra review (≥3 iterations) | src/durable-objects/task-processor.ts, src/routes/simulate.ts
 2026-02-28 | Claude | feat(simulate): add timeout param to /simulate/command for DO task polling | src/routes/simulate.ts, CLAUDE.md
@@ -643,8 +699,10 @@ graph TD
     P1_2 --> P2
     P7 --> P8[Phase 8: Operational Hardening ✅]
     P5 --> P8
-    P8 --> F_ECO[Future: Ecosystem Integration]
-    P8 --> F_PLAT[Future: Platform Evolution]
+    P8 --> P9[Phase 9: Runtime Stability & Orchestra ✅]
+    P5 --> P9
+    P9 --> F_ECO[Future: Ecosystem Integration]
+    P9 --> F_PLAT[Future: Platform Evolution]
     DM --> F_ECO
     F_ECO --> F_PLAT
 ```
@@ -719,7 +777,7 @@ ai-hub /api/situation/* endpoints 🔲
 | Task success rate | Tracked (CoVe verification) | >85% | >95% |
 | Context compression | Token-budgeted + summarized | Same | Adaptive |
 | Cross-session learning | Active (R2 learnings + sessions) | Pattern library | Autonomous improvement |
-| Tests | 1526 | 1600+ | 2000+ |
+| Tests | 1708 | 1800+ | 2000+ |
 
 ---
 
