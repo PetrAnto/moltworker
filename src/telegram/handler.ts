@@ -1932,8 +1932,11 @@ export class TelegramHandler {
       return;
     }
 
-    // Soft warning: model supports tools but isn't orchestra-ready
-    if (modelInfo.orchestraReady === false && !modelInfo.isImageGen) {
+    // Soft warning: model supports tools but isn't orchestra-ready.
+    // Models without orchestraReady (undefined) are treated as not ready —
+    // only explicitly true models pass. This catches auto-synced models
+    // (e.g. 12B Nemotron) that technically support tools but can't do multi-step tasks.
+    if (modelInfo.orchestraReady !== true && !modelInfo.isImageGen) {
       const recs = getOrchestraRecommendations();
       const betterModels = [...recs.free.slice(0, 2), ...recs.paid.slice(0, 2)];
       const buttons = betterModels.map(r => ({
@@ -1944,14 +1947,22 @@ export class TelegramHandler {
       // Store pending orchestra params for the callback
       await this.storage.setPendingOrchestra(userId, { mode, repo, prompt, chatId });
       const warnings: string[] = [];
-      if (modelInfo.intelligenceIndex && modelInfo.intelligenceIndex < 45) {
-        warnings.push(`low intelligence score (${modelInfo.intelligenceIndex.toFixed(0)})`);
-      }
-      if (modelInfo.benchmarks?.coding && modelInfo.benchmarks.coding < 30) {
-        warnings.push(`weak coding benchmark (${modelInfo.benchmarks.coding.toFixed(0)})`);
+      if (!modelInfo.intelligenceIndex && !modelInfo.benchmarks?.coding) {
+        warnings.push('no benchmark data (unknown quality)');
+      } else {
+        if (modelInfo.intelligenceIndex && modelInfo.intelligenceIndex < 45) {
+          warnings.push(`low intelligence score (${modelInfo.intelligenceIndex.toFixed(0)})`);
+        }
+        if (modelInfo.benchmarks?.coding && modelInfo.benchmarks.coding < 30) {
+          warnings.push(`weak coding benchmark (${modelInfo.benchmarks.coding.toFixed(0)})`);
+        }
       }
       if ((modelInfo.maxContext || 0) < 64000) {
         warnings.push(`small context (${Math.round((modelInfo.maxContext || 0) / 1000)}K)`);
+      }
+      // Flag small models by name pattern (Nano, Mini, Small, etc.)
+      if (/\b(nano|mini|small|lite|tiny)\b/i.test(modelInfo.name)) {
+        warnings.push('small model — may produce invalid tool calls');
       }
       const warnStr = warnings.length > 0 ? `\nIssues: ${warnings.join(', ')}` : '';
       await this.bot.sendMessage(
