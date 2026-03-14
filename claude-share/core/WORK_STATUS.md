@@ -191,7 +191,7 @@
 9. ~~**7B.5** — Streaming User Feedback~~ ✅ Complete (1392 tests)
 10. ~~**7B.1** — Speculative Tool Execution~~ ✅ Complete (1411 tests)
 11. **Phase 5.1** — Multi-agent review for complex tasks (deferred — 7A.1 CoVe is cheaper alternative)
-12. **Phase 5.3** — Acontext Sandbox for code execution
+12. **Phase 5.3** — Acontext Sandbox for code execution ✅ (run_code tool shipped)
 13. **Phase 5.4** — Acontext Disk for file management
 
 ---

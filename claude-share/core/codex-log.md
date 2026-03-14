@@ -5,6 +5,44 @@
 ---
 
 
+## Session: 2026-03-14 | Phase 5.3 Acontext Sandbox run_code tool (Session: codex-phase-5-3-sandbox-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Implemented a new `run_code` tool backed by Acontext Sandbox for persistent multi-language code execution (Python/JavaScript/Bash), while keeping `sandbox_exec` as fallback.
+
+### Changes Made
+- Added `AcontextClient.executeCode()` with timeout clamping (5-120s, default 30s)
+- Added `run_code` tool definition + execution routing in OpenRouter tools
+- Wired `acontextClient` and `acontextSessionId` into Telegram/DO tool contexts
+- Added focused tests for Acontext sandbox client and `run_code` execution paths
+- Updated tool-count assertions to include `run_code`
+
+### Files Modified
+- `src/acontext/client.ts`
+- `src/acontext/sandbox.test.ts`
+- `src/openrouter/tools.ts`
+- `src/openrouter/run-code.test.ts`
+- `src/openrouter/briefing-aggregator.test.ts`
+- `src/telegram/handler.ts`
+- `src/durable-objects/task-processor.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass (`npm test -- --reporter=verbose 2>&1 | tail -20`)
+- [x] Typecheck passes (`npm run typecheck`)
+
+### Notes for Next Session
+Proceed with Phase 5.4 (Acontext Disk file management), reusing the same Acontext tool-context wiring.
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

@@ -187,7 +187,7 @@
 |----|------|--------|-------|-------|
 | 5.1 | Multi-agent review for complex tasks | ✅ | Claude | Cross-family reviewer (Sonnet/Grok/Gemini), approve/revise, 47 tests |
 | 5.2 | MCP integration (Cloudflare Code Mode) | ✅ | Claude | Generic MCP HTTP client + `cloudflare_api` tool (2500+ CF endpoints), 38 tests |
-| 5.3 | Acontext Sandbox for code execution | 🔲 | Codex | Replaces roadmap Priority 3.2 |
+| 5.3 | Acontext Sandbox for code execution | ✅ | Codex | Added `run_code` tool + Acontext sandbox client execution + context wiring + tests |
 | 5.4 | Acontext Disk for file management | 🔲 | Codex | Replaces roadmap Priority 3.3 |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
 | 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
@@ -481,6 +481,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-14 | Codex (GPT-5.2-Codex) (Session: codex-phase-5-3-sandbox-001) | feat(tools): Phase 5.3 add Acontext-backed run_code tool (python/javascript/bash), keep sandbox_exec fallback, wire Acontext context in Telegram/DO, add sandbox+tool tests | src/acontext/client.ts, src/acontext/sandbox.test.ts, src/openrouter/tools.ts, src/openrouter/run-code.test.ts, src/openrouter/briefing-aggregator.test.ts, src/telegram/handler.ts, src/durable-objects/task-processor.ts
 2026-03-01 | Claude Opus 4.6 (Session: session_019DBbA1BWV4dbdZZrrDzrK5) | fix(syncall): sanitize hyphenated aliases + improve display — sanitizeAlias() strips non-alphanumeric from R2 aliasMap (self-heals), HTML parseMode, compact 1-line layout, model name in buttons, escapeHtml export | src/openrouter/model-sync/alias.ts, src/openrouter/model-sync/alias.test.ts, src/telegram/handler.ts, src/utils/telegram-format.ts
 2026-03-01 | PetrAnto | fix(security,task-processor): strip secrets from DO /status API — defense-in-depth (destructure at DO + allowlist at simulate), defer premature orchestra review (≥3 iterations) | src/durable-objects/task-processor.ts, src/routes/simulate.ts
 2026-02-28 | Claude | feat(simulate): add timeout param to /simulate/command for DO task polling | src/routes/simulate.ts, CLAUDE.md

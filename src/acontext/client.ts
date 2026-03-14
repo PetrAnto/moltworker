@@ -48,6 +48,22 @@ export interface SessionSummary {
   createdAt: string;
 }
 
+export type SandboxLanguage = 'python' | 'javascript' | 'bash';
+
+export interface ExecuteCodeParams {
+  sessionId: string;
+  language: SandboxLanguage;
+  code: string;
+  timeout?: number;
+}
+
+export interface ExecuteCodeResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  executionTimeMs: number;
+}
+
 /** Simplified message format for storage (OpenAI-compatible). */
 export interface OpenAIMessage {
   role: string;
@@ -169,6 +185,19 @@ export class AcontextClient {
    */
   async deleteSession(sessionId: string): Promise<void> {
     await this.request<void>('DELETE', `/api/v1/sessions/${sessionId}`);
+  }
+
+  /**
+   * Execute code in the Acontext sandbox.
+   */
+  async executeCode(params: ExecuteCodeParams): Promise<ExecuteCodeResult> {
+    const timeoutSec = Math.min(Math.max(params.timeout ?? 30, 5), 120);
+    return this.request<ExecuteCodeResult>('POST', '/api/v1/sandbox/execute', {
+      sessionId: params.sessionId,
+      language: params.language,
+      code: params.code,
+      timeout: timeoutSec,
+    });
   }
 
   /**

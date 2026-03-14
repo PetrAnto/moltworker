@@ -2355,7 +2355,7 @@ export class TelegramHandler {
           modelAlias, messages, {
             maxToolCalls: 10,
             maxTimeMs: 120000,
-            toolContext: { githubToken: this.githubToken, braveSearchKey: this.braveSearchKey, cloudflareApiToken: this.cloudflareApiToken, browser: this.browser, sandbox: this.sandbox },
+            toolContext: { githubToken: this.githubToken, braveSearchKey: this.braveSearchKey, cloudflareApiToken: this.cloudflareApiToken, browser: this.browser, sandbox: this.sandbox, acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl), acontextSessionId: `${userId}-${Date.now()}` },
           }
         );
 
@@ -2797,6 +2797,8 @@ export class TelegramHandler {
               cloudflareApiToken: this.cloudflareApiToken,
               browser: this.browser,
               sandbox: this.sandbox,
+              acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl),
+              acontextSessionId: `${userId}-${Date.now()}`,
             },
             reasoningLevel: reasoningLevel ?? undefined,
             responseFormat: requestJson && supportsStructuredOutput(modelAlias)
