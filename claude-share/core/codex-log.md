@@ -5,6 +5,43 @@
 ---
 
 
+## Session: 2026-03-14 | Phase 5.4 Acontext Disk tools (Session: codex-phase-5-4-disk-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Implemented persistent file management tools backed by Acontext Disk: save, read, list, and delete saved files.
+
+### Changes Made
+- Extended `AcontextClient` with Disk API methods: `writeFile`, `readFile`, `listFiles`, `deleteFile`
+- Added tool definitions and execution handlers for `save_file`, `read_saved_file`, `list_saved_files`, `delete_saved_file`
+- Added filename/content validation and limits (path traversal, null bytes, 1MB/file, 100 files/session)
+- Added/updated tests for Disk client behavior, tool execution, and parallel-safe whitelist coverage
+
+### Files Modified
+- `src/acontext/client.ts`
+- `src/acontext/disk.test.ts`
+- `src/openrouter/tools.ts`
+- `src/openrouter/briefing-aggregator.test.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Proceed with Phase 5.6 orchestration polish tasks listed in `next_prompt.md`.
+
+---
+
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)
