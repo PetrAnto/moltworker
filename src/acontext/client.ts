@@ -64,6 +64,12 @@ export interface ExecuteCodeResponse {
   executionTimeMs: number;
 }
 
+export interface AcontextDiskFile {
+  name: string;
+  size: number;
+  updatedAt: string;
+}
+
 /** Simplified message format for storage (OpenAI-compatible). */
 export interface OpenAIMessage {
   role: string;
@@ -198,6 +204,83 @@ export class AcontextClient {
       code: params.code,
       timeout: timeoutSec,
     });
+  }
+
+  /**
+   * Write a text file to the session-scoped Acontext Disk.
+   */
+  async writeFile(params: {
+    sessionId: string;
+    name: string;
+    content: string;
+  }): Promise<{ success: boolean; bytesWritten: number }> {
+    return this.request<{ success: boolean; bytesWritten: number }>(
+      'POST',
+      `/api/v1/sessions/${params.sessionId}/disk/files`,
+      {
+        name: params.name,
+        content: params.content,
+      },
+    );
+  }
+
+  /**
+   * Read a text file from session-scoped Acontext Disk.
+   * Returns null when the file does not exist.
+   */
+  async readFile(params: {
+    sessionId: string;
+    name: string;
+  }): Promise<{ content: string; size: number } | null> {
+    try {
+      return await this.request<{ content: string; size: number }>(
+        'GET',
+        `/api/v1/sessions/${params.sessionId}/disk/files/${encodeURIComponent(params.name)}`,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes(' 404 ')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * List files in session-scoped Acontext Disk.
+   */
+  async listFiles(params: {
+    sessionId: string;
+    prefix?: string;
+  }): Promise<AcontextDiskFile[]> {
+    const query = params.prefix
+      ? `?prefix=${encodeURIComponent(params.prefix)}`
+      : '';
+    return this.request<AcontextDiskFile[]>(
+      'GET',
+      `/api/v1/sessions/${params.sessionId}/disk/files${query}`,
+    );
+  }
+
+  /**
+   * Delete a file from session-scoped Acontext Disk.
+   * Returns success=false when file does not exist.
+   */
+  async deleteFile(params: {
+    sessionId: string;
+    name: string;
+  }): Promise<{ success: boolean }> {
+    try {
+      await this.request<void>(
+        'DELETE',
+        `/api/v1/sessions/${params.sessionId}/disk/files/${encodeURIComponent(params.name)}`,
+      );
+      return { success: true };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes(' 404 ')) {
+        return { success: false };
+      }
+      throw error;
+    }
   }
 
   /**
