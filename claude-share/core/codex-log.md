@@ -5,6 +5,42 @@
 ---
 
 
+
+## Session: 2026-03-14 | Phase 5.4 Acontext Disk file tools (Session: codex-phase-5-4-disk-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Implemented persistent file management tools backed by Acontext Disk (`save_file`, `read_saved_file`, `list_saved_files`, `delete_saved_file`) with validation and limits.
+
+### Changes Made
+- Added Acontext Disk client methods: `writeFile`, `readFile`, `listFiles`, `deleteFile`
+- Added 4 new tool definitions and execution handlers with security checks (path traversal, null bytes, control chars, size/count limits)
+- Marked `read_saved_file` and `list_saved_files` as parallel-safe
+- Added comprehensive Disk-focused test suite and updated tool-count expectations
+
+### Files Modified
+- `src/acontext/client.ts`
+- `src/openrouter/tools.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/acontext/disk.test.ts`
+- `src/openrouter/briefing-aggregator.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Proceed with Phase 5.6 polish tasks (REDO mode type, roadmap parsing robustness, stale-task cleanup, and orchestration progress UX).
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)
