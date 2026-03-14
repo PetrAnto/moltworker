@@ -23,9 +23,10 @@ export interface OrchestraTask {
   timestamp: number;
   modelAlias: string;
   repo: string;            // owner/repo
-  mode: 'init' | 'run';
+  mode: 'init' | 'run' | 'redo';
   prompt: string;          // Original user prompt (truncated)
   branchName: string;      // Branch created
+  durationMs?: number;     // Execution duration in milliseconds
   prUrl?: string;          // PR URL if created
   status: 'started' | 'completed' | 'failed';
   filesChanged: string[];  // List of file paths touched
@@ -852,6 +853,47 @@ export async function storeOrchestraTask(
   await r2.put(key, JSON.stringify(history));
 }
 
+/** Threshold for marking a "started" task as stale (30 minutes). */
+const STALE_TASK_THRESHOLD_MS = 30 * 60 * 1000;
+
+/**
+ * Clean up stale tasks in a user's orchestra history.
+ * Tasks stuck in "started" status for more than 30 minutes are marked as "failed".
+ * Returns the number of tasks cleaned up.
+ */
+export async function cleanupStaleTasks(
+  r2: R2Bucket,
+  userId: string,
+  now: number = Date.now()
+): Promise<number> {
+  const key = `orchestra/${userId}/history.json`;
+
+  let history: OrchestraHistory;
+  try {
+    const obj = await r2.get(key);
+    if (!obj) return 0;
+    history = await obj.json() as OrchestraHistory;
+  } catch {
+    return 0;
+  }
+
+  let cleaned = 0;
+  for (const task of history.tasks) {
+    if (task.status === 'started' && (now - task.timestamp) > STALE_TASK_THRESHOLD_MS) {
+      task.status = 'failed';
+      task.summary = `STALE: Task stuck in "started" for >${Math.round((now - task.timestamp) / 60000)}min — auto-failed`;
+      cleaned++;
+    }
+  }
+
+  if (cleaned > 0) {
+    history.updatedAt = now;
+    await r2.put(key, JSON.stringify(history));
+  }
+
+  return cleaned;
+}
+
 /**
  * Format orchestra history for display to the user.
  */
@@ -865,12 +907,15 @@ export function formatOrchestraHistory(history: OrchestraHistory | null): string
   for (const task of history.tasks.slice(-10).reverse()) {
     const status = task.status === 'completed' ? '✅' : task.status === 'failed' ? '❌' : '⏳';
     const date = new Date(task.timestamp).toLocaleDateString();
-    const modeTag = task.mode === 'init' ? ' [INIT]' : '';
+    const modeTag = task.mode === 'init' ? ' [INIT]' : task.mode === 'redo' ? ' [REDO]' : '';
+    const duration = task.durationMs
+      ? ` | ⏱ ${task.durationMs >= 60000 ? `${Math.round(task.durationMs / 60000)}m` : `${Math.round(task.durationMs / 1000)}s`}`
+      : '';
     const pr = task.prUrl ? `\n   PR: ${task.prUrl}` : '';
     const summary = task.summary ? `\n   ${task.summary}` : '';
     lines.push(
       `${status} ${task.repo}${modeTag} — ${task.prompt.substring(0, 60)}${task.prompt.length > 60 ? '...' : ''}` +
-      `\n   🤖 /${task.modelAlias} | 🌿 ${task.branchName} | ${date}${pr}${summary}`
+      `\n   🤖 /${task.modelAlias} | 🌿 ${task.branchName} | ${date}${duration}${pr}${summary}`
     );
   }
 
@@ -924,30 +969,73 @@ interface RoadmapPhase {
 
 /**
  * Parse a ROADMAP.md into phases and tasks.
- * Looks for `### Phase N: ...` headers and `- [x]`/`- [ ]` task lines.
+ *
+ * Supports multiple formats:
+ * - Standard: `### Phase N: Title` headers + `- [x]` task lines
+ * - H2 headers: `## Phase N: Title` or `## Title`
+ * - Numbered lists: `1. [x] Task title` or `1. Task title` (treated as done=false)
+ * - Indented checkboxes: `  - [x] Task title` (up to 4 spaces / 1 tab indent)
+ * - Flat checklists: `- [x] Task` with no phase headers (grouped into "Tasks")
  */
 export function parseRoadmapPhases(content: string): RoadmapPhase[] {
   const phases: RoadmapPhase[] = [];
   let current: RoadmapPhase | null = null;
 
   for (const line of content.split('\n')) {
-    // Match phase headers: "### Phase 1: Setup" or "### Phase 1 — Setup"
-    const phaseMatch = line.match(/^###\s+(?:Phase\s+\d+[:.—-]\s*)?(.+)/i);
+    // Match phase headers:
+    // "### Phase 1: Setup", "### Phase 1 — Setup", "### Setup" (any ### header)
+    // "## Phase 1: Setup", "## Step 1: Setup" (## only with Phase/Step/Sprint prefix)
+    const phaseMatch = line.match(/^###\s+(?:Phase\s+\d+[:.—\-]\s*)?(.+)/i)
+      || line.match(/^##\s+(?:Phase|Step|Sprint)\s+\d+[:.—\-]\s*(.+)/i);
     if (phaseMatch) {
       current = { name: phaseMatch[1].trim(), tasks: [] };
       phases.push(current);
       continue;
     }
 
-    // Match task lines: "- [x] **Task 1.1**: ..." or "- [ ] Task title"
-    const taskMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)/);
-    if (taskMatch && current) {
+    // Match task lines (with optional leading whitespace up to 4 spaces or 1 tab):
+    // "- [x] Task", "* [ ] Task", "  - [x] Task", "\t- [ ] Task"
+    const taskMatch = line.match(/^[\t ]{0,4}[-*]\s+\[([ xX])\]\s+(.+)/);
+    if (taskMatch) {
       const done = taskMatch[1].toLowerCase() === 'x';
-      // Strip bold task prefix like "**Task 1.1**: " or "**Title**:"
       const title = taskMatch[2]
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
         .trim();
+      // If no phase header was seen yet, create a default "Tasks" phase
+      if (!current) {
+        current = { name: 'Tasks', tasks: [] };
+        phases.push(current);
+      }
       current.tasks.push({ title, done });
+      continue;
+    }
+
+    // Match numbered list items with checkboxes: "1. [x] Task title"
+    const numberedCheckboxMatch = line.match(/^[\t ]{0,4}\d+\.\s+\[([ xX])\]\s+(.+)/);
+    if (numberedCheckboxMatch) {
+      const done = numberedCheckboxMatch[1].toLowerCase() === 'x';
+      const title = numberedCheckboxMatch[2]
+        .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
+        .trim();
+      if (!current) {
+        current = { name: 'Tasks', tasks: [] };
+        phases.push(current);
+      }
+      current.tasks.push({ title, done });
+      continue;
+    }
+
+    // Match plain numbered list items (no checkbox, treated as not done): "1. Task title"
+    // Only match if we're already inside a phase (to avoid matching random numbered text)
+    const numberedPlainMatch = line.match(/^[\t ]{0,4}\d+\.\s+(.+)/);
+    if (numberedPlainMatch && current) {
+      const title = numberedPlainMatch[1]
+        .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
+        .trim();
+      // Skip lines that look like sub-descriptions (start with lowercase, very short)
+      if (title.length > 5) {
+        current.tasks.push({ title, done: false });
+      }
     }
   }
 

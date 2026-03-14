@@ -14,6 +14,7 @@ import {
   generateTaskSlug,
   loadOrchestraHistory,
   storeOrchestraTask,
+  cleanupStaleTasks,
   formatOrchestraHistory,
   parseRoadmapPhases,
   formatRoadmapStatus,
@@ -527,7 +528,7 @@ describe('storeOrchestraTask', () => {
     };
   });
 
-  const makeTask = (taskId: string, mode: 'init' | 'run' = 'run', status: 'started' | 'completed' | 'failed' = 'completed'): OrchestraTask => ({
+  const makeTask = (taskId: string, mode: 'init' | 'run' | 'redo' = 'run', status: 'started' | 'completed' | 'failed' = 'completed'): OrchestraTask => ({
     taskId,
     timestamp: Date.now(),
     modelAlias: 'deep',
@@ -864,7 +865,7 @@ Some notes here.`;
     expect(phases[1].name).toBe('Testing');
   });
 
-  it('ignores tasks outside of phases', () => {
+  it('captures orphan tasks before first phase into default "Tasks" phase', () => {
     const content = `# Roadmap
 - [ ] Orphan task
 
@@ -872,9 +873,12 @@ Some notes here.`;
 - [ ] Real task`;
 
     const phases = parseRoadmapPhases(content);
-    expect(phases).toHaveLength(1);
+    expect(phases).toHaveLength(2);
+    expect(phases[0].name).toBe('Tasks');
     expect(phases[0].tasks).toHaveLength(1);
-    expect(phases[0].tasks[0].title).toBe('Real task');
+    expect(phases[0].tasks[0].title).toBe('Orphan task');
+    expect(phases[1].tasks).toHaveLength(1);
+    expect(phases[1].tasks[0].title).toBe('Real task');
   });
 });
 
@@ -1335,5 +1339,321 @@ describe('validateOrchestraResult', () => {
     const validated = validateOrchestraResult(baseResult, toolOutput);
     expect(validated.branch).toBe('bot/add-feature-grok');
     expect(validated.files).toEqual(['src/feature.ts']);
+  });
+});
+
+// --- OrchestraTask.mode 'redo' type ---
+
+describe('OrchestraTask redo mode', () => {
+  it('accepts redo as a valid mode', () => {
+    const task: OrchestraTask = {
+      taskId: 'orch-1',
+      timestamp: Date.now(),
+      modelAlias: 'deep',
+      repo: 'o/r',
+      mode: 'redo',
+      prompt: 'Fix auth',
+      branchName: 'bot/redo-fix-auth-deep',
+      status: 'completed',
+      filesChanged: ['src/auth.ts'],
+      summary: 'Redid auth properly',
+    };
+    expect(task.mode).toBe('redo');
+  });
+
+  it('stores redo mode via storeOrchestraTask', async () => {
+    const mockBucket = {
+      get: vi.fn().mockResolvedValue(null),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const task: OrchestraTask = {
+      taskId: 'orch-redo-1',
+      timestamp: Date.now(),
+      modelAlias: 'sonnet',
+      repo: 'o/r',
+      mode: 'redo',
+      prompt: 'Redo auth',
+      branchName: 'bot/redo-auth-sonnet',
+      status: 'started',
+      filesChanged: [],
+    };
+
+    await storeOrchestraTask(mockBucket as unknown as R2Bucket, 'user1', task);
+
+    const [, data] = mockBucket.put.mock.calls[0];
+    const parsed = JSON.parse(data as string);
+    expect(parsed.tasks[0].mode).toBe('redo');
+  });
+});
+
+// --- formatOrchestraHistory with redo and duration ---
+
+describe('formatOrchestraHistory enhancements', () => {
+  it('shows [REDO] tag for redo tasks', () => {
+    const history: OrchestraHistory = {
+      userId: 'u1',
+      tasks: [{
+        taskId: 'orch-1',
+        timestamp: Date.now(),
+        modelAlias: 'deep',
+        repo: 'o/r',
+        mode: 'redo',
+        prompt: 'Fix auth',
+        branchName: 'bot/redo-auth-deep',
+        status: 'completed',
+        filesChanged: [],
+      }],
+      updatedAt: Date.now(),
+    };
+    const output = formatOrchestraHistory(history);
+    expect(output).toContain('[REDO]');
+  });
+
+  it('shows duration in minutes for long tasks', () => {
+    const history: OrchestraHistory = {
+      userId: 'u1',
+      tasks: [{
+        taskId: 'orch-1',
+        timestamp: Date.now(),
+        modelAlias: 'deep',
+        repo: 'o/r',
+        mode: 'run',
+        prompt: 'Add feature',
+        branchName: 'bot/add-feat-deep',
+        status: 'completed',
+        filesChanged: [],
+        durationMs: 180000, // 3 minutes
+      }],
+      updatedAt: Date.now(),
+    };
+    const output = formatOrchestraHistory(history);
+    expect(output).toContain('⏱ 3m');
+  });
+
+  it('shows duration in seconds for short tasks', () => {
+    const history: OrchestraHistory = {
+      userId: 'u1',
+      tasks: [{
+        taskId: 'orch-1',
+        timestamp: Date.now(),
+        modelAlias: 'flash',
+        repo: 'o/r',
+        mode: 'init',
+        prompt: 'Init roadmap',
+        branchName: 'bot/init-flash',
+        status: 'completed',
+        filesChanged: [],
+        durationMs: 45000, // 45 seconds
+      }],
+      updatedAt: Date.now(),
+    };
+    const output = formatOrchestraHistory(history);
+    expect(output).toContain('⏱ 45s');
+  });
+
+  it('shows PR link for completed tasks', () => {
+    const history: OrchestraHistory = {
+      userId: 'u1',
+      tasks: [{
+        taskId: 'orch-1',
+        timestamp: Date.now(),
+        modelAlias: 'deep',
+        repo: 'o/r',
+        mode: 'run',
+        prompt: 'Add feature',
+        branchName: 'bot/add-feat-deep',
+        status: 'completed',
+        filesChanged: [],
+        prUrl: 'https://github.com/o/r/pull/42',
+      }],
+      updatedAt: Date.now(),
+    };
+    const output = formatOrchestraHistory(history);
+    expect(output).toContain('PR: https://github.com/o/r/pull/42');
+  });
+});
+
+// --- parseRoadmapPhases robustness ---
+
+describe('parseRoadmapPhases robustness', () => {
+  it('parses ## headers with Phase prefix', () => {
+    const content = `## Phase 1: Setup
+- [x] Initialize project
+- [ ] Add CI
+
+## Phase 2: Core
+- [ ] Build API`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(2);
+    expect(phases[0].name).toBe('Setup');
+    expect(phases[0].tasks).toHaveLength(2);
+    expect(phases[1].tasks).toHaveLength(1);
+  });
+
+  it('parses numbered list items with checkboxes', () => {
+    const content = `### Phase 1: Tasks
+1. [x] First task
+2. [ ] Second task
+3. [x] Third task`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].tasks).toHaveLength(3);
+    expect(phases[0].tasks[0].done).toBe(true);
+    expect(phases[0].tasks[1].done).toBe(false);
+    expect(phases[0].tasks[2].done).toBe(true);
+  });
+
+  it('parses indented checkboxes (2-space indent)', () => {
+    const content = `### Phase 1: Setup
+  - [x] Indented task 1
+  - [ ] Indented task 2`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].tasks).toHaveLength(2);
+    expect(phases[0].tasks[0].title).toBe('Indented task 1');
+  });
+
+  it('parses flat checklist with no phase headers', () => {
+    const content = `- [x] Task one
+- [ ] Task two
+- [x] Task three`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].name).toBe('Tasks');
+    expect(phases[0].tasks).toHaveLength(3);
+  });
+
+  it('parses mixed formats (### + numbered + indented)', () => {
+    const content = `### Setup
+- [x] Initialize
+  - [x] Add config
+
+### Implementation
+1. [x] Build API
+2. [ ] Add tests`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(2);
+    expect(phases[0].tasks).toHaveLength(2);
+    expect(phases[1].tasks).toHaveLength(2);
+  });
+
+  it('parses plain numbered tasks inside a phase', () => {
+    const content = `### Phase 1: MVP
+1. Build the login page
+2. Add password reset
+3. Integrate OAuth`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].tasks).toHaveLength(3);
+    expect(phases[0].tasks[0].done).toBe(false);
+    expect(phases[0].tasks[0].title).toBe('Build the login page');
+  });
+});
+
+// --- cleanupStaleTasks ---
+
+describe('cleanupStaleTasks', () => {
+  let mockBucket: {
+    get: ReturnType<typeof vi.fn>;
+    put: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    mockBucket = {
+      get: vi.fn(),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+  });
+
+  it('marks tasks started >30 min ago as failed', async () => {
+    const now = Date.now();
+    const history: OrchestraHistory = {
+      userId: 'user1',
+      tasks: [{
+        taskId: 'orch-1',
+        timestamp: now - 35 * 60 * 1000, // 35 min ago
+        modelAlias: 'deep',
+        repo: 'o/r',
+        mode: 'run',
+        prompt: 'Add feature',
+        branchName: 'bot/add-feat-deep',
+        status: 'started',
+        filesChanged: [],
+      }],
+      updatedAt: now - 35 * 60 * 1000,
+    };
+
+    mockBucket.get.mockResolvedValue({ json: () => Promise.resolve(history) });
+
+    const cleaned = await cleanupStaleTasks(mockBucket as unknown as R2Bucket, 'user1', now);
+    expect(cleaned).toBe(1);
+
+    const [, data] = mockBucket.put.mock.calls[0];
+    const parsed = JSON.parse(data as string);
+    expect(parsed.tasks[0].status).toBe('failed');
+    expect(parsed.tasks[0].summary).toContain('STALE');
+  });
+
+  it('does not touch recently started tasks', async () => {
+    const now = Date.now();
+    const history: OrchestraHistory = {
+      userId: 'user1',
+      tasks: [{
+        taskId: 'orch-1',
+        timestamp: now - 5 * 60 * 1000, // 5 min ago
+        modelAlias: 'deep',
+        repo: 'o/r',
+        mode: 'run',
+        prompt: 'Add feature',
+        branchName: 'bot/add-feat-deep',
+        status: 'started',
+        filesChanged: [],
+      }],
+      updatedAt: now - 5 * 60 * 1000,
+    };
+
+    mockBucket.get.mockResolvedValue({ json: () => Promise.resolve(history) });
+
+    const cleaned = await cleanupStaleTasks(mockBucket as unknown as R2Bucket, 'user1', now);
+    expect(cleaned).toBe(0);
+    expect(mockBucket.put).not.toHaveBeenCalled();
+  });
+
+  it('does not touch completed or failed tasks', async () => {
+    const now = Date.now();
+    const history: OrchestraHistory = {
+      userId: 'user1',
+      tasks: [
+        {
+          taskId: 'orch-1', timestamp: now - 60 * 60 * 1000, modelAlias: 'deep',
+          repo: 'o/r', mode: 'run', prompt: 'Done', branchName: 'b1',
+          status: 'completed', filesChanged: [],
+        },
+        {
+          taskId: 'orch-2', timestamp: now - 60 * 60 * 1000, modelAlias: 'deep',
+          repo: 'o/r', mode: 'run', prompt: 'Failed', branchName: 'b2',
+          status: 'failed', filesChanged: [],
+        },
+      ],
+      updatedAt: now,
+    };
+
+    mockBucket.get.mockResolvedValue({ json: () => Promise.resolve(history) });
+
+    const cleaned = await cleanupStaleTasks(mockBucket as unknown as R2Bucket, 'user1', now);
+    expect(cleaned).toBe(0);
+  });
+
+  it('returns 0 when no history exists', async () => {
+    mockBucket.get.mockResolvedValue(null);
+    const cleaned = await cleanupStaleTasks(mockBucket as unknown as R2Bucket, 'user1');
+    expect(cleaned).toBe(0);
+  });
+
+  it('handles R2 read error gracefully', async () => {
+    mockBucket.get.mockRejectedValue(new Error('R2 error'));
+    const cleaned = await cleanupStaleTasks(mockBucket as unknown as R2Bucket, 'user1');
+    expect(cleaned).toBe(0);
   });
 });

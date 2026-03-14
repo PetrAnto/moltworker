@@ -888,7 +888,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       const isOrchestra = sysContent.includes('Orchestra INIT Mode') || sysContent.includes('Orchestra RUN Mode') || sysContent.includes('Orchestra REDO Mode');
       if (!isOrchestra) return;
 
-      const orchestraMode = sysContent.includes('Orchestra INIT Mode') ? 'init' as const : 'run' as const;
+      const orchestraMode = sysContent.includes('Orchestra INIT Mode') ? 'init' as const
+        : sysContent.includes('Orchestra REDO Mode') ? 'redo' as const : 'run' as const;
       const repoMatch = sysContent.match(/Full:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/);
       const repo = repoMatch ? repoMatch[1] : 'unknown/unknown';
       const userMsg = task.messages.find(m => m.role === 'user');
@@ -3964,10 +3965,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // Find the orchestra task entry to update (or create a new completed entry)
               const systemMsg = request.messages.find(m => m.role === 'system');
               const systemContent = typeof systemMsg?.content === 'string' ? systemMsg.content : '';
-              const isOrchestra = systemContent.includes('Orchestra INIT Mode') || systemContent.includes('Orchestra RUN Mode');
+              const isOrchestra = systemContent.includes('Orchestra INIT Mode') || systemContent.includes('Orchestra RUN Mode') || systemContent.includes('Orchestra REDO Mode');
               if (isOrchestra) {
-                // Detect init vs run from system prompt
-                const orchestraMode = systemContent.includes('Orchestra INIT Mode') ? 'init' as const : 'run' as const;
+                // Detect init vs run vs redo from system prompt
+                const orchestraMode = systemContent.includes('Orchestra INIT Mode') ? 'init' as const
+                  : systemContent.includes('Orchestra REDO Mode') ? 'redo' as const : 'run' as const;
                 // Extract repo from system prompt
                 const repoMatch = systemContent.match(/Full:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/);
                 const repo = repoMatch ? repoMatch[1] : 'unknown/unknown';
