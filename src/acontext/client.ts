@@ -64,6 +64,12 @@ export interface ExecuteCodeResponse {
   executionTimeMs: number;
 }
 
+export interface DiskFileInfo {
+  name: string;
+  size: number;
+  updatedAt: string;
+}
+
 /** Simplified message format for storage (OpenAI-compatible). */
 export interface OpenAIMessage {
   role: string;
@@ -198,6 +204,76 @@ export class AcontextClient {
       code: params.code,
       timeout: timeoutSec,
     });
+  }
+
+  /**
+   * Write a file to persistent Acontext Disk storage.
+   */
+  async writeFile(params: {
+    sessionId: string;
+    name: string;
+    content: string;
+  }): Promise<{ success: boolean; bytesWritten: number }> {
+    return this.request<{ success: boolean; bytesWritten: number }>('POST', '/api/v1/disk/files', {
+      session_id: params.sessionId,
+      name: params.name,
+      content: params.content,
+    });
+  }
+
+  /**
+   * Read a file from persistent Acontext Disk storage.
+   * Returns null when the file does not exist.
+   */
+  async readFile(params: {
+    sessionId: string;
+    name: string;
+  }): Promise<{ content: string; size: number } | null> {
+    try {
+      return await this.request<{ content: string; size: number }>(
+        'GET',
+        `/api/v1/disk/files/${encodeURIComponent(params.sessionId)}/${encodeURIComponent(params.name)}`,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('404')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * List files in persistent Acontext Disk storage for a session.
+   */
+  async listFiles(params: {
+    sessionId: string;
+    prefix?: string;
+  }): Promise<DiskFileInfo[]> {
+    const query = new URLSearchParams({ session_id: params.sessionId });
+    if (params.prefix) query.set('prefix', params.prefix);
+    return this.request<DiskFileInfo[]>('GET', `/api/v1/disk/files?${query.toString()}`);
+  }
+
+  /**
+   * Delete a file from persistent Acontext Disk storage.
+   * Returns success=false when the file does not exist.
+   */
+  async deleteFile(params: {
+    sessionId: string;
+    name: string;
+  }): Promise<{ success: boolean }> {
+    try {
+      await this.request<void>(
+        'DELETE',
+        `/api/v1/disk/files/${encodeURIComponent(params.sessionId)}/${encodeURIComponent(params.name)}`,
+      );
+      return { success: true };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('404')) {
+        return { success: false };
+      }
+      throw error;
+    }
   }
 
   /**
