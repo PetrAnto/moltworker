@@ -629,6 +629,78 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'save_file',
+      description: 'Save content to a persistent file. Files persist across tool calls and task resumes. Use for storing intermediate results, notes, or generated content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'File name or path (e.g., "results.json", "data/output.csv")',
+          },
+          content: {
+            type: 'string',
+            description: 'File content to save',
+          },
+        },
+        required: ['name', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_saved_file',
+      description: 'Read a previously saved file from persistent storage. Use to retrieve intermediate results or artifacts saved with save_file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'File name or path to read',
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_saved_files',
+      description: 'List files in persistent storage. Optionally filter by prefix (directory-like path).',
+      parameters: {
+        type: 'object',
+        properties: {
+          prefix: {
+            type: 'string',
+            description: 'Optional prefix to filter files (e.g., "data/" to list files in data directory)',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_saved_file',
+      description: 'Delete a file from persistent storage.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'File name or path to delete',
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'cloudflare_api',
       description: 'Access the entire Cloudflare API (2500+ endpoints) via Code Mode MCP. Use "search" to discover endpoints, then "execute" to run TypeScript code against the typed Cloudflare SDK. Extremely powerful — covers DNS, Workers, R2, D1, KV, Zero Trust, Pages, and more.',
       parameters: {
@@ -794,6 +866,18 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         break;
       case 'run_code':
         result = await runCode(args.language, args.code, args.timeout, context);
+        break;
+      case 'save_file':
+        result = await savePersistentFile(args.name, args.content, context);
+        break;
+      case 'read_saved_file':
+        result = await readPersistentFile(args.name, context);
+        break;
+      case 'list_saved_files':
+        result = await listPersistentFiles(args.prefix, context);
+        break;
+      case 'delete_saved_file':
+        result = await deletePersistentFile(args.name, context);
         break;
       case 'cloudflare_api':
         result = await cloudflareApi(args.action, args.query, args.code, context?.cloudflareApiToken);
@@ -2613,6 +2697,141 @@ async function sandboxExec(
   }
 
   return output;
+}
+
+const MAX_PERSISTENT_FILE_SIZE = 1_000_000;
+const MAX_PERSISTENT_FILE_COUNT = 100;
+const MAX_PERSISTENT_FILE_NAME_LENGTH = 255;
+
+function sanitizePersistentFileName(name: string): string {
+  if (typeof name !== 'string') {
+    throw new Error('Invalid file name.');
+  }
+
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error('Invalid file name.');
+  }
+
+  if (trimmed.length > MAX_PERSISTENT_FILE_NAME_LENGTH) {
+    throw new Error(`Invalid file name. Maximum length is ${MAX_PERSISTENT_FILE_NAME_LENGTH} characters.`);
+  }
+
+  if (trimmed.includes('..') || trimmed.startsWith('/') || trimmed.includes('\0')) {
+    throw new Error('Invalid file name. Use relative paths without ".." or absolute paths.');
+  }
+
+  if (/[\x00-\x1F\x7F]/.test(trimmed)) {
+    throw new Error('Invalid file name. Control characters are not allowed.');
+  }
+
+  return trimmed;
+}
+
+function hasNullByte(content: string): boolean {
+  return content.includes('\0');
+}
+
+async function savePersistentFile(
+  nameArg: unknown,
+  contentArg: unknown,
+  context?: ToolContext,
+): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: File storage not available (Acontext not configured)';
+  }
+
+  const name = sanitizePersistentFileName(String(nameArg ?? ''));
+  const content = typeof contentArg === 'string' ? contentArg : String(contentArg ?? '');
+
+  if (hasNullByte(content)) {
+    return 'Error: File content must be text (null bytes are not allowed)';
+  }
+
+  if (content.length > MAX_PERSISTENT_FILE_SIZE) {
+    return `Error: File too large (max ${MAX_PERSISTENT_FILE_SIZE} bytes)`;
+  }
+
+  const files = await context.acontextClient.listFiles({
+    sessionId: context.acontextSessionId || 'default',
+  });
+  const exists = files.some(file => file.name === name);
+  if (!exists && files.length >= MAX_PERSISTENT_FILE_COUNT) {
+    return `Error: File limit reached (max ${MAX_PERSISTENT_FILE_COUNT} files per session)`;
+  }
+
+  const result = await context.acontextClient.writeFile({
+    sessionId: context.acontextSessionId || 'default',
+    name,
+    content,
+  });
+
+  return `File saved: ${name} (${result.bytesWritten} bytes)`;
+}
+
+async function readPersistentFile(nameArg: unknown, context?: ToolContext): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: File storage not available (Acontext not configured)';
+  }
+
+  const name = sanitizePersistentFileName(String(nameArg ?? ''));
+  const result = await context.acontextClient.readFile({
+    sessionId: context.acontextSessionId || 'default',
+    name,
+  });
+
+  if (!result) {
+    return `File not found: ${name}`;
+  }
+
+  return result.content;
+}
+
+async function listPersistentFiles(prefixArg: unknown, context?: ToolContext): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: File storage not available (Acontext not configured)';
+  }
+
+  let prefix: string | undefined;
+  if (typeof prefixArg === 'string' && prefixArg.trim().length > 0) {
+    prefix = sanitizePersistentFileName(prefixArg);
+  }
+
+  const files = await context.acontextClient.listFiles({
+    sessionId: context.acontextSessionId || 'default',
+    prefix,
+  });
+
+  if (files.length === 0) {
+    return prefix ? `No saved files found for prefix: ${prefix}` : 'No saved files found.';
+  }
+
+  const lines = files
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(file => `${file.name} (${file.size} bytes, updated ${file.updatedAt})`);
+
+  return prefix
+    ? `Saved files (${files.length}) for prefix "${prefix}":\n${lines.join('\n')}`
+    : `Saved files (${files.length}):\n${lines.join('\n')}`;
+}
+
+async function deletePersistentFile(nameArg: unknown, context?: ToolContext): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: File storage not available (Acontext not configured)';
+  }
+
+  const name = sanitizePersistentFileName(String(nameArg ?? ''));
+
+  const deleted = await context.acontextClient.deleteFile({
+    sessionId: context.acontextSessionId || 'default',
+    name,
+  });
+
+  if (!deleted.success) {
+    return `File not found: ${name}`;
+  }
+
+  return `File deleted: ${name}`;
 }
 
 /**

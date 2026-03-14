@@ -64,6 +64,12 @@ export interface ExecuteCodeResponse {
   executionTimeMs: number;
 }
 
+export interface DiskFile {
+  name: string;
+  size: number;
+  updatedAt: string;
+}
+
 /** Simplified message format for storage (OpenAI-compatible). */
 export interface OpenAIMessage {
   role: string;
@@ -198,6 +204,66 @@ export class AcontextClient {
       code: params.code,
       timeout: timeoutSec,
     });
+  }
+
+  /**
+   * Save a file to Acontext Disk for a session.
+   */
+  async writeFile(params: {
+    sessionId: string;
+    name: string;
+    content: string;
+  }): Promise<{ success: boolean; bytesWritten: number }> {
+    return this.request<{ success: boolean; bytesWritten: number }>('POST', '/api/v1/disk/files', {
+      session_id: params.sessionId,
+      name: params.name,
+      content: params.content,
+    });
+  }
+
+  /**
+   * Read a file from Acontext Disk for a session.
+   */
+  async readFile(params: {
+    sessionId: string;
+    name: string;
+  }): Promise<{ content: string; size: number } | null> {
+    try {
+      return await this.request<{ content: string; size: number }>('GET',
+        `/api/v1/disk/files/${encodeURIComponent(params.name)}?session_id=${encodeURIComponent(params.sessionId)}`);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('404')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * List files from Acontext Disk for a session.
+   */
+  async listFiles(params: {
+    sessionId: string;
+    prefix?: string;
+  }): Promise<DiskFile[]> {
+    const query = new URLSearchParams();
+    query.set('session_id', params.sessionId);
+    if (params.prefix) {
+      query.set('prefix', params.prefix);
+    }
+
+    return this.request<DiskFile[]>('GET', `/api/v1/disk/files?${query.toString()}`);
+  }
+
+  /**
+   * Delete a file from Acontext Disk for a session.
+   */
+  async deleteFile(params: {
+    sessionId: string;
+    name: string;
+  }): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>('DELETE',
+      `/api/v1/disk/files/${encodeURIComponent(params.name)}?session_id=${encodeURIComponent(params.sessionId)}`);
   }
 
   /**

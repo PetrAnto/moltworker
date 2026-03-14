@@ -107,3 +107,37 @@ Implement Phase 1 first: add centralized task router policy and resume model esc
 
 ---
 
+
+## Session: 2026-03-14 | Phase 5.4 — Acontext Disk for file management (Session: codex-phase-5-4-disk-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Implemented persistent file management tools backed by Acontext Disk, including client methods, tool execution, safety controls, and tests.
+
+### Changes Made
+- Added Acontext Disk client methods: `writeFile`, `readFile`, `listFiles`, `deleteFile`
+- Added tool schemas and execution paths for `save_file`, `read_saved_file`, `list_saved_files`, `delete_saved_file`
+- Added file safety controls (path traversal/absolute path/control char/null-byte rejection), 1MB file size limit, 100-file/session limit
+- Added disk-focused test suite (`src/acontext/disk.test.ts`) and updated parallel-safe whitelist assertions
+
+### Files Modified
+- `src/acontext/client.ts`
+- `src/openrouter/tools.ts`
+- `src/acontext/disk.test.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `src/openrouter/briefing-aggregator.test.ts`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/codex-log.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Phase 5.4 is complete; next unblocked roadmap item remains Phase 5.6 polish items (or F.1 when ai-hub endpoints are ready).

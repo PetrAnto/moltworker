@@ -1254,6 +1254,8 @@ describe('PARALLEL_SAFE_TOOLS whitelist', () => {
     expect(PARALLEL_SAFE_TOOLS.has('geolocate_ip')).toBe(true);
     expect(PARALLEL_SAFE_TOOLS.has('url_metadata')).toBe(true);
     expect(PARALLEL_SAFE_TOOLS.has('generate_chart')).toBe(true);
+    expect(PARALLEL_SAFE_TOOLS.has('read_saved_file')).toBe(true);
+    expect(PARALLEL_SAFE_TOOLS.has('list_saved_files')).toBe(true);
   });
 
   it('should NOT include mutation tools', async () => {
@@ -1261,6 +1263,8 @@ describe('PARALLEL_SAFE_TOOLS whitelist', () => {
     expect(PARALLEL_SAFE_TOOLS.has('github_api')).toBe(false);
     expect(PARALLEL_SAFE_TOOLS.has('github_create_pr')).toBe(false);
     expect(PARALLEL_SAFE_TOOLS.has('sandbox_exec')).toBe(false);
+    expect(PARALLEL_SAFE_TOOLS.has('save_file')).toBe(false);
+    expect(PARALLEL_SAFE_TOOLS.has('delete_saved_file')).toBe(false);
   });
 
   it('should NOT include cloudflare_api in the static set (action-level check)', async () => {
