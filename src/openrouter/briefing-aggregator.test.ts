@@ -1020,8 +1020,8 @@ describe('Phase 2.5.8 — Geolocation Tool', () => {
 // ============================================================================
 
 describe('Test 18 — /help and /start message verification', () => {
-  it('should have exactly 20 tools in AVAILABLE_TOOLS', () => {
-    expect(AVAILABLE_TOOLS.length).toBe(20);
+  it('should have exactly 21 tools in AVAILABLE_TOOLS', () => {
+    expect(AVAILABLE_TOOLS.length).toBe(21);
   });
 
   it('should list all expected tools', () => {
@@ -1046,6 +1046,7 @@ describe('Test 18 — /help and /start message verification', () => {
       'workspace_delete_file',
       'workspace_commit',
       'sandbox_exec',
+      'run_code',
       'cloudflare_api',
     ];
     for (const expected of expectedTools) {
