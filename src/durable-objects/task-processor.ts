@@ -112,6 +112,8 @@ export const PARALLEL_SAFE_TOOLS = new Set([
   'geolocate_ip',
   'url_metadata',
   'generate_chart',
+  'read_saved_file',
+  'list_saved_files',
 ]);
 
 /**
