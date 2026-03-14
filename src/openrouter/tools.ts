@@ -4,6 +4,7 @@
 
 import { getModel } from './models';
 import { cloudflareApi } from './tools-cloudflare';
+import type { AcontextClient, SandboxLanguage } from '../acontext/client';
 
 /** Decode base64 GitHub content to proper UTF-8 string (atob alone mangles multi-byte chars). */
 function decodeBase64Utf8(base64: string): string {
@@ -81,6 +82,8 @@ export interface ToolContext {
   braveSearchKey?: string;
   browser?: Fetcher; // Cloudflare Browser Rendering binding
   sandbox?: SandboxLike; // Sandbox container for code execution
+  acontextClient?: AcontextClient | null; // Acontext client for persistent multi-language code execution
+  acontextSessionId?: string; // Acontext session ID for sandbox state persistence
   cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
   // Workspace operations — callbacks provided by TaskProcessor DO
   workspaceWrite?: (file: WorkspaceFile) => Promise<void>;
@@ -600,6 +603,32 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'run_code',
+      description: 'Execute code in a sandboxed environment. Supports Python, JavaScript, and Bash. Use for calculations, data processing, testing code snippets, or running scripts. Files saved to disk persist across calls.',
+      parameters: {
+        type: 'object',
+        properties: {
+          language: {
+            type: 'string',
+            enum: ['python', 'javascript', 'bash'],
+            description: 'Programming language to execute',
+          },
+          code: {
+            type: 'string',
+            description: 'Code to execute',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Execution timeout in seconds (default: 30, max: 120)',
+          },
+        },
+        required: ['language', 'code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'cloudflare_api',
       description: 'Access the entire Cloudflare API (2500+ endpoints) via Code Mode MCP. Use "search" to discover endpoints, then "execute" to run TypeScript code against the typed Cloudflare SDK. Extremely powerful — covers DNS, Workers, R2, D1, KV, Zero Trust, Pages, and more.',
       parameters: {
@@ -762,6 +791,9 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         break;
       case 'sandbox_exec':
         result = await sandboxExec(args.commands, args.timeout, context?.sandbox, githubToken);
+        break;
+      case 'run_code':
+        result = await runCode(args.language, args.code, args.timeout, context);
         break;
       case 'cloudflare_api':
         result = await cloudflareApi(args.action, args.query, args.code, context?.cloudflareApiToken);
@@ -2578,6 +2610,55 @@ async function sandboxExec(
   // Truncate if too long
   if (output.length > 50000) {
     return output.slice(0, 50000) + '\n\n[Output truncated - exceeded 50KB]';
+  }
+
+  return output;
+}
+
+/**
+ * Execute code in Acontext Sandbox (multi-language: Python, JavaScript, Bash).
+ */
+async function runCode(
+  language: SandboxLanguage,
+  code: string,
+  timeoutArg: string | number | undefined,
+  context?: ToolContext,
+): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: Code execution not available (Acontext not configured)';
+  }
+
+  if (!['python', 'javascript', 'bash'].includes(language)) {
+    throw new Error(`Invalid language: ${String(language)}. Must be one of: python, javascript, bash.`);
+  }
+
+  if (typeof code !== 'string' || code.trim().length === 0) {
+    throw new Error('Code must be a non-empty string.');
+  }
+
+  if (code.length > 100_000) {
+    throw new Error(`Code too long (${code.length} chars). Maximum is 100000.`);
+  }
+
+  const parsedTimeout = typeof timeoutArg === 'number'
+    ? timeoutArg
+    : Number.parseInt(timeoutArg || '30', 10);
+  const timeout = Number.isFinite(parsedTimeout) ? Math.min(Math.max(parsedTimeout, 5), 120) : 30;
+
+  const result = await context.acontextClient.executeCode({
+    sessionId: context.acontextSessionId || 'default',
+    language,
+    code,
+    timeout,
+  });
+
+  let output = '';
+  if (result.stdout) output += result.stdout;
+  if (result.stderr) output += `${output ? '\n\n' : ''}STDERR:\n${result.stderr}`;
+  if (!output) output = `(no output, exit code: ${result.exitCode})`;
+
+  if (output.length > 50000) {
+    output = `${output.slice(0, 50000)}\n... (truncated)`;
   }
 
   return output;
