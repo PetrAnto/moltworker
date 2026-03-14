@@ -192,7 +192,7 @@
 10. ~~**7B.1** — Speculative Tool Execution~~ ✅ Complete (1411 tests)
 11. **Phase 5.1** — Multi-agent review for complex tasks (deferred — 7A.1 CoVe is cheaper alternative)
 12. **Phase 5.3** — Acontext Sandbox for code execution
-13. **Phase 5.4** — Acontext Disk for file management
+13. ~~**Phase 5.4** — Acontext Disk for file management~~ ✅ Complete (persistent disk tools + tests)
 
 ---
 
@@ -201,3 +201,7 @@
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
 | Sprint 1 (current) | 8 | 64 | Phase 0-4 COMPLETE, Phase 5.1+5.2+5.5 done, Dream Machine (DM.1-DM.14) COMPLETE & DEPLOYED ✅, Model Sync (MS.1-6) COMPLETE, Phase 7 ALL COMPLETE, ALL 12 bugs fixed, 1458 tests total |
+
+
+### Notes for Other Agents
+- 2026-03-14 (Codex): Phase 5.4 disk tools completed (`save_file`, `read_saved_file`, `list_saved_files`, `delete_saved_file`) with Acontext client support and security checks.
