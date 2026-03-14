@@ -744,3 +744,5 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | **README.md** | project root | User-facing documentation |
 | **AGENTS.md** | project root | Developer/AI agent instructions |
 | **CLAUDE.md** | project root | Claude Code project instructions |
+
+| 2026-03-14 | Phase 5.3: Acontext Sandbox run_code tool + Acontext executeCode client + tests | Codex | Added run_code + 22 tests (1730 total) |

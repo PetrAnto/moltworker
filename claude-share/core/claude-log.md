@@ -1619,3 +1619,26 @@ Created comprehensive tool-calling landscape analysis and multi-AI orchestration
 - Start with Phase 0 quick wins (tasks 0.1-0.3 in GLOBAL_ROADMAP.md)
 - See `next_prompt.md` for ready-to-copy task prompt
 - Model IDs for GPT-OSS-120B and GLM 4.7 need verification on OpenRouter
+
+
+## 2026-03-14 — Codex (work) — Phase 5.3 Acontext Sandbox
+
+**Branch:** `work`
+**Status:** Completed
+
+### Summary
+Implemented multi-language Acontext-backed `run_code` execution, wired tool context in Telegram + TaskProcessor, and added dedicated sandbox tests.
+
+### Changes Made
+1. Added `executeCode()` and sandbox types to Acontext client.
+2. Added `run_code` tool schema and execution path in tool dispatcher.
+3. Wired `acontextClient` + `acontextSessionId` into handler and DO tool contexts.
+4. Added `src/acontext/sandbox.test.ts` with 22 tests.
+5. Updated tool-count expectation tests for new tool total.
+
+### Validation
+- `npm test -- --reporter=verbose 2>&1 | tail -20`
+- `npm run typecheck`
+
+### Notes for Next Session
+- Proceed with Phase 5.4 (Acontext Disk file management tools).

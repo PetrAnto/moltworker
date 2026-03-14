@@ -1803,6 +1803,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       githubToken: request.githubToken,
       braveSearchKey: request.braveSearchKey,
       cloudflareApiToken: request.cloudflareApiToken,
+      acontextClient: createAcontextClient(request.acontextKey, request.acontextBaseUrl),
+      acontextSessionId: task.taskId,
       // Workspace callbacks — persist to DO storage, not in-memory
       workspaceWrite: (file: WorkspaceFile) => workspace.writeFile(file),
       workspaceList: () => workspace.listFiles(),

@@ -1,13 +1,20 @@
+## Quick Redirect
+
+Phase 5.3 is complete. Next implementation task is **Phase 5.4 — Acontext Disk for file management**.
+Use: `claude-share/core/codex-prompts/codex-prompt-5.4-disk.md`.
+
+---
+
 # Next Task for AI Session
 
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-14 (Orchestra gating fix, roadmap triage)
+**Last Updated:** 2026-03-14 (Phase 5.3 complete; next up 5.4 Acontext Disk)
 
 ---
 
-## Current Task: 5.6 — Multi-Agent Orchestration Polish
+## Current Task: 5.4 — Acontext Disk for File Management
 
 ### Context
 
