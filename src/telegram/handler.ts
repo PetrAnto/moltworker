@@ -18,6 +18,7 @@ import {
   generateTaskSlug,
   loadOrchestraHistory,
   storeOrchestraTask,
+  cleanupStaleTasks,
   formatOrchestraHistory,
   fetchRoadmapFromGitHub,
   formatRoadmapStatus,
@@ -1483,8 +1484,14 @@ export class TelegramHandler {
 
     // /orch history
     if (sub === 'history') {
+      // Clean up any stale "started" tasks before showing history
+      const cleaned = await cleanupStaleTasks(this.r2Bucket, userId);
       const history = await loadOrchestraHistory(this.r2Bucket, userId);
-      await this.bot.sendMessage(chatId, formatOrchestraHistory(history));
+      let msg = formatOrchestraHistory(history);
+      if (cleaned > 0) {
+        msg = `🧹 Cleaned ${cleaned} stale task(s)\n\n${msg}`;
+      }
+      await this.bot.sendMessage(chatId, msg);
       return;
     }
 
@@ -2065,13 +2072,12 @@ export class TelegramHandler {
     ];
 
     // Store the orchestra task entry as "started"
-    // OrchestraTask.mode only supports 'init' | 'run', treat redo as run
     const orchestraTask: OrchestraTask = {
       taskId: `orch-${userId}-${Date.now()}`,
       timestamp: Date.now(),
       modelAlias,
       repo,
-      mode: mode === 'redo' ? 'run' : mode,
+      mode,
       prompt: (resolvedTask || prompt || (mode === 'init' ? 'Roadmap creation' : 'Next roadmap task')).substring(0, 200),
       branchName,
       status: 'started',
