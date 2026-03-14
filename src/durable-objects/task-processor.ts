@@ -1799,10 +1799,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Workspace manager persists staged files in DO storage (survives evictions/auto-resumes)
     const workspace = this.getWorkspaceManager(task.taskId);
 
+    const acontextClient = createAcontextClient(request.acontextKey, request.acontextBaseUrl);
+
     const toolContext: ToolContext = {
       githubToken: request.githubToken,
       braveSearchKey: request.braveSearchKey,
       cloudflareApiToken: request.cloudflareApiToken,
+      acontextClient,
+      acontextSessionId: task.taskId,
       // Workspace callbacks — persist to DO storage, not in-memory
       workspaceWrite: (file: WorkspaceFile) => workspace.writeFile(file),
       workspaceList: () => workspace.listFiles(),

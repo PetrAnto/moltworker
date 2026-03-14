@@ -4,6 +4,7 @@
 
 import { getModel } from './models';
 import { cloudflareApi } from './tools-cloudflare';
+import type { AcontextClient, SandboxLanguage, SandboxExecutionResult } from '../acontext/client';
 
 /** Decode base64 GitHub content to proper UTF-8 string (atob alone mangles multi-byte chars). */
 function decodeBase64Utf8(base64: string): string {
@@ -81,6 +82,8 @@ export interface ToolContext {
   braveSearchKey?: string;
   browser?: Fetcher; // Cloudflare Browser Rendering binding
   sandbox?: SandboxLike; // Sandbox container for code execution
+  acontextClient?: AcontextClient | null; // Acontext sandbox for multi-language execution
+  acontextSessionId?: string; // Session ID for persistent Acontext sandbox state
   cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
   // Workspace operations — callbacks provided by TaskProcessor DO
   workspaceWrite?: (file: WorkspaceFile) => Promise<void>;
@@ -579,6 +582,32 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'run_code',
+      description: 'Execute code in a sandboxed environment. Supports Python, JavaScript, and Bash. Use for calculations, data processing, testing code snippets, or running scripts. Files saved to disk persist across calls.',
+      parameters: {
+        type: 'object',
+        properties: {
+          language: {
+            type: 'string',
+            enum: ['python', 'javascript', 'bash'],
+            description: 'Programming language to execute',
+          },
+          code: {
+            type: 'string',
+            description: 'Code to execute',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Execution timeout in seconds (default: 30, max: 120)',
+          },
+        },
+        required: ['language', 'code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'sandbox_exec',
       description: 'Execute shell commands in a sandbox container for complex code tasks. Use for multi-file refactors, build/test workflows, or tasks that need git CLI. The container has git, node, npm, and common dev tools. Commands run sequentially. Use github_create_pr for simple file changes instead.',
       parameters: {
@@ -759,6 +788,9 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         break;
       case 'workspace_commit':
         result = await workspaceCommit(args.owner, args.repo, args.branch, args.message, args.base, githubToken, context);
+        break;
+      case 'run_code':
+        result = await runCode(args.language as SandboxLanguage, args.code, args.timeout, context?.acontextClient, context?.acontextSessionId);
         break;
       case 'sandbox_exec':
         result = await sandboxExec(args.commands, args.timeout, context?.sandbox, githubToken);
@@ -2464,6 +2496,55 @@ async function githubCreatePr(
  * The container has git, node, npm, and common dev tools.
  * GitHub token is injected as GH_TOKEN env var for git/gh CLI authentication.
  */
+
+async function runCode(
+  language: SandboxLanguage,
+  code: string,
+  timeoutInput: string | number | undefined,
+  acontextClient?: AcontextClient | null,
+  acontextSessionId?: string,
+): Promise<string> {
+  if (!acontextClient) {
+    return 'Error: Code execution not available (Acontext not configured)';
+  }
+
+  if (!['python', 'javascript', 'bash'].includes(language)) {
+    throw new Error('Invalid language. Must be one of: python, javascript, bash.');
+  }
+
+  if (typeof code !== 'string' || code.trim().length === 0) {
+    throw new Error('Code must be a non-empty string.');
+  }
+
+  if (code.length > 100000) {
+    throw new Error('Code too long (max 100000 characters).');
+  }
+
+  const timeoutRaw = typeof timeoutInput === 'number'
+    ? timeoutInput
+    : parseInt(timeoutInput || '30', 10);
+  const execTimeout = Number.isFinite(timeoutRaw) ? Math.min(Math.max(timeoutRaw, 5), 120) : 30;
+
+  const result: SandboxExecutionResult = await acontextClient.executeCode({
+    sessionId: acontextSessionId || 'default',
+    language,
+    code,
+    timeout: execTimeout,
+  });
+
+  let output = '';
+  if (result.stdout) output += result.stdout;
+  if (result.stderr) output += (output ? '\n\nSTDERR:\n' : 'STDERR:\n') + result.stderr;
+  if (!output) output = `(no output, exit code: ${result.exitCode})`;
+
+  if (output.length > 50000) {
+    output = output.substring(0, 50000) + '\n... (truncated)';
+  }
+
+
+  return output;
+}
+
 async function sandboxExec(
   commandsJson: string,
   timeoutStr?: string,

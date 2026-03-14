@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
+import type { AcontextClient } from '../acontext/client';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -4388,6 +4389,213 @@ describe('audit trail protection in github_create_pr', () => {
 
     expect(result.content).toContain('ROADMAP TAMPERING');
     expect(result.content).toContain('tasks would be silently deleted');
+  });
+});
+
+
+describe('run_code tool', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should be included in AVAILABLE_TOOLS', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'run_code');
+    expect(tool).toBeDefined();
+    expect(tool!.function.parameters.required).toEqual(['language', 'code']);
+  });
+
+  it('should be included in TOOLS_WITHOUT_BROWSER', () => {
+    const tool = TOOLS_WITHOUT_BROWSER.find(t => t.function.name === 'run_code');
+    expect(tool).toBeDefined();
+  });
+
+  it('should return graceful error when Acontext is not configured', async () => {
+    const result = await executeTool({
+      id: 'call_rc_1',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'python', code: 'print(1)' }),
+      },
+    });
+
+    expect(result.content).toContain('Acontext not configured');
+  });
+
+  it('should execute python code with provided session id', async () => {
+    const executeCode = vi.fn().mockResolvedValue({
+      stdout: '2\n',
+      stderr: '',
+      exitCode: 0,
+      executionTimeMs: 15,
+    });
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    const result = await executeTool({
+      id: 'call_rc_2',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'python', code: 'print(1+1)', timeout: 40 }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(result.content).toBe('2\n');
+    expect(executeCode).toHaveBeenCalledWith({
+      sessionId: 'task-123',
+      language: 'python',
+      code: 'print(1+1)',
+      timeout: 40,
+    });
+  });
+
+  it('should clamp timeout to max 120 seconds', async () => {
+    const executeCode = vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0, executionTimeMs: 1 });
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    await executeTool({
+      id: 'call_rc_3',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'bash', code: 'echo ok', timeout: 999 }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(executeCode).toHaveBeenCalledWith(expect.objectContaining({ timeout: 120 }));
+  });
+
+  it('should clamp timeout to min 5 seconds', async () => {
+    const executeCode = vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0, executionTimeMs: 1 });
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    await executeTool({
+      id: 'call_rc_4',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'javascript', code: 'console.log(1)', timeout: 1 }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(executeCode).toHaveBeenCalledWith(expect.objectContaining({ timeout: 5 }));
+  });
+
+  it('should include stderr section when stderr is present', async () => {
+    const executeCode = vi.fn().mockResolvedValue({
+      stdout: 'partial output',
+      stderr: 'traceback',
+      exitCode: 1,
+      executionTimeMs: 2,
+    });
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    const result = await executeTool({
+      id: 'call_rc_5',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'python', code: 'raise Exception()' }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(result.content).toContain('partial output');
+    expect(result.content).toContain('STDERR:');
+    expect(result.content).toContain('traceback');
+  });
+
+  it('should return fallback output when no stdout/stderr', async () => {
+    const executeCode = vi.fn().mockResolvedValue({
+      stdout: '',
+      stderr: '',
+      exitCode: 7,
+      executionTimeMs: 3,
+    });
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    const result = await executeTool({
+      id: 'call_rc_6',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'bash', code: 'exit 7' }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(result.content).toContain('no output, exit code: 7');
+  });
+
+  it('should truncate output over 50KB', async () => {
+    const longOutput = 'x'.repeat(51000);
+    const executeCode = vi.fn().mockResolvedValue({
+      stdout: longOutput,
+      stderr: '',
+      exitCode: 0,
+      executionTimeMs: 3,
+    });
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    const result = await executeTool({
+      id: 'call_rc_7',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'bash', code: 'printf x' }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(result.content.length).toBeLessThanOrEqual(50020);
+    expect(result.content).toContain('... (truncated)');
+  });
+
+  it('should reject invalid language', async () => {
+    const executeCode = vi.fn();
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    const result = await executeTool({
+      id: 'call_rc_8',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'ruby', code: 'puts 1' }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(result.content).toContain('Invalid language');
+    expect(executeCode).not.toHaveBeenCalled();
+  });
+
+  it('should reject overly long code payloads', async () => {
+    const executeCode = vi.fn();
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    const result = await executeTool({
+      id: 'call_rc_9',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'python', code: 'a'.repeat(100001) }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(result.content).toContain('Code too long');
+    expect(executeCode).not.toHaveBeenCalled();
+  });
+
+  it('should surface Acontext execution errors', async () => {
+    const executeCode = vi.fn().mockRejectedValue(new Error('network error'));
+    const mockClient = { executeCode } as unknown as AcontextClient;
+
+    const result = await executeTool({
+      id: 'call_rc_10',
+      type: 'function',
+      function: {
+        name: 'run_code',
+        arguments: JSON.stringify({ language: 'bash', code: 'echo hi' }),
+      },
+    }, { acontextClient: mockClient, acontextSessionId: 'task-123' });
+
+    expect(result.content).toContain('Error executing run_code: network error');
   });
 });
 

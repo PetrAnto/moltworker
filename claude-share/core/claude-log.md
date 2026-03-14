@@ -1619,3 +1619,10 @@ Created comprehensive tool-calling landscape analysis and multi-AI orchestration
 - Start with Phase 0 quick wins (tasks 0.1-0.3 in GLOBAL_ROADMAP.md)
 - See `next_prompt.md` for ready-to-copy task prompt
 - Model IDs for GPT-OSS-120B and GLM 4.7 need verification on OpenRouter
+
+## 2026-03-14 — Codex session (Phase 5.3 Acontext Sandbox)
+- Added `AcontextClient.executeCode()` and sandbox types.
+- Added `run_code` tool definition/execution with timeout validation, truncation, and graceful fallback.
+- Wired `acontextClient` + `acontextSessionId` through Telegram handler and TaskProcessor tool contexts.
+- Added tests in `src/acontext/sandbox.test.ts`, expanded `src/openrouter/tools.test.ts`, and updated tool-count assertion.
+- Validation: `npm test -- --reporter=verbose 2>&1 | tail -20` and `npm run typecheck` passed.
