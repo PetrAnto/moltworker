@@ -626,6 +626,80 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
       },
     },
   },
+
+  {
+    type: 'function',
+    function: {
+      name: 'save_file',
+      description: 'Save content to a persistent file. Files persist across tool calls and task resumes. Use for storing intermediate results, notes, or generated content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'File name or path (e.g., "results.json", "data/output.csv")',
+          },
+          content: {
+            type: 'string',
+            description: 'File content to save',
+          },
+        },
+        required: ['name', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_saved_file',
+      description: 'Read a previously saved file from persistent storage. Use to retrieve intermediate results or artifacts saved with save_file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'File name or path to read',
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_saved_files',
+      description: 'List files in persistent storage. Optionally filter by prefix (directory-like path).',
+      parameters: {
+        type: 'object',
+        properties: {
+          prefix: {
+            type: 'string',
+            description: 'Optional prefix to filter files (e.g., "data/" to list files in data directory)',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_saved_file',
+      description: 'Delete a file from persistent storage.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'File name or path to delete',
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+
   {
     type: 'function',
     function: {
@@ -794,6 +868,18 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         break;
       case 'run_code':
         result = await runCode(args.language, args.code, args.timeout, context);
+        break;
+      case 'save_file':
+        result = await saveFile(args.name, args.content, context);
+        break;
+      case 'read_saved_file':
+        result = await readSavedFile(args.name, context);
+        break;
+      case 'list_saved_files':
+        result = await listSavedFiles(args.prefix, context);
+        break;
+      case 'delete_saved_file':
+        result = await deleteSavedFile(args.name, context);
         break;
       case 'cloudflare_api':
         result = await cloudflareApi(args.action, args.query, args.code, context?.cloudflareApiToken);
@@ -2618,6 +2704,152 @@ async function sandboxExec(
 /**
  * Execute code in Acontext Sandbox (multi-language: Python, JavaScript, Bash).
  */
+
+const MAX_SAVED_FILE_NAME_LENGTH = 255;
+const MAX_SAVED_FILE_SIZE = 1_000_000;
+const MAX_SAVED_FILES_PER_SESSION = 100;
+
+function sanitizeSavedFileName(name: string): string {
+  return name.replace(/[\x00-\x1F\x7F]/g, '').trim();
+}
+
+function validateSavedFileName(name: string): string | null {
+  if (typeof name !== 'string' || name.trim().length === 0) {
+    return 'Error: Invalid file name. Provide a non-empty relative path.';
+  }
+
+  const sanitized = sanitizeSavedFileName(name);
+  if (!sanitized) {
+    return 'Error: Invalid file name. Control characters are not allowed.';
+  }
+
+  if (sanitized.length > MAX_SAVED_FILE_NAME_LENGTH) {
+    return `Error: File name too long (max ${MAX_SAVED_FILE_NAME_LENGTH} chars).`;
+  }
+
+  if (sanitized.startsWith('/') || sanitized.startsWith('\\')) {
+    return 'Error: Invalid file name. Use relative paths only.';
+  }
+
+  if (sanitized.includes('..')) {
+    return 'Error: Invalid file name. Path traversal ("..") is not allowed.';
+  }
+
+  if (sanitized.includes('\0') || name.includes('\0')) {
+    return 'Error: Invalid file name. Null bytes are not allowed.';
+  }
+
+  return null;
+}
+
+async function saveFile(name: string, content: string, context?: ToolContext): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: File storage not available (Acontext not configured)';
+  }
+
+  const validationError = validateSavedFileName(name);
+  if (validationError) {
+    return validationError;
+  }
+
+  if (typeof content !== 'string') {
+    return 'Error: Content must be a string.';
+  }
+
+  if (content.includes('\0')) {
+    return 'Error: Binary content is not supported. Save text content only.';
+  }
+
+  if (content.length > MAX_SAVED_FILE_SIZE) {
+    return `Error: File too large (${content.length} bytes). Maximum is ${MAX_SAVED_FILE_SIZE} bytes.`;
+  }
+
+  const sessionId = context.acontextSessionId || 'default';
+  const files = await context.acontextClient.listFiles({ sessionId });
+  const existing = files.some(file => file.name === name);
+  if (!existing && files.length >= MAX_SAVED_FILES_PER_SESSION) {
+    return `Error: File limit reached (${MAX_SAVED_FILES_PER_SESSION} files per session). Delete old files first.`;
+  }
+
+  const result = await context.acontextClient.writeFile({
+    sessionId,
+    name,
+    content,
+  });
+
+  return `File saved: ${name} (${result.bytesWritten} bytes)`;
+}
+
+async function readSavedFile(name: string, context?: ToolContext): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: File storage not available (Acontext not configured)';
+  }
+
+  const validationError = validateSavedFileName(name);
+  if (validationError) {
+    return validationError;
+  }
+
+  const result = await context.acontextClient.readFile({
+    sessionId: context.acontextSessionId || 'default',
+    name,
+  });
+
+  if (!result) {
+    return `File not found: ${name}`;
+  }
+
+  return result.content;
+}
+
+async function listSavedFiles(prefix: string | undefined, context?: ToolContext): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: File storage not available (Acontext not configured)';
+  }
+
+  if (prefix !== undefined) {
+    const validationError = validateSavedFileName(prefix);
+    if (validationError) {
+      return validationError;
+    }
+  }
+
+  const files = await context.acontextClient.listFiles({
+    sessionId: context.acontextSessionId || 'default',
+    prefix,
+  });
+
+  if (files.length === 0) {
+    return prefix ? `No saved files found for prefix: ${prefix}` : 'No saved files found.';
+  }
+
+  return files
+    .map(file => `${file.name} (${file.size} bytes, updated ${file.updatedAt})`)
+    .join('\n');
+}
+
+async function deleteSavedFile(name: string, context?: ToolContext): Promise<string> {
+  if (!context?.acontextClient) {
+    return 'Error: File storage not available (Acontext not configured)';
+  }
+
+  const validationError = validateSavedFileName(name);
+  if (validationError) {
+    return validationError;
+  }
+
+  const result = await context.acontextClient.deleteFile({
+    sessionId: context.acontextSessionId || 'default',
+    name,
+  });
+
+  if (!result.success) {
+    return `File not found: ${name}`;
+  }
+
+  return `File deleted: ${name}`;
+}
+
 async function runCode(
   language: SandboxLanguage,
   code: string,

@@ -188,7 +188,7 @@
 | 5.1 | Multi-agent review for complex tasks | ✅ | Claude | Cross-family reviewer (Sonnet/Grok/Gemini), approve/revise, 47 tests |
 | 5.2 | MCP integration (Cloudflare Code Mode) | ✅ | Claude | Generic MCP HTTP client + `cloudflare_api` tool (2500+ CF endpoints), 38 tests |
 | 5.3 | Acontext Sandbox for code execution | 🔲 | Codex | Replaces roadmap Priority 3.2 |
-| 5.4 | Acontext Disk for file management | 🔲 | Codex | Replaces roadmap Priority 3.3 |
+| 5.4 | Acontext Disk for file management | ✅ | Codex | Added Acontext Disk-backed save/read/list/delete tools + security limits + tests |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
 | 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
 
@@ -478,6 +478,7 @@
 
 ## Changelog
 
+2026-03-14 | Codex (Session: codex-phase-5-4-disk-001) | feat(tools): add Acontext Disk file management tools (save/read/list/delete), security validation, and tests | src/acontext/client.ts, src/openrouter/tools.ts, src/acontext/disk.test.ts, src/durable-objects/task-processor.ts
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```

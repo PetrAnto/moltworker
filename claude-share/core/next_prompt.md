@@ -1,3 +1,18 @@
+# Next Prompt — 2026-03-14 (Post Phase 5.4)
+
+Phase 5.4 (Acontext Disk tools) is complete on branch `work`.
+
+## Next Recommended Task
+Continue **Phase 5.6 orchestration polish** with focus on:
+1. REDO mode type (`'redo'`) in OrchestraTask
+2. Roadmap parsing robustness for non-standard formats
+3. Stale task cleanup for RUN tasks
+4. `/orch history` UX improvements
+
+Validation: `npm test -- --reporter=verbose 2>&1 | tail -20` and `npm run typecheck`.
+
+---
+
 # Next Task for AI Session
 
 > Copy-paste this prompt to start the next AI session.
