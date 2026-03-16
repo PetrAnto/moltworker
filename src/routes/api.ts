@@ -3,13 +3,193 @@ import type { AppEnv } from '../types';
 import { createAccessMiddleware } from '../auth';
 import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2, waitForProcess } from '../gateway';
 import { createAcontextClient } from '../acontext/client';
+import type { LearningHistory, TaskLearning } from '../openrouter/learnings';
+import type { OrchestraHistory, OrchestraTask } from '../orchestra/orchestra';
 
 // CLI commands can take 10-15 seconds to complete due to WebSocket connection overhead
 const CLI_TIMEOUT_MS = 20000;
+const ANALYTICS_CACHE_TTL_MS = 60_000;
+
+interface AnalyticsTaskRow {
+  timestamp: number;
+  model: string;
+  category: string;
+  success: boolean;
+  durationMs: number;
+  summary: string;
+}
+
+interface AnalyticsOverview {
+  totalTasks: number;
+  successRate: number;
+  avgDurationMs: number;
+  tasksByCategory: Record<string, number>;
+  tasksByModel: Record<string, number>;
+  toolUsage: Record<string, number>;
+  recentTasks: AnalyticsTaskRow[];
+  orchestraTasks: {
+    total: number;
+    completed: number;
+    failed: number;
+    byRepo: Record<string, number>;
+  };
+}
+
+interface OrchestraAnalytics {
+  tasks: Array<{
+    taskId: string;
+    timestamp: number;
+    repo: string;
+    mode: string;
+    status: string;
+    model: string;
+    durationMs?: number;
+    prUrl?: string;
+    summary?: string;
+    filesChanged: string[];
+  }>;
+  repoStats: Record<string, { total: number; completed: number; failed: number }>;
+}
+
+let analyticsOverviewCache: { data: AnalyticsOverview; expiresAt: number } | null = null;
+let analyticsOrchestraCache: { data: OrchestraAnalytics; expiresAt: number } | null = null;
 
 /** Build --token arg for openclaw CLI commands (required when gateway uses token auth) */
 function tokenArg(env: { MOLTBOT_GATEWAY_TOKEN?: string }): string {
   return env.MOLTBOT_GATEWAY_TOKEN ? ` --token ${env.MOLTBOT_GATEWAY_TOKEN}` : '';
+}
+
+async function listR2Objects(r2: R2Bucket, prefix: string): Promise<R2Object[]> {
+  const objects: R2Object[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const page = await r2.list({ prefix, cursor });
+    objects.push(...page.objects);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  return objects;
+}
+
+async function readR2Json<T>(r2: R2Bucket, key: string): Promise<T | null> {
+  const obj = await r2.get(key);
+  if (!obj) return null;
+  try {
+    return await obj.json<T>();
+  } catch {
+    return null;
+  }
+}
+
+function incrementCounter(counter: Record<string, number>, key: string): void {
+  counter[key] = (counter[key] || 0) + 1;
+}
+
+function createEmptyAnalyticsOverview(): AnalyticsOverview {
+  return {
+    totalTasks: 0,
+    successRate: 0,
+    avgDurationMs: 0,
+    tasksByCategory: {},
+    tasksByModel: {},
+    toolUsage: {},
+    recentTasks: [],
+    orchestraTasks: {
+      total: 0,
+      completed: 0,
+      failed: 0,
+      byRepo: {},
+    },
+  };
+}
+
+async function buildAnalyticsOverview(r2: R2Bucket): Promise<AnalyticsOverview> {
+  const overview = createEmptyAnalyticsOverview();
+  const learnings = await listR2Objects(r2, 'learnings/');
+  const allTasks: AnalyticsTaskRow[] = [];
+  let totalDurationMs = 0;
+  let successfulTasks = 0;
+
+  for (const object of learnings) {
+    if (!object.key.endsWith('/history.json')) continue;
+    const history = await readR2Json<LearningHistory>(r2, object.key);
+    if (!history) continue;
+    for (const learning of history.learnings || []) {
+      const task = learning as TaskLearning;
+      overview.totalTasks += 1;
+      totalDurationMs += task.durationMs;
+      if (task.success) successfulTasks += 1;
+      incrementCounter(overview.tasksByCategory, task.category);
+      incrementCounter(overview.tasksByModel, task.modelAlias || 'unknown');
+
+      for (const tool of task.toolsUsed || []) {
+        incrementCounter(overview.toolUsage, tool);
+      }
+
+      allTasks.push({
+        timestamp: task.timestamp,
+        model: task.modelAlias || 'unknown',
+        category: task.category,
+        success: task.success,
+        durationMs: task.durationMs,
+        summary: task.taskSummary || '',
+      });
+    }
+  }
+
+  const orchestra = await buildOrchestraAnalytics(r2);
+  for (const task of orchestra.tasks) {
+    overview.orchestraTasks.total += 1;
+    if (task.status === 'completed') overview.orchestraTasks.completed += 1;
+    if (task.status === 'failed') overview.orchestraTasks.failed += 1;
+    incrementCounter(overview.orchestraTasks.byRepo, task.repo || 'unknown');
+  }
+
+  overview.successRate = overview.totalTasks === 0
+    ? 0
+    : Number(((successfulTasks / overview.totalTasks) * 100).toFixed(1));
+  overview.avgDurationMs = overview.totalTasks === 0 ? 0 : Math.round(totalDurationMs / overview.totalTasks);
+  overview.recentTasks = allTasks
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 20);
+
+  return overview;
+}
+
+async function buildOrchestraAnalytics(r2: R2Bucket): Promise<OrchestraAnalytics> {
+  const orchestraObjects = await listR2Objects(r2, 'orchestra/');
+  const tasks: OrchestraAnalytics['tasks'] = [];
+  const repoStats: OrchestraAnalytics['repoStats'] = {};
+
+  for (const object of orchestraObjects) {
+    if (!object.key.endsWith('/history.json')) continue;
+    const history = await readR2Json<OrchestraHistory>(r2, object.key);
+    if (!history) continue;
+    for (const task of history.tasks || []) {
+      tasks.push({
+        taskId: task.taskId,
+        timestamp: task.timestamp,
+        repo: task.repo,
+        mode: task.mode,
+        status: task.status,
+        model: task.modelAlias,
+        durationMs: task.durationMs,
+        prUrl: task.prUrl,
+        summary: task.summary,
+        filesChanged: task.filesChanged || [],
+      });
+
+      const stats = repoStats[task.repo] || { total: 0, completed: 0, failed: 0 };
+      stats.total += 1;
+      if (task.status === 'completed') stats.completed += 1;
+      if (task.status === 'failed') stats.failed += 1;
+      repoStats[task.repo] = stats;
+    }
+  }
+
+  tasks.sort((a, b) => b.timestamp - a.timestamp);
+  return { tasks, repoStats };
 }
 
 /**
@@ -406,6 +586,46 @@ adminApi.get('/models/catalog', async (c) => {
       })),
       stale,
     });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: errorMessage }, 500);
+  }
+});
+
+// GET /api/admin/analytics/overview - Aggregate task + orchestra analytics across all users
+adminApi.get('/analytics/overview', async (c) => {
+  const now = Date.now();
+  if (analyticsOverviewCache && now < analyticsOverviewCache.expiresAt) {
+    return c.json(analyticsOverviewCache.data);
+  }
+
+  try {
+    const data = await buildAnalyticsOverview(c.env.MOLTBOT_BUCKET);
+    analyticsOverviewCache = {
+      data,
+      expiresAt: now + ANALYTICS_CACHE_TTL_MS,
+    };
+    return c.json(data);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: errorMessage }, 500);
+  }
+});
+
+// GET /api/admin/analytics/orchestra - Return detailed orchestra task history
+adminApi.get('/analytics/orchestra', async (c) => {
+  const now = Date.now();
+  if (analyticsOrchestraCache && now < analyticsOrchestraCache.expiresAt) {
+    return c.json(analyticsOrchestraCache.data);
+  }
+
+  try {
+    const data = await buildOrchestraAnalytics(c.env.MOLTBOT_BUCKET);
+    analyticsOrchestraCache = {
+      data,
+      expiresAt: now + ANALYTICS_CACHE_TTL_MS,
+    };
+    return c.json(data);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ error: errorMessage }, 500);
