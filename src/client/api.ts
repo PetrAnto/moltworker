@@ -158,3 +158,54 @@ export interface AcontextSessionsResponse {
 export async function getAcontextSessions(): Promise<AcontextSessionsResponse> {
   return apiRequest<AcontextSessionsResponse>('/acontext/sessions');
 }
+
+export interface AnalyticsRecentTask {
+  timestamp: number;
+  model: string;
+  category: string;
+  success: boolean;
+  durationMs: number;
+  summary: string;
+}
+
+export interface AnalyticsOverview {
+  totalTasks: number;
+  successRate: number;
+  avgDurationMs: number;
+  tasksByCategory: Record<string, number>;
+  tasksByModel: Record<string, number>;
+  toolUsage: Record<string, number>;
+  recentTasks: AnalyticsRecentTask[];
+  orchestraTasks: {
+    total: number;
+    completed: number;
+    failed: number;
+    byRepo: Record<string, number>;
+  };
+}
+
+export interface OrchestraAnalyticsTask {
+  taskId: string;
+  timestamp: number;
+  repo: string;
+  mode: string;
+  status: string;
+  model: string;
+  durationMs?: number;
+  prUrl?: string;
+  summary?: string;
+  filesChanged: string[];
+}
+
+export interface OrchestraAnalytics {
+  tasks: OrchestraAnalyticsTask[];
+  repoStats: Record<string, { total: number; completed: number; failed: number }>;
+}
+
+export async function fetchAnalyticsOverview(): Promise<AnalyticsOverview> {
+  return apiRequest<AnalyticsOverview>('/analytics/overview');
+}
+
+export async function fetchOrchestraAnalytics(): Promise<OrchestraAnalytics> {
+  return apiRequest<OrchestraAnalytics>('/analytics/orchestra');
+}

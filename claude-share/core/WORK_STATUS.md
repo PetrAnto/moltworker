@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-16 (F.2 Browser tool enhancement COMPLETE — a11y tree, click/fill/scroll, session persistence)
+**Last Updated:** 2026-03-16 (F.5 Observability dashboard enhancement COMPLETE — analytics APIs + admin dashboard UI)
 
 ---
 
@@ -49,6 +49,7 @@
 | 5.4 | Acontext Disk file management (4 saved file tools) | Codex+Claude | ✅ Complete | PRs 328-330, 332-334→compromise |
 | 5.5 | Web search tool (Brave Search API) | Codex | ✅ Complete | `work` |
 | 5.6 | Orchestra mode polish (durationMs, parsing, stale cleanup) | Codex+Claude | ✅ Complete | PRs 337-339→compromise merged |
+| F.5 | Observability dashboard enhancement (admin analytics APIs + dashboard UI) | Codex (GPT-5.2-Codex) | ✅ Complete | `work` |
 | DM.1 | Dream Machine Build stage (DO, queue, callbacks, safety) | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.2 | Dream-build bearer token auth | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.3 | Route fix — /dream-build bypasses CF Access | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
@@ -151,6 +152,7 @@
 | 7A.4 | Structured Step Decomposition — JSON plan steps (1299 tests) | Claude Opus 4.6 | 2026-02-23 | `claude/execute-next-prompt-psdEX` |
 | 7B.4 | Reduce Iteration Count — inject pre-loaded files (1312 tests) | Claude Opus 4.6 | 2026-02-23 | `claude/execute-next-prompt-psdEX` |
 | 7A.1 | CoVe Verification Loop — post-work verification (1336 tests) | Claude Opus 4.6 | 2026-02-23 | `claude/execute-next-prompt-psdEX` |
+| F.5 | Observability dashboard enhancement (admin analytics APIs + dashboard UI) | Codex (GPT-5.2-Codex) | 2026-03-16 | `work` |
 
 ---
 

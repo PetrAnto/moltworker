@@ -398,7 +398,7 @@
 | F.2 | Browser tool enhancement (CDP) — a11y tree, click/fill/scroll | ✅ | 4-6h | 4 new actions + session persistence, 14 tests |
 | F.3 | Code execution sandbox (Acontext or Piston) | 🔲 | 8-12h | Maps to Phase 5.3 |
 | F.4 | File management tools (R2 or Acontext Disk) | 🔲 | 4-6h | Maps to Phase 5.4 |
-| F.5 | Observability dashboard enhancement | 🔲 | 4-6h | Acontext session replay, success rates (extends Phase 2.3-2.4) |
+| F.5 | Observability dashboard enhancement | ✅ | 4-6h | Admin analytics API endpoints + dashboard UI with task/orchestra aggregates, charts, timeline, and tests |
 
 ### Future: Platform Evolution (M3 Gate)
 
@@ -478,6 +478,7 @@
 
 ## Changelog
 
+2026-03-16 | Codex (GPT-5.2-Codex) (Session: codex-f5-dashboard-001) | feat(client): F.5 observability dashboard enhancement — added admin analytics APIs (overview/orchestra), analytics UI page, nav wiring, and route tests (1800 total) | src/routes/api.ts, src/routes/api.test.ts, src/client/api.ts, src/client/App.tsx, src/client/App.css, src/client/pages/AnalyticsPage.tsx, src/client/pages/AnalyticsPage.css
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```

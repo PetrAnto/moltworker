@@ -3,11 +3,11 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-16 (F.2 COMPLETE, F.5 ready for Codex)
+**Last Updated:** 2026-03-16 (F.5 COMPLETE, F.6 queued)
 
 ---
 
-## Current Task: F.2 — Browser Tool Enhancement (CDP a11y + interactions)
+## Current Task: F.6 — Fork to `storia-agent` (planning + migration prep)
 
 ### Context
 
@@ -177,6 +177,7 @@ Mock the browser `Fetcher` in tests — return fake HTML for extract, fake a11y 
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-16 | F.5 — Observability dashboard enhancement | Codex | Admin analytics overview/orchestra APIs + analytics UI page + nav + tests |
 | 2026-03-16 | Phase 5.6 — Orchestra polish (durationMs, parsing, stale cleanup) | Codex+Claude | PRs 337-339 → compromise |
 | 2026-03-16 | Phase 5.4 — Acontext Disk file management (4 tools + hardening) | Codex+Claude | PRs 328-330, 332-334 → compromise |
 | 2026-03-16 | Phase 5.3 — Acontext Sandbox `run_code` tool | Codex+Claude | PR 323 → compromise |

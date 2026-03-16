@@ -1,0 +1,168 @@
+.analytics-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.stat-card {
+  background: var(--surface-color);
+  border-radius: 8px;
+  padding: 1.5rem;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+.stat-value {
+  display: block;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.stat-value.success {
+  color: var(--success-color);
+}
+
+.stat-value.error {
+  color: var(--error-color);
+}
+
+.stat-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+.chart-section {
+  background: var(--surface-color);
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: var(--shadow);
+}
+
+.chart-section h3 {
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+}
+
+.bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.bar-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr 48px;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.bar-label {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bar-track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary-color);
+}
+
+.bar-fill.alt {
+  background: #8b5cf6;
+}
+
+.bar-value {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  text-align: right;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.tasks-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tasks-table th,
+.tasks-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tasks-table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.status-success {
+  color: var(--success-color);
+}
+
+.status-error {
+  color: var(--error-color);
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.timeline-item {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 0.75rem;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 0.3rem;
+  border-radius: 999px;
+}
+
+.status-dot.ok {
+  background: var(--success-color);
+}
+
+.status-dot.bad {
+  background: var(--error-color);
+}
+
+.status-dot.pending {
+  background: var(--warning-color);
+}
+
+.timeline-title {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.timeline-meta,
+.timeline-summary {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}

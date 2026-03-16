@@ -11,6 +11,13 @@
   border-bottom: 1px solid var(--border-color);
   box-shadow: var(--shadow);
   display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.header-brand {
+  display: flex;
   align-items: center;
   gap: 1rem;
 }
@@ -34,10 +41,31 @@
   width: 100%;
 }
 
+.header-nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nav-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: 0.4rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.nav-link.active {
+  color: var(--text-primary);
+  border-color: var(--primary-color);
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .app-header {
     padding: 1rem;
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .app-main {
