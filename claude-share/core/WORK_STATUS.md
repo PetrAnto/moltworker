@@ -204,3 +204,10 @@
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
 | Sprint 1 (current) | 8 | 64 | Phase 0-4 COMPLETE, Phase 5.1+5.2+5.5 done, Dream Machine (DM.1-DM.14) COMPLETE & DEPLOYED ✅, Model Sync (MS.1-6) COMPLETE, Phase 7 ALL COMPLETE, ALL 12 bugs fixed, 1458 tests total |
+
+
+## Update (2026-03-16)
+
+- ✅ Completed F.5 observability dashboard enhancement on `work` branch.
+- Added analytics APIs (`/api/admin/analytics/overview`, `/api/admin/analytics/orchestra`) with 60s cache.
+- Added new Admin UI Analytics page with summary cards, category/model/tool bars, recent tasks table, and orchestra timeline.

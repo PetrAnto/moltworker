@@ -5,6 +5,44 @@
 ---
 
 
+
+## Session: 2026-03-16 | F.5 Observability Dashboard Enhancement (Session: codex-f5-dashboard-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Implemented admin analytics APIs and a new analytics dashboard page for aggregated learnings and orchestra history insights.
+
+### Changes Made
+- Added `/api/admin/analytics/overview` and `/api/admin/analytics/orchestra` with 60s in-memory caching
+- Added analytics types + client fetch helpers and a new `AnalyticsPage` UI (stats, bars, table, timeline)
+- Added Admin/Analytics navigation in app header
+- Added route tests for both analytics endpoints
+
+### Files Modified
+- `src/routes/api.ts`
+- `src/routes/api.test.ts`
+- `src/client/api.ts`
+- `src/client/App.tsx`
+- `src/client/App.css`
+- `src/client/pages/AnalyticsPage.tsx`
+- `src/client/pages/AnalyticsPage.css`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+If registry access is available, optionally replace CSS bars with Recharts components for richer charts.
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

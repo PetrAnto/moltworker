@@ -7,6 +7,10 @@
 
 ---
 
+### Changelog (Latest)
+
+- 2026-03-16 | Codex (Session: codex-f5-dashboard-001) | F.5 dashboard enhancement: analytics API endpoints, cached aggregation, admin analytics UI + tests | src/routes/api.ts, src/routes/api.test.ts, src/client/pages/AnalyticsPage.tsx, src/client/api.ts
+
 ## Project Overview
 
 **Moltworker** is a multi-platform AI assistant gateway deployed on Cloudflare Workers. It provides:
