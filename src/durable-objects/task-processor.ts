@@ -3922,8 +3922,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     const extractedText = extractionData.choices?.[0]?.message?.content || '';
                     const facts = parseExtractionResponse(extractedText);
                     let storedCount = 0;
-                    for (const { fact, category } of facts) {
-                      const res = await storeMemoryFact(this.r2, task.userId, fact, category);
+                    for (const { fact, category, confidence } of facts) {
+                      const res = await storeMemoryFact(this.r2, task.userId, fact, category, 'extracted', confidence);
                       if (res.stored) storedCount++;
                     }
                     if (storedCount > 0) {

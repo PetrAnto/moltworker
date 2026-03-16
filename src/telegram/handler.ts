@@ -2115,10 +2115,12 @@ export class TelegramHandler {
     let sessionContext = '';
     if (mode !== 'init') {
       const contextPrompt = resolvedTask || prompt || 'Execute next roadmap task';
-      memoryHint = await this.getMemoryHint(userId);
-      learningsHint = await this.getLearningsHint(userId, contextPrompt);
-      lastTaskHint = await this.getLastTaskHint(userId);
-      sessionContext = await this.getSessionContext(userId, contextPrompt);
+      [memoryHint, learningsHint, lastTaskHint, sessionContext] = await Promise.all([
+        this.getMemoryHint(userId),
+        this.getLearningsHint(userId, contextPrompt),
+        this.getLastTaskHint(userId),
+        this.getSessionContext(userId, contextPrompt),
+      ]);
     }
 
     const toolHint = modelInfo.parallelCalls
@@ -2723,10 +2725,12 @@ export class TelegramHandler {
     let lastTaskHint = '';
     let sessionContext = '';
     if (complexity === 'complex') {
-      memoryHint = await this.getMemoryHint(userId);
-      learningsHint = await this.getLearningsHint(userId, messageText);
-      lastTaskHint = await this.getLastTaskHint(userId);
-      sessionContext = await this.getSessionContext(userId, messageText);
+      [memoryHint, learningsHint, lastTaskHint, sessionContext] = await Promise.all([
+        this.getMemoryHint(userId),
+        this.getLearningsHint(userId, messageText),
+        this.getLastTaskHint(userId),
+        this.getSessionContext(userId, messageText),
+      ]);
     }
 
     // Add conversation boundary hint when history exists to prevent context bleed
