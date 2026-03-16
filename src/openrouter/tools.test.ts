@@ -5102,3 +5102,203 @@ describe('workspace_commit tool', () => {
     expect(fetchCalls.length).toBe(7);
   });
 });
+
+// ─── browse_url tool tests ──────────────────────────────────────────────────
+
+describe('browse_url tool', () => {
+  /**
+   * Helper: create a mock Fetcher that routes browser API calls.
+   * handlers is a map of URL-suffix → response body.
+   */
+  function mockBrowser(handlers: Record<string, unknown>): Fetcher {
+    const fetchFn = vi.fn(async (input: RequestInfo) => {
+      const url = typeof input === 'string' ? input : input.url;
+      for (const [suffix, body] of Object.entries(handlers)) {
+        if (url.endsWith(suffix)) {
+          return new Response(JSON.stringify(body), { status: 200 });
+        }
+      }
+      return new Response('not found', { status: 404 });
+    });
+    return { fetch: fetchFn } as unknown as Fetcher;
+  }
+
+  function toolCall(args: Record<string, string>, context?: ToolContext) {
+    return executeTool(
+      { id: 'browse_1', type: 'function', function: { name: 'browse_url', arguments: JSON.stringify(args) } },
+      context,
+    );
+  }
+
+  // ── extract_text ──
+
+  it('extract_text returns page title and content', async () => {
+    const browser = mockBrowser({
+      '/new': { sessionId: 's1' },
+      '/navigate': {},
+      '/wait': {},
+      '/evaluate': { result: { title: 'Hello', description: 'desc', content: 'Body text here' } },
+    });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'extract_text' }, ctx);
+    expect(result.content).toContain('Title: Hello');
+    expect(result.content).toContain('Body text here');
+    expect(result.content).toContain('desc');
+  });
+
+  it('extract_text falls back to fetchUrl when browser is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-type': 'text/html' }),
+      text: () => Promise.resolve('<html><body>Fallback content</body></html>'),
+    }));
+
+    const result = await toolCall({ url: 'https://example.com' }); // no browser context
+    expect(result.content).toContain('Fallback content');
+  });
+
+  // ── accessibility_tree ──
+
+  it('accessibility_tree returns numbered elements', async () => {
+    const tree = '[1] heading "Welcome"\n[2] link "Sign In" href="/login"\n[3] textbox "Email" type=text';
+    const browser = mockBrowser({
+      '/new': { sessionId: 's2' },
+      '/navigate': {},
+      '/wait': {},
+      '/evaluate': { result: { title: 'Test Page', tree, count: 3 } },
+    });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'accessibility_tree' }, ctx);
+    expect(result.content).toContain('Page: Test Page');
+    expect(result.content).toContain('Elements: 3');
+    expect(result.content).toContain('[1] heading "Welcome"');
+    expect(result.content).toContain('[2] link "Sign In"');
+    expect(result.content).toContain('[3] textbox "Email"');
+  });
+
+  it('accessibility_tree truncates output exceeding 50KB', async () => {
+    const longTree = 'x'.repeat(60000);
+    const browser = mockBrowser({
+      '/new': { sessionId: 's2b' },
+      '/navigate': {},
+      '/wait': {},
+      '/evaluate': { result: { title: 'Big', tree: longTree, count: 999 } },
+    });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'accessibility_tree' }, ctx);
+    expect(result.content).toContain('[Tree truncated');
+    expect(result.content.length).toBeLessThanOrEqual(50100);
+  });
+
+  // ── click ──
+
+  it('click dispatches click and returns confirmation', async () => {
+    const browser = mockBrowser({
+      '/new': { sessionId: 's3' },
+      '/navigate': {},
+      '/wait': {},
+      '/evaluate': { result: { success: true, tag: 'BUTTON', text: 'Submit' } },
+    });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'click', selector: '#submit-btn' }, ctx);
+    expect(result.content).toContain('Clicked BUTTON "Submit"');
+  });
+
+  it('click returns error when selector is missing', async () => {
+    const browser = mockBrowser({ '/new': { sessionId: 's3b' }, '/navigate': {}, '/wait': {} });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'click' }, ctx);
+    expect(result.content).toContain('Error: selector is required');
+  });
+
+  // ── fill ──
+
+  it('fill types text into an input', async () => {
+    const browser = mockBrowser({
+      '/new': { sessionId: 's4' },
+      '/navigate': {},
+      '/wait': {},
+      '/evaluate': { result: { success: true, tag: 'INPUT', value: 'hello@test.com' } },
+    });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'fill', selector: '#email', text: 'hello@test.com' }, ctx);
+    expect(result.content).toContain('Filled INPUT with "hello@test.com"');
+  });
+
+  it('fill returns error when text is missing', async () => {
+    const browser = mockBrowser({ '/new': { sessionId: 's4b' }, '/navigate': {}, '/wait': {} });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'fill', selector: '#email' }, ctx);
+    expect(result.content).toContain('Error: text is required');
+  });
+
+  // ── scroll ──
+
+  it('scroll down one viewport when no selector is given', async () => {
+    const browser = mockBrowser({
+      '/new': { sessionId: 's5' },
+      '/navigate': {},
+      '/wait': {},
+      '/evaluate': { result: { success: true, scrolledTo: 'down one viewport', scrollY: 800, scrollHeight: 3000, viewportHeight: 800 } },
+    });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'scroll' }, ctx);
+    expect(result.content).toContain('Scrolled to down one viewport');
+    expect(result.content).toContain('800/3000px');
+  });
+
+  it('scroll to element when selector is given', async () => {
+    const browser = mockBrowser({
+      '/new': { sessionId: 's5b' },
+      '/navigate': {},
+      '/wait': {},
+      '/evaluate': { result: { success: true, scrolledTo: 'DIV "Footer section"' } },
+    });
+    const ctx: ToolContext = { browser };
+    const result = await toolCall({ url: 'https://example.com', action: 'scroll', selector: '#footer' }, ctx);
+    expect(result.content).toContain('Scrolled to DIV "Footer section"');
+  });
+
+  // ── session persistence ──
+
+  it('reuses browser session across multiple calls', async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.endsWith('/new')) return new Response(JSON.stringify({ sessionId: 'persistent-1' }), { status: 200 });
+      if (url.includes('/evaluate'))
+        return new Response(JSON.stringify({ result: { title: 'P', description: '', content: 'First', tree: '[1] link "Go"', count: 1, success: true, tag: 'A', text: 'Go' } }), { status: 200 });
+      return new Response('{}', { status: 200 });
+    });
+    const browser = { fetch: fetchFn } as unknown as Fetcher;
+    const ctx: ToolContext = { browser };
+
+    // First call creates session
+    await toolCall({ url: 'https://example.com', action: 'extract_text' }, ctx);
+    expect(ctx.browserSessionId).toBe('persistent-1');
+
+    // Second call reuses session
+    await toolCall({ url: 'https://example.com', action: 'accessibility_tree' }, ctx);
+
+    // /new should only have been called once
+    const newCalls = fetchFn.mock.calls.filter(
+      (c: [RequestInfo]) => (typeof c[0] === 'string' ? c[0] : c[0].url).endsWith('/new'),
+    );
+    expect(newCalls.length).toBe(1);
+  });
+
+  // ── tool definition ──
+
+  it('tool definition includes all 7 actions', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'browse_url');
+    expect(tool).toBeDefined();
+    const actionEnum = tool!.function.parameters.properties.action.enum;
+    expect(actionEnum).toEqual(['extract_text', 'screenshot', 'pdf', 'accessibility_tree', 'click', 'fill', 'scroll']);
+  });
+
+  it('tool definition includes selector and text params', () => {
+    const tool = AVAILABLE_TOOLS.find(t => t.function.name === 'browse_url');
+    expect(tool).toBeDefined();
+    expect(tool!.function.parameters.properties.selector).toBeDefined();
+    expect(tool!.function.parameters.properties.text).toBeDefined();
+  });
+});
