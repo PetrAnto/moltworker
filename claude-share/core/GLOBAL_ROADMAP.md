@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-16 (Phase 5 COMPLETE — 5.6 orchestra polish merged, 1785 tests)
+**Last Updated:** 2026-03-16 (F.2 + F.5 complete — browser CDP + analytics dashboard, 1800 tests)
 
 ---
 
@@ -398,7 +398,7 @@
 | F.2 | Browser tool enhancement (CDP) — a11y tree, click/fill/scroll | ✅ | 4-6h | 4 new actions + session persistence, 14 tests |
 | F.3 | Code execution sandbox (Acontext or Piston) | 🔲 | 8-12h | Maps to Phase 5.3 |
 | F.4 | File management tools (R2 or Acontext Disk) | 🔲 | 4-6h | Maps to Phase 5.4 |
-| F.5 | Observability dashboard enhancement | 🔲 | 4-6h | Acontext session replay, success rates (extends Phase 2.3-2.4) |
+| F.5 | Observability dashboard enhancement | ✅ | 4-6h | Analytics API + metrics UI: summary cards, bar charts, tasks table, orchestra timeline, 2 tests |
 
 ### Future: Platform Evolution (M3 Gate)
 
