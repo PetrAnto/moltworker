@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-16 (Phase 5.3+5.4 complete — Acontext Sandbox + Disk tools, 25 tools total)
+**Last Updated:** 2026-03-16 (Phase 5.6 complete — orchestra polish fixes merged locally, tests/typecheck passing)
 
 ---
 

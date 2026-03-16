@@ -4,6 +4,38 @@
 
 ---
 
+## Session: 2026-03-16 | 5.6 Orchestra Mode Polish (Codex)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** `work`
+**Status:** Completed
+
+### Summary
+Implemented the remaining Phase 5.6 orchestra polish fixes: duration tracking in persisted orchestra history, broader roadmap header parsing (`#`/`##`/`###` variants), and stale-task cleanup at orchestra execution start (not only history view).
+
+### Changes Made
+- `src/durable-objects/task-processor.ts`
+  - Added `durationMs: Date.now() - task.startTime` when storing failed orchestra tasks.
+  - Added `durationMs: Date.now() - task.startTime` when storing completed/failed orchestra results.
+- `src/orchestra/orchestra.ts`
+  - Extended `parseRoadmapPhases()` header matching to accept:
+    - `## <Custom Header>` (without Phase/Step/Sprint prefix)
+    - `# Phase N: ...` / `# Step N — ...`
+  - Allowed optional whitespace before separator punctuation in numbered phase headers.
+  - Filtered header-only sections with no tasks from parsed output to avoid false phase entries (e.g. `## Phases`, `## Notes`).
+- `src/telegram/handler.ts`
+  - Added `cleanupStaleTasks(this.r2Bucket, userId)` at start of `executeOrchestra()`.
+- Tests
+  - Added 6+ tests in `src/orchestra/orchestra.test.ts` for new header formats and duration persistence.
+  - Added `src/telegram/handler.orchestra.test.ts` with 2 tests verifying stale cleanup runs for `/orch` execution paths.
+
+### Test Results
+- `npm test -- src/orchestra/orchestra.test.ts src/telegram/handler.orchestra.test.ts --reporter=verbose` ✅
+- `npm test -- --reporter=verbose 2>&1 | tail -20` ✅ (1784 tests passing)
+- `npm run typecheck` ✅
+
+---
+
 ## Session: 2026-02-23 | 7B.1 Speculative Tool Execution (Session: session_01V82ZPEL4WPcLtvGC6szgt5)
 
 **AI:** Claude Opus 4.6

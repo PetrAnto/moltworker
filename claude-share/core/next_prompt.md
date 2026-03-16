@@ -3,36 +3,30 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-16 (Phase 5.3+5.4 complete, 5.6 scoped for Codex)
+**Last Updated:** 2026-03-16 (Phase 5.6 complete; next focus moved to F.2 browser tool enhancement)
 
 ---
 
-## Current Task: 5.6 — Orchestra Mode Polish (Codex)
+## Current Task: F.2 — Browser Tool Enhancement (CDP)
 
 ### Status
+Phase 5.6 is complete. Next priority is Browser tool capability expansion.
 
-Most original 5.6 items are already implemented. Three focused fixes remain.
+### Scope for Next Session
+1. Add CDP-backed browser interactions for accessibility tree extraction and robust click/fill/scroll flows.
+2. Extend tool interface + tests for deterministic browser actions.
+3. Keep backward compatibility with existing `browse_url` workflows.
 
-### Already Done (do NOT redo)
+### Suggested Validation
+```bash
+npm test -- src/openrouter/vision-tools.test.ts --reporter=verbose
+npm test -- src/openrouter/tools-cloudflare.test.ts --reporter=verbose
+npm run typecheck
+```
 
-- ✅ REDO mode type — `mode: 'init' | 'run' | 'redo'` exists, stored correctly, tests exist
-- ✅ Roadmap parsing — handles `###`, `## Phase/Step/Sprint`, numbered lists, indented checkboxes, flat checklists (6 tests)
-- ✅ Stale task cleanup — `cleanupStaleTasks()` exists, called from `/orch history` (5 tests)
-- ✅ History UX — shows model, duration, PR link, REDO tag, summary
-
-### Remaining Fixes (Codex prompt ready)
-
-**Prompt file:** `claude-share/core/codex-prompts/codex-prompt-5.6-orchestra-polish.md`
-
-1. **Populate `durationMs`** — Field exists in type + rendering but never stored in `task-processor.ts`
-2. **Extend `parseRoadmapPhases`** — Add `## Header` (no prefix) and `# Phase N:` matching
-3. **Wire `cleanupStaleTasks` into `/orch run`** — Currently only on `/orch history`
-
-### Future (not for this Codex run)
-
-- Progress reporting — wire into 7B.5 streaming feedback
-- INIT quality — structured output for roadmap generation
-- Integration-level tests across handler → orchestra → task-processor
+### Notes
+- Keep changes isolated to browser tool paths.
+- Prefer small atomic commits if split into parser/action layers.
 
 ---
 
@@ -42,6 +36,7 @@ Most original 5.6 items are already implemented. Three focused fixes remain.
 |-------|------|--------|
 | 5.3 | Acontext Sandbox for code execution (`run_code` tool) | ✅ Merged 2026-03-16 |
 | 5.4 | Acontext Disk for file management (4 saved file tools) | ✅ Merged 2026-03-16 |
+| 5.6 | Orchestra mode polish (durationMs + parser + stale cleanup wiring) | ✅ Completed 2026-03-16 |
 
 ---
 
