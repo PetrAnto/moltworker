@@ -3,79 +3,173 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-16 (Phase 5 COMPLETE, 5.6 merged, all 6 sub-phases done)
+**Last Updated:** 2026-03-16 (Phase 5 COMPLETE, F.2 ready for Claude, F.5 ready for Codex)
 
 ---
 
-## Phase 5 — COMPLETE
+## Current Task: F.2 — Browser Tool Enhancement (CDP a11y + interactions)
 
-All Phase 5 tasks are done (5.1-5.6). 1785 tests passing.
+### Context
+
+The `browse_url` tool already uses Cloudflare Browser Rendering via HTTP endpoints (`POST https://browser/{sessionId}/*`). A full CDP WebSocket server exists in `src/routes/cdp.ts` (1,856 lines) with DOM, Runtime, Input, Network, Emulation domains. However, **the AI tool only exposes 3 actions**: `extract_text`, `screenshot`, `pdf`. Users can't interact with pages or get structured content.
+
+### What Exists
+
+| Component | File | Status |
+|-----------|------|--------|
+| `browse_url` tool | `src/openrouter/tools.ts:3717-3864` | 3 actions: extract_text, screenshot, pdf |
+| BROWSER binding | `wrangler.jsonc:80-82` | Configured, `Fetcher` type |
+| CDP WebSocket server | `src/routes/cdp.ts` | Full CDP: DOM, Runtime, Input, Network (1,856 lines) |
+| ToolContext.browser | `src/openrouter/tools.ts:85` | `browser?: Fetcher` — passed to browseUrl() |
+| Tool definition | `src/openrouter/tools.ts:379-404` | `url`, `action` (enum), `wait_for` params |
+| Content extraction | `src/openrouter/tools.ts:3788-3840` | JS eval: removes scripts/styles, extracts body.innerText, 50KB limit |
+
+### What's Missing
+
+1. **a11y tree extraction** — Get structured page content (roles, names, values) instead of raw innerText. Much better for AI to understand interactive elements (buttons, links, forms, inputs).
+
+2. **Click action** — Click a button/link by CSS selector or a11y role+name. Essential for multi-step workflows (login, navigation, form submission).
+
+3. **Fill action** — Type text into an input by selector. Needed for search, login, forms.
+
+4. **Scroll action** — Scroll to see more content (infinite scroll pages, below-fold content).
+
+### Implementation Plan
+
+#### Step 1: Add `get_accessibility_tree` action to browse_url
+
+The a11y tree is the highest-value addition. It gives the AI a structured view of the page: what's clickable, what's fillable, what text is where.
+
+**Approach:** Use the existing `POST https://browser/{sessionId}/evaluate` endpoint to run a JS function that builds an a11y-like tree from the DOM:
+
+```typescript
+// Pseudo-code for the JS to evaluate in browser context
+function getA11yTree() {
+  const walk = (el, depth = 0) => {
+    const role = el.getAttribute('role') || inferRole(el.tagName);
+    const name = el.getAttribute('aria-label') || el.textContent?.trim().substring(0, 80);
+    const value = (el as HTMLInputElement).value;
+    const isInteractive = ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName);
+    // Build compact representation: "  [button] Submit" or "  [link] Homepage (href=/)"
+    // Assign numeric IDs for click/fill references
+  };
+  return walk(document.body);
+}
+```
+
+Return format should be compact text (not JSON) for token efficiency:
+```
+[1] heading "Welcome to Example"
+[2] link "Sign In" href="/login"
+[3] textbox "Email" placeholder="you@example.com"
+[4] textbox "Password" type=password
+[5] button "Log In"
+[6] link "Forgot password?" href="/forgot"
+```
+
+Each element gets a numeric ID that can be referenced in click/fill actions.
+
+#### Step 2: Add `click` action
+
+```typescript
+case 'click':
+  // Navigate to URL, wait for load
+  // Find element by selector (or by a11y ID from previous get_accessibility_tree)
+  // Dispatch click event
+  // Wait for navigation/network settle
+  // Return new page content or a11y tree
+```
+
+#### Step 3: Add `fill` action
+
+```typescript
+case 'fill':
+  // Find input by selector
+  // Focus, clear existing value, type new value
+  // Return confirmation
+```
+
+#### Step 4: Add `scroll` action
+
+```typescript
+case 'scroll':
+  // Scroll by specified amount or to element
+  // Return new visible content
+```
+
+### Tool Definition Changes
+
+Update the `browse_url` tool definition to add new actions and params:
+
+```typescript
+{
+  name: 'browse_url',
+  parameters: {
+    properties: {
+      url: { type: 'string' },
+      action: {
+        type: 'string',
+        enum: ['extract_text', 'screenshot', 'pdf', 'accessibility_tree', 'click', 'fill', 'scroll'],
+      },
+      selector: {
+        type: 'string',
+        description: 'CSS selector for click/fill/scroll target',
+      },
+      text: {
+        type: 'string',
+        description: 'Text to type for fill action',
+      },
+      wait_for: { type: 'string' },
+    },
+    required: ['url'],
+  },
+}
+```
+
+### Session Persistence (Important Design Decision)
+
+Currently each `browse_url` call creates a new browser session. For click/fill/scroll to work across multiple tool calls, we need **session persistence**:
+
+- Option A: Store `sessionId` in ToolContext, reuse across calls within same task
+- Option B: Return `sessionId` in tool response, let AI pass it back in next call
+- Option C: Auto-create session on first call, reuse for same URL domain
+
+**Recommended:** Option A — store in ToolContext. Simplest for the AI, and the session lifetime matches the task lifetime. Add `browserSessionId?: string` to ToolContext.
+
+### Key Files to Modify
+
+| File | Change |
+|------|--------|
+| `src/openrouter/tools.ts` | Add actions to `browseUrl()`, update tool definition |
+| `src/openrouter/tools.ts` | Add a11y tree JS extraction function |
+| `src/openrouter/tools.test.ts` | Add tests (mock browser Fetcher) |
+| `src/types.ts` | No change needed (ToolContext already has `browser`) |
+
+### Testing
+
+```bash
+npm test -- src/openrouter/tools.test.ts --reporter=verbose
+npm run typecheck
+```
+
+Mock the browser `Fetcher` in tests — return fake HTML for extract, fake a11y tree for accessibility_tree, etc.
+
+### Definition of Done
+
+- [ ] `accessibility_tree` action returns numbered, structured page elements
+- [ ] `click` action dispatches click on element by selector
+- [ ] `fill` action types text into input by selector
+- [ ] `scroll` action scrolls page or to element
+- [ ] Session persistence across multiple browse_url calls in same task
+- [ ] At least 8 new tests (2 per action)
+- [ ] All existing tests pass, typecheck clean
+- [ ] Tool definition updated with new actions + params
 
 ---
 
-## Next Task Candidates
+## Parallel: F.5 — Observability Dashboard (Codex)
 
-Pick based on what's unblocked and highest value. Recommended order:
-
-### Option A: F.2 — Browser Tool Enhancement (CDP)
-**Best for: Claude Code (design-heavy, touches multiple files)**
-
-Enhance the existing `browse_url` tool with Cloudflare Browser Rendering CDP protocol:
-- Add a11y tree extraction (structured page content without full HTML)
-- Add click/fill/scroll actions for interactive pages
-- Add screenshot capture as tool output
-
-**Why next:** `BROWSER` binding already exists. The current `browse_url` is fetch-based (no JS rendering). CDP would unlock real browser automation — form filling, SPA navigation, login flows. High user value.
-
-**Key files:**
-- `src/openrouter/tools.ts` — current `browse_url` tool (fetch-based)
-- `src/gateway/process.ts` — sandbox container management
-- `wrangler.jsonc` — `BROWSER` binding already configured
-- `src/durable-objects/task-processor.ts` — tool context wiring
-
-**Effort:** 4-6h | **Codex-friendly:** Partially (core CDP client yes, UX design no)
-
----
-
-### Option B: F.8 — Long-term Memory (MEMORY.md + fact extraction)
-**Best for: Claude Code (architectural, extends existing learnings system)**
-
-Add persistent user memory beyond the current session-scoped learnings:
-- Extract facts from conversations (preferences, project context, recurring topics)
-- Store in per-user `MEMORY.md` in R2
-- Inject relevant memories into system prompt based on conversation topic
-- Add `/memory` command to view/edit/clear memories
-
-**Why next:** Extends the existing Phase 3.1 compound learning system. Would make the bot genuinely personalized across sessions.
-
-**Key files:**
-- `src/openrouter/storage.ts` — existing R2 learning storage
-- `src/durable-objects/task-processor.ts` — learning extraction (lines 3865-3880)
-- `src/telegram/handler.ts` — command handling
-
-**Effort:** 8-12h | **Codex-friendly:** Partially (storage yes, extraction prompts no)
-
----
-
-### Option C: F.5 — Observability Dashboard Enhancement
-**Best for: Codex (self-contained frontend + API work)**
-
-Enhance the admin dashboard with:
-- Acontext session replay (view tool calls, model responses, timing)
-- Success/failure rates per model
-- Cost breakdown charts
-- Orchestra task timeline view
-
-**Key files:**
-- `src/client/App.tsx` — existing admin dashboard
-- `src/routes/admin.ts` — admin API routes
-
-**Effort:** 4-6h | **Codex-friendly:** Yes (mostly frontend + API)
-
----
-
-### Option D: F.1 — ai-hub Data Feeds
-**Status: BLOCKED** on ai-hub `/api/situation/*` endpoints being live.
+**Prompt file:** `claude-share/core/codex-prompts/codex-prompt-F5-dashboard.md`
 
 ---
 
@@ -87,8 +181,3 @@ Enhance the admin dashboard with:
 | 2026-03-16 | Phase 5.4 — Acontext Disk file management (4 tools + hardening) | Codex+Claude | PRs 328-330, 332-334 → compromise |
 | 2026-03-16 | Phase 5.3 — Acontext Sandbox `run_code` tool | Codex+Claude | PR 323 → compromise |
 | 2026-03-14 | Orchestra gating fix | Claude Opus 4.6 | Commit d28fcb1 |
-| 2026-03-10 | Orchestra diffs PR merged | Claude Opus 4.6 | Commit a888455 |
-| 2026-03-08 | Post-execution extraction verifier | Claude Opus 4.6 | Commit 675ef49 |
-| 2026-02-23 | 5.1: Multi-Agent Review (1458 tests) | Claude Opus 4.6 | Phase 5.1 complete |
-| 2026-02-23 | Phase 7 ALL 10 tasks complete (1411 tests) | Claude Opus 4.6 | Phase 7 complete |
-| 2026-03-01 | Phase 8 Operational Hardening (1526 tests) | Claude Opus 4.6 | 38 tasks |
