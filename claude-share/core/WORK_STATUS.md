@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-02-23 (5.1 Multi-Agent Review complete — 1458 tests)
+**Last Updated:** 2026-03-16 (Phase 5.3+5.4 complete — Acontext Sandbox + Disk tools, 25 tools total)
 
 ---
 
@@ -45,6 +45,8 @@
 | 2.4 | Acontext sessions dashboard in admin UI | Codex+Claude | ✅ Complete | `claude/implement-p1-guardrails-DcOgI` |
 | P2 | Audit Phase 2: P2 guardrails (tool validation + No Fake Success) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-Wh6Cx` |
 | 5.2 | MCP integration (Cloudflare Code Mode) | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
+| 5.3 | Acontext Sandbox for code execution (run_code tool) | Codex+Claude | ✅ Complete | PRs 323→compromise |
+| 5.4 | Acontext Disk file management (4 saved file tools) | Codex+Claude | ✅ Complete | PRs 328-330, 332-334→compromise |
 | 5.5 | Web search tool (Brave Search API) | Codex | ✅ Complete | `work` |
 | DM.1 | Dream Machine Build stage (DO, queue, callbacks, safety) | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.2 | Dream-build bearer token auth | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
