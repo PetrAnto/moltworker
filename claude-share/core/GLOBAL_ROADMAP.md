@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-01 (Merged with MOLTWORKER_ROADMAP-claude_review.md — milestone gates, future phases, cross-repo deps, metrics — 1526 tests)
+**Last Updated:** 2026-03-16 (Phase 5 COMPLETE — 5.6 orchestra polish merged, 1785 tests)
 
 ---
 
@@ -190,7 +190,7 @@
 | 5.3 | Acontext Sandbox for code execution | ✅ | Codex+Claude | `run_code` tool + Acontext sandbox client, timeout clamping [5s,120s], 27 tests |
 | 5.4 | Acontext Disk for file management | ✅ | Codex+Claude | `save_file`, `read_saved_file`, `list_saved_files`, `delete_saved_file` tools, 1MB limit, 100 files/session, sanitized filenames, 22 tests |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
-| 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
+| 5.6 | Multi-agent orchestration polish | ✅ | Codex+Claude | durationMs tracking, extended roadmap parsing (##/# headers), stale cleanup in run path, 9 new tests |
 
 > 🧑 HUMAN CHECK 5.7: Evaluate MCP server hosting options (Sandbox vs. external) — ⏳ PENDING
 > 🧑 HUMAN CHECK 5.8: Security review of code execution sandbox — ⏳ PENDING
