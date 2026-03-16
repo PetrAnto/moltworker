@@ -5,6 +5,32 @@
 ---
 
 
+## Session: 2026-03-16 | F.5 observability dashboard enhancement (Session: codex-f5-dashboard-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Implemented admin analytics endpoints and a new analytics dashboard page with aggregated learnings/orchestra metrics.
+
+### Files Modified
+- `src/routes/api.ts`
+- `src/routes/api.test.ts`
+- `src/client/api.ts`
+- `src/client/App.tsx`
+- `src/client/App.css`
+- `src/client/pages/AnalyticsPage.tsx`
+- `src/client/pages/AnalyticsPage.css`
+
+### Tests
+- [x] `npm run build`
+- [x] `npm test -- src/routes/api.test.ts --reporter=verbose`
+- [x] `npm run typecheck`
+
+---
+
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

@@ -3,11 +3,11 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-16 (F.2 COMPLETE, F.5 ready for Codex)
+**Last Updated:** 2026-03-16 (F.5 COMPLETE by Codex, next task pending)
 
 ---
 
-## Current Task: F.2 — Browser Tool Enhancement (CDP a11y + interactions)
+## Current Task: F.6 — TBD (choose next roadmap priority)
 
 ### Context
 
