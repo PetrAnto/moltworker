@@ -395,7 +395,7 @@
 | ID | Task | Status | Effort | Notes |
 |----|------|--------|--------|-------|
 | F.1 | ai-hub data feeds — RSS, market, proactive notifications | ⏸️ Blocked | 6-8h | Depends on ai-hub `/api/situation/*` endpoints |
-| F.2 | Browser tool enhancement (CDP) — a11y tree, click/fill/scroll | 🔲 | 4-6h | `BROWSER` binding exists but underused. Peekaboo pattern. |
+| F.2 | Browser tool enhancement (CDP) — a11y tree, click/fill/scroll | ✅ | 4-6h | 4 new actions + session persistence, 14 tests |
 | F.3 | Code execution sandbox (Acontext or Piston) | 🔲 | 8-12h | Maps to Phase 5.3 |
 | F.4 | File management tools (R2 or Acontext Disk) | 🔲 | 4-6h | Maps to Phase 5.4 |
 | F.5 | Observability dashboard enhancement | 🔲 | 4-6h | Acontext session replay, success rates (extends Phase 2.3-2.4) |
@@ -481,6 +481,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-16 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(browse_url): F.2 browser tool enhancement — 4 new actions (accessibility_tree, click, fill, scroll) + session persistence via browserSessionId in ToolContext, 14 new tests | src/openrouter/tools.ts, src/openrouter/tools.test.ts
 2026-03-01 | Claude Opus 4.6 (Session: session_019DBbA1BWV4dbdZZrrDzrK5) | fix(syncall): sanitize hyphenated aliases + improve display — sanitizeAlias() strips non-alphanumeric from R2 aliasMap (self-heals), HTML parseMode, compact 1-line layout, model name in buttons, escapeHtml export | src/openrouter/model-sync/alias.ts, src/openrouter/model-sync/alias.test.ts, src/telegram/handler.ts, src/utils/telegram-format.ts
 2026-03-01 | PetrAnto | fix(security,task-processor): strip secrets from DO /status API — defense-in-depth (destructure at DO + allowlist at simulate), defer premature orchestra review (≥3 iterations) | src/durable-objects/task-processor.ts, src/routes/simulate.ts
 2026-02-28 | Claude | feat(simulate): add timeout param to /simulate/command for DO task polling | src/routes/simulate.ts, CLAUDE.md

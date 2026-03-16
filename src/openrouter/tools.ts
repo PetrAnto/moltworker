@@ -81,6 +81,7 @@ export interface ToolContext {
   githubToken?: string;
   braveSearchKey?: string;
   browser?: Fetcher; // Cloudflare Browser Rendering binding
+  browserSessionId?: string; // Persistent browser session ID across browse_url calls
   sandbox?: SandboxLike; // Sandbox container for code execution
   acontextClient?: AcontextClient | null; // Acontext client for persistent multi-language code execution
   acontextSessionId?: string; // Acontext session ID for sandbox state persistence
@@ -380,18 +381,26 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'browse_url',
-      description: 'Browse a URL using a real browser. Use this for JavaScript-rendered pages, screenshots, or when fetch_url fails. Returns text content by default, or a screenshot/PDF.',
+      description: 'Browse a URL using a real browser. Supports text extraction, screenshots, PDF, accessibility tree, clicking, filling inputs, and scrolling. The browser session persists across calls so you can interact with pages in multiple steps (e.g. get accessibility_tree, then click a button, then fill a form).',
       parameters: {
         type: 'object',
         properties: {
           url: {
             type: 'string',
-            description: 'The URL to browse',
+            description: 'The URL to browse (required for first call, optional for subsequent actions on same session)',
           },
           action: {
             type: 'string',
             description: 'Action to perform',
-            enum: ['extract_text', 'screenshot', 'pdf'],
+            enum: ['extract_text', 'screenshot', 'pdf', 'accessibility_tree', 'click', 'fill', 'scroll'],
+          },
+          selector: {
+            type: 'string',
+            description: 'CSS selector for click/fill/scroll target. For accessibility_tree elements, use the [data-a11y-id="N"] selector with the numeric ID shown in the tree.',
+          },
+          text: {
+            type: 'string',
+            description: 'Text to type for fill action',
           },
           wait_for: {
             type: 'string',
@@ -827,7 +836,15 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         result = await geolocateIp(args.ip);
         break;
       case 'browse_url':
-        result = await browseUrl(args.url, args.action as 'extract_text' | 'screenshot' | 'pdf' | undefined, args.wait_for, context?.browser);
+        result = await browseUrl(
+          args.url,
+          args.action as BrowseAction | undefined,
+          args.wait_for,
+          context?.browser,
+          args.selector,
+          args.text,
+          context,
+        );
         break;
       case 'github_create_pr':
         result = await githubCreatePr(
@@ -3714,11 +3731,129 @@ async function webSearch(query: string, numResults = '5', apiKey?: string): Prom
 /**
  * Browse a URL using Cloudflare Browser Rendering
  */
+type BrowseAction = 'extract_text' | 'screenshot' | 'pdf' | 'accessibility_tree' | 'click' | 'fill' | 'scroll';
+
+/**
+ * JS expression evaluated in-browser to build an accessibility-like tree.
+ * Returns compact text with numbered interactive/semantic elements.
+ */
+const A11Y_TREE_EXPRESSION = `
+(function() {
+  var id = 0;
+  var lines = [];
+  var INTERACTIVE = ['A','BUTTON','INPUT','SELECT','TEXTAREA','DETAILS','SUMMARY'];
+  var SEMANTIC = ['H1','H2','H3','H4','H5','H6','NAV','MAIN','ARTICLE','SECTION','FORM','TABLE','IMG'];
+  var SKIP = ['SCRIPT','STYLE','NOSCRIPT','SVG','PATH'];
+
+  function inferRole(tag) {
+    var map = {
+      A:'link', BUTTON:'button', INPUT:'textbox', SELECT:'combobox',
+      TEXTAREA:'textbox', H1:'heading', H2:'heading', H3:'heading',
+      H4:'heading', H5:'heading', H6:'heading', NAV:'navigation',
+      MAIN:'main', ARTICLE:'article', SECTION:'region', FORM:'form',
+      TABLE:'table', IMG:'image', DETAILS:'group', SUMMARY:'button',
+      UL:'list', OL:'list', LI:'listitem'
+    };
+    return map[tag] || '';
+  }
+
+  function getName(el) {
+    return el.getAttribute('aria-label')
+      || el.getAttribute('alt')
+      || el.getAttribute('title')
+      || el.getAttribute('placeholder')
+      || (el.textContent || '').trim().substring(0, 80);
+  }
+
+  function walk(el, depth) {
+    if (!el || !el.tagName) return;
+    var tag = el.tagName;
+    if (SKIP.indexOf(tag) >= 0) return;
+    if (el.hidden || el.getAttribute('aria-hidden') === 'true') return;
+
+    var role = el.getAttribute('role') || inferRole(tag);
+    var isInteractive = INTERACTIVE.indexOf(tag) >= 0;
+    var isSemantic = SEMANTIC.indexOf(tag) >= 0;
+
+    if (isInteractive || isSemantic || role) {
+      id++;
+      el.setAttribute('data-a11y-id', String(id));
+      var indent = '  '.repeat(depth);
+      var name = getName(el);
+      var extra = '';
+
+      if (tag === 'A') extra = ' href="' + (el.getAttribute('href') || '') + '"';
+      if (tag === 'INPUT') {
+        var t = el.getAttribute('type') || 'text';
+        extra = ' type=' + t;
+        if (el.value) extra += ' value="' + el.value.substring(0, 40) + '"';
+        if (t === 'checkbox' || t === 'radio') extra += el.checked ? ' checked' : '';
+        role = t === 'checkbox' ? 'checkbox' : t === 'radio' ? 'radio' : 'textbox';
+      }
+      if (tag === 'SELECT') {
+        var sel = el.options && el.options[el.selectedIndex];
+        if (sel) extra = ' selected="' + sel.text.substring(0, 40) + '"';
+      }
+      if (tag === 'TEXTAREA' && el.value) {
+        extra = ' value="' + el.value.substring(0, 40) + '"';
+      }
+      if (tag === 'IMG') {
+        extra = ' src="' + (el.getAttribute('src') || '').substring(0, 80) + '"';
+      }
+
+      lines.push(indent + '[' + id + '] ' + (role || tag.toLowerCase()) + ' "' + name.replace(/"/g, "'") + '"' + extra);
+    }
+
+    var children = el.children;
+    for (var i = 0; i < children.length; i++) {
+      walk(children[i], isInteractive || isSemantic || role ? depth + 1 : depth);
+    }
+  }
+
+  walk(document.body, 0);
+  return { title: document.title || '', tree: lines.join('\\n'), count: id };
+})()
+`;
+
+/**
+ * Get or create a persistent browser session.
+ * When context is provided, session ID is stored for reuse across calls.
+ */
+async function getOrCreateSession(
+  browser: Fetcher,
+  context?: ToolContext,
+): Promise<{ sessionId: string; isNew: boolean }> {
+  // Reuse existing session if available
+  if (context?.browserSessionId) {
+    return { sessionId: context.browserSessionId, isNew: false };
+  }
+
+  const sessionResponse = await browser.fetch('https://browser/new', {
+    method: 'POST',
+  });
+
+  if (!sessionResponse.ok) {
+    throw new Error(`Failed to create browser session: ${sessionResponse.statusText}`);
+  }
+
+  const session = await sessionResponse.json() as { sessionId: string };
+
+  // Persist session ID in context for reuse
+  if (context) {
+    context.browserSessionId = session.sessionId;
+  }
+
+  return { sessionId: session.sessionId, isNew: true };
+}
+
 async function browseUrl(
   url: string,
-  action: 'extract_text' | 'screenshot' | 'pdf' = 'extract_text',
+  action: BrowseAction = 'extract_text',
   waitFor?: string,
-  browser?: Fetcher
+  browser?: Fetcher,
+  selector?: string,
+  text?: string,
+  context?: ToolContext,
 ): Promise<string> {
   if (!browser) {
     // Fallback to regular fetch if browser not available
@@ -3726,21 +3861,13 @@ async function browseUrl(
   }
 
   try {
-    // Use Cloudflare Browser Rendering API
-    // The browser binding acts as a Puppeteer endpoint
-    const sessionResponse = await browser.fetch('https://browser/new', {
-      method: 'POST',
-    });
+    const { sessionId, isNew } = await getOrCreateSession(browser, context);
 
-    if (!sessionResponse.ok) {
-      throw new Error(`Failed to create browser session: ${sessionResponse.statusText}`);
-    }
+    // Only navigate if this is a new session or URL is explicitly provided
+    // For actions on an existing session (click, fill, scroll), skip navigation
+    const needsNavigation = isNew || (url && !['click', 'fill', 'scroll'].includes(action));
 
-    const session = await sessionResponse.json() as { sessionId: string };
-    const sessionId = session.sessionId;
-
-    try {
-      // Navigate to URL
+    if (needsNavigation && url) {
       await browser.fetch(`https://browser/${sessionId}/navigate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3755,111 +3882,253 @@ async function browseUrl(
           body: JSON.stringify({ selector: waitFor, timeout: 10000 }),
         });
       } else {
-        // Default wait for page to be ready
         await browser.fetch(`https://browser/${sessionId}/wait`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ event: 'networkidle0', timeout: 10000 }),
         });
       }
+    }
 
-      // Perform the requested action
-      switch (action) {
-        case 'screenshot': {
-          const screenshotResponse = await browser.fetch(`https://browser/${sessionId}/screenshot`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fullPage: false }),
-          });
-
-          if (!screenshotResponse.ok) {
-            throw new Error('Failed to take screenshot');
-          }
-
-          const data = await screenshotResponse.json() as { base64: string };
-          // Return as data URL that can be displayed
-          return `Screenshot captured. Base64 data (first 100 chars): ${data.base64.slice(0, 100)}...\n\n[Full screenshot data available for image rendering]`;
-        }
-
-        case 'pdf': {
-          const pdfResponse = await browser.fetch(`https://browser/${sessionId}/pdf`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
-          });
-
-          if (!pdfResponse.ok) {
-            throw new Error('Failed to generate PDF');
-          }
-
-          return 'PDF generated successfully. The document can be downloaded from the session.';
-        }
-
-        case 'extract_text':
-        default: {
-          // Extract text content from the page
-          const textResponse = await browser.fetch(`https://browser/${sessionId}/evaluate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              expression: `
-                (function() {
-                  // Remove script and style elements
-                  const scripts = document.querySelectorAll('script, style, noscript');
-                  scripts.forEach(el => el.remove());
-
-                  // Get text content
-                  const title = document.title || '';
-                  const body = document.body?.innerText || '';
-
-                  // Get meta description
-                  const metaDesc = document.querySelector('meta[name="description"]')?.getAttribute('content') || '';
-
-                  return {
-                    title,
-                    description: metaDesc,
-                    content: body.slice(0, 50000) // Limit content
-                  };
-                })()
-              `,
-            }),
-          });
-
-          if (!textResponse.ok) {
-            throw new Error('Failed to extract text');
-          }
-
-          const result = await textResponse.json() as { result: { title: string; description: string; content: string } };
-          const { title, description, content } = result.result;
-
-          let output = `Title: ${title}\n`;
-          if (description) {
-            output += `Description: ${description}\n`;
-          }
-          output += `\n---\n\n${content}`;
-
-          // Truncate if too long
-          if (output.length > 50000) {
-            return output.slice(0, 50000) + '\n\n[Content truncated - exceeded 50KB]';
-          }
-
-          return output;
-        }
-      }
-    } finally {
-      // Clean up session
-      try {
-        await browser.fetch(`https://browser/${sessionId}/close`, {
+    switch (action) {
+      case 'screenshot': {
+        const screenshotResponse = await browser.fetch(`https://browser/${sessionId}/screenshot`, {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fullPage: false }),
         });
-      } catch {
-        // Ignore cleanup errors
+
+        if (!screenshotResponse.ok) {
+          throw new Error('Failed to take screenshot');
+        }
+
+        const data = await screenshotResponse.json() as { base64: string };
+        return `Screenshot captured. Base64 data (first 100 chars): ${data.base64.slice(0, 100)}...\n\n[Full screenshot data available for image rendering]`;
+      }
+
+      case 'pdf': {
+        const pdfResponse = await browser.fetch(`https://browser/${sessionId}/pdf`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+
+        if (!pdfResponse.ok) {
+          throw new Error('Failed to generate PDF');
+        }
+
+        return 'PDF generated successfully. The document can be downloaded from the session.';
+      }
+
+      case 'accessibility_tree': {
+        const a11yResponse = await browser.fetch(`https://browser/${sessionId}/evaluate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expression: A11Y_TREE_EXPRESSION }),
+        });
+
+        if (!a11yResponse.ok) {
+          throw new Error('Failed to extract accessibility tree');
+        }
+
+        const a11yResult = await a11yResponse.json() as { result: { title: string; tree: string; count: number } };
+        const { title, tree, count } = a11yResult.result;
+
+        let output = `Page: ${title}\nElements: ${count}\n\n${tree}`;
+        if (output.length > 50000) {
+          output = output.slice(0, 50000) + '\n\n[Tree truncated - exceeded 50KB]';
+        }
+        return output;
+      }
+
+      case 'click': {
+        if (!selector) {
+          return 'Error: selector is required for click action. Use a CSS selector or [data-a11y-id="N"] from the accessibility tree.';
+        }
+
+        const clickResponse = await browser.fetch(`https://browser/${sessionId}/evaluate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expression: `
+              (function() {
+                var el = document.querySelector(${JSON.stringify(selector)});
+                if (!el) return { success: false, error: 'Element not found: ${selector.replace(/'/g, "\\'")}' };
+                el.scrollIntoView({ block: 'center' });
+                el.click();
+                return { success: true, tag: el.tagName, text: (el.textContent || '').trim().substring(0, 100) };
+              })()
+            `,
+          }),
+        });
+
+        if (!clickResponse.ok) {
+          throw new Error('Failed to execute click');
+        }
+
+        const clickResult = await clickResponse.json() as { result: { success: boolean; error?: string; tag?: string; text?: string } };
+        if (!clickResult.result.success) {
+          return `Click failed: ${clickResult.result.error}`;
+        }
+
+        // Wait for any navigation/network activity to settle
+        try {
+          await browser.fetch(`https://browser/${sessionId}/wait`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event: 'networkidle0', timeout: 5000 }),
+          });
+        } catch {
+          // Timeout is OK — page may not navigate
+        }
+
+        return `Clicked ${clickResult.result.tag} "${clickResult.result.text}". Use accessibility_tree or extract_text to see the updated page.`;
+      }
+
+      case 'fill': {
+        if (!selector) {
+          return 'Error: selector is required for fill action.';
+        }
+        if (text === undefined || text === null) {
+          return 'Error: text is required for fill action.';
+        }
+
+        const fillResponse = await browser.fetch(`https://browser/${sessionId}/evaluate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expression: `
+              (function() {
+                var el = document.querySelector(${JSON.stringify(selector)});
+                if (!el) return { success: false, error: 'Element not found: ${selector.replace(/'/g, "\\'")}' };
+                if (!('value' in el)) return { success: false, error: 'Element is not an input/textarea/select' };
+                el.focus();
+                el.value = '';
+                el.value = ${JSON.stringify(text)};
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return { success: true, tag: el.tagName, value: el.value.substring(0, 40) };
+              })()
+            `,
+          }),
+        });
+
+        if (!fillResponse.ok) {
+          throw new Error('Failed to execute fill');
+        }
+
+        const fillResult = await fillResponse.json() as { result: { success: boolean; error?: string; tag?: string; value?: string } };
+        if (!fillResult.result.success) {
+          return `Fill failed: ${fillResult.result.error}`;
+        }
+
+        return `Filled ${fillResult.result.tag} with "${fillResult.result.value}".`;
+      }
+
+      case 'scroll': {
+        const scrollExpression = selector
+          ? `
+            (function() {
+              var el = document.querySelector(${JSON.stringify(selector)});
+              if (!el) return { success: false, error: 'Element not found: ${selector.replace(/'/g, "\\'")}' };
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              return { success: true, scrolledTo: el.tagName + ' "' + (el.textContent || '').trim().substring(0, 60) + '"' };
+            })()
+          `
+          : `
+            (function() {
+              window.scrollBy(0, window.innerHeight);
+              return {
+                success: true,
+                scrolledTo: 'down one viewport',
+                scrollY: window.scrollY,
+                scrollHeight: document.body.scrollHeight,
+                viewportHeight: window.innerHeight
+              };
+            })()
+          `;
+
+        const scrollResponse = await browser.fetch(`https://browser/${sessionId}/evaluate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expression: scrollExpression }),
+        });
+
+        if (!scrollResponse.ok) {
+          throw new Error('Failed to execute scroll');
+        }
+
+        const scrollResult = await scrollResponse.json() as {
+          result: { success: boolean; error?: string; scrolledTo?: string; scrollY?: number; scrollHeight?: number; viewportHeight?: number }
+        };
+        if (!scrollResult.result.success) {
+          return `Scroll failed: ${scrollResult.result.error}`;
+        }
+
+        let msg = `Scrolled to ${scrollResult.result.scrolledTo}.`;
+        if (scrollResult.result.scrollY !== undefined) {
+          msg += ` Position: ${scrollResult.result.scrollY}/${scrollResult.result.scrollHeight}px.`;
+        }
+        msg += ' Use extract_text or accessibility_tree to see updated content.';
+        return msg;
+      }
+
+      case 'extract_text':
+      default: {
+        const textResponse = await browser.fetch(`https://browser/${sessionId}/evaluate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expression: `
+              (function() {
+                // Remove script and style elements
+                const scripts = document.querySelectorAll('script, style, noscript');
+                scripts.forEach(el => el.remove());
+
+                // Get text content
+                const title = document.title || '';
+                const body = document.body?.innerText || '';
+
+                // Get meta description
+                const metaDesc = document.querySelector('meta[name="description"]')?.getAttribute('content') || '';
+
+                return {
+                  title,
+                  description: metaDesc,
+                  content: body.slice(0, 50000) // Limit content
+                };
+              })()
+            `,
+          }),
+        });
+
+        if (!textResponse.ok) {
+          throw new Error('Failed to extract text');
+        }
+
+        const result = await textResponse.json() as { result: { title: string; description: string; content: string } };
+        const { title, description, content } = result.result;
+
+        let output = `Title: ${title}\n`;
+        if (description) {
+          output += `Description: ${description}\n`;
+        }
+        output += `\n---\n\n${content}`;
+
+        if (output.length > 50000) {
+          return output.slice(0, 50000) + '\n\n[Content truncated - exceeded 50KB]';
+        }
+
+        return output;
       }
     }
   } catch (error) {
-    // If browser rendering fails, fall back to regular fetch
+    // If browser rendering fails, fall back to regular fetch for extract_text
     console.error('[browse_url] Browser rendering failed, falling back to fetch:', error);
-    return fetchUrl(url);
+    if (action === 'extract_text') {
+      return fetchUrl(url);
+    }
+    return `Browser action '${action}' failed: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 

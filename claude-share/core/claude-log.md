@@ -4,6 +4,40 @@
 
 ---
 
+## Session: 2026-03-16 | F.2 Browser Tool Enhancement (Session: session_01KxpZF4pir5V2D91zPwnBHo)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QW3Qh`
+**Status:** Completed
+
+### Summary
+Enhanced the `browse_url` tool from 3 actions to 7, adding accessibility tree extraction, click, fill, and scroll actions with persistent browser sessions.
+
+### Changes Made
+- Added `browserSessionId` to `ToolContext` for session persistence across tool calls
+- Added `accessibility_tree` action: builds numbered a11y-like tree from DOM (roles, names, values, interactive elements)
+- Added `click` action: dispatches click on element by CSS selector, waits for network settle
+- Added `fill` action: types text into input/textarea by selector, dispatches input/change events
+- Added `scroll` action: scrolls by viewport or to specific element via selector
+- Updated tool definition with new actions (`accessibility_tree`, `click`, `fill`, `scroll`) and new params (`selector`, `text`)
+- Session persistence: first call creates session, subsequent calls reuse it via `context.browserSessionId`
+- Refactored `browseUrl()` to use `getOrCreateSession()` helper
+
+### Files Modified
+- `src/openrouter/tools.ts` — browseUrl function rewrite, ToolContext update, tool definition update
+- `src/openrouter/tools.test.ts` — 14 new tests for all browse_url actions
+
+### Tests
+- [x] 215 tests pass (14 new browse_url tests)
+- [x] Typecheck passes
+
+### Notes for Next Session
+- The `browse_url` tool is excluded from Durable Objects (no browser binding in DO). Consider enabling it if DO gains browser access.
+- The a11y tree uses `data-a11y-id` attributes for element references — AI can use `[data-a11y-id="N"]` selectors for click/fill.
+- Session cleanup (close) was removed in favor of persistence — sessions are cleaned up by Cloudflare's TTL.
+
+---
+
 ## Session: 2026-02-23 | 7B.1 Speculative Tool Execution (Session: session_01V82ZPEL4WPcLtvGC6szgt5)
 
 **AI:** Claude Opus 4.6
