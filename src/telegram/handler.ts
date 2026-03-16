@@ -1907,6 +1907,11 @@ export class TelegramHandler {
     repo: string,
     prompt: string
   ): Promise<void> {
+    // Clean up stale orchestra tasks before starting new work
+    if (this.r2Bucket) {
+      await cleanupStaleTasks(this.r2Bucket, userId);
+    }
+
     // Verify prerequisites
     if (!this.githubToken) {
       await this.bot.sendMessage(chatId, '❌ GitHub token not configured. Orchestra mode requires GITHUB_TOKEN.');

@@ -612,6 +612,33 @@ describe('storeOrchestraTask', () => {
     const parsed = JSON.parse(data as string);
     expect(parsed.tasks[0].mode).toBe('init');
   });
+
+  it('persists durationMs for completed tasks', async () => {
+    mockBucket.get.mockResolvedValue(null);
+
+    await storeOrchestraTask(mockBucket as unknown as R2Bucket, 'user1', {
+      ...makeTask('t-complete', 'run', 'completed'),
+      durationMs: 123456,
+    });
+
+    const [, data] = mockBucket.put.mock.calls[0];
+    const parsed = JSON.parse(data as string);
+    expect(parsed.tasks[0].durationMs).toBe(123456);
+  });
+
+  it('persists durationMs for failed tasks', async () => {
+    mockBucket.get.mockResolvedValue(null);
+
+    await storeOrchestraTask(mockBucket as unknown as R2Bucket, 'user1', {
+      ...makeTask('t-failed', 'run', 'failed'),
+      durationMs: 9876,
+    });
+
+    const [, data] = mockBucket.put.mock.calls[0];
+    const parsed = JSON.parse(data as string);
+    expect(parsed.tasks[0].status).toBe('failed');
+    expect(parsed.tasks[0].durationMs).toBe(9876);
+  });
 });
 
 describe('loadOrchestraHistory', () => {
@@ -1548,6 +1575,67 @@ describe('parseRoadmapPhases robustness', () => {
     expect(phases[0].tasks).toHaveLength(3);
     expect(phases[0].tasks[0].done).toBe(false);
     expect(phases[0].tasks[0].title).toBe('Build the login page');
+  });
+
+  it('parses ## headers without Phase/Step/Sprint prefix', () => {
+    const content = `## Setup Tasks
+- [x] Bootstrap app
+
+## QA
+- [ ] Add tests`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(2);
+    expect(phases[0].name).toBe('Setup Tasks');
+    expect(phases[1].name).toBe('QA');
+  });
+
+  it('parses # Phase headers with tasks', () => {
+    const content = `# Phase 1: Setup
+- [x] Configure tooling
+
+# Phase 2: Build
+- [ ] Implement API`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(2);
+    expect(phases[0].name).toBe('Setup');
+    expect(phases[1].name).toBe('Build');
+  });
+
+  it('parses # Step headers with em dash delimiter', () => {
+    const content = `# Step 1 — Build
+- [ ] Create endpoint`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].name).toBe('Build');
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('parses mixed #, ##, and ### headers in one roadmap', () => {
+    const content = `# Phase 1: Planning
+- [x] Define scope
+
+## Implementation
+- [ ] Build feature
+
+### Phase 3: Validation
+- [ ] Run tests`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(3);
+    expect(phases[0].name).toBe('Planning');
+    expect(phases[1].name).toBe('Implementation');
+    expect(phases[2].name).toBe('Validation');
+  });
+
+  it('filters out empty phases (headers with no tasks)', () => {
+    const content = `## Intro
+
+## Setup
+- [ ] Init project
+
+## Notes`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].name).toBe('Setup');
   });
 });
 
