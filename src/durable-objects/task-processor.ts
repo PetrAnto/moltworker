@@ -527,6 +527,28 @@ function sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 /**
+ * Ensure all assistant messages with tool_calls have reasoning_content.
+ * Moonshot/Kimi requires reasoning_content on every assistant tool-call message
+ * when thinking mode is enabled (reasoning: { enabled: true }). Without this,
+ * the API returns 400: "thinking is enabled but reasoning_content is missing
+ * in assistant tool call message at index N".
+ *
+ * This can happen when:
+ * 1. stripOldReasoningContent() removed it during context compression
+ * 2. A previous iteration produced tool calls without a thinking trace
+ * 3. Messages were restored from a checkpoint that didn't preserve reasoning
+ */
+function ensureMoonshotReasoning(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map(msg => {
+    if (msg.role !== 'assistant') return msg;
+    if (!msg.tool_calls || msg.tool_calls.length === 0) return msg;
+    if (msg.reasoning_content) return msg;
+    // Inject minimal reasoning_content to satisfy the API constraint
+    return { ...msg, reasoning_content: '.' };
+  });
+}
+
+/**
  * Truncate large tool results in checkpoint messages to prevent context saturation.
  * Replaces tool results over `maxChars` with a truncated version showing the first
  * and last few lines, preserving enough context for the model to understand what
@@ -2391,7 +2413,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               const fetchTimeout = setTimeout(() => abortController.abort(), idleTimeout + 30000);
 
               // Inject cache_control on system messages for Anthropic models (prompt caching)
-              const sanitized = sanitizeMessages(conversationMessages);
+              let sanitized = sanitizeMessages(conversationMessages);
+              // Moonshot/Kimi requires reasoning_content on all assistant tool-call messages
+              // when thinking mode is enabled — inject placeholder where missing
+              if (provider === 'moonshot') {
+                sanitized = ensureMoonshotReasoning(sanitized);
+              }
               const finalMessages = isAnthropicModel(task.modelAlias) ? injectCacheControl(sanitized) : sanitized;
 
               // Build request body — Anthropic uses a different format (Messages API)
