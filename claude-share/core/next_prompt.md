@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-14 (Orchestra gating fix, roadmap triage)
+**Last Updated:** 2026-03-16 (Codex: 5.4 disk hardening + tests)
 
 ---
 
@@ -74,7 +74,7 @@ Two prompts for Codex are ready in `claude-share/core/codex-prompts/`:
 | File | Task | Phase |
 |------|------|-------|
 | `codex-prompt-5.3-sandbox.md` | Acontext Sandbox for code execution | 5.3 |
-| `codex-prompt-5.4-disk.md` | Acontext Disk for file management | 5.4 |
+| `codex-prompt-5.4-disk.md` | Acontext Disk for file management | 5.4 ✅ Complete (2026-03-16) |
 
 ---
 

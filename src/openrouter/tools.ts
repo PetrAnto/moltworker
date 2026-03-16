@@ -2754,30 +2754,34 @@ const MAX_SAVED_FILE_SIZE = 1_000_000;
 const MAX_SAVED_FILE_COUNT = 100;
 const MAX_SAVED_FILE_NAME_LENGTH = 255;
 
-function validateSavedFileName(name: string): string | null {
-  if (typeof name !== 'string' || name.trim().length === 0) {
-    return 'Invalid file name. Provide a non-empty relative path.';
+function normalizeSavedFileName(name: string): { normalized?: string; error?: string } {
+  if (typeof name !== 'string') {
+    return { error: 'Invalid file name. Name must be a string.' };
   }
 
-  const trimmed = name.trim();
+  if (name.includes('\0')) {
+    return { error: 'Invalid file name. Null bytes are not allowed.' };
+  }
+
+  const trimmed = name.trim().replace(/[\x01-\x1F\x7F]/g, '');
+
+  if (trimmed.length === 0) {
+    return { error: 'Invalid file name. Provide a non-empty relative path.' };
+  }
 
   if (trimmed.length > MAX_SAVED_FILE_NAME_LENGTH) {
-    return `Invalid file name. Maximum length is ${MAX_SAVED_FILE_NAME_LENGTH} characters.`;
+    return { error: `Invalid file name. Maximum length is ${MAX_SAVED_FILE_NAME_LENGTH} characters.` };
   }
 
   if (trimmed.startsWith('/') || trimmed.startsWith('\\')) {
-    return 'Invalid file name. Use relative paths only.';
+    return { error: 'Invalid file name. Use relative paths only.' };
   }
 
   if (trimmed.includes('..')) {
-    return 'Invalid file name. Path traversal is not allowed.';
+    return { error: 'Invalid file name. Path traversal is not allowed.' };
   }
 
-  if (/[\x00-\x1F\x7F]/.test(trimmed)) {
-    return 'Invalid file name. Control characters are not allowed.';
-  }
-
-  return null;
+  return { normalized: trimmed };
 }
 
 async function saveFile(name: string, content: string, context?: ToolContext): Promise<string> {
@@ -2785,9 +2789,9 @@ async function saveFile(name: string, content: string, context?: ToolContext): P
     return 'Error: File storage not available (Acontext not configured)';
   }
 
-  const nameError = validateSavedFileName(name);
-  if (nameError) {
-    return `Error: ${nameError}`;
+  const normalized = normalizeSavedFileName(name);
+  if (normalized.error) {
+    return `Error: ${normalized.error}`;
   }
 
   if (typeof content !== 'string') {
@@ -2804,18 +2808,18 @@ async function saveFile(name: string, content: string, context?: ToolContext): P
 
   const sessionId = context.acontextSessionId || 'default';
   const files = await context.acontextClient.listFiles({ sessionId });
-  const exists = files.some(file => file.name === name);
+  const exists = files.some(file => file.name === normalized.normalized);
   if (!exists && files.length >= MAX_SAVED_FILE_COUNT) {
     return `Error: File limit reached (${MAX_SAVED_FILE_COUNT} files per session). Delete old files first.`;
   }
 
   const result = await context.acontextClient.writeFile({
     sessionId,
-    name,
+    name: normalized.normalized!,
     content,
   });
 
-  return `File saved: ${name} (${result.bytesWritten} bytes)`;
+  return `File saved: ${normalized.normalized} (${result.bytesWritten} bytes)`;
 }
 
 async function readSavedFile(name: string, context?: ToolContext): Promise<string> {
@@ -2823,18 +2827,18 @@ async function readSavedFile(name: string, context?: ToolContext): Promise<strin
     return 'Error: File storage not available (Acontext not configured)';
   }
 
-  const nameError = validateSavedFileName(name);
-  if (nameError) {
-    return `Error: ${nameError}`;
+  const normalized = normalizeSavedFileName(name);
+  if (normalized.error) {
+    return `Error: ${normalized.error}`;
   }
 
   const result = await context.acontextClient.readFile({
     sessionId: context.acontextSessionId || 'default',
-    name,
+    name: normalized.normalized!,
   });
 
   if (!result) {
-    return `File not found: ${name}`;
+    return `File not found: ${normalized.normalized}`;
   }
 
   return result.content;
@@ -2846,10 +2850,11 @@ async function listSavedFiles(prefix: string | undefined, context?: ToolContext)
   }
 
   if (typeof prefix === 'string' && prefix.trim().length > 0) {
-    const prefixError = validateSavedFileName(prefix);
-    if (prefixError) {
-      return `Error: ${prefixError}`;
+    const normalizedPrefix = normalizeSavedFileName(prefix);
+    if (normalizedPrefix.error) {
+      return `Error: ${normalizedPrefix.error}`;
     }
+    prefix = normalizedPrefix.normalized;
   } else {
     prefix = undefined;
   }
@@ -2877,21 +2882,21 @@ async function deleteSavedFile(name: string, context?: ToolContext): Promise<str
     return 'Error: File storage not available (Acontext not configured)';
   }
 
-  const nameError = validateSavedFileName(name);
-  if (nameError) {
-    return `Error: ${nameError}`;
+  const normalized = normalizeSavedFileName(name);
+  if (normalized.error) {
+    return `Error: ${normalized.error}`;
   }
 
   const result = await context.acontextClient.deleteFile({
     sessionId: context.acontextSessionId || 'default',
-    name,
+    name: normalized.normalized!,
   });
 
   if (!result.success) {
-    return `File not found: ${name}`;
+    return `File not found: ${normalized.normalized}`;
   }
 
-  return `File deleted: ${name}`;
+  return `File deleted: ${normalized.normalized}`;
 }
 
 /**

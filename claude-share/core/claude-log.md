@@ -1619,3 +1619,27 @@ Created comprehensive tool-calling landscape analysis and multi-AI orchestration
 - Start with Phase 0 quick wins (tasks 0.1-0.3 in GLOBAL_ROADMAP.md)
 - See `next_prompt.md` for ready-to-copy task prompt
 - Model IDs for GPT-OSS-120B and GLM 4.7 need verification on OpenRouter
+
+
+## Session: 2026-03-16 | Codex Phase 5.4 Acontext Disk follow-through
+
+**AI:** Codex (GPT-5.2-Codex)  
+**Branch:** current working branch  
+**Status:** Completed
+
+### Summary
+Validated and completed Phase 5.4 disk file-management tooling already present in codebase, then aligned sanitization behavior and security tests.
+
+### Changes Made
+- Updated saved-file name normalization in `src/openrouter/tools.ts` to:
+  - reject null bytes explicitly
+  - trim + strip control characters (except null-byte hard reject)
+  - enforce relative path, traversal guard, and max length
+  - consistently use normalized names in save/read/delete flows
+- Updated `src/acontext/disk.test.ts` security expectations:
+  - null-byte delete now expects explicit null-byte error
+  - control-character filename case now verifies sanitization to `badname.txt` and successful write call
+
+### Validation
+- `npm test -- --reporter=verbose`
+- `npm run typecheck`

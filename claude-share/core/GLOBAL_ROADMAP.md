@@ -744,3 +744,7 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | **README.md** | project root | User-facing documentation |
 | **AGENTS.md** | project root | Developer/AI agent instructions |
 | **CLAUDE.md** | project root | Claude Code project instructions |
+
+## Incremental Updates
+
+- 2026-03-16 — Codex: Phase 5.4 Acontext Disk for file management validated/hardened (name sanitization for saved files, disk security tests updated, full test+typecheck pass).
