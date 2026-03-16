@@ -1619,3 +1619,23 @@ Created comprehensive tool-calling landscape analysis and multi-AI orchestration
 - Start with Phase 0 quick wins (tasks 0.1-0.3 in GLOBAL_ROADMAP.md)
 - See `next_prompt.md` for ready-to-copy task prompt
 - Model IDs for GPT-OSS-120B and GLM 4.7 need verification on OpenRouter
+
+---
+
+## Session: 2026-03-16 | Phase 5.6 Orchestra Mode Polish (Codex)
+
+**AI:** Codex (GPT-5.2-Codex)  
+**Branch:** `work`  
+**Status:** Completed
+
+### Summary
+Implemented the remaining Phase 5.6 polish items for orchestra mode:
+- Populated `durationMs` when storing completed and failed orchestra tasks in TaskProcessor.
+- Extended roadmap parser to support `##` generic headers and `# Phase|Step|Sprint N` headers.
+- Wired stale task cleanup into `executeOrchestra()` so `/orch run` cleans stale started tasks before proceeding.
+- Added regression tests for parser formats, duration persistence, and `/orch run` cleanup behavior.
+
+### Validation
+- `npm test` (full suite): pass (1784 tests)
+- `npm run typecheck`: pass
+

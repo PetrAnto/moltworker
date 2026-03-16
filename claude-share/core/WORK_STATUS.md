@@ -203,3 +203,17 @@
 | Sprint | Tasks Planned | Tasks Completed | Notes |
 |--------|-------------|----------------|-------|
 | Sprint 1 (current) | 8 | 64 | Phase 0-4 COMPLETE, Phase 5.1+5.2+5.5 done, Dream Machine (DM.1-DM.14) COMPLETE & DEPLOYED ✅, Model Sync (MS.1-6) COMPLETE, Phase 7 ALL COMPLETE, ALL 12 bugs fixed, 1458 tests total |
+
+---
+
+### Update: 2026-03-16 — Phase 5.6 completed by Codex
+
+- ✅ `durationMs` now stored for both completed and failed orchestra history entries.
+- ✅ `parseRoadmapPhases()` now supports:
+  - generic `## Header` phases (excluding structural `## Phases` / `## Notes`)
+  - `# Phase N: Title`
+  - `# Step N — Title`
+- ✅ `cleanupStaleTasks()` now runs at the start of `executeOrchestra()` (covers `/orch run` path).
+- ✅ Added regression tests (`src/orchestra/orchestra.test.ts`, `src/telegram/handler-orchestra.test.ts`).
+- ✅ Validation: `npm test` (1784 tests), `npm run typecheck`.
+

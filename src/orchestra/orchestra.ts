@@ -984,9 +984,18 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
   for (const line of content.split('\n')) {
     // Match phase headers:
     // "### Phase 1: Setup", "### Phase 1 — Setup", "### Setup" (any ### header)
-    // "## Phase 1: Setup", "## Step 1: Setup" (## only with Phase/Step/Sprint prefix)
-    const phaseMatch = line.match(/^###\s+(?:Phase\s+\d+[:.—\-]\s*)?(.+)/i)
-      || line.match(/^##\s+(?:Phase|Step|Sprint)\s+\d+[:.—\-]\s*(.+)/i);
+    // "## Phase 1: Setup", "## Step 1: Setup", "## Setup" (any ## header)
+    // "# Phase 1: Setup", "# Step 1 — Setup" (# only with Phase/Step/Sprint prefix)
+    const phaseMatch = line.match(/^###\s+(?:Phase\s+\d+\s*[:.—\-]\s*)?(.+)/i)
+      || line.match(/^##\s+(?:Phase|Step|Sprint)\s+\d+\s*[:.—\-]\s*(.+)/i)
+      || ((): RegExpMatchArray | null => {
+        const genericH2 = line.match(/^##\s+(.+)/i);
+        if (!genericH2) return null;
+        const header = genericH2[1].trim();
+        if (/^(?:phases?|notes?)$/i.test(header)) return null;
+        return genericH2;
+      })()
+      || line.match(/^#\s+(?:Phase|Step|Sprint)\s+\d+\s*[:.—\-]\s*(.+)/i);
     if (phaseMatch) {
       current = { name: phaseMatch[1].trim(), tasks: [] };
       phases.push(current);

@@ -3,15 +3,19 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-16 (Phase 5.3+5.4 complete, 5.6 scoped for Codex)
+**Last Updated:** 2026-03-16 (Phase 5.6 complete; next up F.2)
 
 ---
 
-## Current Task: 5.6 — Orchestra Mode Polish (Codex)
+## Current Task: F.2 — Browser Tool Enhancement (CDP)
 
 ### Status
 
-Most original 5.6 items are already implemented. Three focused fixes remain.
+Phase 5.6 is complete. Next task is browser tool enhancement:
+
+- Add richer browser actions (a11y tree extraction, click/fill/scroll primitives)
+- Integrate with existing `BROWSER` binding and tool execution pipeline
+- Add tests for action routing + error handling
 
 ### Already Done (do NOT redo)
 
@@ -20,13 +24,11 @@ Most original 5.6 items are already implemented. Three focused fixes remain.
 - ✅ Stale task cleanup — `cleanupStaleTasks()` exists, called from `/orch history` (5 tests)
 - ✅ History UX — shows model, duration, PR link, REDO tag, summary
 
-### Remaining Fixes (Codex prompt ready)
+### Suggested Scope for Next Session
 
-**Prompt file:** `claude-share/core/codex-prompts/codex-prompt-5.6-orchestra-polish.md`
-
-1. **Populate `durationMs`** — Field exists in type + rendering but never stored in `task-processor.ts`
-2. **Extend `parseRoadmapPhases`** — Add `## Header` (no prefix) and `# Phase N:` matching
-3. **Wire `cleanupStaleTasks` into `/orch run`** — Currently only on `/orch history`
+1. Add CDP-style actions to browser tooling surface
+2. Ensure tool calls are safely validated and rate-limited
+3. Add regression tests for navigation + interaction + failures
 
 ### Future (not for this Codex run)
 
@@ -40,6 +42,7 @@ Most original 5.6 items are already implemented. Three focused fixes remain.
 
 | Phase | Task | Status |
 |-------|------|--------|
+| 5.6 | Orchestra mode polish (duration, parser headers, stale cleanup on run) | ✅ Completed 2026-03-16 |
 | 5.3 | Acontext Sandbox for code execution (`run_code` tool) | ✅ Merged 2026-03-16 |
 | 5.4 | Acontext Disk for file management (4 saved file tools) | ✅ Merged 2026-03-16 |
 

@@ -190,7 +190,7 @@
 | 5.3 | Acontext Sandbox for code execution | ✅ | Codex+Claude | `run_code` tool + Acontext sandbox client, timeout clamping [5s,120s], 27 tests |
 | 5.4 | Acontext Disk for file management | ✅ | Codex+Claude | `save_file`, `read_saved_file`, `list_saved_files`, `delete_saved_file` tools, 1MB limit, 100 files/session, sanitized filenames, 22 tests |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
-| 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
+| 5.6 | Multi-agent orchestration | ✅ | Codex | Orchestra polish complete: duration tracking, expanded roadmap headers, stale cleanup on /orch run |
 
 > 🧑 HUMAN CHECK 5.7: Evaluate MCP server hosting options (Sandbox vs. external) — ⏳ PENDING
 > 🧑 HUMAN CHECK 5.8: Security review of code execution sandbox — ⏳ PENDING
@@ -744,3 +744,4 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | **README.md** | project root | User-facing documentation |
 | **AGENTS.md** | project root | Developer/AI agent instructions |
 | **CLAUDE.md** | project root | Claude Code project instructions |
+2026-03-16 | Codex (GPT-5.2-Codex) | fix(orchestra): Phase 5.6 polish — store durationMs for failed/completed tasks, broaden roadmap header parsing (#/##/###), and run stale cleanup during /orch run; add parser + cleanup regression tests | src/durable-objects/task-processor.ts, src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/telegram/handler.ts, src/telegram/handler-orchestra.test.ts
