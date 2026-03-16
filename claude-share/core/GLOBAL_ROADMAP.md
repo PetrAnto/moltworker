@@ -187,8 +187,8 @@
 |----|------|--------|-------|-------|
 | 5.1 | Multi-agent review for complex tasks | ✅ | Claude | Cross-family reviewer (Sonnet/Grok/Gemini), approve/revise, 47 tests |
 | 5.2 | MCP integration (Cloudflare Code Mode) | ✅ | Claude | Generic MCP HTTP client + `cloudflare_api` tool (2500+ CF endpoints), 38 tests |
-| 5.3 | Acontext Sandbox for code execution | 🔲 | Codex | Replaces roadmap Priority 3.2 |
-| 5.4 | Acontext Disk for file management | 🔲 | Codex | Replaces roadmap Priority 3.3 |
+| 5.3 | Acontext Sandbox for code execution | ✅ | Codex+Claude | `run_code` tool + Acontext sandbox client, timeout clamping [5s,120s], 27 tests |
+| 5.4 | Acontext Disk for file management | ✅ | Codex+Claude | `save_file`, `read_saved_file`, `list_saved_files`, `delete_saved_file` tools, 1MB limit, 100 files/session, sanitized filenames, 22 tests |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
 | 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
 
