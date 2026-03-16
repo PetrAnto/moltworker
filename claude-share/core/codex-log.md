@@ -5,6 +5,39 @@
 ---
 
 
+
+## Session: 2026-03-16 | Phase 5.4 Acontext Disk for file management (Session: codex-phase-5-4-disk-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Completed Phase 5.4 by hardening Acontext Disk file-management tools with filename sanitization and expanded security-focused tests.
+
+### Changes Made
+- Added filename sanitization helper for persistent disk tools and applied it to save/read/list/delete flows
+- Ensured sanitized names are consistently used for storage operations and user-facing responses
+- Extended disk tool tests to validate control-character stripping behavior and sanitized downstream API calls
+- Re-ran full test suite and typecheck to confirm no regressions
+
+### Files Modified
+- `src/openrouter/tools.ts`
+- `src/acontext/disk.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Phase 5.4 is complete. Remaining parallel Codex prompt is Phase 5.3 (Acontext Sandbox) if not already landed.
+
+---
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

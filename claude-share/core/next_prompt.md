@@ -74,7 +74,7 @@ Two prompts for Codex are ready in `claude-share/core/codex-prompts/`:
 | File | Task | Phase |
 |------|------|-------|
 | `codex-prompt-5.3-sandbox.md` | Acontext Sandbox for code execution | 5.3 |
-| `codex-prompt-5.4-disk.md` | Acontext Disk for file management | 5.4 |
+| `codex-prompt-5.4-disk.md` | Acontext Disk for file management | 5.4 ✅ Complete |
 
 ---
 
@@ -87,7 +87,7 @@ Two prompts for Codex are ready in `claude-share/core/codex-prompts/`:
 | **F.1** | ai-hub data feeds (RSS, market, proactive notifications) | 6-8h | **BLOCKED** on ai-hub `/api/situation/*` endpoints. Unblock: ask Petr about ai-hub M1 status. When ready: add `fetch_situation()` tool that calls ai-hub REST API, wire into daily briefing aggregator (2.5.7), add proactive notification via Telegram scheduled messages. Key files: `src/openrouter/tools.ts` (add tool), `src/telegram/handler.ts` (add `/situation` command), `src/durable-objects/task-processor.ts` (wire tool context). Needs `AI_HUB_API_KEY` in wrangler secrets. |
 | **F.2** | Browser tool enhancement (CDP) — a11y tree, click/fill/scroll | 4-6h | `BROWSER` binding exists, Peekaboo pattern |
 | **5.3** | Acontext Sandbox for code execution | 8-12h | See codex-prompt-5.3-sandbox.md |
-| **5.4** | Acontext Disk for file management | 4-6h | See codex-prompt-5.4-disk.md |
+| **5.4** | Acontext Disk for file management | ✅ Done | Completed 2026-03-16 by Codex |
 | **F.5** | Observability dashboard enhancement | 4-6h | Acontext session replay, success rates |
 | **F.8** | Long-term memory (MEMORY.md + fact extraction) | 8-12h | Extends Phase 3.1 learnings |
 | **6.3** | Voice messages (Whisper + TTS) | High | New capability |
