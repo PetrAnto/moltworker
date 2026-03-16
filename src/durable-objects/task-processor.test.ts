@@ -2552,3 +2552,47 @@ describe('orphaned threshold constants', () => {
     expect(ORPHANED_THRESHOLD_PAID_MS).toBeGreaterThan(90000);
   });
 });
+
+describe('orchestra history duration tracking', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('records durationMs when updating failed orchestra history', async () => {
+    vi.resetModules();
+    const orchestra = await import('../orchestra/orchestra');
+    const storeSpy = vi.spyOn(orchestra, 'storeOrchestraTask').mockResolvedValue(undefined);
+    const { TaskProcessor } = await import('./task-processor');
+
+    const fakeTask = {
+      taskId: 'orch-fail-1',
+      userId: 'user-a',
+      modelAlias: 'deep',
+      startTime: Date.now() - 4200,
+      messages: [
+        { role: 'system', content: 'Orchestra RUN Mode\nFull: owner/repo' },
+        { role: 'user', content: 'implement feature x' },
+      ],
+      result: '',
+    } as unknown as Record<string, unknown>;
+
+    const fakeCtx = {
+      r2: {} as R2Bucket,
+    } as unknown as Record<string, unknown>;
+
+    await (TaskProcessor.prototype as unknown as { updateOrchestraHistoryOnFailure: (task: Record<string, unknown>, reason: string) => Promise<void> })
+      .updateOrchestraHistoryOnFailure.call(fakeCtx, fakeTask, 'unit-test failure');
+
+    expect(storeSpy).toHaveBeenCalledTimes(1);
+    const stored = storeSpy.mock.calls[0][2];
+    expect(stored.status).toBe('failed');
+    expect(typeof stored.durationMs).toBe('number');
+    expect(stored.durationMs).toBeGreaterThanOrEqual(4000);
+  });
+
+  it('includes durationMs in completed orchestra task payload construction', async () => {
+    const source = await import('node:fs/promises').then(fs => fs.readFile(new URL('./task-processor.ts', import.meta.url), 'utf8'));
+    expect(source).toContain('const completedTask: OrchestraTask = {');
+    expect(source).toContain('durationMs: Date.now() - task.startTime');
+  });
+});

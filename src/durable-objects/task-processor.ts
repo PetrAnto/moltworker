@@ -912,6 +912,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         status: 'failed',
         filesChanged: [],
         summary: `FAILED: ${failureReason}`,
+        durationMs: Date.now() - task.startTime,
       };
       await storeOrchestraTask(this.r2, task.userId, failedTask);
       console.log(`[TaskProcessor] Orchestra failure recorded: ${repo} — ${failureReason}`);
@@ -4069,6 +4070,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   status: taskStatus,
                   filesChanged: orchestraResult.files,
                   summary: taskSummary,
+                  durationMs: Date.now() - task.startTime,
                 };
                 await storeOrchestraTask(this.r2, task.userId, completedTask);
                 const statusLabel = taskStatus === 'completed'

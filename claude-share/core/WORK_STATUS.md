@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-16 (Phase 5.3+5.4 complete — Acontext Sandbox + Disk tools, 25 tools total)
+**Last Updated:** 2026-03-16 (Phase 5.6 orchestra polish complete — duration tracking + parser expansion + stale cleanup on run)
 
 ---
 
@@ -48,6 +48,7 @@
 | 5.3 | Acontext Sandbox for code execution (run_code tool) | Codex+Claude | ✅ Complete | PRs 323→compromise |
 | 5.4 | Acontext Disk file management (4 saved file tools) | Codex+Claude | ✅ Complete | PRs 328-330, 332-334→compromise |
 | 5.5 | Web search tool (Brave Search API) | Codex | ✅ Complete | `work` |
+| 5.6 | Orchestra mode polish | Codex (GPT-5.2-Codex) | ✅ Complete | `work` |
 | DM.1 | Dream Machine Build stage (DO, queue, callbacks, safety) | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.2 | Dream-build bearer token auth | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |
 | DM.3 | Route fix — /dream-build bypasses CF Access | Claude Opus 4.6 | ✅ Complete | `claude/code-mode-mcp-integration-yDHLz` |

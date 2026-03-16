@@ -3,51 +3,33 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-16 (Phase 5.3+5.4 complete, 5.6 scoped for Codex)
+**Last Updated:** 2026-03-16 (Phase 5.6 complete by Codex)
 
 ---
 
-## Current Task: 5.6 — Orchestra Mode Polish (Codex)
+## Current Task: F.2 — Browser tool enhancement (CDP)
 
 ### Status
+Phase 5.6 is complete. Next priority is F.2 from the remaining roadmap queue.
 
-Most original 5.6 items are already implemented. Three focused fixes remain.
+### Scope
+Enhance browser tooling (CDP-backed) to support:
+1. Accessibility tree extraction
+2. Click/fill/scroll primitives
+3. Better deterministic action sequencing for tool calls
 
-### Already Done (do NOT redo)
+### Constraints
+- Reuse existing `BROWSER` binding and current browser patterns.
+- Keep changes backward compatible with existing browse tool behavior.
+- Add targeted tests for new behavior and failure handling.
 
-- ✅ REDO mode type — `mode: 'init' | 'run' | 'redo'` exists, stored correctly, tests exist
-- ✅ Roadmap parsing — handles `###`, `## Phase/Step/Sprint`, numbered lists, indented checkboxes, flat checklists (6 tests)
-- ✅ Stale task cleanup — `cleanupStaleTasks()` exists, called from `/orch history` (5 tests)
-- ✅ History UX — shows model, duration, PR link, REDO tag, summary
+### Validation
+```bash
+npm test
+npm run typecheck
+```
 
-### Remaining Fixes (Codex prompt ready)
-
-**Prompt file:** `claude-share/core/codex-prompts/codex-prompt-5.6-orchestra-polish.md`
-
-1. **Populate `durationMs`** — Field exists in type + rendering but never stored in `task-processor.ts`
-2. **Extend `parseRoadmapPhases`** — Add `## Header` (no prefix) and `# Phase N:` matching
-3. **Wire `cleanupStaleTasks` into `/orch run`** — Currently only on `/orch history`
-
-### Future (not for this Codex run)
-
-- Progress reporting — wire into 7B.5 streaming feedback
-- INIT quality — structured output for roadmap generation
-- Integration-level tests across handler → orchestra → task-processor
-
----
-
-## Completed Codex Tasks
-
-| Phase | Task | Status |
-|-------|------|--------|
-| 5.3 | Acontext Sandbox for code execution (`run_code` tool) | ✅ Merged 2026-03-16 |
-| 5.4 | Acontext Disk for file management (4 saved file tools) | ✅ Merged 2026-03-16 |
-
----
-
-## Remaining Roadmap (Not Started)
-
-> For the next session after 5.6 is done. Copy this table forward.
+### Remaining Roadmap (Not Started)
 
 | ID | Task | Effort | Notes |
 |----|------|--------|-------|
@@ -66,11 +48,6 @@ Most original 5.6 items are already implemented. Three focused fixes remain.
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-16 | Phase 5.6 — Orchestra polish (durationMs, parser, stale cleanup on run) | Codex | Complete |
 | 2026-03-16 | Phase 5.4 — Acontext Disk file management (4 tools + hardening) | Codex+Claude | PRs 328-330, 332-334 → compromise |
 | 2026-03-16 | Phase 5.3 — Acontext Sandbox `run_code` tool | Codex+Claude | PR 323 → compromise |
-| 2026-03-14 | Orchestra gating fix — gate auto-synced models without orchestraReady flag | Claude Opus 4.6 | Commit d28fcb1 |
-| 2026-03-10 | Orchestra diffs PR merged | Claude Opus 4.6 | Commit a888455 |
-| 2026-03-08 | Post-execution extraction verifier for orchestra | Claude Opus 4.6 | Commit 675ef49 |
-| 2026-02-23 | 5.1: Multi-Agent Review (1458 tests) | Claude Opus 4.6 | Phase 5.1 complete |
-| 2026-02-23 | Phase 7 ALL 10 tasks complete (1411 tests) | Claude Opus 4.6 | Phase 7 complete |
-| 2026-03-01 | Phase 8 Operational Hardening (1526 tests) | Claude Opus 4.6 | 38 tasks |

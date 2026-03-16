@@ -107,3 +107,38 @@ Implement Phase 1 first: add centralized task router policy and resume model esc
 
 ---
 
+
+
+## Session: 2026-03-16 | Phase 5.6 Orchestra polish (Session: codex-5-6-orchestra-polish-001)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Implemented the remaining Phase 5.6 orchestra polish items: duration tracking persistence, broader roadmap header parsing, and stale-task cleanup on /orch run.
+
+### Changes Made
+- Added `durationMs` persistence for both failed and completed orchestra task history payloads in the task processor
+- Extended roadmap parser header support to include `## Header` and `# Phase/Step/Sprint N:` forms while avoiding common section headers (`## Phases`, `## Notes`)
+- Added stale-task cleanup invocation at the start of orchestra execution flow (`executeOrchestra`)
+- Added focused tests for parser coverage, cleanup integration, and duration tracking coverage
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/durable-objects/task-processor.test.ts`
+- `src/orchestra/orchestra.ts`
+- `src/orchestra/orchestra.test.ts`
+- `src/telegram/handler.ts`
+- `src/telegram/handler.orchestra.test.ts`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Phase 5.6 polish is complete. Continue with the next roadmap item from `next_prompt.md` (currently F.2 browser tool enhancement).

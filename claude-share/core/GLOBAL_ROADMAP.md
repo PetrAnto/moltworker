@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-01 (Merged with MOLTWORKER_ROADMAP-claude_review.md — milestone gates, future phases, cross-repo deps, metrics — 1526 tests)
+**Last Updated:** 2026-03-16 (Phase 5.6 orchestra polish complete — duration tracking + parser expansion + stale cleanup on run, 1782 tests)
 
 ---
 
@@ -190,7 +190,7 @@
 | 5.3 | Acontext Sandbox for code execution | ✅ | Codex+Claude | `run_code` tool + Acontext sandbox client, timeout clamping [5s,120s], 27 tests |
 | 5.4 | Acontext Disk for file management | ✅ | Codex+Claude | `save_file`, `read_saved_file`, `list_saved_files`, `delete_saved_file` tools, 1MB limit, 100 files/session, sanitized filenames, 22 tests |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
-| 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
+| 5.6 | Multi-agent orchestration | ✅ | Codex | Orchestra polish complete: stores durationMs, broader roadmap headers, stale cleanup on /orch run |
 
 > 🧑 HUMAN CHECK 5.7: Evaluate MCP server hosting options (Sandbox vs. external) — ⏳ PENDING
 > 🧑 HUMAN CHECK 5.8: Security review of code execution sandbox — ⏳ PENDING
@@ -477,6 +477,8 @@
 ---
 
 ## Changelog
+
+2026-03-16 | Codex (GPT-5.2-Codex) | fix(orchestra): complete Phase 5.6 polish — persist task durationMs (completed+failed), extend roadmap header parsing (`## Header`, `# Phase/Step`), and cleanup stale tasks at orchestra run start | src/durable-objects/task-processor.ts, src/orchestra/orchestra.ts, src/telegram/handler.ts, src/orchestra/orchestra.test.ts, src/durable-objects/task-processor.test.ts, src/telegram/handler.orchestra.test.ts
 
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 

@@ -1538,6 +1538,47 @@ describe('parseRoadmapPhases robustness', () => {
     expect(phases[1].tasks).toHaveLength(2);
   });
 
+
+  it('parses ## headers without Phase/Step/Sprint prefix', () => {
+    const content = `## Custom Header
+- [ ] Implement parser
+
+## Another Header
+- [x] Add tests`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(2);
+    expect(phases[0].name).toBe('Custom Header');
+    expect(phases[0].tasks[0].title).toBe('Implement parser');
+    expect(phases[1].name).toBe('Another Header');
+  });
+
+  it('parses single-# Phase/Step headers with numeric prefix', () => {
+    const content = `# Phase 1: Setup
+- [ ] Bootstrap project
+
+# Step 2 — Build
+- [x] Ship core feature`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(2);
+    expect(phases[0].name).toBe('Setup');
+    expect(phases[0].tasks[0].title).toBe('Bootstrap project');
+    expect(phases[1].name).toBe('Build');
+    expect(phases[1].tasks[0].done).toBe(true);
+  });
+
+  it('handles mixed #/##/### headers in one roadmap', () => {
+    const content = `# Phase 1: Foundation
+- [ ] Init
+
+## Feature Slice
+- [x] Add endpoint
+
+### Phase 3: Polish
+- [ ] Add tests`;
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(3);
+    expect(phases.map(p => p.name)).toEqual(['Foundation', 'Feature Slice', 'Polish']);
+  });
   it('parses plain numbered tasks inside a phase', () => {
     const content = `### Phase 1: MVP
 1. Build the login page

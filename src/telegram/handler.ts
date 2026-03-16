@@ -1917,6 +1917,10 @@ export class TelegramHandler {
       return;
     }
 
+    if (this.r2Bucket) {
+      await cleanupStaleTasks(this.r2Bucket, userId);
+    }
+
     const modelAlias = await this.storage.getUserModel(userId);
     const modelInfo = getModel(modelAlias);
 
