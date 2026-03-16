@@ -13,6 +13,7 @@ import { injectCacheControl } from '../openrouter/prompt-cache';
 import { buildAnthropicRequest, buildAnthropicHeaders, parseAnthropicSSEStream } from '../openrouter/anthropic-direct';
 import { markdownToTelegramHtml } from '../utils/telegram-format';
 import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSummary, type SessionSummary } from '../openrouter/learnings';
+import { loadUserMemory, storeMemoryFact, buildExtractionPrompt, parseExtractionResponse, MIN_EXTRACTION_LENGTH, EXTRACTION_DEBOUNCE_MS } from '../openrouter/memory';
 import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extractor';
 import { UserStorage } from '../openrouter/storage';
 import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
@@ -3892,6 +3893,48 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             };
             await storeSessionSummary(this.r2, task.userId, sessionSummary);
             console.log(`[TaskProcessor] Learning + session stored: ${learning.category}, ${learning.uniqueTools.length} unique tools`);
+
+            // Extract memory facts from conversation (F.8 — non-blocking)
+            if (userMessage.length >= MIN_EXTRACTION_LENGTH && learning.category !== 'simple_chat') {
+              try {
+                const existingMemory = await loadUserMemory(this.r2, task.userId);
+                const existingFacts = existingMemory?.facts || [];
+                // Debounce: skip if last extraction was recent
+                const lastExtraction = existingMemory?.updatedAt || 0;
+                if (Date.now() - lastExtraction > EXTRACTION_DEBOUNCE_MS) {
+                  const extractionPrompt = buildExtractionPrompt(userMessage, resultSummary, existingFacts);
+                  // Use flash model via OpenRouter for cheap/fast extraction
+                  const extractionResp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${request.openrouterKey}`,
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                      model: 'google/gemini-3-flash-preview',
+                      messages: [{ role: 'user', content: extractionPrompt }],
+                      max_tokens: 512,
+                      temperature: 0.3,
+                    }),
+                  });
+                  if (extractionResp.ok) {
+                    const extractionData = await extractionResp.json() as { choices: Array<{ message: { content: string } }> };
+                    const extractedText = extractionData.choices?.[0]?.message?.content || '';
+                    const facts = parseExtractionResponse(extractedText);
+                    let storedCount = 0;
+                    for (const { fact, category } of facts) {
+                      const res = await storeMemoryFact(this.r2, task.userId, fact, category);
+                      if (res.stored) storedCount++;
+                    }
+                    if (storedCount > 0) {
+                      console.log(`[TaskProcessor] Memory: stored ${storedCount} new fact(s) for user ${task.userId}`);
+                    }
+                  }
+                }
+              } catch (memErr) {
+                console.error('[TaskProcessor] Memory extraction failed (non-fatal):', memErr);
+              }
+            }
           } catch (learnErr) {
             console.error('[TaskProcessor] Failed to store learning:', learnErr);
           }
