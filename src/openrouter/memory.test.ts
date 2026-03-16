@@ -267,27 +267,47 @@ describe('memory module', () => {
 
   // ── buildExtractionPrompt ──
 
-  it('buildExtractionPrompt includes user message and existing facts', () => {
+  it('buildExtractionPrompt uses XML delimiters and anti-injection rules', () => {
     const existing: MemoryFact[] = [{
       id: '1', fact: 'Uses Python', category: 'technical',
       source: 'extracted', confidence: 0.7, createdAt: 0, lastReferencedAt: 0,
     }];
     const prompt = buildExtractionPrompt('I work at Acme Corp as a senior dev', 'Great, noted!', existing);
+    expect(prompt).toContain('<user_message>');
+    expect(prompt).toContain('</user_message>');
+    expect(prompt).toContain('<assistant_response>');
+    expect(prompt).toContain('<existing_facts>');
     expect(prompt).toContain('I work at Acme Corp');
     expect(prompt).toContain('Uses Python');
-    expect(prompt).toContain('do NOT duplicate');
-    expect(prompt).toContain('JSON array');
+    expect(prompt).toContain('EXPLICITLY stated');
+    expect(prompt).toContain('Never infer, guess, or invent');
+    expect(prompt).toContain('"confidence"');
   });
 
   // ── parseExtractionResponse ──
 
-  it('parseExtractionResponse parses valid JSON array', () => {
-    const response = '[{"fact": "Uses React", "category": "technical"}, {"fact": "Prefers dark mode", "category": "preference"}]';
+  it('parseExtractionResponse parses valid JSON array with confidence', () => {
+    const response = '[{"fact": "Uses React", "category": "technical", "confidence": 0.85}, {"fact": "Prefers dark mode", "category": "preference", "confidence": 0.9}]';
     const facts = parseExtractionResponse(response);
     expect(facts).toHaveLength(2);
     expect(facts[0].fact).toBe('Uses React');
     expect(facts[0].category).toBe('technical');
-    expect(facts[1].fact).toBe('Prefers dark mode');
+    expect(facts[0].confidence).toBe(0.85);
+    expect(facts[1].confidence).toBe(0.9);
+  });
+
+  it('parseExtractionResponse defaults confidence to 0.7 when missing', () => {
+    const response = '[{"fact": "Uses React", "category": "technical"}]';
+    const facts = parseExtractionResponse(response);
+    expect(facts).toHaveLength(1);
+    expect(facts[0].confidence).toBe(0.7);
+  });
+
+  it('parseExtractionResponse filters low-confidence facts (<0.65)', () => {
+    const response = '[{"fact": "Maybe uses Java", "category": "technical", "confidence": 0.3}, {"fact": "Definitely uses Python", "category": "technical", "confidence": 0.9}]';
+    const facts = parseExtractionResponse(response);
+    expect(facts).toHaveLength(1);
+    expect(facts[0].fact).toBe('Definitely uses Python');
   });
 
   it('parseExtractionResponse returns empty for empty array', () => {
@@ -295,14 +315,14 @@ describe('memory module', () => {
   });
 
   it('parseExtractionResponse handles markdown-wrapped JSON', () => {
-    const response = 'Here are the facts:\n```json\n[{"fact": "Uses VS Code", "category": "technical"}]\n```';
+    const response = 'Here are the facts:\n```json\n[{"fact": "Uses VS Code", "category": "technical", "confidence": 0.8}]\n```';
     const facts = parseExtractionResponse(response);
     expect(facts).toHaveLength(1);
     expect(facts[0].fact).toBe('Uses VS Code');
   });
 
   it('parseExtractionResponse filters invalid categories', () => {
-    const response = '[{"fact": "Valid", "category": "technical"}, {"fact": "Bad", "category": "invalid"}]';
+    const response = '[{"fact": "Valid", "category": "technical", "confidence": 0.8}, {"fact": "Bad", "category": "invalid", "confidence": 0.9}]';
     const facts = parseExtractionResponse(response);
     expect(facts).toHaveLength(1);
     expect(facts[0].fact).toBe('Valid');
@@ -315,8 +335,14 @@ describe('memory module', () => {
 
   it('parseExtractionResponse truncates long facts', () => {
     const longFact = 'x'.repeat(300);
-    const response = `[{"fact": "${longFact}", "category": "context"}]`;
+    const response = `[{"fact": "${longFact}", "category": "context", "confidence": 0.8}]`;
     const facts = parseExtractionResponse(response);
     expect(facts[0].fact.length).toBe(200);
+  });
+
+  it('parseExtractionResponse clamps confidence to 0-1 range', () => {
+    const response = '[{"fact": "Test", "category": "technical", "confidence": 1.5}]';
+    const facts = parseExtractionResponse(response);
+    expect(facts[0].confidence).toBe(1.0);
   });
 });
