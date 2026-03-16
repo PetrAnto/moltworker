@@ -1619,3 +1619,15 @@ Created comprehensive tool-calling landscape analysis and multi-AI orchestration
 - Start with Phase 0 quick wins (tasks 0.1-0.3 in GLOBAL_ROADMAP.md)
 - See `next_prompt.md` for ready-to-copy task prompt
 - Model IDs for GPT-OSS-120B and GLM 4.7 need verification on OpenRouter
+
+
+## Session: 2026-03-16 | Phase 5.4 disk follow-up hardening (Codex)
+
+### Summary
+- Finalized Phase 5.4 disk file-management hardening in tool execution: control-character sanitization, explicit null-byte rejection, and consistent use of sanitized file names for save/read/list/delete operations.
+- Updated disk tests to match null-byte behavior and verify sanitized save-path behavior.
+
+### Validation
+- `npm test -- src/acontext/disk.test.ts`
+- `npm test -- --reporter=verbose 2>&1 | tail -20`
+- `npm run typecheck`

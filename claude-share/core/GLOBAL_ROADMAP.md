@@ -188,7 +188,7 @@
 | 5.1 | Multi-agent review for complex tasks | ✅ | Claude | Cross-family reviewer (Sonnet/Grok/Gemini), approve/revise, 47 tests |
 | 5.2 | MCP integration (Cloudflare Code Mode) | ✅ | Claude | Generic MCP HTTP client + `cloudflare_api` tool (2500+ CF endpoints), 38 tests |
 | 5.3 | Acontext Sandbox for code execution | 🔲 | Codex | Replaces roadmap Priority 3.2 |
-| 5.4 | Acontext Disk for file management | 🔲 | Codex | Replaces roadmap Priority 3.3 |
+| 5.4 | Acontext Disk for file management | ✅ | Codex | Replaces roadmap Priority 3.3 (implemented) |
 | 5.5 | Web search tool | ✅ | Codex | Brave Search API tool with TTL cache + Telegram/DO key plumbing |
 | 5.6 | Multi-agent orchestration | 🔲 | Claude | Orchestra INIT/RUN/REDO modes implemented, needs polish |
 
@@ -744,3 +744,5 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | **README.md** | project root | User-facing documentation |
 | **AGENTS.md** | project root | Developer/AI agent instructions |
 | **CLAUDE.md** | project root | Claude Code project instructions |
+
+2026-03-16 | Codex (Session: codex-phase-5-4-disk-002) | fix(tools): harden save/read/list/delete saved-file path sanitization, null-byte handling, and disk security tests | src/openrouter/tools.ts, src/acontext/disk.test.ts
