@@ -4,6 +4,31 @@
 
 ---
 
+## Session: 2026-03-16 | F.5 Observability Dashboard Enhancement (Codex)
+
+**AI:** Codex (GPT-5.2-Codex)
+**Branch:** `work`
+**Status:** Completed
+
+### Summary
+Implemented admin analytics endpoints with 60-second caching and added a new analytics dashboard page in the admin UI.
+
+### Changes Made
+- Added `GET /api/admin/analytics/overview` and `GET /api/admin/analytics/orchestra`
+- Aggregated learnings + orchestra history from R2 (`MOLTBOT_BUCKET`)
+- Added in-memory 60-second caches for analytics responses
+- Added analytics client types/functions in `src/client/api.ts`
+- Added new `AnalyticsPage` with summary cards, bar charts, recent tasks table, and orchestra timeline
+- Added header navigation tabs between Admin and Analytics views
+- Added API route tests for both analytics endpoints
+
+### Validation
+- `npm run build`
+- `npm test`
+- `npm run typecheck`
+
+---
+
 ## Session: 2026-03-16 | F.2 Browser Tool Enhancement (Session: session_01KxpZF4pir5V2D91zPwnBHo)
 
 **AI:** Claude Opus 4.6

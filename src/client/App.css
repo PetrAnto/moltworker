@@ -43,4 +43,39 @@
   .app-main {
     padding: 1rem;
   }
+
+  .app-header {
+    flex-wrap: wrap;
+  }
+
+  .app-nav {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+
+.app-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.app-nav a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.9rem;
+}
+
+.app-nav a:hover {
+  color: var(--text-primary);
+}
+
+.app-nav a.active {
+  color: var(--text-primary);
+  border-color: var(--primary-color);
+  background: rgba(233, 69, 96, 0.15);
 }
