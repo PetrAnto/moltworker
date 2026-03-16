@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-16 (F.8 Long-term Memory — ready for Claude Code)
+**Last Updated:** 2026-03-16 (F.8 COMPLETE — long-term memory with fact extraction, injection, /memory command)
 
 ---
 

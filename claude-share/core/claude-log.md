@@ -4,6 +4,39 @@
 
 ---
 
+## Session: 2026-03-16 | F.8 Long-term Memory (Session: session_01KxpZF4pir5V2D91zPwnBHo)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QW3Qh`
+**Status:** Completed
+
+### Summary
+Added long-term user memory as a 4th context layer alongside learnings, last-task, and sessions. Facts about users (preferences, projects, tech stack) are automatically extracted from conversations and persisted across sessions.
+
+### Changes Made
+- New `src/openrouter/memory.ts` (320 lines): MemoryFact/UserMemory types, CRUD functions, deduplication (substring + word overlap), ring buffer (100 max, evict lowest confidence), extraction prompt builder, response parser
+- task-processor.ts: fact extraction via flash model after complex task success, debounced 5 min
+- handler.ts: `getMemoryHint()` injected into both orchestra and normal chat system prompts (before learnings), `/memory` command with show/add/remove/clear subcommands
+- Updated help text with memory commands
+
+### Files Modified
+- `src/openrouter/memory.ts` (NEW)
+- `src/openrouter/memory.test.ts` (NEW)
+- `src/durable-objects/task-processor.ts`
+- `src/telegram/handler.ts`
+
+### Tests
+- [x] 26 new memory tests pass
+- [x] All 1826 tests pass
+- [x] Typecheck clean
+
+### Notes for Next Session
+- Memory extraction only runs on success path (not failure) — failure conversations rarely contain reliable user facts
+- The flash model (`google/gemini-3-flash-preview`) is used for extraction — cheap and fast
+- Consider adding memory to the admin dashboard UI in a future task
+
+---
+
 ## Session: 2026-03-16 | F.2 Browser Tool Enhancement (Session: session_01KxpZF4pir5V2D91zPwnBHo)
 
 **AI:** Claude Opus 4.6
