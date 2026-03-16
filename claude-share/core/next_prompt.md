@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-16 (Phase 5 COMPLETE, F.2 ready for Claude, F.5 ready for Codex)
+**Last Updated:** 2026-03-16 (F.2 COMPLETE, F.5 ready for Codex)
 
 ---
 
