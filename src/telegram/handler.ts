@@ -8,6 +8,7 @@ import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from
 import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
 import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, formatLearningSummary, loadLastTaskSummary, formatLastTaskForPrompt, loadSessionHistory, getRelevantSessions, formatSessionsForPrompt } from '../openrouter/learnings';
+import { getMemoryContext, loadUserMemory, addManualFact, deleteMemoryFact, clearUserMemory, formatMemoryDisplay } from '../openrouter/memory';
 import { createAcontextClient, formatSessionsList } from '../acontext/client';
 import {
   buildInitPrompt,
@@ -705,6 +706,18 @@ export class TelegramHandler {
   }
 
   /**
+   * Get persistent user memory context for system prompt injection (F.8).
+   * Returns empty string if no memories found or on error.
+   */
+  private async getMemoryHint(userId: string): Promise<string> {
+    try {
+      return await getMemoryContext(this.r2Bucket, userId);
+    } catch {
+      return ''; // Non-fatal: skip on error
+    }
+  }
+
+  /**
    * Handle an incoming update
    */
   async handleUpdate(update: TelegramUpdate): Promise<void> {
@@ -933,6 +946,56 @@ export class TelegramHandler {
           console.error('[Telegram] Failed to list Acontext sessions:', err);
           await this.bot.sendMessage(chatId, '⚠️ Failed to fetch sessions. Try again later.');
         }
+        break;
+      }
+
+      case '/memory': {
+        // Long-term user memory management (F.8)
+        const memoryArgs = text.slice('/memory'.length).trim();
+
+        if (memoryArgs.startsWith('add ')) {
+          const factText = memoryArgs.slice('add '.length).trim();
+          if (!factText) {
+            await this.bot.sendMessage(chatId, '⚠️ Usage: /memory add <fact>\nExample: /memory add I prefer Python for APIs');
+            break;
+          }
+          const addResult = await addManualFact(this.r2Bucket, userId, factText);
+          if (addResult.stored) {
+            await this.bot.sendMessage(chatId, `🧠 Remembered: "${factText}"`);
+          } else {
+            await this.bot.sendMessage(chatId, `⚠️ Not stored: ${addResult.reason}`);
+          }
+          break;
+        }
+
+        if (memoryArgs.startsWith('remove ')) {
+          const factId = memoryArgs.slice('remove '.length).trim();
+          if (!factId) {
+            await this.bot.sendMessage(chatId, '⚠️ Usage: /memory remove <id>');
+            break;
+          }
+          const removed = await deleteMemoryFact(this.r2Bucket, userId, factId);
+          if (removed) {
+            await this.bot.sendMessage(chatId, `🧠 Fact ${factId} removed.`);
+          } else {
+            await this.bot.sendMessage(chatId, `⚠️ Fact not found: ${factId}`);
+          }
+          break;
+        }
+
+        if (memoryArgs === 'clear') {
+          await clearUserMemory(this.r2Bucket, userId);
+          await this.bot.sendMessage(chatId, '🧠 All memories cleared.');
+          break;
+        }
+
+        // Default: show all memories
+        const userMemory = await loadUserMemory(this.r2Bucket, userId);
+        if (!userMemory || userMemory.facts.length === 0) {
+          await this.bot.sendMessage(chatId, '🧠 No memories stored yet. I\'ll learn about you as we chat, or use /memory add <fact> to add manually.');
+          break;
+        }
+        await this.bot.sendMessage(chatId, formatMemoryDisplay(userMemory));
         break;
       }
 
@@ -2045,12 +2108,14 @@ export class TelegramHandler {
       });
     }
 
-    // Inject learnings and last task context — skip for INIT mode (no prior context needed, reduces token bloat)
+    // Inject learnings, memory, and last task context — skip for INIT mode (no prior context needed, reduces token bloat)
+    let memoryHint = '';
     let learningsHint = '';
     let lastTaskHint = '';
     let sessionContext = '';
     if (mode !== 'init') {
       const contextPrompt = resolvedTask || prompt || 'Execute next roadmap task';
+      memoryHint = await this.getMemoryHint(userId);
       learningsHint = await this.getLearningsHint(userId, contextPrompt);
       lastTaskHint = await this.getLastTaskHint(userId);
       sessionContext = await this.getSessionContext(userId, contextPrompt);
@@ -2071,7 +2136,7 @@ export class TelegramHandler {
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: orchestraSystemPrompt + toolHint + learningsHint + lastTaskHint + sessionContext,
+        content: orchestraSystemPrompt + toolHint + memoryHint + learningsHint + lastTaskHint + sessionContext,
       },
       { role: 'user', content: userMessage },
     ];
@@ -2652,11 +2717,13 @@ export class TelegramHandler {
     }
 
     // Gate expensive R2 loads based on task complexity (Phase 7A.2)
-    // Simple queries skip learnings, last-task summary, and session history
+    // Simple queries skip learnings, memory, last-task summary, and session history
+    let memoryHint = '';
     let learningsHint = '';
     let lastTaskHint = '';
     let sessionContext = '';
     if (complexity === 'complex') {
+      memoryHint = await this.getMemoryHint(userId);
       learningsHint = await this.getLearningsHint(userId, messageText);
       lastTaskHint = await this.getLastTaskHint(userId);
       sessionContext = await this.getSessionContext(userId, messageText);
@@ -2671,7 +2738,7 @@ export class TelegramHandler {
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: systemPrompt + toolHint + learningsHint + lastTaskHint + sessionContext + conversationBoundary,
+        content: systemPrompt + toolHint + memoryHint + learningsHint + lastTaskHint + sessionContext + conversationBoundary,
       },
       ...history.map(msg => ({
         role: msg.role as 'user' | 'assistant',
@@ -5055,9 +5122,13 @@ Quick switch: /deep /grok /sonnet /flash /opus etc.
 ━━━ Daily Briefing ━━━
 /briefing — Weather + HN + Reddit + arXiv digest
 
-━━━ Task History ━━━
+━━━ Task History & Memory ━━━
 /learnings — View task patterns, success rates, top tools
 /sessions — Recent context sessions (replay & analysis)
+/memory — View remembered facts about you
+/memory add <fact> — Manually add a fact
+/memory remove <id> — Remove a specific fact
+/memory clear — Clear all memories
 
 ━━━ Image Generation ━━━
 /img <prompt> — Generate (default: FLUX.2 Pro)

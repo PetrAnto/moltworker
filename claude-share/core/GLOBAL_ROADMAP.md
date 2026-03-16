@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-16 (F.2 + F.5 complete — browser CDP + analytics dashboard, 1800 tests)
+**Last Updated:** 2026-03-16 (F.8 Long-term Memory COMPLETE — fact extraction + injection, 1826 tests)
 
 ---
 
@@ -399,6 +399,7 @@
 | F.3 | Code execution sandbox (Acontext or Piston) | 🔲 | 8-12h | Maps to Phase 5.3 |
 | F.4 | File management tools (R2 or Acontext Disk) | 🔲 | 4-6h | Maps to Phase 5.4 |
 | F.5 | Observability dashboard enhancement | ✅ | 4-6h | Analytics API + metrics UI: summary cards, bar charts, tasks table, orchestra timeline, 2 tests |
+| F.8 | Long-term user memory (fact extraction + injection) | ✅ | 4-6h | 4th context layer: 100 facts/user, flash extraction, dedup, /memory cmd, 26 tests |
 
 ### Future: Platform Evolution (M3 Gate)
 
@@ -481,6 +482,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-16 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(memory): F.8 long-term user memory — fact extraction via flash, CRUD storage, dedup, system prompt injection, /memory command, 26 tests | src/openrouter/memory.ts, src/openrouter/memory.test.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts
 2026-03-16 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(browse_url): F.2 browser tool enhancement — 4 new actions (accessibility_tree, click, fill, scroll) + session persistence via browserSessionId in ToolContext, 14 new tests | src/openrouter/tools.ts, src/openrouter/tools.test.ts
 2026-03-01 | Claude Opus 4.6 (Session: session_019DBbA1BWV4dbdZZrrDzrK5) | fix(syncall): sanitize hyphenated aliases + improve display — sanitizeAlias() strips non-alphanumeric from R2 aliasMap (self-heals), HTML parseMode, compact 1-line layout, model name in buttons, escapeHtml export | src/openrouter/model-sync/alias.ts, src/openrouter/model-sync/alias.test.ts, src/telegram/handler.ts, src/utils/telegram-format.ts
 2026-03-01 | PetrAnto | fix(security,task-processor): strip secrets from DO /status API — defense-in-depth (destructure at DO + allowlist at simulate), defer premature orchestra review (≥3 iterations) | src/durable-objects/task-processor.ts, src/routes/simulate.ts
