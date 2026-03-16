@@ -365,23 +365,27 @@ describe('saved files security', () => {
     expect(result.content).toContain('relative paths only');
   });
 
-  it('blocks null bytes in delete name', async () => {
+  it('blocks null bytes in file names', async () => {
     const result = await executeTool({
       id: '21',
       type: 'function',
       function: { name: 'delete_saved_file', arguments: JSON.stringify({ name: 'bad\u0000name.txt' }) },
     }, { acontextClient: { deleteFile: vi.fn() } as unknown as AcontextClient });
 
-    expect(result.content).toContain('Control characters are not allowed');
+    expect(result.content).toContain('Null bytes are not allowed');
   });
 
-  it('blocks control characters in file names', async () => {
+  it('sanitizes control characters in file names before save', async () => {
+    const listFiles = vi.fn().mockResolvedValue([]);
+    const writeFile = vi.fn().mockResolvedValue({ success: true, bytesWritten: 1 });
+
     const result = await executeTool({
       id: '22',
       type: 'function',
       function: { name: 'save_file', arguments: JSON.stringify({ name: 'bad\x01name.txt', content: 'x' }) },
-    }, { acontextClient: { listFiles: vi.fn(), writeFile: vi.fn() } as unknown as AcontextClient });
+    }, { acontextClient: { listFiles, writeFile } as unknown as AcontextClient });
 
-    expect(result.content).toContain('Control characters are not allowed');
+    expect(result.content).toBe('File saved: badname.txt (1 bytes)');
+    expect(writeFile).toHaveBeenCalledWith({ sessionId: 'default', name: 'badname.txt', content: 'x' });
   });
 });
