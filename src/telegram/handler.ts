@@ -1949,7 +1949,7 @@ export class TelegramHandler {
         const bar = rate >= 75 ? '🟩' : rate >= 50 ? '🟨' : '🟥';
         lines.push(`  ${bar} *${model}*: ${m.completions}/${m.total} ok (${rate}%) — ${m.failures} fail`);
       }
-      lines.push(`\n_Total: ${stats.total} events_`);
+      lines.push(`\n_Total: ${stats.total} events — overall success: ${stats.successRate}%_`);
       await this.bot.sendMessage(chatId, lines.join('\n'), { parseMode: 'Markdown' });
       return;
     }
