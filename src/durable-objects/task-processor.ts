@@ -287,6 +287,10 @@ interface TaskState {
   coveRetried?: boolean;
   // 7A.2: Extraction verification retry flag (only one retry allowed)
   extractionRetried?: boolean;
+  // Post-completion deliverable validation retry (only one retry allowed)
+  deliverableRetried?: boolean;
+  // Whether this is an orchestra task (persisted so alarm handler can use tighter limits)
+  isOrchestraTask?: boolean;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
   // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
@@ -372,6 +376,10 @@ const CHECKPOINT_VERSION = 2;
 // Max auto-resume attempts before requiring manual intervention
 const MAX_AUTO_RESUMES_DEFAULT = 10; // Raised from 5 — complex refactors with slow-streaming models exhaust 5 resumes at 95% completion
 const MAX_AUTO_RESUMES_FREE = 5; // Free tier stays conservative
+// Orchestra-specific caps: tighter than general tasks because orchestra has
+// structured deliverables — if a model can't finish in 6 resumes, it's thrashing.
+const MAX_AUTO_RESUMES_ORCHESTRA = 6;
+const MAX_AUTO_RESUMES_ORCHESTRA_FREE = 3;
 // Elapsed time limits removed — other guards (max tool calls, stall detection,
 // auto-resume limits) are sufficient to prevent runaway tasks.
 // Max consecutive resumes with no new tool calls before declaring stall
@@ -442,9 +450,12 @@ export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & {
   return result;
 }
 
-/** Get the auto-resume limit based on model cost */
-function getAutoResumeLimit(modelAlias: string): number {
+/** Get the auto-resume limit based on model cost and task type */
+function getAutoResumeLimit(modelAlias: string, isOrchestra = false): number {
   const model = getModel(modelAlias);
+  if (isOrchestra) {
+    return model?.isFree ? MAX_AUTO_RESUMES_ORCHESTRA_FREE : MAX_AUTO_RESUMES_ORCHESTRA;
+  }
   return model?.isFree ? MAX_AUTO_RESUMES_FREE : MAX_AUTO_RESUMES_DEFAULT;
 }
 
@@ -1102,7 +1113,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     const resumeCount = task.autoResumeCount ?? 0;
-    const maxResumes = getAutoResumeLimit(task.modelAlias);
+    const maxResumes = getAutoResumeLimit(task.modelAlias, task.isOrchestraTask);
 
     // Check if auto-resume is enabled and under limit.
     // Direct-API models (DeepSeek, Moonshot, DashScope) may not have an OpenRouter key
@@ -1175,6 +1186,32 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
       } else {
         noProgressResumes = 0; // Reset on progress
+      }
+
+      // Orchestra-specific stall: if we've used 3+ resumes but never called
+      // github_create_pr, the model is stuck in a read/discover loop.
+      // Abort early to prevent runaway token burn.
+      if (task.isOrchestraTask && resumeCount >= 3
+          && !task.toolsUsed.includes('github_create_pr')
+          && !wasStreamingWhenEvicted) {
+        const orchStallReason = `Orchestra stall: ${resumeCount} resumes with ${toolCountNow} tools but no PR attempted`;
+        console.log(`[TaskProcessor] ${orchStallReason}`);
+        task.status = 'failed';
+        task.error = `${orchStallReason}. Model stuck in read loop — try a more capable model.`;
+        await this.doState.storage.put('task', taskForStorage(task));
+        try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
+        try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+        await this.updateOrchestraHistoryOnFailure(task, orchStallReason);
+        if (task.telegramToken) {
+          const orchProgress = this.buildProgressSummary(task);
+          await this.sendTelegramMessageWithButtons(
+            task.telegramToken,
+            task.chatId,
+            `🛑 Orchestra stall: ${resumeCount} resumes, ${toolCountNow} tools, but no PR was ever attempted.${orchProgress}\n\n💡 Try: ${this.getStallModelRecs()}\n\nProgress saved.`,
+            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+          );
+        }
+        return;
       }
 
       // Update stall tracking
@@ -2028,6 +2065,39 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           console.log(`[TaskProcessor] Post-restore compression: ${beforeCount} → ${compressed.length} messages, ${resumeTokens} → ${afterTokens} tokens (target: ${resumeTargetBudget})`);
         }
       }
+
+      // STICKY CONTEXT ANCHOR: On orchestra resumes, re-inject pending deliverables
+      // at the bottom of context. Context compression can drop the atomic refactor rules
+      // and administrative instructions from the initial system prompt — this ensures
+      // the model sees its remaining obligations on every single resume.
+      if (task.autoResumeCount && task.autoResumeCount > 0) {
+        const sysMsg = conversationMessages.find(m => m.role === 'system');
+        const sysTxt = typeof sysMsg?.content === 'string' ? sysMsg.content : '';
+        const isOrchResumed = sysTxt.includes('Orchestra RUN') || sysTxt.includes('Orchestra INIT') || sysTxt.includes('Orchestra REDO');
+        if (isOrchResumed) {
+          const hasPr = task.toolsUsed.includes('github_create_pr');
+          const hasRoadmapPatch = conversationMessages.some(m =>
+            m.role === 'tool' && typeof m.content === 'string' && m.content.includes('ROADMAP.md')
+          );
+          const hasWorkLogPatch = conversationMessages.some(m =>
+            m.role === 'tool' && typeof m.content === 'string' && m.content.includes('WORK_LOG.md')
+          );
+
+          const pending: string[] = [];
+          if (!hasPr) pending.push('Create PR via github_create_pr (or workspace_commit + github_create_pr)');
+          if (!hasRoadmapPatch) pending.push('Update ROADMAP.md (mark task as [x] done)');
+          if (!hasWorkLogPatch) pending.push('Update WORK_LOG.md (append new row)');
+          if (!hasPr) pending.push('Output ORCHESTRA_RESULT block with real PR URL');
+
+          if (pending.length > 0) {
+            conversationMessages.push({
+              role: 'user',
+              content: `[SYSTEM: Pending Deliverables — you MUST complete ALL before finishing]\n${pending.map((p, i) => `${i + 1}. ${p}`).join('\n')}\n\nIMPORTANT: If extracting/splitting code, the source file MUST shrink (CREATE + IMPORT + DELETE in one PR). Do NOT output success until all deliverables are verified.`,
+            });
+            console.log(`[TaskProcessor] Sticky context anchor injected: ${pending.length} pending deliverables (resume #${task.autoResumeCount})`);
+          }
+        }
+      }
     }
 
     // Inject source-grounding guardrail for coding/github tasks into the system message.
@@ -2040,6 +2110,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           content: sysContent + SOURCE_GROUNDING_PROMPT,
         };
         console.log('[TaskProcessor] Source-grounding guardrail injected for coding task');
+      }
+    }
+
+    // Detect and persist orchestra flag for alarm handler (tighter resume limits)
+    if (!task.isOrchestraTask && conversationMessages.length > 0) {
+      const sysMsg0 = conversationMessages[0];
+      const sys0 = typeof sysMsg0?.content === 'string' ? sysMsg0.content : '';
+      if (sys0.includes('Orchestra RUN') || sys0.includes('Orchestra INIT') || sys0.includes('Orchestra REDO')) {
+        task.isOrchestraTask = true;
+        await this.doState.storage.put('task', taskForStorage(task));
       }
     }
 
@@ -3703,6 +3783,50 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   console.log(`[TaskProcessor] Extraction verification error (non-fatal): ${verifyErr}`);
                 }
               }
+            }
+          }
+
+          // POST-COMPLETION DELIVERABLE VALIDATION for orchestra tasks.
+          // Before transitioning to review, verify that all required deliverables
+          // (PR created, ROADMAP updated, WORK_LOG updated) are present in tool evidence.
+          // One retry allowed to complete missing steps.
+          if (isOrchestraRun && !task.deliverableRetried) {
+            const hasPrCall = task.toolsUsed.includes('github_create_pr');
+            const toolOutputs = conversationMessages
+              .filter(m => m.role === 'tool')
+              .map(m => typeof m.content === 'string' ? m.content : '');
+            const prSucceeded = toolOutputs.some(o => o.includes('Pull Request created successfully'));
+            const roadmapUpdated = toolOutputs.some(o =>
+              o.includes('ROADMAP.md') || (o.includes('Pull Request created') && o.includes('ROADMAP'))
+            );
+            const workLogUpdated = toolOutputs.some(o =>
+              o.includes('WORK_LOG.md') || (o.includes('Pull Request created') && o.includes('WORK_LOG'))
+            );
+
+            const missing: string[] = [];
+            if (!hasPrCall) missing.push('github_create_pr was never called — no PR exists');
+            else if (!prSucceeded) missing.push('github_create_pr was called but FAILED — check the error and retry');
+            if (!roadmapUpdated) missing.push('ROADMAP.md was not updated (task must be marked as [x] done)');
+            if (!workLogUpdated) missing.push('WORK_LOG.md was not updated (append a new row with your changes)');
+
+            if (missing.length > 0) {
+              task.deliverableRetried = true;
+              await this.doState.storage.put('task', taskForStorage(task));
+              console.log(`[TaskProcessor] Deliverable validation FAILED: ${missing.length} missing — retrying`);
+              for (const m of missing) console.log(`[TaskProcessor]   - ${m}`);
+              conversationMessages.push({
+                role: 'assistant',
+                content: choice.message.content || '',
+              });
+              conversationMessages.push({
+                role: 'user',
+                content: `[DELIVERABLE VALIDATION FAILED — COMPLETE THESE NOW]\n` +
+                  `Your work is NOT done. The following required deliverables are missing:\n\n` +
+                  missing.map((m, i) => `${i + 1}. ${m}`).join('\n') + '\n\n' +
+                  `Fix ALL of these NOW. Include ROADMAP.md and WORK_LOG.md updates in the PR. ` +
+                  `After the PR is created successfully, output the ORCHESTRA_RESULT block with the real PR URL.`,
+              });
+              continue; // One more work iteration to complete missing deliverables
             }
           }
 

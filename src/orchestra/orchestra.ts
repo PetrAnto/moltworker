@@ -894,6 +894,77 @@ export async function cleanupStaleTasks(
   return cleaned;
 }
 
+// ============================================================
+// Historical Model Performance Stats
+// ============================================================
+
+/** Per-model completion stats derived from orchestra history. */
+export interface ModelCompletionStats {
+  alias: string;
+  completed: number;
+  failed: number;
+  total: number;
+  /** Bayesian-smoothed success rate (0-1). Starts at 0.5 with 2 pseudo-observations. */
+  successRate: number;
+}
+
+/**
+ * Compute per-model completion stats from all users' orchestra histories.
+ * Uses a Bayesian prior (Beta(1,1) → start at 50% with 2 pseudo-obs) so that
+ * models with few tasks don't dominate the ranking.
+ */
+export function getModelCompletionStats(
+  histories: OrchestraHistory[]
+): Map<string, ModelCompletionStats> {
+  const raw = new Map<string, { completed: number; failed: number }>();
+
+  for (const history of histories) {
+    for (const task of history.tasks) {
+      if (task.status !== 'completed' && task.status !== 'failed') continue;
+      const entry = raw.get(task.modelAlias) ?? { completed: 0, failed: 0 };
+      if (task.status === 'completed') entry.completed++;
+      else entry.failed++;
+      raw.set(task.modelAlias, entry);
+    }
+  }
+
+  const stats = new Map<string, ModelCompletionStats>();
+  for (const [alias, { completed, failed }] of raw) {
+    const total = completed + failed;
+    // Beta(1,1) prior → (completed + 1) / (total + 2)
+    const successRate = (completed + 1) / (total + 2);
+    stats.set(alias, { alias, completed, failed, total, successRate });
+  }
+  return stats;
+}
+
+/**
+ * Load all orchestra histories from R2 for model stats aggregation.
+ * Scans the orchestra/ prefix and loads all history.json files.
+ * Returns at most 50 histories to bound R2 reads.
+ */
+export async function loadAllOrchestraHistories(
+  r2: R2Bucket
+): Promise<OrchestraHistory[]> {
+  const histories: OrchestraHistory[] = [];
+  try {
+    const listed = await r2.list({ prefix: 'orchestra/', limit: 100 });
+    const historyKeys = listed.objects
+      .filter(o => o.key.endsWith('/history.json'))
+      .slice(0, 50);
+
+    for (const obj of historyKeys) {
+      try {
+        const data = await r2.get(obj.key);
+        if (data) {
+          histories.push(await data.json() as OrchestraHistory);
+        }
+      } catch { /* skip corrupt entries */ }
+    }
+  } catch { /* R2 unavailable — return empty */ }
+  return histories;
+}
+
 /**
  * Format orchestra history for display to the user.
  */
