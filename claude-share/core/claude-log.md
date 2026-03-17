@@ -4,6 +4,38 @@
 
 ---
 
+## Session: 2026-03-17 | F.10 Enable Reasoning for Kimidirect (Session: session_01KxpZF4pir5V2D91zPwnBHo)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QW3Qh`
+**Status:** Completed
+
+### Summary
+Added `reasoning: 'configurable'` to the kimidirect (Kimi K2.5 Direct) model definition. This enables auto-detected reasoning levels to be injected as `{ enabled: true/false }` when calling the Moonshot direct API, matching how DeepSeek and Grok models already work. The existing `ensureMoonshotReasoning` pipeline handles `reasoning_content` placeholders on tool-call messages. This should improve orchestra task success rates for kimidirect by enabling chain-of-thought reasoning for complex multi-step tasks.
+
+### Changes Made
+- `src/openrouter/models.ts`: Added `reasoning: 'configurable'` to kimidirect model definition
+- `src/openrouter/reasoning.test.ts`: Added 2 test cases verifying `getReasoningParam('kimidirect', ...)` returns correct `{ enabled: boolean }` values
+
+### Files Modified
+- `src/openrouter/models.ts`
+- `src/openrouter/reasoning.test.ts`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+
+### Tests
+- [x] All 1831 tests pass (1829 + 2 new)
+- [x] Typecheck clean
+
+### Notes for Next Session
+- After deployment, test with `/simulate/chat` using `kimidirect` model to verify Moonshot API accepts the reasoning parameter
+- Monitor orchestra tasks with kimidirect for improved completion rates
+- Next priorities: observability for orchestra events, or F.1/F.6/F.7
+
+---
+
 ## Session: 2026-03-17 | F.9 Orchestra Hardening (Session: session_01KxpZF4pir5V2D91zPwnBHo)
 
 **AI:** Claude Opus 4.6
