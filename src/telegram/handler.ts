@@ -18,6 +18,8 @@ import {
   parseOrchestraResult,
   generateTaskSlug,
   loadOrchestraHistory,
+  loadAllOrchestraHistories,
+  getModelCompletionStats,
   storeOrchestraTask,
   cleanupStaleTasks,
   formatOrchestraHistory,
@@ -1759,7 +1761,10 @@ export class TelegramHandler {
         const isHeavyCoding = /refactor|split|migrat|rewrite|architect|complex|multi.?file|test suite/i.test(taskLower);
         const isSimple = /add comment|update readme|rename|typo|config|bump|version/i.test(taskLower);
 
-        const ranked = getRankedOrchestraModels({ isHeavyCoding, isSimple });
+        // Load historical completion rates to factor into model ranking
+        const histories = await loadAllOrchestraHistories(this.r2Bucket);
+        const completionStats = getModelCompletionStats(histories);
+        const ranked = getRankedOrchestraModels({ isHeavyCoding, isSimple, completionStats });
         const lines: string[] = [
           `🔍 **Next task:** ${nextTask.title}`,
           `📁 **Phase:** ${nextTask.phase}`,
