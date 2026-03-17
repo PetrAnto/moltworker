@@ -1,14 +1,18 @@
-# Moltworker — Global Roadmap
+# Moltworker — Global Roadmap (ARCHIVED — Strategic Review)
+
+> **⚠️ SUPERSEDED:** This file is the original strategic roadmap from Feb 28, 2026.
+> **Active source of truth:** `claude-share/core/GLOBAL_ROADMAP.md`
+> All Phase 0-8 items below are **COMPLETE**. See GLOBAL_ROADMAP.md for current status.
 
 > **Repo**: PetrAnto/moltworker (public)
 > **Bot**: @petrantobot on Telegram
 > **Stack**: Cloudflare Workers + Durable Objects + R2 + OpenRouter
-> **Last Updated**: February 28, 2026
+> **Last Updated**: February 28, 2026 (archived March 17, 2026)
 > **Source Specs**: tool-calling-analysis.md, future-integrations.md, dream-machine-moltworker-brief.md, CODE_MODE_MCP_STORIA_SPEC.md, storia-free-apis-catalog.md
 
 ---
 
-## Current State
+## Current State (as of archive date — Feb 28)
 
 Moltworker is a production-grade AI assistant gateway running on Cloudflare Workers. It operates as PetrAnto's personal autonomous agent via Telegram, and is the designated build engine for Storia Digital's Dream Machine pipeline.
 

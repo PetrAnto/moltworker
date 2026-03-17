@@ -4,6 +4,42 @@
 
 ---
 
+## Session: 2026-03-17 | F.9 Orchestra Hardening (Session: session_01KxpZF4pir5V2D91zPwnBHo)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QW3Qh`
+**Status:** Completed
+
+### Summary
+Implemented 5 orchestra improvements based on Gemini + Grok analysis of Kimi K2.5 partial failure pattern (27 tools, 5 resumes, no PR created). Added multi-turn escalating deliverable validation, sticky context anchors on resume, Bayesian historical completion rates for model ranking, tighter orchestra resume limits, and read-loop stall detection. Also fixed API source parity (stream_options for direct APIs) and added provider info to /status command.
+
+### Changes Made
+- **Commit 1:** Post-task deliverable validation with auto-retry, sticky context anchor on resume, historical completion rates in getRankedOrchestraModels (Bayesian-smoothed ±15pts), orchestra resume limits (6 paid/3 free, was 10/5), read-loop stall abort after 3 resumes without PR
+- **Commit 2:** Upgraded validation from boolean to multi-turn (3 levels: reminder→strict uppercase→abort as FAILED_DELIVERABLE), added extraction source-file-shrank check, stream_options parity for direct APIs (Moonshot/DeepSeek/DashScope), /status shows "API: Direct API (moonshot)" vs "API: OpenRouter", fixed auto-resume display (was showing 15x, actual 5x free)
+- **Sync files update:** Updated GLOBAL_ROADMAP.md, WORK_STATUS.md, next_prompt.md, claude-log.md
+
+### Files Modified
+- `src/durable-objects/task-processor.ts`
+- `src/openrouter/models.ts`
+- `src/orchestra/orchestra.ts`
+- `src/telegram/handler.ts`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+
+### Tests
+- [x] All 1829 tests pass
+- [x] Typecheck clean
+
+### Notes for Next Session
+- `getModelCompletionStats()` and `loadAllOrchestraHistories()` are exported but not yet wired into the /orch advise handler in handler.ts — next task
+- kimidirect vs minimax difference is primarily model capability (minimax has `reasoning: 'fixed'`), not a code bug
+- The `ensureMoonshotReasoning` pipeline is correct (runs after compression, before each API call)
+- MOLTWORKER_ROADMAP-claude_review.md is very stale (Feb 28) — still shows Phase 0 as "not started". Consider archiving it since GLOBAL_ROADMAP.md is the active source of truth.
+
+---
+
 ## Session: 2026-03-16 | F.8 Long-term Memory (Session: session_01KxpZF4pir5V2D91zPwnBHo)
 
 **AI:** Claude Opus 4.6
