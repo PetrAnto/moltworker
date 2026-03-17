@@ -287,8 +287,8 @@ interface TaskState {
   coveRetried?: boolean;
   // 7A.2: Extraction verification retry flag (only one retry allowed)
   extractionRetried?: boolean;
-  // Post-completion deliverable validation retry (only one retry allowed)
-  deliverableRetried?: boolean;
+  // Post-completion deliverable validation retry count (escalating: 0→reminder, 1→strict, 2→abort)
+  validationRetryCount?: number;
   // Whether this is an orchestra task (persisted so alarm handler can use tighter limits)
   isOrchestraTask?: boolean;
   // 5.1: Multi-agent review — which model reviewed the work
@@ -2526,6 +2526,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   max_tokens: maxTokens,
                   temperature: getTemperature(task.modelAlias),
                   stream: true,
+                  // Include usage data in stream — parity with OpenRouter path
+                  stream_options: { include_usage: true },
                 };
                 if (useTools) {
                   const phaseTools = getToolsForPhase(task.phase);
@@ -3787,10 +3789,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           }
 
           // POST-COMPLETION DELIVERABLE VALIDATION for orchestra tasks.
-          // Before transitioning to review, verify that all required deliverables
-          // (PR created, ROADMAP updated, WORK_LOG updated) are present in tool evidence.
-          // One retry allowed to complete missing steps.
-          if (isOrchestraRun && !task.deliverableRetried) {
+          // Multi-turn escalating validator: Turn 0 = standard reminder, Turn 1 = strict
+          // enforcement with UPPERCASE emphasis, Turn 2+ = abort as FAILED_DELIVERABLE.
+          // Validation prompts bypass compressContextBudgeted by being injected at the
+          // bottom of the message array (compression preserves recent messages).
+          if (isOrchestraRun) {
+            const retryCount = task.validationRetryCount ?? 0;
             const hasPrCall = task.toolsUsed.includes('github_create_pr');
             const toolOutputs = conversationMessages
               .filter(m => m.role === 'tool')
@@ -3803,30 +3807,59 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               o.includes('WORK_LOG.md') || (o.includes('Pull Request created') && o.includes('WORK_LOG'))
             );
 
+            // For extraction tasks, also check that source file shrank
+            const isExtraction = isExtractionTask(task.toolsUsed);
+            const sourceShrank = !isExtraction || toolOutputs.some(o =>
+              /source.*shrank|line count.*drop|deleted.*from.*source|EXTRACTION.*PASS/i.test(o)
+            );
+
             const missing: string[] = [];
             if (!hasPrCall) missing.push('github_create_pr was never called — no PR exists');
             else if (!prSucceeded) missing.push('github_create_pr was called but FAILED — check the error and retry');
             if (!roadmapUpdated) missing.push('ROADMAP.md was not updated (task must be marked as [x] done)');
             if (!workLogUpdated) missing.push('WORK_LOG.md was not updated (append a new row with your changes)');
+            if (isExtraction && !sourceShrank) missing.push('Source file did NOT shrink — you created the new file but FORGOT to DELETE the extracted code from the original. Use patch action to DELETE now.');
 
             if (missing.length > 0) {
-              task.deliverableRetried = true;
+              // Turn 2+: Abort — model is incapable of completing deliverables
+              if (retryCount >= 2) {
+                console.log(`[TaskProcessor] Deliverable validation ABORT after ${retryCount} retries — marking FAILED_DELIVERABLE`);
+                task.status = 'failed';
+                task.error = `FAILED_DELIVERABLE: ${missing.length} deliverable(s) still missing after ${retryCount} retries: ${missing.join('; ')}`;
+                await this.doState.storage.put('task', taskForStorage(task));
+                // Skip review phase — go straight to task completion as failed
+                break;
+              }
+
+              task.validationRetryCount = retryCount + 1;
               await this.doState.storage.put('task', taskForStorage(task));
-              console.log(`[TaskProcessor] Deliverable validation FAILED: ${missing.length} missing — retrying`);
+              console.log(`[TaskProcessor] Deliverable validation FAILED (attempt ${retryCount + 1}/2): ${missing.length} missing`);
               for (const m of missing) console.log(`[TaskProcessor]   - ${m}`);
+
               conversationMessages.push({
                 role: 'assistant',
                 content: choice.message.content || '',
               });
-              conversationMessages.push({
-                role: 'user',
-                content: `[DELIVERABLE VALIDATION FAILED — COMPLETE THESE NOW]\n` +
+
+              // Escalating prompt: Turn 0 = reminder, Turn 1 = strict/uppercase
+              const prompt = retryCount === 0
+                ? `[DELIVERABLE VALIDATION FAILED — COMPLETE THESE NOW]\n` +
                   `Your work is NOT done. The following required deliverables are missing:\n\n` +
                   missing.map((m, i) => `${i + 1}. ${m}`).join('\n') + '\n\n' +
                   `Fix ALL of these NOW. Include ROADMAP.md and WORK_LOG.md updates in the PR. ` +
-                  `After the PR is created successfully, output the ORCHESTRA_RESULT block with the real PR URL.`,
+                  `After the PR is created successfully, output the ORCHESTRA_RESULT block with the real PR URL.`
+                : `[CRITICAL — FINAL ATTEMPT — TASK WILL BE MARKED FAILED IF YOU DO NOT COMPLY]\n` +
+                  `YOU HAVE FAILED TO COMPLETE REQUIRED DELIVERABLES. THIS IS YOUR LAST CHANCE.\n\n` +
+                  missing.map((m, i) => `${i + 1}. **${m.toUpperCase()}**`).join('\n') + '\n\n' +
+                  `CALL THE TOOLS NOW. Do NOT explain, do NOT plan, do NOT describe — EXECUTE.\n` +
+                  `If github_create_pr failed before, use a DIFFERENT branch name.\n` +
+                  `If ROADMAP.md/WORK_LOG.md are missing from the PR, add them as patch actions.`;
+
+              conversationMessages.push({
+                role: 'user',
+                content: prompt,
               });
-              continue; // One more work iteration to complete missing deliverables
+              continue; // Retry work iteration
             }
           }
 
