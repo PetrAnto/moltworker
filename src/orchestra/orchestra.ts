@@ -1502,3 +1502,111 @@ The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FA
 - **NEVER delete roadmap tasks** — mark them [x] or add notes, but never remove entries. The tool will BLOCK this.
 ${historyContext}`;
 }
+
+// === Orchestra Event Observability ===
+
+/** Lightweight event for R2-persisted orchestra observability. */
+export interface OrchestraEvent {
+  timestamp: number;
+  taskId: string;
+  userId?: string;
+  modelAlias: string;
+  eventType: 'stall_abort' | 'validation_fail' | 'task_abort' | 'task_complete' | 'deliverable_retry';
+  details: Record<string, unknown>;
+}
+
+const MAX_EVENTS_PER_MONTH = 500;
+
+/**
+ * Append an orchestra event to R2 (monthly JSONL bucket).
+ * Non-blocking: catches errors internally, never throws.
+ */
+export async function appendOrchestraEvent(
+  r2: R2Bucket,
+  event: OrchestraEvent,
+): Promise<void> {
+  const date = new Date(event.timestamp);
+  const month = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+  const key = `orchestra-events/${month}.jsonl`;
+
+  try {
+    let lines: string[] = [];
+    const existing = await r2.get(key);
+    if (existing) {
+      const text = await existing.text();
+      lines = text.split('\n').filter(l => l.trim());
+    }
+    lines.push(JSON.stringify(event));
+    if (lines.length > MAX_EVENTS_PER_MONTH) {
+      lines = lines.slice(-MAX_EVENTS_PER_MONTH);
+    }
+    await r2.put(key, lines.join('\n') + '\n');
+  } catch (err) {
+    console.error('[OrchestraEvents] Failed to append event:', err);
+  }
+}
+
+/**
+ * Load recent orchestra events from R2 (last N months).
+ * Returns events sorted newest-first.
+ */
+export async function getRecentOrchestraEvents(
+  r2: R2Bucket,
+  monthsBack: number = 2,
+  modelFilter?: string,
+  limit: number = 100,
+): Promise<OrchestraEvent[]> {
+  const events: OrchestraEvent[] = [];
+  const now = new Date();
+
+  for (let i = 0; i < monthsBack; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    const key = `orchestra-events/${month}.jsonl`;
+
+    try {
+      const obj = await r2.get(key);
+      if (!obj) continue;
+      const text = await obj.text();
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line) as OrchestraEvent;
+          if (modelFilter && ev.modelAlias !== modelFilter) continue;
+          events.push(ev);
+        } catch { /* skip malformed lines */ }
+      }
+    } catch { /* skip missing months */ }
+  }
+
+  events.sort((a, b) => b.timestamp - a.timestamp);
+  return events.slice(0, limit);
+}
+
+/**
+ * Aggregate orchestra event stats for display.
+ */
+export function aggregateOrchestraStats(events: OrchestraEvent[]): {
+  total: number;
+  byType: Record<string, number>;
+  byModel: Record<string, { total: number; completions: number; failures: number }>;
+} {
+  const byType: Record<string, number> = {};
+  const byModel: Record<string, { total: number; completions: number; failures: number }> = {};
+
+  for (const ev of events) {
+    byType[ev.eventType] = (byType[ev.eventType] || 0) + 1;
+
+    if (!byModel[ev.modelAlias]) {
+      byModel[ev.modelAlias] = { total: 0, completions: 0, failures: 0 };
+    }
+    byModel[ev.modelAlias].total++;
+    if (ev.eventType === 'task_complete') {
+      byModel[ev.modelAlias].completions++;
+    } else if (ev.eventType === 'stall_abort' || ev.eventType === 'task_abort') {
+      byModel[ev.modelAlias].failures++;
+    }
+  }
+
+  return { total: events.length, byType, byModel };
+}

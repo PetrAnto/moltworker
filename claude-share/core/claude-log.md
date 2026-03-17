@@ -4,6 +4,43 @@
 
 ---
 
+## Session: 2026-03-17 | F.11 Orchestra Observability (Session: session_01KxpZF4pir5V2D91zPwnBHo)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QW3Qh`
+**Status:** Completed
+
+### Summary
+Added R2-persisted orchestra event observability. Events (stall_abort, validation_fail, task_abort, task_complete, deliverable_retry) are logged to monthly JSONL files in R2 at 6 critical points in task-processor.ts. Added `/orch stats [model]` command to view aggregated per-model success/failure rates. Fire-and-forget writes ensure zero impact on task pipeline latency.
+
+### Changes Made
+- `src/orchestra/orchestra.ts`: OrchestraEvent interface, appendOrchestraEvent (JSONL to R2), getRecentOrchestraEvents (multi-month read + filter), aggregateOrchestraStats (per-type + per-model)
+- `src/durable-objects/task-processor.ts`: emitOrchestraEvent helper, wired at 6 points (generic stall, orchestra stall, max resumes, validation abort, deliverable retry, task completion)
+- `src/telegram/handler.ts`: `/orch stats [model]` command with Markdown formatting, callback button, help text
+- `src/orchestra/orchestra.test.ts`: 9 new tests for append, read, filter, limit, aggregate, error handling
+
+### Files Modified
+- `src/orchestra/orchestra.ts`
+- `src/orchestra/orchestra.test.ts`
+- `src/durable-objects/task-processor.ts`
+- `src/telegram/handler.ts`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+
+### Tests
+- [x] All 1840 tests pass (1831 + 9 new)
+- [x] Typecheck clean
+
+### Notes for Next Session
+- After deployment, trigger an orchestra task and verify events appear in R2 under `orchestra-events/YYYY-MM.jsonl`
+- `/orch stats` should show data after a few runs
+- Future: use events to feed real-time model health scores into `/orch advise` rankings
+- Future: add 30-90 day expiration cleanup for old event files
+
+---
+
 ## Session: 2026-03-17 | F.10 Enable Reasoning for Kimidirect (Session: session_01KxpZF4pir5V2D91zPwnBHo)
 
 **AI:** Claude Opus 4.6

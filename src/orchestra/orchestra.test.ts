@@ -20,11 +20,15 @@ import {
   formatRoadmapStatus,
   findMatchingTasks,
   resetRoadmapTasks,
+  appendOrchestraEvent,
+  getRecentOrchestraEvents,
+  aggregateOrchestraStats,
   LARGE_FILE_THRESHOLD_LINES,
   LARGE_FILE_THRESHOLD_KB,
   LARGE_FILE_WARNING_LINES,
   type OrchestraTask,
   type OrchestraHistory,
+  type OrchestraEvent,
 } from './orchestra';
 
 // --- generateTaskSlug ---
@@ -1743,5 +1747,133 @@ describe('cleanupStaleTasks', () => {
     mockBucket.get.mockRejectedValue(new Error('R2 error'));
     const cleaned = await cleanupStaleTasks(mockBucket as unknown as R2Bucket, 'user1');
     expect(cleaned).toBe(0);
+  });
+});
+
+// --- Orchestra Event Observability ---
+
+describe('appendOrchestraEvent', () => {
+  let mockBucket: { get: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    mockBucket = { get: vi.fn(), put: vi.fn() };
+  });
+
+  const baseEvent: OrchestraEvent = {
+    timestamp: new Date('2026-03-17T12:00:00Z').getTime(),
+    taskId: 'task-1',
+    userId: 'user1',
+    modelAlias: 'kimidirect',
+    eventType: 'stall_abort',
+    details: { resumes: 3, tools: 15 },
+  };
+
+  it('creates new JSONL file when none exists', async () => {
+    mockBucket.get.mockResolvedValue(null);
+    mockBucket.put.mockResolvedValue(undefined);
+
+    await appendOrchestraEvent(mockBucket as unknown as R2Bucket, baseEvent);
+
+    expect(mockBucket.put).toHaveBeenCalledOnce();
+    const [key, body] = mockBucket.put.mock.calls[0];
+    expect(key).toBe('orchestra-events/2026-03.jsonl');
+    const lines = body.trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0])).toEqual(baseEvent);
+  });
+
+  it('appends to existing JSONL file', async () => {
+    const existing = JSON.stringify({ ...baseEvent, taskId: 'task-0' }) + '\n';
+    mockBucket.get.mockResolvedValue({ text: () => Promise.resolve(existing) });
+    mockBucket.put.mockResolvedValue(undefined);
+
+    await appendOrchestraEvent(mockBucket as unknown as R2Bucket, baseEvent);
+
+    const [, body] = mockBucket.put.mock.calls[0];
+    const lines = body.trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[1]).taskId).toBe('task-1');
+  });
+
+  it('does not throw on R2 error', async () => {
+    mockBucket.get.mockRejectedValue(new Error('R2 down'));
+    // Should not throw
+    await appendOrchestraEvent(mockBucket as unknown as R2Bucket, baseEvent);
+    expect(mockBucket.put).not.toHaveBeenCalled();
+  });
+});
+
+describe('getRecentOrchestraEvents', () => {
+  let mockBucket: { get: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    mockBucket = { get: vi.fn() };
+  });
+
+  it('returns empty array when no events exist', async () => {
+    mockBucket.get.mockResolvedValue(null);
+    const events = await getRecentOrchestraEvents(mockBucket as unknown as R2Bucket, 1);
+    expect(events).toEqual([]);
+  });
+
+  it('parses JSONL and returns events sorted newest-first', async () => {
+    const ev1: OrchestraEvent = { timestamp: 1000, taskId: 't1', modelAlias: 'deep', eventType: 'task_complete', details: {} };
+    const ev2: OrchestraEvent = { timestamp: 2000, taskId: 't2', modelAlias: 'flash', eventType: 'stall_abort', details: {} };
+    const jsonl = JSON.stringify(ev1) + '\n' + JSON.stringify(ev2) + '\n';
+    mockBucket.get.mockResolvedValue({ text: () => Promise.resolve(jsonl) });
+
+    const events = await getRecentOrchestraEvents(mockBucket as unknown as R2Bucket, 1);
+    expect(events).toHaveLength(2);
+    expect(events[0].taskId).toBe('t2'); // newest first
+    expect(events[1].taskId).toBe('t1');
+  });
+
+  it('filters by model alias', async () => {
+    const ev1: OrchestraEvent = { timestamp: 1000, taskId: 't1', modelAlias: 'deep', eventType: 'task_complete', details: {} };
+    const ev2: OrchestraEvent = { timestamp: 2000, taskId: 't2', modelAlias: 'flash', eventType: 'stall_abort', details: {} };
+    const jsonl = JSON.stringify(ev1) + '\n' + JSON.stringify(ev2) + '\n';
+    mockBucket.get.mockResolvedValue({ text: () => Promise.resolve(jsonl) });
+
+    const events = await getRecentOrchestraEvents(mockBucket as unknown as R2Bucket, 1, 'deep');
+    expect(events).toHaveLength(1);
+    expect(events[0].modelAlias).toBe('deep');
+  });
+
+  it('respects limit', async () => {
+    const lines = Array.from({ length: 20 }, (_, i) =>
+      JSON.stringify({ timestamp: i, taskId: `t${i}`, modelAlias: 'deep', eventType: 'task_complete', details: {} })
+    ).join('\n') + '\n';
+    mockBucket.get.mockResolvedValue({ text: () => Promise.resolve(lines) });
+
+    const events = await getRecentOrchestraEvents(mockBucket as unknown as R2Bucket, 1, undefined, 5);
+    expect(events).toHaveLength(5);
+  });
+});
+
+describe('aggregateOrchestraStats', () => {
+  it('aggregates events by type and model', () => {
+    const events: OrchestraEvent[] = [
+      { timestamp: 1, taskId: 't1', modelAlias: 'deep', eventType: 'task_complete', details: {} },
+      { timestamp: 2, taskId: 't2', modelAlias: 'deep', eventType: 'stall_abort', details: {} },
+      { timestamp: 3, taskId: 't3', modelAlias: 'flash', eventType: 'task_complete', details: {} },
+      { timestamp: 4, taskId: 't4', modelAlias: 'deep', eventType: 'task_abort', details: {} },
+      { timestamp: 5, taskId: 't5', modelAlias: 'flash', eventType: 'validation_fail', details: {} },
+    ];
+
+    const stats = aggregateOrchestraStats(events);
+    expect(stats.total).toBe(5);
+    expect(stats.byType['task_complete']).toBe(2);
+    expect(stats.byType['stall_abort']).toBe(1);
+    expect(stats.byType['task_abort']).toBe(1);
+    expect(stats.byType['validation_fail']).toBe(1);
+    expect(stats.byModel['deep']).toEqual({ total: 3, completions: 1, failures: 2 });
+    expect(stats.byModel['flash']).toEqual({ total: 2, completions: 1, failures: 0 });
+  });
+
+  it('returns empty aggregation for empty events', () => {
+    const stats = aggregateOrchestraStats([]);
+    expect(stats.total).toBe(0);
+    expect(stats.byType).toEqual({});
+    expect(stats.byModel).toEqual({});
   });
 });

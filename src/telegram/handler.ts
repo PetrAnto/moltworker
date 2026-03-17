@@ -30,6 +30,8 @@ import {
   createRoadmapResetPR,
   parseRoadmapPhases,
   type OrchestraTask,
+  getRecentOrchestraEvents,
+  aggregateOrchestraStats,
 } from '../orchestra/orchestra';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
@@ -1915,6 +1917,43 @@ export class TelegramHandler {
       }
     }
 
+    // /orch stats [model] — show aggregated event metrics
+    if (sub === 'stats') {
+      if (!this.r2Bucket) {
+        await this.bot.sendMessage(chatId, '❌ R2 not configured.');
+        return;
+      }
+      const modelFilter = args[1] || undefined;
+      const events = await getRecentOrchestraEvents(this.r2Bucket, 2, modelFilter);
+      if (events.length === 0) {
+        await this.bot.sendMessage(chatId, modelFilter
+          ? `📊 No orchestra events found for *${modelFilter}* in last 2 months.`
+          : '📊 No orchestra events recorded yet.',
+          { parseMode: 'Markdown' });
+        return;
+      }
+      const stats = aggregateOrchestraStats(events);
+      const lines: string[] = ['📊 *Orchestra Stats* (last 2 months)\n'];
+      // Event type breakdown
+      lines.push('*Events by type:*');
+      for (const [type, count] of Object.entries(stats.byType).sort((a, b) => b[1] - a[1])) {
+        const icon = type === 'task_complete' ? '✅' : type.includes('stall') ? '🛑' : type.includes('abort') ? '⏹' : type.includes('validation') ? '❌' : '🔄';
+        lines.push(`  ${icon} ${type}: ${count}`);
+      }
+      // Per-model breakdown
+      lines.push('\n*Per model:*');
+      const sortedModels = Object.entries(stats.byModel)
+        .sort((a, b) => b[1].total - a[1].total);
+      for (const [model, m] of sortedModels) {
+        const rate = m.total > 0 ? Math.round((m.completions / m.total) * 100) : 0;
+        const bar = rate >= 75 ? '🟩' : rate >= 50 ? '🟨' : '🟥';
+        lines.push(`  ${bar} *${model}*: ${m.completions}/${m.total} ok (${rate}%) — ${m.failures} fail`);
+      }
+      lines.push(`\n_Total: ${stats.total} events_`);
+      await this.bot.sendMessage(chatId, lines.join('\n'), { parseMode: 'Markdown' });
+      return;
+    }
+
     // Legacy: /orch owner/repo <prompt> — treated as run
     const parsed = parseOrchestraCommand(args);
     if (parsed) {
@@ -1940,11 +1979,13 @@ export class TelegramHandler {
       ]);
       orchButtons.push([
         { text: '📜 History', callback_data: 'orch:history' },
+        { text: '📊 Stats', callback_data: 'orch:stats' },
         { text: '🔓 Unset Repo', callback_data: 'orch:unset' },
       ]);
     } else {
       orchButtons.push([
         { text: '📜 History', callback_data: 'orch:history' },
+        { text: '📊 Stats', callback_data: 'orch:stats' },
       ]);
     }
 
@@ -1961,6 +2002,7 @@ export class TelegramHandler {
       '/orch next [task] — Run next (or specific) task\n' +
       '/orch roadmap — View roadmap status\n' +
       '/orch history — View past tasks\n' +
+      '/orch stats [model] — Event metrics (stalls, aborts)\n' +
       '/orch reset <task> — Uncheck for re-run\n' +
       '/orch redo <task> — Re-implement a failed task\n\n' +
       modelRecs + '\n\n' +
@@ -3109,6 +3151,9 @@ export class TelegramHandler {
             break;
           case 'unset':
             await this.handleOrchestraCommand(fakeMsg, chatId, userId, ['unset']);
+            break;
+          case 'stats':
+            await this.handleOrchestraCommand(fakeMsg, chatId, userId, ['stats']);
             break;
           default:
             await this.bot.sendMessage(chatId, '❓ Unknown orchestra action.');

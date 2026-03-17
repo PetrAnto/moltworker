@@ -16,7 +16,7 @@ import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSumma
 import { loadUserMemory, storeMemoryFact, buildExtractionPrompt, parseExtractionResponse, MIN_EXTRACTION_LENGTH, EXTRACTION_DEBOUNCE_MS } from '../openrouter/memory';
 import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extractor';
 import { UserStorage } from '../openrouter/storage';
-import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, type OrchestraTask } from '../orchestra/orchestra';
+import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, type OrchestraTask, type OrchestraEvent } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
@@ -911,6 +911,25 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
   }
 
+  /** Fire-and-forget orchestra event to R2. Never throws. */
+  private emitOrchestraEvent(
+    task: TaskState,
+    eventType: OrchestraEvent['eventType'],
+    details: Record<string, unknown>,
+  ): void {
+    if (!this.r2) return;
+    const event: OrchestraEvent = {
+      timestamp: Date.now(),
+      taskId: task.taskId,
+      userId: task.userId,
+      modelAlias: task.modelAlias,
+      eventType,
+      details,
+    };
+    // Fire-and-forget — never block the task pipeline
+    appendOrchestraEvent(this.r2, event).catch(() => {});
+  }
+
   /**
    * Update R2 orchestra history when a task fails.
    * Without this, failed tasks stay at 'started' forever in the history.
@@ -1172,6 +1191,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // Update orchestra history so failed tasks don't stay at 'started' forever
           await this.updateOrchestraHistoryOnFailure(task, stallReason);
+          this.emitOrchestraEvent(task, 'stall_abort', { reason: stallReason, resumes: noProgressResumes, iterations: task.iterations, tools: toolCountNow });
 
           if (task.telegramToken) {
             const stallProgress = this.buildProgressSummary(task);
@@ -1202,6 +1222,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
         try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
         await this.updateOrchestraHistoryOnFailure(task, orchStallReason);
+        this.emitOrchestraEvent(task, 'stall_abort', { reason: orchStallReason, resumes: resumeCount, tools: toolCountNow, orchestra: true });
         if (task.telegramToken) {
           const orchProgress = this.buildProgressSummary(task);
           await this.sendTelegramMessageWithButtons(
@@ -1284,6 +1305,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
     // Update orchestra history so failed tasks don't stay at 'started' forever
     await this.updateOrchestraHistoryOnFailure(task, failureReason);
+    this.emitOrchestraEvent(task, 'task_abort', { reason: failureReason, resumes: resumeCount, maxResumes, elapsed });
 
     if (task.telegramToken) {
       const limitReachedMsg = resumeCount >= maxResumes
@@ -3827,12 +3849,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 task.status = 'failed';
                 task.error = `FAILED_DELIVERABLE: ${missing.length} deliverable(s) still missing after ${retryCount} retries: ${missing.join('; ')}`;
                 await this.doState.storage.put('task', taskForStorage(task));
+                this.emitOrchestraEvent(task, 'validation_fail', { retries: retryCount, missing });
                 // Skip review phase — go straight to task completion as failed
                 break;
               }
 
               task.validationRetryCount = retryCount + 1;
               await this.doState.storage.put('task', taskForStorage(task));
+              this.emitOrchestraEvent(task, 'deliverable_retry', { attempt: retryCount + 1, missing });
               console.log(`[TaskProcessor] Deliverable validation FAILED (attempt ${retryCount + 1}/2): ${missing.length} missing`);
               for (const m of missing) console.log(`[TaskProcessor]   - ${m}`);
 
@@ -4300,6 +4324,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   durationMs: Date.now() - task.startTime,
                 };
                 await storeOrchestraTask(this.r2, task.userId, completedTask);
+                this.emitOrchestraEvent(task, taskStatus === 'completed' ? 'task_complete' : 'task_abort', {
+                  repo, mode: orchestraMode, branch: orchestraResult.branch,
+                  prUrl: verifiedPrUrl, durationMs: Date.now() - task.startTime,
+                  ...(taskStatus !== 'completed' && failureReason ? { reason: failureReason } : {}),
+                });
                 const statusLabel = taskStatus === 'completed'
                   ? (hasNetDeletionWarning ? 'completed (⚠️ net deletion)' : 'completed')
                   : `FAILED (${failureReason})`;
