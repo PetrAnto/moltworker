@@ -1846,12 +1846,12 @@ export interface OrchestraModelRec {
  * Get orchestra recommendations — top 3 free, top 3 paid, and avoid list.
  * Uses the unified scorer (getRankedOrchestraModels) for consistent ordering.
  */
-export function getOrchestraRecommendations(): {
+export function getOrchestraRecommendations(completionStats?: Map<string, { successRate: number; total: number }>): {
   free: OrchestraModelRec[];
   paid: OrchestraModelRec[];
   avoid: string[];
 } {
-  const ranked = getRankedOrchestraModels();
+  const ranked = getRankedOrchestraModels(completionStats ? { completionStats } : undefined);
 
   const formatRec = (r: RankedOrchestraModel): OrchestraModelRec => {
     const model = getModel(r.alias);
@@ -1907,6 +1907,8 @@ function parseOutputCost(cost: string): number {
 export function getRankedOrchestraModels(taskHint?: {
   isHeavyCoding?: boolean;
   isSimple?: boolean;
+  /** Per-model historical completion stats from R2 orchestra history */
+  completionStats?: Map<string, { successRate: number; total: number }>;
 }): RankedOrchestraModel[] {
   const all = getAllModels();
   const toolModels = Object.values(all).filter(m =>
@@ -2011,6 +2013,22 @@ export function getRankedOrchestraModels(taskHint?: {
     }
     if (taskHint?.isSimple && m.isFree) {
       score += 15; // Free models get a significant boost for simple tasks
+    }
+
+    // ── 5. Historical completion rate (from real orchestra runs) ──
+    // A model with 80% SWE-bench but 20% actual completion rate is a liability.
+    // Weight: up to ±15 pts based on Bayesian-smoothed success rate.
+    if (taskHint?.completionStats) {
+      const stats = taskHint.completionStats.get(m.alias);
+      if (stats && stats.total >= 2) {
+        // Scale: 0.5 (prior) → 0, 1.0 → +15, 0.0 → -15
+        const historyPts = Math.round((stats.successRate - 0.5) * 30);
+        score += historyPts;
+        if (stats.total >= 3) {
+          const pct = Math.round(stats.successRate * 100);
+          highlights.push(`${pct}% hist(${stats.total})`);
+        }
+      }
     }
 
     return { model: m, score, highlights };
