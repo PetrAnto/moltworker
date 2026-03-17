@@ -2,7 +2,7 @@
  * Tests for Orchestra Mode (init/run two-mode design)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildInitPrompt,
   buildRunPrompt,
@@ -23,6 +23,7 @@ import {
   appendOrchestraEvent,
   getRecentOrchestraEvents,
   aggregateOrchestraStats,
+  cleanupExpiredOrchestraEvents,
   LARGE_FILE_THRESHOLD_LINES,
   LARGE_FILE_THRESHOLD_KB,
   LARGE_FILE_WARNING_LINES,
@@ -1862,6 +1863,8 @@ describe('aggregateOrchestraStats', () => {
 
     const stats = aggregateOrchestraStats(events);
     expect(stats.total).toBe(5);
+    // 2 completions / (2 completions + 2 failures) = 50%
+    expect(stats.successRate).toBe(50);
     expect(stats.byType['task_complete']).toBe(2);
     expect(stats.byType['stall_abort']).toBe(1);
     expect(stats.byType['task_abort']).toBe(1);
@@ -1873,7 +1876,59 @@ describe('aggregateOrchestraStats', () => {
   it('returns empty aggregation for empty events', () => {
     const stats = aggregateOrchestraStats([]);
     expect(stats.total).toBe(0);
+    expect(stats.successRate).toBe(0);
     expect(stats.byType).toEqual({});
     expect(stats.byModel).toEqual({});
+  });
+
+  it('computes 100% success rate when all tasks complete', () => {
+    const events: OrchestraEvent[] = [
+      { timestamp: 1, taskId: 't1', modelAlias: 'deep', eventType: 'task_complete', details: {} },
+      { timestamp: 2, taskId: 't2', modelAlias: 'deep', eventType: 'task_complete', details: {} },
+    ];
+    expect(aggregateOrchestraStats(events).successRate).toBe(100);
+  });
+});
+
+describe('cleanupExpiredOrchestraEvents', () => {
+  let mockBucket: { list: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    mockBucket = { list: vi.fn(), delete: vi.fn() };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-15'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('deletes files older than 3 months', async () => {
+    mockBucket.list.mockResolvedValue({
+      objects: [
+        { key: 'orchestra-events/2026-01.jsonl' }, // > 3 months old → delete
+        { key: 'orchestra-events/2026-02.jsonl' }, // > 3 months old → delete
+        { key: 'orchestra-events/2026-04.jsonl' }, // within retention → keep
+        { key: 'orchestra-events/2026-06.jsonl' }, // current month → keep
+      ],
+    });
+    mockBucket.delete.mockResolvedValue(undefined);
+
+    const deleted = await cleanupExpiredOrchestraEvents(mockBucket as unknown as R2Bucket);
+    expect(deleted).toBe(2);
+    expect(mockBucket.delete).toHaveBeenCalledWith('orchestra-events/2026-01.jsonl');
+    expect(mockBucket.delete).toHaveBeenCalledWith('orchestra-events/2026-02.jsonl');
+  });
+
+  it('returns 0 when no files exist', async () => {
+    mockBucket.list.mockResolvedValue({ objects: [] });
+    const deleted = await cleanupExpiredOrchestraEvents(mockBucket as unknown as R2Bucket);
+    expect(deleted).toBe(0);
+  });
+
+  it('handles R2 errors gracefully', async () => {
+    mockBucket.list.mockRejectedValue(new Error('R2 down'));
+    const deleted = await cleanupExpiredOrchestraEvents(mockBucket as unknown as R2Bucket);
+    expect(deleted).toBe(0);
   });
 });

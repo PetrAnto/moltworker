@@ -1516,6 +1516,7 @@ export interface OrchestraEvent {
 }
 
 const MAX_EVENTS_PER_MONTH = 500;
+const EVENT_RETENTION_MONTHS = 3; // Delete files older than this
 
 /**
  * Append an orchestra event to R2 (monthly JSONL bucket).
@@ -1580,6 +1581,10 @@ export async function getRecentOrchestraEvents(
   }
 
   events.sort((a, b) => b.timestamp - a.timestamp);
+
+  // Opportunistic cleanup — fire-and-forget, never blocks reads
+  cleanupExpiredOrchestraEvents(r2).catch(() => {});
+
   return events.slice(0, limit);
 }
 
@@ -1588,11 +1593,14 @@ export async function getRecentOrchestraEvents(
  */
 export function aggregateOrchestraStats(events: OrchestraEvent[]): {
   total: number;
+  successRate: number; // 0-100, overall task_complete / (task_complete + failures)
   byType: Record<string, number>;
   byModel: Record<string, { total: number; completions: number; failures: number }>;
 } {
   const byType: Record<string, number> = {};
   const byModel: Record<string, { total: number; completions: number; failures: number }> = {};
+  let completions = 0;
+  let failures = 0;
 
   for (const ev of events) {
     byType[ev.eventType] = (byType[ev.eventType] || 0) + 1;
@@ -1603,10 +1611,45 @@ export function aggregateOrchestraStats(events: OrchestraEvent[]): {
     byModel[ev.modelAlias].total++;
     if (ev.eventType === 'task_complete') {
       byModel[ev.modelAlias].completions++;
+      completions++;
     } else if (ev.eventType === 'stall_abort' || ev.eventType === 'task_abort') {
       byModel[ev.modelAlias].failures++;
+      failures++;
     }
   }
 
-  return { total: events.length, byType, byModel };
+  const denominator = completions + failures;
+  const successRate = denominator > 0 ? Math.round((completions / denominator) * 100) : 0;
+
+  return { total: events.length, successRate, byType, byModel };
+}
+
+/**
+ * Delete orchestra event files older than EVENT_RETENTION_MONTHS.
+ * Call opportunistically (e.g. from getRecentOrchestraEvents) to prevent R2 bloat.
+ * Returns the number of keys deleted.
+ */
+export async function cleanupExpiredOrchestraEvents(r2: R2Bucket): Promise<number> {
+  try {
+    const listed = await r2.list({ prefix: 'orchestra-events/' });
+    if (!listed.objects.length) return 0;
+
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - EVENT_RETENTION_MONTHS);
+    const cutoffMonth = `${cutoff.getUTCFullYear()}-${String(cutoff.getUTCMonth() + 1).padStart(2, '0')}`;
+
+    let deleted = 0;
+    for (const obj of listed.objects) {
+      // Key format: orchestra-events/YYYY-MM.jsonl
+      const match = obj.key.match(/orchestra-events\/(\d{4}-\d{2})\.jsonl/);
+      if (match && match[1] < cutoffMonth) {
+        await r2.delete(obj.key);
+        deleted++;
+      }
+    }
+    return deleted;
+  } catch (err) {
+    console.error('[OrchestraEvents] Failed to cleanup expired events:', err);
+    return 0;
+  }
 }
