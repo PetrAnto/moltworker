@@ -401,6 +401,7 @@
 | F.5 | Observability dashboard enhancement | ✅ | 4-6h | Analytics API + metrics UI: summary cards, bar charts, tasks table, orchestra timeline, 2 tests |
 | F.8 | Long-term user memory (fact extraction + injection) | ✅ | 4-6h | 4th context layer: 100 facts/user, flash extraction, dedup, /memory cmd, 26 tests |
 | F.9 | Orchestra hardening (post-task validation, historical ranking, stall detection) | ✅ | 3-4h | Multi-turn deliverable validation (3 escalation levels), sticky context anchor on resume, Bayesian completion rates in /orch advise, orchestra resume limits (6/3), read-loop stall abort, extraction source-shrank check, stream_options parity for direct APIs, /status shows API source |
+| F.10 | Enable reasoning for kimidirect (Moonshot Kimi K2.5) | ✅ | 15min | Added `reasoning: 'configurable'` to kimidirect model — auto-detected reasoning level injected as `{ enabled: true/false }`, improves orchestra task success rate |
 
 ### Future: Platform Evolution (M3 Gate)
 
@@ -483,6 +484,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(models): F.10 enable reasoning for kimidirect — added reasoning: 'configurable' to Kimi K2.5 Direct model, 2 new tests | src/openrouter/models.ts, src/openrouter/reasoning.test.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(orchestra): F.9 multi-turn validation, API source parity, /status provider info — escalating deliverable validation (3 levels: reminder→strict→abort), extraction source-shrank check, stream_options for direct APIs, /status shows Direct API vs OpenRouter, fixed auto-resume display | src/durable-objects/task-processor.ts, src/telegram/handler.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(orchestra): F.9 post-task validation, sticky context, historical ranking, tighter stall detection — post-completion deliverable validation with auto-retry, sticky context anchor re-injects pending deliverables on resume, Bayesian completion rates (±15pts) in getRankedOrchestraModels, orchestra resume limits (6 paid/3 free), read-loop stall abort after 3 resumes without PR | src/durable-objects/task-processor.ts, src/openrouter/models.ts, src/orchestra/orchestra.ts
 2026-03-16 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(memory): F.8 long-term user memory — fact extraction via flash, CRUD storage, dedup, system prompt injection, /memory command, 26 tests | src/openrouter/memory.ts, src/openrouter/memory.test.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts

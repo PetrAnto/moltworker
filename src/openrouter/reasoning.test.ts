@@ -113,6 +113,19 @@ describe('getReasoningParam', () => {
       expect(getReasoningParam('geminipro', 'off')).toEqual({ effort: 'minimal' });
     });
   });
+
+  // Kimi K2.5 Direct — uses { enabled: boolean }
+  describe('Kimi K2.5 Direct (kimidirect)', () => {
+    it('returns { enabled: false } for off', () => {
+      expect(getReasoningParam('kimidirect', 'off')).toEqual({ enabled: false });
+    });
+
+    it('returns { enabled: true } for low/medium/high', () => {
+      expect(getReasoningParam('kimidirect', 'low')).toEqual({ enabled: true });
+      expect(getReasoningParam('kimidirect', 'medium')).toEqual({ enabled: true });
+      expect(getReasoningParam('kimidirect', 'high')).toEqual({ enabled: true });
+    });
+  });
 });
 
 // === detectReasoningLevel ===

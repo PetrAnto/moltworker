@@ -669,6 +669,7 @@ export const MODELS: Record<string, ModelInfo> = {
     parallelCalls: true,
     maxContext: 262144,
     fixedTemperature: 1,
+    reasoning: 'configurable',
   },
 };
 
