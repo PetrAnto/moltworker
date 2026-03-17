@@ -71,6 +71,8 @@ import {
   categorizeModel,
   getValueTier,
   resolveTaskModel,
+  isDirectApi,
+  getProvider,
   type ModelInfo,
   type ReasoningLevel,
   type RouterCheckpointMeta,
@@ -862,12 +864,19 @@ export class TelegramHandler {
         const hasGithub = !!this.githubToken;
         const hasBrowser = !!this.browser;
         const hasSandbox = !!this.sandbox;
+        const statusIsDirect = isDirectApi(statusModel);
+        const statusProvider = getProvider(statusModel);
+        const statusApiSource = statusIsDirect
+          ? `Direct API (${statusProvider})`
+          : 'OpenRouter';
+        const statusResumeLimit = statusModelInfo?.isFree ? '5x free' : '10x paid';
         await this.bot.sendMessage(
           chatId,
           `📊 Bot Status\n\n` +
           `Model: ${statusModelInfo?.name || statusModel}\n` +
+          `API: ${statusApiSource}\n` +
           `Conversation: ${statusHistory.length} messages\n` +
-          `Auto-resume: ${statusAutoResume ? `✓ Enabled (${statusModelInfo?.isFree ? '15x free' : '10x paid'})` : '✗ Disabled'}\n` +
+          `Auto-resume: ${statusAutoResume ? `✓ Enabled (${statusResumeLimit})` : '✗ Disabled'}\n` +
           `Auto-route: ${statusAutoRoute ? '✓ Simple queries → fast model' : '✗ Disabled'}\n` +
           `GitHub Tools: ${hasGithub ? '✓ Configured (read + PR creation)' : '✗ Not configured'}\n` +
           `Browser Tools: ${hasBrowser ? '✓ Configured' : '✗ Not configured'}\n` +
