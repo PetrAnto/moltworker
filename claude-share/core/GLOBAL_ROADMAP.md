@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-17 (F.9 Orchestra Hardening — post-task validation, historical ranking, stall detection, /status API source, 1829 tests)
+**Last Updated:** 2026-03-17 (F.12 Event-Based Model Scoring — event reliability feeds into /orch advise, stall/validation penalties, 1848 tests)
 
 ---
 
@@ -485,6 +485,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(orchestra): F.12 event-based model scoring — getEventBasedModelScores() computes per-model reliability from R2 events (stalls, validation fails, retries), wired into /orch advise with ±20pt scoring + stall/validation penalties, 8 new tests | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/openrouter/models.ts, src/telegram/handler.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(orchestra): F.11 orchestra observability — OrchestraEvent JSONL in R2, appendOrchestraEvent + getRecentOrchestraEvents + aggregateOrchestraStats, 6 injection points in task-processor, /orch stats command, 9 new tests | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(models): F.10 enable reasoning for kimidirect — added reasoning: 'configurable' to Kimi K2.5 Direct model, 2 new tests | src/openrouter/models.ts, src/openrouter/reasoning.test.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(orchestra): F.9 multi-turn validation, API source parity, /status provider info — escalating deliverable validation (3 levels: reminder→strict→abort), extraction source-shrank check, stream_options for direct APIs, /status shows Direct API vs OpenRouter, fixed auto-resume display | src/durable-objects/task-processor.ts, src/telegram/handler.ts

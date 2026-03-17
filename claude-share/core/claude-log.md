@@ -4,6 +4,37 @@
 
 ---
 
+## Session: 2026-03-17 | F.12 Event-Based Model Scoring (Session: session_01KxpZF4pir5V2D91zPwnBHo)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QW3Qh`
+**Status:** Completed
+
+### Summary
+Added event-based model reliability scoring to `/orch advise`. New `getEventBasedModelScores()` function computes per-model scores from R2-persisted orchestra events, capturing stalls, validation failures, and deliverable retries — richer than the existing history-based stats. When event data exists for a model, it takes priority over old history stats (±20 pts vs ±15 pts). Models with high stall rates get extra penalties (-4 to -8 pts). Models with 3+ validation failures get -5 pts.
+
+### Changes Made
+- `src/orchestra/orchestra.ts`: EventBasedModelScore interface + getEventBasedModelScores() function
+- `src/openrouter/models.ts`: Extended getRankedOrchestraModels() with eventScores parameter, new section 5 with stall/validation penalties
+- `src/telegram/handler.ts`: /orch advise loads events in parallel with histories, passes eventScores to ranker
+- `src/orchestra/orchestra.test.ts`: 4 new tests for getEventBasedModelScores (mixed events, empty, non-terminal only, stall-heavy)
+
+### Files Modified
+- `src/orchestra/orchestra.ts`
+- `src/orchestra/orchestra.test.ts`
+- `src/openrouter/models.ts`
+- `src/telegram/handler.ts`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+
+### Test Results
+- 1848 tests passing (was 1840, +8 new)
+- Typecheck clean
+
+---
+
 ## Session: 2026-03-17 | F.11 Orchestra Observability (Session: session_01KxpZF4pir5V2D91zPwnBHo)
 
 **AI:** Claude Opus 4.6

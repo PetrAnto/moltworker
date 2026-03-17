@@ -3,35 +3,36 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-17 (F.11 Orchestra Observability COMPLETE)
+**Last Updated:** 2026-03-17 (F.12 Event-Based Model Scoring COMPLETE)
 
 ---
 
-## Current Task: Feed Orchestra Events into /orch advise Model Rankings
+## Current Task: F.7 — Discord Full Integration (read-only → two-way)
 
 ### Why
 
-F.11 added R2-persisted orchestra events (stall_abort, task_abort, validation_fail, task_complete, deliverable_retry). The `/orch advise` command already uses Bayesian-smoothed historical completion rates from `getModelCompletionStats()`. But these stats come from `OrchestraHistory` (per-user task records), which only tracks final status.
-
-The new `OrchestraEvent` data is richer — it distinguishes stalls from aborts from validation failures. Feeding event-level stats into the model ranking would give more nuanced recommendations (e.g. penalize models that stall frequently even if they eventually complete on retry).
+Discord integration is currently read-only (announcements forwarded to Telegram). The next step is to make it two-way: Discord users should be able to interact with the bot directly via DMs and mentions, using the same OpenRouter backend and tool pipeline as Telegram.
 
 ### What to Build
 
-1. In `orchestra.ts`, add a function like `getEventBasedModelScores(events: OrchestraEvent[])` that computes per-model reliability scores from events
-2. In `handler.ts` `/orch advise`, load events via `getRecentOrchestraEvents()` and pass scores to ranking
-3. Display event-based insights alongside existing historical rates in the advise output
+1. Discord bot handler that mirrors Telegram handler functionality (message handling, model selection, tool execution)
+2. Two-way message flow: Discord users can chat with AI models, use tools, run commands
+3. Shared backend: reuse OpenRouter client, tool execution, Durable Objects pipeline
+4. Basic commands: `/models`, `/use`, `/pick`, `/help` in Discord slash command format
 
 ### Key Files
 
 | File | Change |
 |------|--------|
-| `src/orchestra/orchestra.ts` | New scoring function from events |
-| `src/telegram/handler.ts` | Wire into /orch advise |
+| `src/routes/discord.ts` | Expand from read-only to full handler |
+| `src/discord/handler.ts` | New: Discord-specific message/command handling |
+| `src/index.ts` | Wire Discord routes |
 
 ### Definition of Done
 
-- [ ] /orch advise shows event-based model reliability alongside existing stats
-- [ ] Models with frequent stalls are penalized in recommendations
+- [ ] Discord bot responds to DMs and mentions with AI responses
+- [ ] Tool execution works through Discord (same pipeline as Telegram)
+- [ ] Basic slash commands work (/models, /use, /help)
 - [ ] All tests pass, typecheck clean
 
 ---
@@ -40,6 +41,7 @@ The new `OrchestraEvent` data is richer — it distinguishes stalls from aborts 
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-17 | F.12 — Event-based model scoring in /orch advise | Claude Opus 4.6 | 1848 tests |
 | 2026-03-17 | F.11 — Orchestra observability (R2 events + /orch stats) | Claude Opus 4.6 | 1840 tests |
 | 2026-03-17 | F.10 — Enable reasoning for kimidirect | Claude Opus 4.6 | 1831 tests |
 | 2026-03-17 | Wire completion stats into /orch advise handler | Claude Opus 4.6 | 1829 tests |
@@ -51,8 +53,8 @@ The new `OrchestraEvent` data is richer — it distinguishes stalls from aborts 
 
 ## Alternative Next Tasks (if above is done or blocked)
 
-1. **Event-based model scoring** (above) — enrich /orch advise with event data
+1. **F.7 — Discord full integration** (above)
 2. **F.1 — ai-hub data feeds** — Blocked on ai-hub `/api/situation/*`
 3. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
-4. **F.7** — Discord full integration (read-only → two-way)
-5. **Event cleanup cron** — 30-90 day expiration for old orchestra-events/ files
+4. **6.3** — Voice messages (Whisper + TTS)
+5. **6.4** — Calendar/reminder tools

@@ -32,6 +32,7 @@ import {
   type OrchestraTask,
   getRecentOrchestraEvents,
   aggregateOrchestraStats,
+  getEventBasedModelScores,
 } from '../orchestra/orchestra';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
@@ -1763,10 +1764,14 @@ export class TelegramHandler {
         const isHeavyCoding = /refactor|split|migrat|rewrite|architect|complex|multi.?file|test suite/i.test(taskLower);
         const isSimple = /add comment|update readme|rename|typo|config|bump|version/i.test(taskLower);
 
-        // Load historical completion rates to factor into model ranking
-        const histories = await loadAllOrchestraHistories(this.r2Bucket);
+        // Load historical completion rates + event-based scores for model ranking
+        const [histories, events] = await Promise.all([
+          loadAllOrchestraHistories(this.r2Bucket),
+          getRecentOrchestraEvents(this.r2Bucket, 3, undefined, 500),
+        ]);
         const completionStats = getModelCompletionStats(histories);
-        const ranked = getRankedOrchestraModels({ isHeavyCoding, isSimple, completionStats });
+        const eventScores = getEventBasedModelScores(events);
+        const ranked = getRankedOrchestraModels({ isHeavyCoding, isSimple, completionStats, eventScores });
         const lines: string[] = [
           `🔍 **Next task:** ${nextTask.title}`,
           `📁 **Phase:** ${nextTask.phase}`,
