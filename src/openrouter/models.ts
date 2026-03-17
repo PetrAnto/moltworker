@@ -1910,6 +1910,8 @@ export function getRankedOrchestraModels(taskHint?: {
   isSimple?: boolean;
   /** Per-model historical completion stats from R2 orchestra history */
   completionStats?: Map<string, { successRate: number; total: number }>;
+  /** Per-model event-based reliability scores (richer than completionStats) */
+  eventScores?: Map<string, { successRate: number; stallRate: number; total: number; validationFails: number; retries: number }>;
 }): RankedOrchestraModel[] {
   const all = getAllModels();
   const toolModels = Object.values(all).filter(m =>
@@ -2016,13 +2018,30 @@ export function getRankedOrchestraModels(taskHint?: {
       score += 15; // Free models get a significant boost for simple tasks
     }
 
-    // ── 5. Historical completion rate (from real orchestra runs) ──
-    // A model with 80% SWE-bench but 20% actual completion rate is a liability.
-    // Weight: up to ±15 pts based on Bayesian-smoothed success rate.
-    if (taskHint?.completionStats) {
+    // ── 5. Real-world reliability (from orchestra events + history) ──
+    // Event scores are richer (stalls, validation fails, retries) so they
+    // take priority over simple history stats when available for a model.
+    const evScore = taskHint?.eventScores?.get(m.alias);
+    if (evScore && evScore.total >= 2) {
+      // Base: up to ±20 pts from success rate (stronger than old ±15)
+      const basePts = Math.round((evScore.successRate - 0.5) * 40);
+      score += basePts;
+
+      // Extra penalty for stall-prone models (stalls = worst failure mode)
+      if (evScore.stallRate > 0.3) score -= 8;
+      else if (evScore.stallRate > 0.1) score -= 4;
+
+      // Penalty for validation failures (model produces bad deliverables)
+      if (evScore.validationFails >= 3) score -= 5;
+
+      if (evScore.total >= 3) {
+        const pct = Math.round(evScore.successRate * 100);
+        highlights.push(`${pct}% ev(${evScore.total})`);
+      }
+    } else if (taskHint?.completionStats) {
+      // Fallback to old history stats for models without event data
       const stats = taskHint.completionStats.get(m.alias);
       if (stats && stats.total >= 2) {
-        // Scale: 0.5 (prior) → 0, 1.0 → +15, 0.0 → -15
         const historyPts = Math.round((stats.successRate - 0.5) * 30);
         score += historyPts;
         if (stats.total >= 3) {

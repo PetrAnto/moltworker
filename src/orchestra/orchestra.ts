@@ -1629,6 +1629,68 @@ export function aggregateOrchestraStats(events: OrchestraEvent[]): {
  * Call opportunistically (e.g. from getRecentOrchestraEvents) to prevent R2 bloat.
  * Returns the number of keys deleted.
  */
+/** Per-model reliability scores derived from R2-persisted orchestra events. */
+export interface EventBasedModelScore {
+  alias: string;
+  completions: number;
+  failures: number;       // stall_abort + task_abort
+  stalls: number;         // stall_abort only
+  validationFails: number;
+  retries: number;        // deliverable_retry
+  total: number;          // terminal events: completions + failures
+  successRate: number;    // Bayesian-smoothed: (completions + 1) / (total + 2)
+  stallRate: number;      // stalls / total (0 if no terminal events)
+}
+
+/**
+ * Compute per-model reliability scores from orchestra events.
+ * Richer than getModelCompletionStats — captures stalls, validation failures,
+ * and deliverable retries in addition to simple pass/fail.
+ */
+export function getEventBasedModelScores(
+  events: OrchestraEvent[],
+): Map<string, EventBasedModelScore> {
+  const raw = new Map<string, Omit<EventBasedModelScore, 'successRate' | 'stallRate'>>();
+
+  for (const ev of events) {
+    let entry = raw.get(ev.modelAlias);
+    if (!entry) {
+      entry = { alias: ev.modelAlias, completions: 0, failures: 0, stalls: 0, validationFails: 0, retries: 0, total: 0 };
+      raw.set(ev.modelAlias, entry);
+    }
+
+    switch (ev.eventType) {
+      case 'task_complete':
+        entry.completions++;
+        entry.total++;
+        break;
+      case 'stall_abort':
+        entry.failures++;
+        entry.stalls++;
+        entry.total++;
+        break;
+      case 'task_abort':
+        entry.failures++;
+        entry.total++;
+        break;
+      case 'validation_fail':
+        entry.validationFails++;
+        break;
+      case 'deliverable_retry':
+        entry.retries++;
+        break;
+    }
+  }
+
+  const scores = new Map<string, EventBasedModelScore>();
+  for (const [alias, entry] of raw) {
+    const successRate = (entry.completions + 1) / (entry.total + 2);
+    const stallRate = entry.total > 0 ? entry.stalls / entry.total : 0;
+    scores.set(alias, { ...entry, successRate, stallRate });
+  }
+  return scores;
+}
+
 export async function cleanupExpiredOrchestraEvents(r2: R2Bucket): Promise<number> {
   try {
     const listed = await r2.list({ prefix: 'orchestra-events/' });

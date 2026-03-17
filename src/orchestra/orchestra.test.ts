@@ -23,6 +23,7 @@ import {
   appendOrchestraEvent,
   getRecentOrchestraEvents,
   aggregateOrchestraStats,
+  getEventBasedModelScores,
   cleanupExpiredOrchestraEvents,
   LARGE_FILE_THRESHOLD_LINES,
   LARGE_FILE_THRESHOLD_KB,
@@ -1887,6 +1888,80 @@ describe('aggregateOrchestraStats', () => {
       { timestamp: 2, taskId: 't2', modelAlias: 'deep', eventType: 'task_complete', details: {} },
     ];
     expect(aggregateOrchestraStats(events).successRate).toBe(100);
+  });
+});
+
+describe('getEventBasedModelScores', () => {
+  it('computes per-model scores from mixed events', () => {
+    const events: OrchestraEvent[] = [
+      { timestamp: 1, taskId: 't1', modelAlias: 'deep', eventType: 'task_complete', details: {} },
+      { timestamp: 2, taskId: 't2', modelAlias: 'deep', eventType: 'stall_abort', details: {} },
+      { timestamp: 3, taskId: 't3', modelAlias: 'deep', eventType: 'task_complete', details: {} },
+      { timestamp: 4, taskId: 't4', modelAlias: 'flash', eventType: 'task_complete', details: {} },
+      { timestamp: 5, taskId: 't5', modelAlias: 'flash', eventType: 'validation_fail', details: {} },
+      { timestamp: 6, taskId: 't6', modelAlias: 'deep', eventType: 'deliverable_retry', details: {} },
+      { timestamp: 7, taskId: 't7', modelAlias: 'flash', eventType: 'task_abort', details: {} },
+    ];
+
+    const scores = getEventBasedModelScores(events);
+
+    const deep = scores.get('deep')!;
+    expect(deep.completions).toBe(2);
+    expect(deep.failures).toBe(1);
+    expect(deep.stalls).toBe(1);
+    expect(deep.retries).toBe(1);
+    expect(deep.validationFails).toBe(0);
+    expect(deep.total).toBe(3); // 2 completions + 1 stall_abort
+    // Bayesian: (2+1)/(3+2) = 0.6
+    expect(deep.successRate).toBeCloseTo(0.6, 2);
+    // stallRate: 1/3 ≈ 0.333
+    expect(deep.stallRate).toBeCloseTo(0.333, 2);
+
+    const flash = scores.get('flash')!;
+    expect(flash.completions).toBe(1);
+    expect(flash.failures).toBe(1);
+    expect(flash.stalls).toBe(0);
+    expect(flash.validationFails).toBe(1);
+    expect(flash.retries).toBe(0);
+    expect(flash.total).toBe(2); // 1 completion + 1 task_abort
+    // Bayesian: (1+1)/(2+2) = 0.5
+    expect(flash.successRate).toBe(0.5);
+    expect(flash.stallRate).toBe(0);
+  });
+
+  it('returns empty map for no events', () => {
+    const scores = getEventBasedModelScores([]);
+    expect(scores.size).toBe(0);
+  });
+
+  it('handles models with only non-terminal events', () => {
+    const events: OrchestraEvent[] = [
+      { timestamp: 1, taskId: 't1', modelAlias: 'test', eventType: 'validation_fail', details: {} },
+      { timestamp: 2, taskId: 't2', modelAlias: 'test', eventType: 'deliverable_retry', details: {} },
+    ];
+
+    const scores = getEventBasedModelScores(events);
+    const test = scores.get('test')!;
+    expect(test.total).toBe(0); // no terminal events
+    expect(test.validationFails).toBe(1);
+    expect(test.retries).toBe(1);
+    // Bayesian with 0 terminal: (0+1)/(0+2) = 0.5
+    expect(test.successRate).toBe(0.5);
+    expect(test.stallRate).toBe(0);
+  });
+
+  it('identifies stall-heavy models', () => {
+    const events: OrchestraEvent[] = [
+      { timestamp: 1, taskId: 't1', modelAlias: 'staller', eventType: 'stall_abort', details: {} },
+      { timestamp: 2, taskId: 't2', modelAlias: 'staller', eventType: 'stall_abort', details: {} },
+      { timestamp: 3, taskId: 't3', modelAlias: 'staller', eventType: 'task_complete', details: {} },
+    ];
+
+    const scores = getEventBasedModelScores(events);
+    const staller = scores.get('staller')!;
+    expect(staller.stallRate).toBeCloseTo(0.667, 2);
+    // Bayesian: (1+1)/(3+2) = 0.4
+    expect(staller.successRate).toBeCloseTo(0.4, 2);
   });
 });
 

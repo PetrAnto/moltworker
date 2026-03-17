@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-17 (F.11 Orchestra Observability COMPLETE — 1840 tests)
+**Last Updated:** 2026-03-17 (F.12 Event-Based Model Scoring COMPLETE — 1848 tests)
 
 ---
 
@@ -18,6 +18,7 @@
 
 | Task ID | Description | Assignee | Status | Branch |
 |---------|-------------|----------|--------|--------|
+| F.12 | Event-based model scoring in /orch advise | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QW3Qh` |
 | F.11 | Orchestra observability (R2-persisted events + /orch stats) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QW3Qh` |
 | F.10 | Enable reasoning for kimidirect (Kimi K2.5) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QW3Qh` |
 | F.9 | Orchestra hardening (validation, ranking, stall detection, /status) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QW3Qh` |
@@ -31,7 +32,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | F.11 COMPLETE — awaiting next task | `claude/execute-next-prompt-QW3Qh` | 2026-03-17 |
+| Claude | F.12 COMPLETE — awaiting next task | `claude/execute-next-prompt-QW3Qh` | 2026-03-17 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -59,4 +60,4 @@
 |--------|-------------|----------------|-------|
 | Sprint 1 (Feb 6-13) | 8 | 64 | Phase 0-4, 5.1+5.2+5.5, Dream Machine, Model Sync, Phase 7 ALL, 12 bugs |
 | Sprint 2 (Feb 23-Mar 1) | — | 38 | Phase 8 operational hardening, /simulate endpoint, 1526 tests |
-| Sprint 3 (Mar 1-17) | — | 7 | F.2 Browser CDP, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, 1840 tests |
+| Sprint 3 (Mar 1-17) | — | 8 | F.2 Browser CDP, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, 1848 tests |
