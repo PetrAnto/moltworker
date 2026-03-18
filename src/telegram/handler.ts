@@ -2029,7 +2029,8 @@ export class TelegramHandler {
     userId: string,
     mode: 'init' | 'run' | 'redo',
     repo: string,
-    prompt: string
+    prompt: string,
+    skipModelGuard: boolean = false,
   ): Promise<void> {
     // Clean up stale orchestra tasks before starting new work
     if (this.r2Bucket) {
@@ -2072,7 +2073,7 @@ export class TelegramHandler {
     // Models without orchestraReady (undefined) are treated as not ready —
     // only explicitly true models pass. This catches auto-synced models
     // (e.g. 12B Nemotron) that technically support tools but can't do multi-step tasks.
-    if (modelInfo.orchestraReady !== true && !modelInfo.isImageGen) {
+    if (modelInfo.orchestraReady !== true && !modelInfo.isImageGen && !skipModelGuard) {
       const recs = getOrchestraRecommendations();
       const betterModels = [...recs.free.slice(0, 2), ...recs.paid.slice(0, 2)];
       const buttons = betterModels.map(r => ({
@@ -2083,8 +2084,10 @@ export class TelegramHandler {
       // Store pending orchestra params for the callback
       await this.storage.setPendingOrchestra(userId, { mode, repo, prompt, chatId });
       const warnings: string[] = [];
+      let isUnknown = false;
       if (!modelInfo.intelligenceIndex && !modelInfo.benchmarks?.coding) {
-        warnings.push('no benchmark data (unknown quality)');
+        warnings.push('no benchmark data');
+        isUnknown = true;
       } else {
         if (modelInfo.intelligenceIndex && modelInfo.intelligenceIndex < 45) {
           warnings.push(`low intelligence score (${modelInfo.intelligenceIndex.toFixed(0)})`);
@@ -2100,10 +2103,13 @@ export class TelegramHandler {
       if (/\b(nano|mini|small|lite|tiny)\b/i.test(modelInfo.name)) {
         warnings.push('small model — may produce invalid tool calls');
       }
-      const warnStr = warnings.length > 0 ? `\nIssues: ${warnings.join(', ')}` : '';
+      const warnStr = warnings.length > 0 ? ` (${warnings.join(', ')})` : '';
+      const header = isUnknown
+        ? `⚠️ /${modelAlias} is untested for orchestra${warnStr}.\nIt may work fine — tap Proceed to try, or pick a proven model:`
+        : `⚠️ /${modelAlias} may struggle with orchestra tasks${warnStr}.\n\nRecommended models:`;
       await this.bot.sendMessage(
         chatId,
-        `⚠️ /${modelAlias} may struggle with orchestra tasks.${warnStr}\n\nRecommended models:`,
+        header,
         { reply_markup: { inline_keyboard: [buttons.slice(0, 4), buttons.slice(4)] } },
       );
       return;
@@ -3128,9 +3134,10 @@ export class TelegramHandler {
         if (payload && payload !== 'proceed') {
           await this.handleUseCommand(chatId, userId, query.from.username, [payload]);
         }
-        // Clear pending and execute
+        // Clear pending and execute (skip model guard if user chose "proceed")
         await this.storage.setPendingOrchestra(userId, null);
-        await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt);
+        const skipGuard = payload === 'proceed';
+        await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt, skipGuard);
         break;
       }
 
