@@ -313,8 +313,9 @@ Execute the next task from the roadmap for **${repo}**.
 
 ## RULES (breaking these will block your PR)
 - Read each file AT MOST ONCE. Never call github_read_file on the same path twice.
-- WORK_LOG.md is APPEND-ONLY. Never delete or modify existing rows. Only add a new row at the bottom matching the existing column format.
+- WORK_LOG.md is APPEND-ONLY. Read it first, then add ONE new row at the bottom matching the existing column format. Never add a row that already exists. Never delete or modify existing rows.
 - ROADMAP.md: only change your task from \`- [ ]\` to \`- [x]\`. Never delete or modify other tasks.
+- Complete ALL code changes before updating ROADMAP.md or WORK_LOG.md. Code first, docs last.
 - Do NOT regenerate entire files from memory — use "patch" action for edits.
 - Always finish with a github_create_pr call + ORCHESTRA_RESULT block. Use github_push_files to batch large changes before the PR.
 
@@ -395,8 +396,9 @@ Execute the next task from the roadmap for **${repo}**.
 
 ## RULES (breaking these will block your PR)
 - Read each file AT MOST ONCE. Never call github_read_file on the same path twice.
-- WORK_LOG.md is APPEND-ONLY. Never delete or modify existing rows. Only add a new row at the bottom matching the existing column format.
+- WORK_LOG.md is APPEND-ONLY. Read it first, then add ONE new row at the bottom matching the existing column format. Never add a row that already exists. Never delete or modify existing rows.
 - ROADMAP.md: only change your task from \`- [ ]\` to \`- [x]\`. Never delete or modify other tasks.
+- Complete ALL code changes before updating ROADMAP.md or WORK_LOG.md. Code first, docs last.
 - Do NOT regenerate entire files from memory — use "patch" action for edits.
 - Always finish with a github_create_pr call + ORCHESTRA_RESULT block. Use github_push_files to batch large changes before the PR.
 
@@ -508,8 +510,9 @@ Execute the next task from the project roadmap for **${repo}**.
 
 ## CRITICAL RULES (breaking these will block your PR)
 - Read each file AT MOST ONCE. Never call github_read_file on the same path twice.
-- WORK_LOG.md is APPEND-ONLY. Never delete or modify existing rows. Only add a new row at the bottom matching the existing column format.
+- WORK_LOG.md is APPEND-ONLY. Read it first, then add ONE new row at the bottom matching the existing column format. Never add a row that already exists. Never delete or modify existing rows.
 - ROADMAP.md: only change your task from \`- [ ]\` to \`- [x]\`. Never delete or modify other tasks.
+- Complete ALL code changes before updating ROADMAP.md or WORK_LOG.md. Code first, docs last.
 - Do NOT regenerate entire files from memory — use "patch" action for edits.
 - After calling github_create_pr, CHECK THE RESULT. If it returned an error, fix and retry. Never claim success if the tool returned an error.
 - Always finish with a github_create_pr call + ORCHESTRA_RESULT block with a real PR URL. Use github_push_files to batch large changes before the PR.
@@ -579,7 +582,7 @@ If blocked (API errors): update WORK_LOG.md with status, report \`pr: FAILED\`.
 
 ## Step 5: UPDATE ROADMAP & WORK LOG (in same PR)
 - **ROADMAP.md**: Change ONLY your completed task from \`- [ ]\` to \`- [x]\`. Never delete tasks.
-- **WORK_LOG.md**: Read the existing file first. KEEP ALL existing content BYTE-FOR-BYTE identical. APPEND a new row at the bottom matching the EXISTING column format. Do NOT restructure the table or change column headers. If the existing format differs from what you expect, match it exactly.
+- **WORK_LOG.md**: Read the existing file first. KEEP ALL existing content BYTE-FOR-BYTE identical. APPEND exactly ONE new row at the bottom matching the EXISTING column format. Before appending, verify the row does not already exist in the file. Do NOT restructure the table or change column headers. If the existing format differs from what you expect, match it exactly.
 
 ## Step 6: CREATE PR
 - Branch: \`${branch}\` (bot/ prefix added automatically)
