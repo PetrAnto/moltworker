@@ -2073,7 +2073,13 @@ export class TelegramHandler {
     // Models without orchestraReady (undefined) are treated as not ready —
     // only explicitly true models pass. This catches auto-synced models
     // (e.g. 12B Nemotron) that technically support tools but can't do multi-step tasks.
-    if (modelInfo.orchestraReady !== true && !modelInfo.isImageGen && !skipModelGuard) {
+    // Exception: models with proven event history (1+ task_complete) skip the gate.
+    let hasProvenHistory = false;
+    if (modelInfo.orchestraReady !== true && !skipModelGuard && this.r2Bucket) {
+      const events = await getRecentOrchestraEvents(this.r2Bucket, 3, modelAlias, 50);
+      hasProvenHistory = events.some(ev => ev.eventType === 'task_complete');
+    }
+    if (modelInfo.orchestraReady !== true && !modelInfo.isImageGen && !skipModelGuard && !hasProvenHistory) {
       const recs = getOrchestraRecommendations();
       const betterModels = [...recs.free.slice(0, 2), ...recs.paid.slice(0, 2)];
       const buttons = betterModels.map(r => ({

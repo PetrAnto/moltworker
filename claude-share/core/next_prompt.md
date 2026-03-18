@@ -3,36 +3,52 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-17 (F.12 Event-Based Model Scoring COMPLETE)
+**Last Updated:** 2026-03-18 (Orchestra gate bypass for proven models + prompt dedup fixes)
 
 ---
 
-## Current Task: F.7 — Discord Full Integration (read-only → two-way)
+## Current Task: F.3 — Code Execution Sandbox in Orchestra (Durable Objects)
 
 ### Why
 
-Discord integration is currently read-only (announcements forwarded to Telegram). The next step is to make it two-way: Discord users should be able to interact with the bot directly via DMs and mentions, using the same OpenRouter backend and tool pipeline as Telegram.
+Orchestra tasks run in Durable Objects, which currently exclude `sandbox_exec` (the Cloudflare Container tool). This means models can't build, test, or lint their own code before creating PRs — leading to broken PRs, untested code, and wasted iterations.
+
+The Cloudflare Container (`@cloudflare/sandbox`) is already deployed and working for direct chat. Making it available in DOs would let orchestra models self-verify their work.
+
+### Current State
+
+- `sandbox_exec` — works in Worker context (direct Telegram), excluded from DO via `TOOLS_WITHOUT_BROWSER` filter
+- `run_code` — wired into DOs via Acontext API, but requires `ACONTEXT_API_KEY` which is not configured
+- The DO's `toolContext` has no `sandbox` field
 
 ### What to Build
 
-1. Discord bot handler that mirrors Telegram handler functionality (message handling, model selection, tool execution)
-2. Two-way message flow: Discord users can chat with AI models, use tools, run commands
-3. Shared backend: reuse OpenRouter client, tool execution, Durable Objects pipeline
-4. Basic commands: `/models`, `/use`, `/pick`, `/help` in Discord slash command format
+1. Pass a sandbox reference (or sandbox stub ID) into the Durable Object's `TaskRequest`
+2. Add `sandbox_exec` to the DO tool set (remove from `TOOLS_WITHOUT_BROWSER` filter or create a new filter)
+3. Wire `sandbox` into the DO's `toolContext` so `sandboxExec()` can call `sandbox.startProcess()`
+4. Add safety limits for DO context (longer timeouts since tasks are long-running, but cap total sandbox calls)
+5. Update orchestra prompts to encourage models to test their code before creating PRs
 
 ### Key Files
 
 | File | Change |
 |------|--------|
-| `src/routes/discord.ts` | Expand from read-only to full handler |
-| `src/discord/handler.ts` | New: Discord-specific message/command handling |
-| `src/index.ts` | Wire Discord routes |
+| `src/durable-objects/task-processor.ts` | Add sandbox to toolContext, pass through from TaskRequest |
+| `src/openrouter/tools.ts` | Update tool filtering for DO context |
+| `src/telegram/handler.ts` | Pass sandbox binding to DO task request |
+| `src/orchestra/orchestra.ts` | Add "test your code" step to prompts |
+
+### Challenges
+
+- DOs can't directly hold a `Sandbox` binding — may need to proxy through the Worker or pass a stub
+- Sandbox container is `max_instances: 1` — concurrent orchestra tasks could contend
+- Need to prevent sandbox abuse (infinite loops, resource exhaustion)
 
 ### Definition of Done
 
-- [ ] Discord bot responds to DMs and mentions with AI responses
-- [ ] Tool execution works through Discord (same pipeline as Telegram)
-- [ ] Basic slash commands work (/models, /use, /help)
+- [ ] Orchestra tasks can execute shell commands via `sandbox_exec`
+- [ ] Models can run `npm test`, `npm run build`, etc. before creating PRs
+- [ ] Safety limits prevent sandbox abuse in DO context
 - [ ] All tests pass, typecheck clean
 
 ---
@@ -41,20 +57,18 @@ Discord integration is currently read-only (announcements forwarded to Telegram)
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-18 | Orchestra gate bypass for proven models (event history) | Claude Opus 4.6 | 1848 tests |
+| 2026-03-18 | Prompt dedup fix (WORK_LOG duplicates + code-first ordering) | Claude Opus 4.6 | 1848 tests |
+| 2026-03-18 | Fix Proceed button loop + improve unknown model warning | Claude Opus 4.6 | 1848 tests |
 | 2026-03-17 | F.12 — Event-based model scoring in /orch advise | Claude Opus 4.6 | 1848 tests |
 | 2026-03-17 | F.11 — Orchestra observability (R2 events + /orch stats) | Claude Opus 4.6 | 1840 tests |
-| 2026-03-17 | F.10 — Enable reasoning for kimidirect | Claude Opus 4.6 | 1831 tests |
-| 2026-03-17 | Wire completion stats into /orch advise handler | Claude Opus 4.6 | 1829 tests |
-| 2026-03-17 | F.9 — Orchestra hardening (validation, ranking, stall detection) | Claude Opus 4.6 | 1829 tests |
-| 2026-03-16 | F.8 — Long-term Memory (fact extraction + injection) | Claude Opus 4.6 | 1826 tests |
-| 2026-03-16 | F.5 — Analytics dashboard (API + metrics UI) | Codex+Claude | PRs 343-346 |
 
 ---
 
 ## Alternative Next Tasks (if above is done or blocked)
 
-1. **F.7 — Discord full integration** (above)
-2. **F.1 — ai-hub data feeds** — Blocked on ai-hub `/api/situation/*`
-3. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
-4. **6.3** — Voice messages (Whisper + TTS)
-5. **6.4** — Calendar/reminder tools
+1. **F.3 — Code execution sandbox** (above)
+2. **F.4 — File management tools** (R2 save/read/list/delete)
+3. **F.1 — ai-hub data feeds** — Blocked on ai-hub `/api/situation/*`
+4. **F.7** — Discord full integration (read-only → two-way)
+5. **6.3** — Voice messages (Whisper + TTS)

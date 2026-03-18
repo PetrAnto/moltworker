@@ -379,7 +379,7 @@ const MAX_AUTO_RESUMES_FREE = 5; // Free tier stays conservative
 // Orchestra-specific caps: tighter than general tasks because orchestra has
 // structured deliverables — if a model can't finish in 6 resumes, it's thrashing.
 const MAX_AUTO_RESUMES_ORCHESTRA = 6;
-const MAX_AUTO_RESUMES_ORCHESTRA_FREE = 3;
+const MAX_AUTO_RESUMES_ORCHESTRA_FREE = 6;
 // Elapsed time limits removed — other guards (max tool calls, stall detection,
 // auto-resume limits) are sufficient to prevent runaway tasks.
 // Max consecutive resumes with no new tool calls before declaring stall
