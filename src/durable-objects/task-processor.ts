@@ -1969,6 +1969,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     let consecutiveInvalidArgsIterations = 0;
     const MAX_INVALID_ARGS_NUDGE = 4; // After 4 iterations with all-invalid args, inject nudge
     const MAX_INVALID_ARGS_BAIL = 8; // After 8, bail out — model can't format tool calls
+    // Stream split death loop tracking: consecutive splits with 0 complete tool calls.
+    // When a model generates oversized tool calls (e.g. full 30KB file in workspace_write_file),
+    // the stream gets truncated every time, producing 0 tools. Without escalating nudges,
+    // the model repeats the same oversized call indefinitely, exhausting all auto-resumes.
+    let consecutiveEmptySplits = 0;
+    const MAX_EMPTY_SPLITS_NUDGE = 2; // After 2 empty splits, tell model to use smaller operations
+    const MAX_EMPTY_SPLITS_BAIL = 5; // After 5, bail — model can't adapt
     // P2 guardrails: track tool errors for "No Fake Success" enforcement
     const toolErrorTracker = createToolErrorTracker();
     // Error threshold guardrail: if the same tool returns the same error 3 consecutive times,
@@ -2952,9 +2959,30 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             `tools: ${choice.message.tool_calls?.length ?? 0}`);
 
           if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
-            // No complete tool calls — add partial text and nudge to continue.
-            // Include the tail of the truncated text so the model can pick up
-            // exactly where it left off without repeating.
+            consecutiveEmptySplits++;
+            console.log(`[TaskProcessor] Empty stream split ${consecutiveEmptySplits}/${MAX_EMPTY_SPLITS_BAIL}`);
+
+            // Bail out if the model can't adapt after repeated splits
+            if (consecutiveEmptySplits >= MAX_EMPTY_SPLITS_BAIL) {
+              console.log(`[TaskProcessor] Stream split death loop: ${consecutiveEmptySplits} consecutive empty splits — bailing out`);
+              task.status = 'failed';
+              task.error = `Model generates oversized tool calls that exceed streaming limits (${consecutiveEmptySplits} consecutive truncations). ` +
+                `The model keeps trying to write full file content instead of using patch action. Try a different model.`;
+              task.result = `Stream split death loop: model cannot generate tool calls small enough to fit within streaming limits.`;
+              await this.doState.storage.put('task', taskForStorage(task));
+              if (task.telegramToken) {
+                await this.sendTelegramMessageWithButtons(
+                  task.telegramToken,
+                  task.chatId,
+                  `❌ Task failed: streaming death loop.\n\n${task.modelAlias} keeps generating tool calls too large for the stream limit (${consecutiveEmptySplits}× truncated).\n\n` +
+                  `This usually means the model is trying to write/rewrite a large file instead of using patch action.\n\n💡 Try: /deep, /sonnet, or /flash`,
+                  [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+                );
+              }
+              return;
+            }
+
+            // Add partial text if any
             const partialText = choice.message.content || '';
             if (partialText) {
               conversationMessages.push({
@@ -2962,20 +2990,39 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 content: partialText,
               });
             }
-            const tail = partialText.length > 300
-              ? partialText.slice(-300)
-              : partialText;
-            const nudge = tail
-              ? `[Your response was cut short by a streaming limit. Continue EXACTLY where you left off — do not repeat anything. Your last output ended with:\n\n${tail}\n\nContinue from there. If you were about to call a tool, call it now.]`
-              : '[Your response was cut short by a streaming limit. Continue exactly where you left off. If you were about to call a tool, call it now.]';
+
+            // Escalating nudge based on split count
+            let nudge: string;
+            if (consecutiveEmptySplits >= MAX_EMPTY_SPLITS_NUDGE) {
+              // Escalated nudge: explicitly tell model about the size constraint
+              nudge = `[SYSTEM: STREAMING LIMIT — YOUR TOOL CALL WAS TOO LARGE AND GOT TRUNCATED (attempt ${consecutiveEmptySplits}/${MAX_EMPTY_SPLITS_BAIL}).
+
+Your last tool call exceeded the streaming token limit and was discarded. This will keep happening if you try the same approach.
+
+YOU MUST CHANGE YOUR APPROACH:
+- Do NOT write entire file contents. Do NOT use workspace_write_file or github_push_files with full file content for files >100 lines.
+- For editing existing files: use github_create_pr or github_push_files with action "patch" and small, targeted {"find":"exact text","replace":"new text"} pairs.
+- For creating new files: use workspace_write_file with ONLY the new file (small), then workspace_commit, then patch the original file separately via github_create_pr.
+- Break large operations into multiple small tool calls.
+
+If you already created the new file and just need to patch the original, call github_create_pr now with action "patch" for the original file.]`;
+            } else {
+              // First split: gentle nudge
+              const tail = partialText.length > 300
+                ? partialText.slice(-300)
+                : partialText;
+              nudge = tail
+                ? `[Your response was cut short by a streaming limit. Your tool call was too large and got discarded. Use SMALLER tool calls — for existing files, use action "patch" with targeted find/replace pairs instead of writing full file content. Your last output ended with:\n\n${tail}\n\nContinue with a smaller operation.]`
+                : '[Your response was cut short by a streaming limit. Your tool call was too large and got discarded. Use SMALLER tool calls — for existing files, use action "patch" with targeted find/replace pairs instead of writing full file content. Call a tool now with a smaller payload.]';
+            }
             conversationMessages.push({
               role: 'user',
               content: nudge,
             });
             continue;
           }
-          // Has complete tool calls — fall through to normal tool execution below.
-          // The model will see the results and continue naturally in the next iteration.
+          // Has complete tool calls — reset split counter and fall through to normal tool execution.
+          consecutiveEmptySplits = 0;
         }
 
         // Phase transition: plan → work after first model response
