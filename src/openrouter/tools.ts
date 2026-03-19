@@ -514,11 +514,12 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
       description: 'Stage a file for creation or update in the local workspace. Does NOT call GitHub — the file is held in storage until you call workspace_commit.\n\n' +
         'Use this instead of github_push_files when creating or updating multiple files. ' +
         'Each call is tiny and fast (no streaming risk). When all files are staged, call workspace_commit once to push them all.\n\n' +
+        'SIZE LIMITS: max 250 lines / 10KB per file. For editing existing files >100 lines, use github_create_pr with action "patch" instead — do NOT try to rewrite the entire file.\n\n' +
         'Typical workflow:\n' +
-        '1. workspace_write_file — stage file A\n' +
-        '2. workspace_write_file — stage file B\n' +
-        '3. workspace_write_file — stage file C\n' +
-        '4. workspace_commit — push all staged files to GitHub branch in one commit',
+        '1. workspace_write_file — stage NEW file A (extracted module, <250 lines)\n' +
+        '2. workspace_write_file — stage NEW file B\n' +
+        '3. workspace_commit — push all staged files to branch\n' +
+        '4. github_create_pr — patch the ORIGINAL file to add imports + delete extracted code',
       parameters: {
         type: 'object',
         properties: {
@@ -1380,6 +1381,22 @@ async function githubPushFiles(
     parentSha = baseRef.object.sha;
   }
 
+  // Guard: reject oversized "update" changes that models generate when trying to
+  // rewrite large files from memory. These create massive tool call payloads (9000+ tokens)
+  // that exceed the streaming window, causing death loops. Force patch instead.
+  for (const change of changes) {
+    if (change.action === 'update' && change.content) {
+      const lineCount = change.content.split('\n').length;
+      if (lineCount > 300) {
+        throw new Error(
+          `Cannot "update" "${change.path}" — ${lineCount} lines exceeds the 300-line limit for full rewrites. ` +
+          `Use action "patch" with {"find":"exact text","replace":"new text"} pairs instead. ` +
+          `This prevents streaming timeouts and syntax errors from regenerating large files.`
+        );
+      }
+    }
+  }
+
   // Resolve patches: for "patch" actions, fetch the file from the correct branch and apply
   const fetchBranch = branchExists ? fullBranch : baseBranch;
   for (let ci = 0; ci < changes.length; ci++) {
@@ -1549,6 +1566,26 @@ async function workspaceWriteFile(
         `For files >300 lines, use github_create_pr or github_push_files with ` +
         `action "patch" and a patches array of targeted find/replace pairs. ` +
         `This prevents syntax errors from regenerating large files from memory.`,
+      );
+    }
+  }
+
+  // Guard: reject oversized "create" calls that risk streaming timeouts.
+  // Models sometimes try to "create" a copy of a large file (e.g. writing the full
+  // 30KB App.jsx with modifications). This generates a 9000+ token tool call that
+  // exceeds the ~120s streaming window, causing a death loop of truncated tool calls.
+  // New files being extracted should be <200 lines; anything larger is likely a
+  // full-file rewrite disguised as "create".
+  if (action === 'create' && content) {
+    const contentBytes = content.length;
+    const lineCount = content.split('\n').length;
+    if (contentBytes > 10_000 || lineCount > 250) {
+      throw new Error(
+        `workspace_write_file "create" rejected for "${path}" — ` +
+        `content is ${lineCount} lines / ${contentBytes} chars (limits: 250 lines / 10KB). ` +
+        `This is too large for a single tool call and risks streaming timeout. ` +
+        `If creating a NEW extracted module, keep it under 250 lines. ` +
+        `If trying to rewrite an EXISTING file, use github_create_pr with action "patch" instead.`,
       );
     }
   }
@@ -1808,6 +1845,21 @@ async function githubCreatePr(
 
   if (totalContentSize > 1_000_000) {
     throw new Error(`Total content size (${(totalContentSize / 1024).toFixed(0)}KB) exceeds 1MB limit.`);
+  }
+
+  // Guard: reject oversized "update" changes (same guard as githubPushFiles).
+  // Models sometimes try to rewrite a 30KB file from memory instead of using patch.
+  for (const change of changes) {
+    if (change.action === 'update' && change.content) {
+      const lineCount = change.content.split('\n').length;
+      if (lineCount > 300) {
+        throw new Error(
+          `Cannot "update" "${change.path}" — ${lineCount} lines exceeds the 300-line limit for full rewrites. ` +
+          `Use action "patch" with {"find":"exact text","replace":"new text"} pairs instead. ` +
+          `This prevents streaming timeouts and syntax errors from regenerating large files.`
+        );
+      }
+    }
   }
 
   const headers: Record<string, string> = {
