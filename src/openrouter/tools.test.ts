@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, applyFuzzyPatch, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -2953,7 +2953,7 @@ describe('github_create_pr tool', () => {
     }, { githubToken: 'test-token' });
 
     expect(result.content).toContain('PATCH FAILED');
-    expect(result.content).toContain('not found in file');
+    expect(result.content).toContain('not found');
   });
 
   it('should fail patch when find string matches multiple times', async () => {
@@ -2992,7 +2992,7 @@ describe('github_create_pr tool', () => {
     }, { githubToken: 'test-token' });
 
     expect(result.content).toContain('PATCH FAILED');
-    expect(result.content).toContain('matches 2 times');
+    expect(result.content).toContain('matches multiple times');
   });
 
   it('should apply multiple patches sequentially', async () => {
@@ -5300,5 +5300,123 @@ describe('browse_url tool', () => {
     expect(tool).toBeDefined();
     expect(tool!.function.parameters.properties.selector).toBeDefined();
     expect(tool!.function.parameters.properties.text).toBeDefined();
+  });
+});
+
+// ─── applyFuzzyPatch ────────────────────────────────────────────────────────
+
+describe('applyFuzzyPatch', () => {
+  it('applies exact match (fast path)', () => {
+    const content = 'line1\nline2\nline3\n';
+    const result = applyFuzzyPatch(content, 'line2', 'REPLACED', 'test.ts');
+    expect(result).toBe('line1\nREPLACED\nline3\n');
+  });
+
+  it('throws on exact match with multiple occurrences', () => {
+    const content = 'foo\nbar\nfoo\n';
+    expect(() => applyFuzzyPatch(content, 'foo', 'baz', 'test.ts')).toThrow('matches multiple times');
+  });
+
+  it('falls back to fuzzy match when whitespace differs', () => {
+    const content = '  function foo() {\n    return 1;\n  }\n  function bar() {\n    return 2;\n  }';
+    // Model sends find string with wrong indentation
+    const find = 'function foo() {\n  return 1;\n}';
+    const replace = 'function foo() {\n    return 42;\n  }';
+    const result = applyFuzzyPatch(content, find, replace, 'test.ts');
+    expect(result).toContain('return 42');
+    expect(result).toContain('function bar');
+  });
+
+  it('falls back to fuzzy match with extra spaces in find', () => {
+    const content = 'const x = 1;\nconst y  =  2;\nconst z = 3;';
+    // Model sends find with normalized spacing
+    const find = 'const y = 2;';
+    const replace = 'const y = 42;';
+    const result = applyFuzzyPatch(content, find, replace, 'test.ts');
+    expect(result).toContain('const y = 42;');
+    expect(result).toContain('const x = 1;');
+    expect(result).toContain('const z = 3;');
+  });
+
+  it('throws on fuzzy match with multiple occurrences', () => {
+    // Multi-line find forces fuzzy path (no exact substring match).
+    // Both blocks match after normalization.
+    const content = '  doStuff(1);\n  save();\n  gap\n  doStuff(1);\n  save();';
+    const find = 'doStuff(1);\nsave();'; // 2-line block, no indentation — no exact match
+    expect(() => applyFuzzyPatch(content, find, 'baz();', 'test.ts')).toThrow('matches multiple locations');
+  });
+
+  it('throws for whitespace-sensitive files (Python)', () => {
+    const content = 'def foo():\n  return 1\n';
+    expect(() => applyFuzzyPatch(content, 'def foo():\n    return 1', 'replaced', 'main.py')).toThrow(
+      'whitespace-significant'
+    );
+  });
+
+  it('throws for YAML files', () => {
+    const content = 'key: value\n';
+    expect(() => applyFuzzyPatch(content, 'key:  value', 'key: new', 'config.yaml')).toThrow(
+      'whitespace-significant'
+    );
+  });
+
+  it('handles multi-line fuzzy patches correctly', () => {
+    const content = [
+      'import React from "react";',
+      '',
+      'function App() {',
+      '  const [count, setCount] = React.useState(0);',
+      '  return <div>{count}</div>;',
+      '}',
+      '',
+      'export default App;',
+    ].join('\n');
+
+    // Model sends find with slightly different indentation
+    const find = 'function App() {\nconst [count, setCount] = React.useState(0);\nreturn <div>{count}</div>;\n}';
+    const replace = 'function App() {\n  const [count, setCount] = React.useState(0);\n  return <button onClick={() => setCount(c => c + 1)}>{count}</button>;\n}';
+    const result = applyFuzzyPatch(content, find, replace, 'App.tsx');
+    expect(result).toContain('onClick');
+    expect(result).toContain('export default App;');
+    expect(result).toContain('import React');
+  });
+
+  it('strips leading/trailing empty lines from find string in fuzzy mode', () => {
+    // Force fuzzy path by adding indentation difference
+    const content = '  a\n  b\n  c';
+    const find = '\n b \n'; // Whitespace differs from content + extra newlines
+    const replace = '  B';
+    const result = applyFuzzyPatch(content, find, replace, 'test.js');
+    expect(result).toContain('B');
+    expect(result).toContain('  a');
+    expect(result).toContain('  c');
+  });
+
+  it('throws when find string is empty after normalization', () => {
+    const content = 'a\nb\nc';
+    expect(() => applyFuzzyPatch(content, '\n\n', 'x', 'test.js')).toThrow('empty after normalization');
+  });
+
+  it('throws informative error when no match found (exact + fuzzy)', () => {
+    const content = 'function hello() { return "world"; }';
+    expect(() => applyFuzzyPatch(content, 'function goodbye()', 'replaced', 'test.ts')).toThrow(
+      'exact + fuzzy'
+    );
+  });
+
+  it('preserves content before first line when match starts at line 0', () => {
+    const content = 'first line\nsecond line\nthird line';
+    const find = 'first  line'; // extra space — fuzzy
+    const replace = 'FIRST LINE';
+    const result = applyFuzzyPatch(content, find, replace, 'test.js');
+    expect(result).toBe('FIRST LINE\nsecond line\nthird line');
+  });
+
+  it('preserves content after last line when match ends at last line', () => {
+    const content = 'first line\nsecond line\nthird line';
+    const find = 'third  line'; // extra space — fuzzy
+    const replace = 'THIRD LINE';
+    const result = applyFuzzyPatch(content, find, replace, 'test.js');
+    expect(result).toBe('first line\nsecond line\nTHIRD LINE');
   });
 });

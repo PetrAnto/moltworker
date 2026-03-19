@@ -5,12 +5,100 @@
 import { getModel } from './models';
 import { cloudflareApi } from './tools-cloudflare';
 import type { AcontextClient, SandboxLanguage } from '../acontext/client';
+import { checkBracketBalance } from '../guardrails/extraction-verifier';
 
 /** Decode base64 GitHub content to proper UTF-8 string (atob alone mangles multi-byte chars). */
 function decodeBase64Utf8(base64: string): string {
   const binary = atob(base64.replace(/\n/g, ''));
   const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
   return new TextDecoder().decode(bytes);
+}
+
+/** Normalize a single line for fuzzy comparison: trim + collapse whitespace. */
+function normalizeLine(line: string): string {
+  return line.trim().replace(/\s+/g, ' ');
+}
+
+/** Extensions where whitespace is semantically significant — fuzzy matching disabled. */
+const WHITESPACE_SENSITIVE_EXTENSIONS = /\.(py|yaml|yml|pug|makefile)$/i;
+
+/**
+ * Apply a find/replace patch with exact-match fast path and fuzzy fallback.
+ *
+ * 1. Tries exact indexOf (fast, preserves everything).
+ * 2. Falls back to trimmed line-by-line comparison (handles whitespace/indentation diffs).
+ * 3. Requires unique match in both modes.
+ * 4. Skips fuzzy for whitespace-significant file types.
+ */
+export function applyFuzzyPatch(content: string, find: string, replace: string, filePath: string): string {
+  // --- Fast path: exact match ---
+  const exactIdx = content.indexOf(find);
+  if (exactIdx !== -1) {
+    if (content.indexOf(find, exactIdx + 1) !== -1) {
+      throw new Error(
+        `PATCH FAILED for "${filePath}": "find" matches multiple times. Include more surrounding context.`
+      );
+    }
+    return content.substring(0, exactIdx) + replace + content.substring(exactIdx + find.length);
+  }
+
+  // --- Skip fuzzy for whitespace-significant files ---
+  if (WHITESPACE_SENSITIVE_EXTENSIONS.test(filePath) || filePath.toLowerCase().endsWith('makefile')) {
+    const findPreview = find.length > 100 ? find.substring(0, 100) + '...' : find;
+    throw new Error(
+      `PATCH FAILED for "${filePath}": "find" string not found exactly, and fuzzy matching is disabled ` +
+      `for whitespace-significant files. Searched for: ${JSON.stringify(findPreview)}. ` +
+      `Use github_read_file to get the exact current content.`
+    );
+  }
+
+  // --- Fuzzy fallback: trimmed line-by-line comparison ---
+  const originalLines = content.split('\n');
+  const findLines = find.split('\n').map(normalizeLine);
+
+  // Strip leading/trailing empty normalized lines from find (models often add extra newlines)
+  while (findLines.length > 0 && findLines[0] === '') findLines.shift();
+  while (findLines.length > 0 && findLines[findLines.length - 1] === '') findLines.pop();
+
+  if (findLines.length === 0) {
+    throw new Error(`PATCH FAILED for "${filePath}": "find" string is empty after normalization.`);
+  }
+
+  let matchStart = -1;
+  let matchCount = 0;
+
+  for (let i = 0; i <= originalLines.length - findLines.length; i++) {
+    const window = originalLines.slice(i, i + findLines.length).map(normalizeLine);
+    if (window.every((nl, j) => nl === findLines[j])) {
+      matchStart = i;
+      matchCount++;
+      if (matchCount > 1) break; // Early exit: ambiguous
+    }
+  }
+
+  if (matchCount === 0) {
+    const findPreview = find.length > 120 ? find.substring(0, 120) + '...' : find;
+    throw new Error(
+      `PATCH FAILED for "${filePath}" (exact + fuzzy): "find" string not found. ` +
+      `Searched for: ${JSON.stringify(findPreview)}. ` +
+      `Use github_read_file to get the exact current content, then copy the precise text to match.`
+    );
+  }
+
+  if (matchCount > 1) {
+    throw new Error(
+      `PATCH FAILED for "${filePath}" (fuzzy): "find" matches multiple locations. ` +
+      `Include more unique surrounding context in the "find" string.`
+    );
+  }
+
+  // Apply replacement, preserving original content before/after the matched window
+  const before = originalLines.slice(0, matchStart).join('\n');
+  const after = originalLines.slice(matchStart + findLines.length).join('\n');
+  const result = (matchStart > 0 ? before + '\n' : '') + replace + (matchStart + findLines.length < originalLines.length ? '\n' + after : '');
+
+  console.log(`[fuzzy-patch] Applied whitespace-tolerant patch to "${filePath}" at line ~${matchStart + 1}`);
+  return result;
 }
 
 // Tool definitions in OpenAI function calling format
@@ -1418,20 +1506,7 @@ async function githubPushFiles(
     let fileContent = decodeBase64Utf8(fileData.content);
     for (let pi = 0; pi < change.patches.length; pi++) {
       const patch = change.patches[pi];
-      const idx = fileContent.indexOf(patch.find);
-      if (idx === -1) {
-        throw new Error(
-          `PATCH FAILED for "${change.path}" (patch #${pi + 1}): ` +
-          `"find" string not found. Use github_read_file to get exact content.`
-        );
-      }
-      if (fileContent.indexOf(patch.find, idx + 1) !== -1) {
-        throw new Error(
-          `PATCH FAILED for "${change.path}" (patch #${pi + 1}): ` +
-          `"find" matches multiple times. Include more context.`
-        );
-      }
-      fileContent = fileContent.substring(0, idx) + patch.replace + fileContent.substring(idx + patch.find.length);
+      fileContent = applyFuzzyPatch(fileContent, patch.find, patch.replace, change.path);
     }
     console.log(`[github_push_files] Resolved patch for "${change.path}": ${change.patches.length} patch(es) applied`);
     changes[ci] = { path: change.path, content: fileContent, action: 'update' };
@@ -1447,6 +1522,22 @@ async function githubPushFiles(
     }
     if (change.action !== 'delete' && !change.content) {
       throw new Error(`Missing content for ${change.action} on "${change.path}".`);
+    }
+  }
+
+  // Bracket balance check: catch truncated/corrupted code files before committing
+  const BRACKET_CHECK_EXTENSIONS = /\.(js|jsx|ts|tsx|css)$/i;
+  for (const change of changes) {
+    if (change.action === 'delete' || !change.content) continue;
+    if (BRACKET_CHECK_EXTENSIONS.test(change.path)) {
+      const syntaxIssue = checkBracketBalance(change.content);
+      if (syntaxIssue) {
+        throw new Error(
+          `SYNTAX ERROR in "${change.path}": ${syntaxIssue}. ` +
+          `The patched file has unbalanced brackets/braces/parens — likely a truncated or corrupted write. ` +
+          `Use github_read_file to verify the file content and fix the patch.`
+        );
+      }
     }
   }
 
@@ -1901,37 +1992,10 @@ async function githubCreatePr(
 
     let fileContent = decodeBase64Utf8(fileData.content);
 
-    // Apply each patch sequentially
+    // Apply each patch sequentially (exact match with fuzzy fallback)
     for (let pi = 0; pi < change.patches.length; pi++) {
       const patch = change.patches[pi];
-      const findStr = patch.find;
-      const replaceStr = patch.replace;
-
-      // Count occurrences
-      const firstIdx = fileContent.indexOf(findStr);
-      if (firstIdx === -1) {
-        // Provide helpful context: show nearby content to help the model fix the find string
-        const findPreview = findStr.length > 100 ? findStr.substring(0, 100) + '...' : findStr;
-        throw new Error(
-          `PATCH FAILED for "${change.path}" (patch #${pi + 1}/${change.patches.length}): ` +
-          `"find" string not found in file. The text must match EXACTLY (including whitespace, quotes, newlines). ` +
-          `Searched for: ${JSON.stringify(findPreview)}. ` +
-          `Use github_read_file to get the exact current content, then copy the precise text to match.`
-        );
-      }
-
-      const secondIdx = fileContent.indexOf(findStr, firstIdx + 1);
-      if (secondIdx !== -1) {
-        // Multiple matches — ambiguous
-        throw new Error(
-          `PATCH FAILED for "${change.path}" (patch #${pi + 1}/${change.patches.length}): ` +
-          `"find" string matches ${fileContent.split(findStr).length - 1} times (must match exactly once). ` +
-          `Include more surrounding context in the "find" string to make it unique.`
-        );
-      }
-
-      // Apply the replacement
-      fileContent = fileContent.substring(0, firstIdx) + replaceStr + fileContent.substring(firstIdx + findStr.length);
+      fileContent = applyFuzzyPatch(fileContent, patch.find, patch.replace, change.path);
     }
 
     // Convert to a resolved "update" action with the patched content
@@ -2501,6 +2565,21 @@ async function githubCreatePr(
     }
     const refData = await refResponse.json() as GitRefResponse;
     baseSha = refData.object.sha;
+  }
+
+  // Bracket balance check: catch truncated/corrupted code files before committing
+  for (const change of changes) {
+    if (change.action === 'delete' || !change.content) continue;
+    if (/\.(js|jsx|ts|tsx|css)$/i.test(change.path)) {
+      const syntaxIssue = checkBracketBalance(change.content);
+      if (syntaxIssue) {
+        throw new Error(
+          `SYNTAX ERROR in "${change.path}": ${syntaxIssue}. ` +
+          `The patched file has unbalanced brackets/braces/parens — likely a truncated or corrupted write. ` +
+          `Use github_read_file to verify the file content and fix the patch.`
+        );
+      }
+    }
   }
 
   // --- Step 2: Create blobs for each file ---
