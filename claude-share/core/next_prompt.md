@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-18 (Orchestra gate bypass for proven models + prompt dedup fixes)
+**Last Updated:** 2026-03-19 (F.14 Fuzzy Patch Fallback + Bracket Balance Pre-Commit — 1861 tests)
 
 ---
 
@@ -57,6 +57,8 @@ The Cloudflare Container (`@cloudflare/sandbox`) is already deployed and working
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-19 | F.14 — Fuzzy patch fallback + bracket balance pre-commit | Claude Opus 4.6 | 1861 tests. applyFuzzyPatch (exact→fuzzy line-by-line), checkBracketBalance before blob creation. MiniMax PR #98: cleanest Step 3 across 16+ attempts |
+| 2026-03-19 | F.13 — MiniMax M2.7 upgrade + death loop fix | Claude Opus 4.6 | 1848 tests. Escalating stream-split nudges, size guards on workspace_write_file |
 | 2026-03-18 | Orchestra gate bypass for proven models (event history) | Claude Opus 4.6 | 1848 tests |
 | 2026-03-18 | Prompt dedup fix (WORK_LOG duplicates + code-first ordering) | Claude Opus 4.6 | 1848 tests |
 | 2026-03-18 | Fix Proceed button loop + improve unknown model warning | Claude Opus 4.6 | 1848 tests |

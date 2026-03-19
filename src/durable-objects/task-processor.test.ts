@@ -13,6 +13,14 @@ vi.mock('cloudflare:workers', () => ({
   },
 }));
 
+// Mock @cloudflare/sandbox — the real module depends on @cloudflare/containers
+// which has broken ESM paths in the test environment
+vi.mock('@cloudflare/sandbox', () => ({
+  getSandbox: vi.fn(() => ({
+    startProcess: vi.fn(),
+  })),
+}));
+
 // Mock the openrouter modules (keep parseSSEStream real — used by direct API streaming)
 vi.mock('../openrouter/client', async (importOriginal) => {
   const original = await importOriginal<typeof import('../openrouter/client')>();

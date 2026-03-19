@@ -4631,8 +4631,14 @@ export const TOOLS_WITHOUT_BROWSER: ToolDefinition[] = AVAILABLE_TOOLS.filter(
   tool => tool.function.name !== 'browse_url' && tool.function.name !== 'sandbox_exec'
 );
 
+/** Capability flags controlling which tools are exposed to the model. */
+export interface ToolCapabilities {
+  browser?: boolean;
+  sandbox?: boolean;
+}
+
 /**
- * Get tools for a given task phase.
+ * Get tools for a given task phase, filtered by available capabilities.
  *
  * Previously this filtered mutation tools during the "plan" phase to save
  * ~500 tokens. However, LLMs base their strategy on the tool schemas in
@@ -4642,13 +4648,23 @@ export const TOOLS_WITHOUT_BROWSER: ToolDefinition[] = AVAILABLE_TOOLS.filter(
  * complete action space.
  *
  * - review: No tools (returns empty — caller should pass undefined)
- * - all other phases: Full DO-available tools
+ * - all other phases: Tools filtered by capabilities
+ *
+ * When `caps` is omitted, defaults to no browser/sandbox (legacy behavior).
  */
-export function getToolsForPhase(phase?: string): ToolDefinition[] {
+export function getToolsForPhase(phase?: string, caps?: ToolCapabilities): ToolDefinition[] {
   if (phase === 'review') {
     return [];
   }
-  return TOOLS_WITHOUT_BROWSER;
+  // If no capabilities specified, use legacy filter (no browser, no sandbox)
+  if (!caps) {
+    return TOOLS_WITHOUT_BROWSER;
+  }
+  return AVAILABLE_TOOLS.filter((tool) => {
+    if (!caps.browser && tool.function.name === 'browse_url') return false;
+    if (!caps.sandbox && tool.function.name === 'sandbox_exec') return false;
+    return true;
+  });
 }
 
 /**

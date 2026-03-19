@@ -19,6 +19,12 @@ vi.mock('cloudflare:workers', () => ({
   },
 }));
 
+vi.mock('@cloudflare/sandbox', () => ({
+  getSandbox: vi.fn(() => ({
+    startProcess: vi.fn(),
+  })),
+}));
+
 vi.mock('../openrouter/client', async (importOriginal) => {
   const original = await importOriginal<typeof import('../openrouter/client')>();
   return {

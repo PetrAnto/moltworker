@@ -5,8 +5,9 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
+import { getSandbox, type Sandbox as SandboxClass } from '@cloudflare/sandbox';
 import { createOpenRouterClient, parseSSEStream, type ChatMessage, type ResponseFormat } from '../openrouter/client';
-import { executeTool, AVAILABLE_TOOLS, githubReadFile, type ToolContext, type ToolCall, type WorkspaceFile, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools } from '../openrouter/tools';
+import { executeTool, AVAILABLE_TOOLS, githubReadFile, type ToolContext, type ToolCall, type WorkspaceFile, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools, type ToolCapabilities } from '../openrouter/tools';
 import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isReasoningMandatoryError, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, getOrchestraRecommendations, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { injectCacheControl } from '../openrouter/prompt-cache';
@@ -95,8 +96,8 @@ const EMERGENCY_CORE_ALIASES = ['qwencoderfree', 'gptoss', 'devstral'];
 
 // Read-only tools that are safe to execute in parallel (no side effects).
 // Mutation tools (github_api, github_create_pr, sandbox_exec) must run sequentially.
-// Note: browse_url and sandbox_exec are already excluded from DO via TOOLS_WITHOUT_BROWSER,
-// but sandbox_exec is listed here for completeness in case the filter changes.
+// Note: browse_url is excluded from DO via TOOLS_WITHOUT_BROWSER. sandbox_exec is now
+// conditionally available in DO when the Sandbox binding is present (capability-aware filtering).
 // workspace_write_file and workspace_delete_file have side effects (staging files) so they're
 // NOT parallel-safe (caching would skip the write). workspace_commit is a mutation (pushes to GitHub).
 // All workspace tools run sequentially.
@@ -332,9 +333,11 @@ export interface TaskRequest {
   acontextBaseUrl?: string;
 }
 
-// DO environment with R2 binding
+// DO environment with R2 + Sandbox bindings
 interface TaskProcessorEnv {
   MOLTBOT_BUCKET?: R2Bucket;
+  Sandbox?: DurableObjectNamespace<SandboxClass>; // Sandbox container binding (for sandbox_exec in DO)
+  SANDBOX_SLEEP_AFTER?: string; // Controls container keep-alive behavior
 }
 
 // Watchdog alarm interval (90 seconds)
@@ -1885,10 +1888,33 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Workspace manager persists staged files in DO storage (survives evictions/auto-resumes)
     const workspace = this.getWorkspaceManager(task.taskId);
 
+    // Initialize sandbox if the Sandbox DO binding is available.
+    // getSandbox() returns a thin RPC stub — safe to call from inside a DO.
+    let sandbox: import('../openrouter/tools').SandboxLike | undefined;
+    if (this.env.Sandbox) {
+      try {
+        const sleepAfter = this.env.SANDBOX_SLEEP_AFTER?.toLowerCase() || 'never';
+        const sandboxOptions = sleepAfter === 'never'
+          ? { keepAlive: true as const }
+          : { sleepAfter };
+        sandbox = getSandbox(this.env.Sandbox, 'moltbot', sandboxOptions);
+        console.log(`[TaskProcessor] Sandbox initialized for task ${task.taskId}`);
+      } catch (err) {
+        console.error(`[TaskProcessor] Failed to initialize sandbox:`, err);
+      }
+    }
+
+    // Capability flags for tool filtering — sandbox_exec only if sandbox is ready
+    const toolCaps: ToolCapabilities = {
+      browser: false, // Browser Rendering binding not available in DOs
+      sandbox: !!sandbox,
+    };
+
     const toolContext: ToolContext = {
       githubToken: request.githubToken,
       braveSearchKey: request.braveSearchKey,
       cloudflareApiToken: request.cloudflareApiToken,
+      sandbox, // Sandbox container for sandbox_exec tool (undefined if binding unavailable)
       acontextClient: createAcontextClient(request.acontextKey, request.acontextBaseUrl),
       acontextSessionId: task.taskId,
       // Workspace callbacks — persist to DO storage, not in-memory
@@ -2472,7 +2498,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     {
                       maxTokens: isPaid ? 32768 : 16384,
                       temperature: getTemperature(task.modelAlias),
-                      tools: useTools ? getToolsForPhase(task.phase) : undefined,
+                      tools: useTools ? getToolsForPhase(task.phase, toolCaps) : undefined,
                       toolChoice: useTools && task.phase !== 'review' ? 'auto' : undefined,
                       idleTimeoutMs: idleTimeout, // Scaled by context size (45s-120s)
                       reasoningLevel: request.reasoningLevel,
@@ -2543,7 +2569,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   messages: finalMessages,
                   maxTokens,
                   temperature: getTemperature(task.modelAlias),
-                  tools: useTools ? getToolsForPhase(task.phase) : undefined,
+                  tools: useTools ? getToolsForPhase(task.phase, toolCaps) : undefined,
                   toolChoice: useTools && task.phase !== 'review' ? 'auto' : undefined,
                   reasoning: reasoningParam,
                 }) as unknown as Record<string, unknown>;
@@ -2559,7 +2585,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   stream_options: { include_usage: true },
                 };
                 if (useTools) {
-                  const phaseTools = getToolsForPhase(task.phase);
+                  const phaseTools = getToolsForPhase(task.phase, toolCaps);
                   if (phaseTools.length > 0) {
                     requestBody.tools = phaseTools;
                     requestBody.tool_choice = 'auto';
