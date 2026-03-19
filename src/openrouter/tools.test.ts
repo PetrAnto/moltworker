@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, applyFuzzyPatch, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, getToolsForPhase, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, applyFuzzyPatch, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -4402,8 +4402,26 @@ describe('sandbox_exec tool', () => {
     expect(tool!.function.parameters.required).toEqual(['commands']);
   });
 
-  it('should NOT be included in TOOLS_WITHOUT_BROWSER (excluded from DOs)', () => {
+  it('should NOT be included in TOOLS_WITHOUT_BROWSER (excluded from DOs by default)', () => {
     const tool = TOOLS_WITHOUT_BROWSER.find(t => t.function.name === 'sandbox_exec');
+    expect(tool).toBeUndefined();
+  });
+
+  it('should be included in getToolsForPhase when sandbox capability is true', () => {
+    const tools = getToolsForPhase('work', { sandbox: true });
+    const tool = tools.find(t => t.function.name === 'sandbox_exec');
+    expect(tool).toBeDefined();
+  });
+
+  it('should NOT be included in getToolsForPhase when sandbox capability is false', () => {
+    const tools = getToolsForPhase('work', { sandbox: false });
+    const tool = tools.find(t => t.function.name === 'sandbox_exec');
+    expect(tool).toBeUndefined();
+  });
+
+  it('should NOT be included in getToolsForPhase without caps (legacy behavior)', () => {
+    const tools = getToolsForPhase('work');
+    const tool = tools.find(t => t.function.name === 'sandbox_exec');
     expect(tool).toBeUndefined();
   });
 
@@ -4420,9 +4438,14 @@ describe('sandbox_exec tool', () => {
     expect(result.content).toContain('Sandbox container is not available');
   });
 
-  it('should fail with invalid commands JSON', async () => {
+  it('should accept plain string command (auto-wrapped in array)', async () => {
     const mockSandbox: SandboxLike = {
-      startProcess: vi.fn(),
+      startProcess: vi.fn().mockResolvedValue({
+        id: 'proc-1',
+        status: 'completed',
+        getLogs: vi.fn().mockResolvedValue({ stdout: 'hello\n', stderr: '' }),
+        kill: vi.fn(),
+      }),
     };
 
     const result = await executeTool({
@@ -4430,7 +4453,26 @@ describe('sandbox_exec tool', () => {
       type: 'function',
       function: {
         name: 'sandbox_exec',
-        arguments: JSON.stringify({ commands: 'not json' }),
+        arguments: JSON.stringify({ commands: 'echo hello' }),
+      },
+    }, { sandbox: mockSandbox });
+
+    // Should succeed — plain string is wrapped in ["echo hello"]
+    expect(mockSandbox.startProcess).toHaveBeenCalled();
+    expect(result.content).toContain('hello');
+  });
+
+  it('should fail with invalid JSON array', async () => {
+    const mockSandbox: SandboxLike = {
+      startProcess: vi.fn(),
+    };
+
+    const result = await executeTool({
+      id: 'call_sb_2b',
+      type: 'function',
+      function: {
+        name: 'sandbox_exec',
+        arguments: JSON.stringify({ commands: '[not valid json' }),
       },
     }, { sandbox: mockSandbox });
 

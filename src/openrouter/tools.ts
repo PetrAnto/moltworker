@@ -2738,12 +2738,18 @@ async function sandboxExec(
     throw new Error('Sandbox container is not available. This tool requires a sandbox-enabled environment. Use github_create_pr for simple file changes instead.');
   }
 
-  // Parse commands
+  // Parse commands — accept JSON array or plain string (models often skip the array wrapper)
   let commands: string[];
-  try {
-    commands = JSON.parse(commandsJson);
-  } catch {
-    throw new Error('Invalid commands JSON. Expected: ["cmd1", "cmd2", ...]');
+  const trimmed = commandsJson.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      commands = JSON.parse(trimmed);
+    } catch {
+      throw new Error('Invalid commands JSON. Expected: ["cmd1", "cmd2", ...]');
+    }
+  } else {
+    // Plain string — wrap in array (common model behavior: sending "echo hi" instead of '["echo hi"]')
+    commands = [trimmed];
   }
 
   if (!Array.isArray(commands) || commands.length === 0) {
