@@ -254,6 +254,7 @@ interface BuildRunPromptParams {
   previousTasks: OrchestraTask[];
   specificTask?: string; // Optional: user-specified task instead of "next"
   branchSlug?: string; // Pre-generated branch slug (without bot/ prefix)
+  hasSandbox?: boolean; // If true, sandbox_exec is available — prompt encourages testing
 }
 
 /**
@@ -350,7 +351,13 @@ If a task says "split", "extract", or "move" code: CREATE the new file, ADD impo
 
 All calls use branch \`${branch}\` (bot/ prefix added automatically). Title ends with [${modelAlias}].
 **After calling github_create_pr, CHECK THE RESULT.** If error, fix and retry.
-
+${params.hasSandbox ? `
+## Step 3.5: VERIFY (sandbox available)
+Before creating the PR, use \`sandbox_exec\` to test your changes:
+- Clone the repo: \`["git clone https://github.com/${repo}.git repo && cd repo && git checkout ${branch}"]\`
+- Run tests: \`["cd repo && npm test"]\` or the project's test command
+- If tests fail, fix the code and retry. Do NOT create a PR with failing tests.
+` : ''}
 ## Step 4: REPORT
 \`\`\`
 ORCHESTRA_RESULT:
@@ -454,7 +461,14 @@ Locate code to extract by **function/const/component name**, not line number (li
 When extracting React components/hooks: copy ALL required imports (useState, useEffect, context providers), prop types, and hook dependencies to the new file.
 
 **After calling github_create_pr, CHECK THE RESULT.** If error (422, 403), fix and retry with a different branch name. NEVER claim success if the tool returned an error.
-
+${params.hasSandbox ? `
+## Step 3.5: VERIFY CODE (sandbox available)
+Before creating the PR, use \`sandbox_exec\` to verify your changes work:
+- Clone and checkout: \`["git clone https://github.com/${repo}.git repo && cd repo && git checkout ${branch}"]\`
+- Run tests/build: \`["cd repo && npm test"]\` or the project's test/build command
+- If tests fail, fix your code (patch the files again) and re-test. Do NOT submit a PR with failing tests.
+- Keep sandbox calls focused — max 3-4 calls for verification.
+` : ''}
 ## Step 4: REPORT
 \`\`\`
 ORCHESTRA_RESULT:
@@ -579,7 +593,20 @@ When extracting React components/hooks: copy ALL required imports (useState, use
 - Do NOT regenerate entire files from memory — you WILL introduce syntax errors and encoding changes
 
 If blocked (API errors): update WORK_LOG.md with status, report \`pr: FAILED\`.
+${params.hasSandbox ? `
+## Step 4.5: VERIFY CODE WITH SANDBOX
+You have \`sandbox_exec\` available — use it to verify your changes before creating the PR:
+1. Clone and checkout your branch: \`["git clone https://github.com/${repo}.git repo && cd repo && git checkout ${branch}"]\`
+2. Run the project's test suite: \`["cd repo && npm test"]\` (or whatever test command the project uses)
+3. Optionally run build/lint: \`["cd repo && npm run build"]\`
+4. If tests or build fail, **fix the code** (push patches via workspace_write_file + workspace_commit), then re-test
+5. Only proceed to create the PR once tests pass
 
+**Guidelines:**
+- Keep sandbox verification focused — typically 2-4 calls (clone, test, maybe build/lint, maybe re-test after fix)
+- If no test suite exists, at least verify the code compiles/builds
+- Report test results in the PR body
+` : ''}
 ## Step 5: UPDATE ROADMAP & WORK LOG (in same PR)
 - **ROADMAP.md**: Change ONLY your completed task from \`- [ ]\` to \`- [x]\`. Never delete tasks.
 - **WORK_LOG.md**: Read the existing file first. KEEP ALL existing content BYTE-FOR-BYTE identical. APPEND exactly ONE new row at the bottom matching the EXISTING column format. Before appending, verify the row does not already exist in the file. Do NOT restructure the table or change column headers. If the existing format differs from what you expect, match it exactly.
