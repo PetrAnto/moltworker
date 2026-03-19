@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-17 (F.12 Event-Based Model Scoring — event reliability feeds into /orch advise, stall/validation penalties, 1848 tests)
+**Last Updated:** 2026-03-19 (F.14 Fuzzy Patch Fallback + Bracket Balance Pre-Commit — 1861 tests)
 
 ---
 
@@ -403,6 +403,8 @@
 | F.9 | Orchestra hardening (post-task validation, historical ranking, stall detection) | ✅ | 3-4h | Multi-turn deliverable validation (3 escalation levels), sticky context anchor on resume, Bayesian completion rates in /orch advise, orchestra resume limits (6/3), read-loop stall abort, extraction source-shrank check, stream_options parity for direct APIs, /status shows API source |
 | F.10 | Enable reasoning for kimidirect (Moonshot Kimi K2.5) | ✅ | 15min | Added `reasoning: 'configurable'` to kimidirect model — auto-detected reasoning level injected as `{ enabled: true/false }`, improves orchestra task success rate |
 | F.11 | Orchestra observability (R2-persisted events + /orch stats) | ✅ | 1h | OrchestraEvent type, JSONL append to R2, 5 event types at 6 injection points in task-processor, `/orch stats` command with per-model aggregation, 9 tests |
+| F.13 | MiniMax M2.7 upgrade + death loop fix | ✅ | 2h | Upgraded MiniMax to M2.7-20260318, added escalating stream-split nudges (consecutiveEmptySplits: gentle→ALL-CAPS→bail at 5), size guards on workspace_write_file (create ≤250 lines/10KB, update ≤300 lines), 13 new tests (1848 total) |
+| F.14 | Fuzzy patch fallback + bracket balance pre-commit checks | ✅ | 1h | applyFuzzyPatch: exact indexOf fast path → trimmed line-by-line fuzzy fallback, skips whitespace-significant files (.py/.yaml/.pug/Makefile), unique match enforcement. checkBracketBalance wired into githubPushFiles + githubCreatePr before blob creation. 14 new tests (1861 total). Validated: MiniMax M2.7 PR #98 cleanest Step 3 across 16+ attempts |
 
 ### Future: Platform Evolution (M3 Gate)
 
@@ -485,6 +487,8 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-19 | Claude Opus 4.6 | feat(tools): F.14 fuzzy patch fallback + bracket balance pre-commit — applyFuzzyPatch with exact→fuzzy fallback (trimmed line-by-line), checkBracketBalance wired before blob creation in githubPushFiles + githubCreatePr, 14 new tests (1861 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts
+2026-03-19 | Claude Opus 4.6 | fix(task-processor): F.13 break stream split death loop — escalating nudges (consecutiveEmptySplits), size guards on workspace_write_file, MiniMax M2.7 upgrade, 13 new tests (1848 total) | src/durable-objects/task-processor.ts, src/openrouter/models.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(orchestra): F.12 event-based model scoring — getEventBasedModelScores() computes per-model reliability from R2 events (stalls, validation fails, retries), wired into /orch advise with ±20pt scoring + stall/validation penalties, 8 new tests | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/openrouter/models.ts, src/telegram/handler.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(orchestra): F.11 orchestra observability — OrchestraEvent JSONL in R2, appendOrchestraEvent + getRecentOrchestraEvents + aggregateOrchestraStats, 6 injection points in task-processor, /orch stats command, 9 new tests | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(models): F.10 enable reasoning for kimidirect — added reasoning: 'configurable' to Kimi K2.5 Direct model, 2 new tests | src/openrouter/models.ts, src/openrouter/reasoning.test.ts
