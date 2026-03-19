@@ -482,13 +482,13 @@ simulate.get('/sandbox-test', async (c) => {
       body: JSON.stringify(taskRequest),
     }));
 
-    // Poll for up to 30s
-    const status = await waitForCompletion(doStub, 30_000);
+    // Poll for up to 60s — sandbox cold start + model round-trip can take >30s
+    const status = await waitForCompletion(doStub, 60_000);
     doResult = status.result || undefined;
     doToolsUsed = status.toolsUsed || [];
     doSandboxOk = doToolsUsed.includes('sandbox_exec');
     if (status.error) doError = status.error;
-    if (status.status === 'processing') doError = 'Timed out after 30s';
+    if (status.status === 'processing') doError = 'Timed out after 60s';
   } catch (err) {
     doError = err instanceof Error ? err.message : String(err);
   }

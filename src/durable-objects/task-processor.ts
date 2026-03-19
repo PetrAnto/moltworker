@@ -87,6 +87,8 @@ const DEFAULT_TOOL_RESULT_LENGTH = 8000; // ~2K tokens
 const MAX_TOOL_RESULT_LENGTH = 50000; // ~12.5K tokens
 // Compress context after this many tool calls
 const COMPRESS_AFTER_TOOLS = 6; // Compress more frequently
+// Max sandbox_exec calls per task — prevents infinite build/test loops
+const MAX_SANDBOX_CALLS_PER_TASK = 15;
 // Safety fallback for aliases without metadata
 const DEFAULT_CONTEXT_BUDGET = 60000;
 
@@ -3131,6 +3133,42 @@ If you already created the new file and just need to patch the original, call gi
 
           const toolNames = choice.message.tool_calls.map(tc => tc.function.name);
           task.toolsUsed.push(...toolNames);
+
+          // Safety: cap sandbox_exec calls per task to prevent infinite build/test loops
+          const sandboxCallCount = task.toolsUsed.filter(t => t === 'sandbox_exec').length;
+          if (sandboxCallCount > MAX_SANDBOX_CALLS_PER_TASK) {
+            // Strip sandbox_exec from this batch — let other tools proceed
+            const filtered = choice.message.tool_calls.filter(tc => tc.function.name !== 'sandbox_exec');
+            if (filtered.length === 0) {
+              // All calls were sandbox — inject a warning as if it were a tool result
+              conversationMessages.push({
+                role: 'tool',
+                tool_call_id: choice.message.tool_calls[0].id,
+                content: `⚠️ sandbox_exec limit reached (${MAX_SANDBOX_CALLS_PER_TASK} calls). No more shell commands allowed in this task. Summarize your findings and finish.`,
+              });
+              // Also add dummy results for remaining tool_calls to keep message pairing valid
+              for (let i = 1; i < choice.message.tool_calls.length; i++) {
+                conversationMessages.push({
+                  role: 'tool',
+                  tool_call_id: choice.message.tool_calls[i].id,
+                  content: 'Skipped — sandbox limit reached.',
+                });
+              }
+              console.log(`[TaskProcessor] Sandbox call limit (${MAX_SANDBOX_CALLS_PER_TASK}) reached for task ${task.taskId}`);
+              continue;
+            }
+            // Some non-sandbox tools remain — replace tool_calls with filtered set
+            // and add a sandbox limit warning for the blocked calls
+            const blockedCalls = choice.message.tool_calls.filter(tc => tc.function.name === 'sandbox_exec');
+            choice.message.tool_calls = filtered;
+            for (const blocked of blockedCalls) {
+              conversationMessages.push({
+                role: 'tool',
+                tool_call_id: blocked.id,
+                content: `⚠️ sandbox_exec limit reached (${MAX_SANDBOX_CALLS_PER_TASK} calls). No more shell commands allowed.`,
+              });
+            }
+          }
 
           // Track unique tool call signatures for cross-resume stall detection.
           // If the model keeps calling get_weather("Prague") across resumes, the

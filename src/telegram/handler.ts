@@ -2178,6 +2178,7 @@ export class TelegramHandler {
         previousTasks,
         specificTask: resolvedTask || undefined,
         branchSlug,
+        hasSandbox: !!this.sandbox,
       });
     }
 
