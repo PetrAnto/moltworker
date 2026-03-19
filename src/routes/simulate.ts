@@ -401,7 +401,111 @@ simulate.get('/health', async (c) => {
       r2: !!env.MOLTBOT_BUCKET,
       github: !!env.GITHUB_TOKEN,
       braveSearch: !!env.BRAVE_SEARCH_KEY,
+      sandbox: !!env.Sandbox,
     },
+  });
+});
+
+/**
+ * GET /simulate/sandbox-test — Test DO→Sandbox connectivity.
+ *
+ * Creates a temporary TaskProcessor DO instance, which initializes
+ * the Sandbox binding via getSandbox(). Then runs a trivial command
+ * (`echo ok`) to verify the sandbox_exec tool works end-to-end from
+ * within a Durable Object context.
+ *
+ * Use this after deploying to verify the Sandbox integration before
+ * relying on it for real tasks.
+ */
+simulate.get('/sandbox-test', async (c) => {
+  const env = c.env;
+  const taskId = `sandbox-test-${Date.now()}`;
+
+  // Step 1: Verify the binding exists
+  if (!env.Sandbox) {
+    return c.json({ ok: false, error: 'Sandbox binding not available in env' }, 500);
+  }
+
+  // Step 2: Test from Worker context (direct — this already works)
+  let workerSandboxOk = false;
+  let workerError: string | undefined;
+  try {
+    const sandbox = c.get('sandbox' as never) as SandboxLike | undefined;
+    if (sandbox) {
+      const proc = await sandbox.startProcess('echo sandbox-worker-ok');
+      // Wait briefly for process
+      await new Promise(r => setTimeout(r, 2000));
+      const logs = await proc.getLogs();
+      workerSandboxOk = !!(logs.stdout?.includes('sandbox-worker-ok'));
+    } else {
+      workerError = 'Sandbox middleware did not set sandbox on context';
+    }
+  } catch (err) {
+    workerError = err instanceof Error ? err.message : String(err);
+  }
+
+  // Step 3: Test from DO context — send a prompt that triggers sandbox_exec
+  // Use a prompt that explicitly requests code execution
+  let doSandboxOk = false;
+  let doError: string | undefined;
+  let doResult: string | undefined;
+  let doToolsUsed: string[] = [];
+  try {
+    const messages: import('../openrouter/client').ChatMessage[] = [
+      { role: 'system', content: 'You have a sandbox_exec tool. Use it to run: echo sandbox-do-ok. Return only the output.' },
+      { role: 'user', content: 'Run this shell command using sandbox_exec: echo sandbox-do-ok' },
+    ];
+
+    const taskRequest: import('../durable-objects/task-processor').TaskRequest = {
+      taskId,
+      chatId: 0,
+      userId: '999999999',
+      modelAlias: 'flash',
+      messages,
+      telegramToken: 'simulate-no-telegram',
+      openrouterKey: env.OPENROUTER_API_KEY || '',
+      githubToken: env.GITHUB_TOKEN,
+      braveSearchKey: env.BRAVE_SEARCH_KEY,
+      autoResume: false,
+      prompt: '[sandbox-test] echo sandbox-do-ok',
+      acontextKey: env.ACONTEXT_API_KEY,
+      acontextBaseUrl: env.ACONTEXT_BASE_URL,
+    };
+
+    const doName = `sandbox-test-${taskId}`;
+    const doId = env.TASK_PROCESSOR!.idFromName(doName);
+    const doStub = env.TASK_PROCESSOR!.get(doId);
+
+    await fetchDOWithRetry(doStub, new Request('https://do/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(taskRequest),
+    }));
+
+    // Poll for up to 30s
+    const status = await waitForCompletion(doStub, 30_000);
+    doResult = status.result || undefined;
+    doToolsUsed = status.toolsUsed || [];
+    doSandboxOk = doToolsUsed.includes('sandbox_exec');
+    if (status.error) doError = status.error;
+    if (status.status === 'processing') doError = 'Timed out after 30s';
+  } catch (err) {
+    doError = err instanceof Error ? err.message : String(err);
+  }
+
+  return c.json({
+    ok: workerSandboxOk && doSandboxOk,
+    worker: {
+      sandboxAvailable: workerSandboxOk,
+      error: workerError,
+    },
+    durableObject: {
+      sandboxExecUsed: doSandboxOk,
+      toolsUsed: doToolsUsed,
+      result: doResult?.slice(0, 500),
+      error: doError,
+    },
+    taskId,
   });
 });
 
