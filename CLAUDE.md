@@ -66,6 +66,11 @@ If not available, commit with standard format and document changes in PR descrip
 - **Redact logs** — Use `src/utils/logging.ts` for any user data
 - **No eval()** — Ever
 
+### Bug Fix Policy
+- **Fix bugs when you find them** — Never defer to "future work" or "noted for later". If you can see it's broken, fix it now.
+- **Don't trust repeated code patterns** — Copy-pasted code can repeat the same mistake. Trace the actual data flow instead of assuming existing code is correct.
+- **Think about realistic inputs** — Mentally test with nested paths, special characters, multibyte strings, empty values, and other edge cases before moving on.
+
 ### Code Quality
 - **Run tests before committing** — `npm test`
 - **Run typecheck** — `npm run typecheck`
