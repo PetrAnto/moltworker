@@ -1022,7 +1022,7 @@ export class TelegramHandler {
           // List all files
           const files = await r2ListFiles(this.r2Bucket, r2Prefix);
           if (files.length === 0) {
-            await this.bot.sendMessage(chatId, '📁 No saved files. Models can save files during tool-calling, or use:\n/files save <name> <content>');
+            await this.bot.sendMessage(chatId, '📁 No saved files yet.\nModels can save files during tool-calling via the save_file tool.');
             break;
           }
           const totalSize = files.reduce((sum, f) => sum + f.size, 0);
@@ -1049,10 +1049,13 @@ export class TelegramHandler {
             await this.bot.sendMessage(chatId, `⚠️ ${content}`);
           } else {
             // Truncate for Telegram (4096 char limit)
+            const contentBytes = new TextEncoder().encode(content).byteLength;
             const display = content.length > 3800
-              ? content.slice(0, 3800) + `\n\n... (truncated, ${content.length} bytes total)`
+              ? content.slice(0, 3800) + `\n\n... (truncated, ${contentBytes} bytes total)`
               : content;
-            await this.bot.sendMessage(chatId, `📄 **${sanitizeSavedFileName(fileName)}**:\n\`\`\`\n${display}\n\`\`\``);
+            const safeName = escapeHtml(sanitizeSavedFileName(fileName));
+            const safeContent = escapeHtml(display);
+            await this.bot.sendMessage(chatId, `📄 <b>${safeName}</b>:\n<pre>${safeContent}</pre>`, { parseMode: 'HTML' });
           }
           break;
         }
@@ -1079,9 +1082,7 @@ export class TelegramHandler {
             await this.bot.sendMessage(chatId, '📁 No files to clear.');
             break;
           }
-          for (const f of files) {
-            await this.r2Bucket.delete(`${r2Prefix}${f.name}`);
-          }
+          await this.r2Bucket.delete(files.map(f => `${r2Prefix}${f.name}`));
           await this.bot.sendMessage(chatId, `🗑️ Cleared ${files.length} files.`);
           break;
         }
