@@ -91,8 +91,10 @@ You are creating a structured project roadmap. Follow this workflow precisely.
 
 ## Workflow
 
-### Step 1: UNDERSTAND THE REPO (max 5-8 file reads)
+### Step 1: UNDERSTAND THE REPO (STRICT BUDGET: max 5 file reads total)
 **Be efficient — read only what you need, then move to Step 3 quickly.**
+**HARD LIMIT: You have a budget of 12 total tool calls for init. Plan accordingly: list_files → 2-3 read_file → create_pr.**
+- If the user asks to COPY or USE an existing roadmap, just find it and copy it — skip analysis.
 - Use \`github_list_files\` to scan the root and main source directory
 - Use \`github_read_file\` to read ONLY these key files:
   - README.md (project overview)
@@ -100,13 +102,13 @@ You are creating a structured project roadmap. Follow this workflow precisely.
   - Any existing roadmap: ${ROADMAP_FILE_CANDIDATES.join(', ')}
   - 1-2 main source files (entry point, main component)
 - Do NOT read every file — the listing gives you enough structure info
+- Do NOT re-read a file you already read — use the content from the first read
 
-### Step 1.5: FLAG LARGE FILES
+### Step 1.5: FLAG LARGE FILES (skip if user asked to copy existing roadmap)
 - Note file sizes from the listing to flag large files (>${LARGE_FILE_THRESHOLD_LINES} lines or ~${LARGE_FILE_THRESHOLD_KB}KB)
-- Also flag files in the WARNING ZONE: ${LARGE_FILE_WARNING_LINES}-${LARGE_FILE_THRESHOLD_LINES} lines. These will cross the threshold once new features are added.
+- Also flag files in the WARNING ZONE: ${LARGE_FILE_WARNING_LINES}-${LARGE_FILE_THRESHOLD_LINES} lines
 - Only check source code files (.ts, .tsx, .js, .jsx, .py, .vue, .svelte, etc.) — skip config, generated, and lock files
-- If any large or warning-zone files are found, they MUST be split into smaller modules before other tasks modify them
-- Record which files are large and what they contain (e.g., "src/App.tsx — 800 lines, contains routing + all page components")
+- Record which files are large and what they contain
 
 ### Step 2: ANALYZE THE PROJECT REQUEST
 - Read the user's project description carefully
@@ -150,42 +152,15 @@ Key rules for the roadmap:
 - Include dependency info so tasks execute in order. Always extract leaf modules first (modules that no other modules depend on) before extracting parent modules.
 - 3-6 phases is typical, each with 2-5 tasks
 
-**CRITICAL — ATOMIC REFACTORING TASKS (prevents dead code / incomplete splits):**
-When a task involves moving code from one file to new module files, the ENTIRE move (create new file + add imports + DELETE from source) MUST be ONE task. NEVER split "create modules" and "update source file" into separate tasks — the bot will only do the additive half and leave dead code.
+**CRITICAL — ATOMIC REFACTORING TASKS:**
+When a task involves moving code from one file to new module files, the ENTIRE move (create new file + add imports + DELETE from source) MUST be ONE task. NEVER split "create modules" and "update source file" into separate tasks.
+- Each task = create + import + DELETE — all three in ONE task
+- Use the word "DELETE" explicitly — never say "modify" for code removal
+- Anchor on function/const/component NAMES, not line numbers (they shift)
+- Include a verification gate (e.g., "grep for 'function X' returns 0 in source file")
+- Extract in topological order: leaf dependencies first, then parents
 
-BAD (causes failures — bot creates files but never deletes from source):
-\`\`\`
-- [ ] **Refactor 1.1**: Split App.jsx into modules
-- [ ] **Refactor 1.2**: Extract financial calculations (Depends on: 1.1)
-- [ ] **Refactor 1.3**: Extract destination data (Depends on: 1.1)
-\`\`\`
-
-GOOD (each task is self-contained and independently verifiable):
-\`\`\`
-- [ ] **Refactor 1.1**: Extract utility functions from App.jsx → src/utils.js
-  - Create src/utils.js with: clamp(), fmt(), fmtUsd(), shortTax() (~lines 20-33)
-  - Add import to App.jsx, DELETE these functions from App.jsx
-  - Verify: grep for "function clamp" returns 0 in App.jsx, App.jsx drops by ~14 lines
-- [ ] **Refactor 1.2**: Extract destination data from App.jsx → src/destinations.js
-  - Create src/destinations.js with: INITIAL_DESTS array (~lines 34-267)
-  - Add import to App.jsx, DELETE the INITIAL_DESTS definition from App.jsx
-  - Verify: grep for "INITIAL_DESTS =" returns 0 in App.jsx, App.jsx drops by ~234 lines
-  - Depends on: Refactor 1.1
-\`\`\`
-
-Rules for refactoring tasks:
-1. **Use the word "DELETE"** — never say "modify" or "update" for code removal. Say "DELETE function Foo from App.jsx" or "DELETE the INITIAL_DESTS definition"
-2. **Each task = create + import + DELETE** — all three actions in ONE task, ONE PR
-3. **Anchor on function/const/component NAMES as primary identifiers** — e.g., "clamp(), fmt(), fmtUsd(), shortTax()". Include approximate line numbers only as a rough guide (e.g., "~lines 20-33") since line numbers shift after each extraction. The executor MUST locate code by name/signature, not line number.
-4. **Include a verification gate** — grep-based checks proving the code is gone (e.g., "grep for 'function clamp' returns 0 in App.jsx") plus expected line count drop as a secondary check
-5. **No deferred deletion** — never write "Depends on: X" where X is supposed to do the deletion later. Each task cleans up after itself.
-6. **One extraction per task** — don't combine multiple unrelated extractions. Each task extracts ONE logical group.
-7. **Topological extraction order** — extract leaf dependencies first (pure utility functions, data constants), then UI atoms, then components that import from those atoms. Never extract a component before its dependencies have been extracted. This prevents broken imports during multi-step splits.
-8. **List ALL cross-file references** — if other files import/reference the extracted code, the task MUST update those files' imports to point at the new module. List them explicitly: "Update imports in Header.jsx, Dashboard.jsx to import from new module."
-9. **React/hooks: preserve context and dependencies** — when extracting components or hooks, ensure ALL required imports (useState, useEffect, context), prop types, and hook dependencies are copied to the new file. After extraction, the component must receive the same props/context it had inline.
-
-- **CRITICAL — Large file splitting:** If Step 1.5 found any large files (>${LARGE_FILE_THRESHOLD_LINES} lines) OR warning-zone files (>${LARGE_FILE_WARNING_LINES} lines), add self-contained extraction tasks EARLY in the roadmap (Phase 1 or as the first tasks in the phase that would modify the file). All tasks that modify that file MUST depend on the extraction tasks. Files in the warning zone WILL cross the threshold once features are added — split them proactively.
-  **For splitting:** use \`github_create_pr\` with BOTH the new module files (action "create") AND the updated source file (action "update" or "patch") in a SINGLE PR call. The identifier check allows splits when moved identifiers are found in other files in the same PR.
+- **Large file splitting:** If Step 1.5 found large files (>${LARGE_FILE_THRESHOLD_LINES} lines) or warning-zone files (>${LARGE_FILE_WARNING_LINES} lines), add extraction tasks EARLY in the roadmap. Use \`github_create_pr\` with BOTH new modules AND updated source in a SINGLE PR call.
 
 ### Step 4: CREATE or UPDATE WORK_LOG.md
 **CRITICAL — WORK_LOG.md is APPEND-ONLY and FORMAT-PRESERVING:**
