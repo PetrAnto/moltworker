@@ -588,21 +588,36 @@ describe('R2 file tools via executeTool', () => {
     expect(result.content).toContain('File limit reached');
   });
 
-  it('enforces storage quota via R2', async () => {
+  it('enforces per-file size limit via R2', async () => {
     const bucket = createMockR2();
     const prefix = 'files/user1/';
-    // Save a 9MB file first
-    await r2SaveFile(bucket, prefix, 'big.txt', 'x'.repeat(9_000_000));
-
-    // Now try to save another 1MB+ file → should exceed 10MB quota
     const result = await executeTool({
-      id: 'r2-6',
+      id: 'r2-6a',
       type: 'function',
-      function: { name: 'save_file', arguments: JSON.stringify({ name: 'more.txt', content: 'x'.repeat(1_000_001) }) },
+      function: { name: 'save_file', arguments: JSON.stringify({ name: 'huge.txt', content: 'x'.repeat(1_000_001) }) },
     }, { r2Bucket: bucket, r2FilePrefix: prefix });
 
-    // content.length > MAX_SAVED_FILE_SIZE (1MB) → rejected by size check first
     expect(result.content).toContain('File too large');
+  });
+
+  it('enforces total storage quota via R2', async () => {
+    const bucket = createMockR2();
+    const prefix = 'files/user1/';
+    // Save a 9.5MB file first (under 10MB total, under 1MB per-file... wait, 9.5MB > 1MB per file)
+    // We need multiple files to approach the quota
+    // Save 10 files of 950KB each = 9.5MB
+    for (let i = 0; i < 10; i++) {
+      await r2SaveFile(bucket, prefix, `chunk${i}.txt`, 'x'.repeat(950_000));
+    }
+
+    // Now try to save a 600KB file → total would be ~10.1MB, exceeding 10MB quota
+    const result = await executeTool({
+      id: 'r2-6b',
+      type: 'function',
+      function: { name: 'save_file', arguments: JSON.stringify({ name: 'overflow.txt', content: 'x'.repeat(600_000) }) },
+    }, { r2Bucket: bucket, r2FilePrefix: prefix });
+
+    expect(result.content).toContain('Storage quota exceeded');
   });
 
   it('allows overwrite at file count limit via R2', async () => {

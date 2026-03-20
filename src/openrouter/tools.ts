@@ -2953,7 +2953,8 @@ export async function r2SaveFile(bucket: R2Bucket, prefix: string, name: string,
   await bucket.put(key, content, {
     customMetadata: { originalName: name, savedAt: new Date().toISOString() },
   });
-  return `File saved: ${name} (${content.length} bytes)`;
+  const byteLength = new TextEncoder().encode(content).byteLength;
+  return `File saved: ${name} (${byteLength} bytes)`;
 }
 
 export async function r2ReadFile(bucket: R2Bucket, prefix: string, name: string): Promise<string> {
@@ -2991,8 +2992,9 @@ async function saveFile(name: string, content: string, context?: ToolContext): P
 
   if (typeof content !== 'string') return 'Error: Content must be a string.';
   if (content.includes('\0')) return 'Error: Binary content is not supported. Save text content only.';
-  if (content.length > MAX_SAVED_FILE_SIZE) {
-    return `Error: File too large (${content.length} bytes). Maximum is ${MAX_SAVED_FILE_SIZE} bytes.`;
+  const contentBytes = new TextEncoder().encode(content).byteLength;
+  if (contentBytes > MAX_SAVED_FILE_SIZE) {
+    return `Error: File too large (${contentBytes} bytes). Maximum is ${MAX_SAVED_FILE_SIZE} bytes.`;
   }
 
   // R2 path (primary)
@@ -3003,9 +3005,9 @@ async function saveFile(name: string, content: string, context?: ToolContext): P
     if (!existingFile && existing.length >= MAX_SAVED_FILE_COUNT) {
       return `Error: File limit reached (${MAX_SAVED_FILE_COUNT} files). Delete old files first.`;
     }
-    // Check total storage quota (sum of existing sizes + new content)
+    // Check total storage quota (sum of existing sizes + new content bytes)
     const totalExisting = existing.reduce((sum, f) => sum + f.size, 0);
-    const newTotal = totalExisting - (existingFile?.size || 0) + content.length;
+    const newTotal = totalExisting - (existingFile?.size || 0) + contentBytes;
     if (newTotal > MAX_USER_STORAGE_BYTES) {
       const usedMB = (totalExisting / 1_000_000).toFixed(1);
       return `Error: Storage quota exceeded (${usedMB}MB / ${MAX_USER_STORAGE_BYTES / 1_000_000}MB). Delete old files first.`;
