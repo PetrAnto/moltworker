@@ -53,22 +53,28 @@ export function applyFuzzyPatch(content: string, find: string, replace: string, 
   }
 
   // --- Fuzzy fallback: trimmed line-by-line comparison ---
+  const isCRLF = content.includes('\r\n');
   const originalLines = content.split('\n');
   const findLines = find.split('\n').map(normalizeLine);
 
   // Strip leading/trailing empty normalized lines from find (models often add extra newlines)
-  while (findLines.length > 0 && findLines[0] === '') findLines.shift();
-  while (findLines.length > 0 && findLines[findLines.length - 1] === '') findLines.pop();
+  let shiftCount = 0;
+  while (findLines.length > 0 && findLines[0] === '') { findLines.shift(); shiftCount++; }
+  let popCount = 0;
+  while (findLines.length > 0 && findLines[findLines.length - 1] === '') { findLines.pop(); popCount++; }
 
   if (findLines.length === 0) {
     throw new Error(`PATCH FAILED for "${filePath}": "find" string is empty after normalization.`);
   }
 
+  // Pre-normalize original lines once (avoids O(N*M) re-normalization in sliding window)
+  const normalizedOriginal = originalLines.map(normalizeLine);
+
   let matchStart = -1;
   let matchCount = 0;
 
-  for (let i = 0; i <= originalLines.length - findLines.length; i++) {
-    const window = originalLines.slice(i, i + findLines.length).map(normalizeLine);
+  for (let i = 0; i <= normalizedOriginal.length - findLines.length; i++) {
+    const window = normalizedOriginal.slice(i, i + findLines.length);
     if (window.every((nl, j) => nl === findLines[j])) {
       matchStart = i;
       matchCount++;
@@ -92,10 +98,27 @@ export function applyFuzzyPatch(content: string, find: string, replace: string, 
     );
   }
 
+  // Apply symmetric trimming to replace string (same empty-line stripping as find)
+  const replaceLines = replace.split('\n');
+  for (let s = 0; s < shiftCount; s++) {
+    if (replaceLines.length > 0 && normalizeLine(replaceLines[0]) === '') replaceLines.shift();
+  }
+  for (let p = 0; p < popCount; p++) {
+    if (replaceLines.length > 0 && normalizeLine(replaceLines[replaceLines.length - 1]) === '') replaceLines.pop();
+  }
+  const adjustedReplace = replaceLines.join('\n');
+
   // Apply replacement, preserving original content before/after the matched window
   const before = originalLines.slice(0, matchStart).join('\n');
   const after = originalLines.slice(matchStart + findLines.length).join('\n');
-  const result = (matchStart > 0 ? before + '\n' : '') + replace + (matchStart + findLines.length < originalLines.length ? '\n' + after : '');
+  let result = (matchStart > 0 ? before + '\n' : '') + adjustedReplace + (matchStart + findLines.length < originalLines.length ? '\n' + after : '');
+
+  // Preserve original line ending style
+  if (isCRLF) {
+    result = result.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+  } else {
+    result = result.replace(/\r\n/g, '\n');
+  }
 
   console.log(`[fuzzy-patch] Applied whitespace-tolerant patch to "${filePath}" at line ~${matchStart + 1}`);
   return result;
