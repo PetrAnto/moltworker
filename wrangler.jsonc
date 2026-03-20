@@ -79,5 +79,8 @@
   },
   "browser": {
     "binding": "BROWSER"
+  },
+  "limits": {
+    "cpu_ms": 300000
   }
 }
