@@ -2822,7 +2822,7 @@ describe('github_create_pr tool', () => {
       }
 
       // File content fetch for patch resolution
-      if (method === 'GET' && urlStr.includes('/contents/src%2Fapp.js')) {
+      if (method === 'GET' && urlStr.includes('/contents/src/app.js')) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({ content: base64Content, encoding: 'base64', size: originalContent.length }),
