@@ -433,17 +433,26 @@ interface StreamPolicy {
 /** @internal Exported for testing */
 export function getStreamPolicy(provider: string, idleTimeoutMs: number): StreamPolicy {
   if (provider === 'anthropic') {
-    // Anthropic direct: generous soft split at 270s, hard abort at 300s.
+    // Anthropic direct: generous soft split, hard abort at 300s.
     // Reasoning models spend 60-120s+ thinking before first output — the old
-    // 85s split killed streams during thinking. 270s gives 4.5 min of streaming
-    // time, and if a task genuinely exceeds that, the graceful split preserves
-    // partial output for auto-resume (unlike the hard abort which loses it).
+    // 85s split killed streams during thinking.
+    //
+    // Timing contract: soft split must fire before hard abort. With keepalive
+    // every 15s, the worst case is a keepalive at T=255s (continues) then next
+    // at T=270s (splits). Hard abort at 300s gives 30s of safety margin.
+    // Tool in-flight gets 285s — still 15s before hard abort, guaranteeing
+    // at least one keepalive opportunity to trigger graceful split.
+    //
+    // Persistence at 30s is a clean multiple of keepalive (15s), so storage
+    // writes fire every 2nd keepalive tick with zero harmonic drift.
+    const keepAliveIntervalMs = 15_000;
+    const hardTimeoutMs = 300_000;
     return {
-      keepAliveIntervalMs: 20_000,
-      persistIntervalMs: 30_000,
-      softSplitMs: 270_000,
-      softSplitToolMs: 290_000,
-      hardTimeoutMs: 300_000, // 5 min absolute max
+      keepAliveIntervalMs,
+      persistIntervalMs: 30_000,                               // 2× keepalive — no drift
+      softSplitMs: hardTimeoutMs - 2 * keepAliveIntervalMs,    // 270s
+      softSplitToolMs: hardTimeoutMs - keepAliveIntervalMs,    // 285s
+      hardTimeoutMs,
     };
   }
 

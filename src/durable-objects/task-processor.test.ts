@@ -2568,17 +2568,29 @@ describe('getStreamPolicy', () => {
 
     // Soft split at 270s — gives reasoning models ample thinking time
     expect(policy.softSplitMs).toBe(270_000);
-    // Tool in-flight gets even more room (290s)
-    expect(policy.softSplitToolMs).toBe(290_000);
+    // Tool in-flight gets 285s
+    expect(policy.softSplitToolMs).toBe(285_000);
     // Hard abort at 300s — absolute safety net
     expect(policy.hardTimeoutMs).toBe(300_000);
     // Soft split must fire before hard abort to preserve partial output
     expect(policy.softSplitMs).toBeLessThan(policy.hardTimeoutMs);
     expect(policy.softSplitToolMs).toBeLessThan(policy.hardTimeoutMs);
-    // Sparse persistence to reduce CPU overhead
+    // Persistence interval (30s) is a clean multiple of keepalive (15s)
     expect(policy.persistIntervalMs).toBe(30_000);
-    // Wider keepalive interval
-    expect(policy.keepAliveIntervalMs).toBe(20_000);
+    expect(policy.keepAliveIntervalMs).toBe(15_000);
+    expect(policy.persistIntervalMs % policy.keepAliveIntervalMs).toBe(0);
+  });
+
+  it('guarantees soft split fires before hard abort with keepalive margin', async () => {
+    const { getStreamPolicy } = await import('./task-processor');
+    const policy = getStreamPolicy('anthropic', 90_000);
+
+    // Both soft split values must leave at least one full keepalive tick
+    // before hard abort — otherwise the hard abort can win and discard output.
+    expect(policy.hardTimeoutMs - policy.softSplitMs)
+      .toBeGreaterThanOrEqual(policy.keepAliveIntervalMs);
+    expect(policy.hardTimeoutMs - policy.softSplitToolMs)
+      .toBeGreaterThanOrEqual(policy.keepAliveIntervalMs);
   });
 
   it('keeps legacy 85s/120s split for non-Anthropic providers', async () => {
