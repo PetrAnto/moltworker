@@ -1022,7 +1022,7 @@ export async function fetchRoadmapFromGitHub(
   }
 
   for (const candidate of ROADMAP_FILE_CANDIDATES) {
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${candidate}`;
+    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(candidate)}`;
     const response = await fetch(url, { headers });
     if (!response.ok) continue;
 

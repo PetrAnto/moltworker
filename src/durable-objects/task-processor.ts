@@ -7,7 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { getSandbox, type Sandbox as SandboxClass } from '@cloudflare/sandbox';
 import { createOpenRouterClient, parseSSEStream, type ChatMessage, type ResponseFormat } from '../openrouter/client';
-import { executeTool, AVAILABLE_TOOLS, githubReadFile, type ToolContext, type ToolCall, type WorkspaceFile, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools, type ToolCapabilities } from '../openrouter/tools';
+import { executeTool, AVAILABLE_TOOLS, githubReadFile, encodeGitHubPath, type ToolContext, type ToolCall, type WorkspaceFile, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools, type ToolCapabilities } from '../openrouter/tools';
 import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isReasoningMandatoryError, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, getOrchestraRecommendations, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { injectCacheControl } from '../openrouter/prompt-cache';
@@ -3921,7 +3921,7 @@ If you already created the new file and just need to patch the original, call gi
                   };
                   const listFiles = async (dir: string): Promise<string[]> => {
                     try {
-                      const url = `https://api.github.com/repos/${repoOwner}/${extractedRepo}/contents/${dir}?ref=${extractedBranch}`;
+                      const url = `https://api.github.com/repos/${repoOwner}/${extractedRepo}/contents/${encodeGitHubPath(dir)}?ref=${encodeURIComponent(extractedBranch)}`;
                       const resp = await fetch(url, {
                         headers: {
                           'User-Agent': 'MoltworkerBot/1.0',
