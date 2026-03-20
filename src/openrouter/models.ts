@@ -572,6 +572,20 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     maxContext: 1000000,
   },
+  sonnetrouter: {
+    id: 'anthropic/claude-sonnet-4-6',
+    alias: 'sonnetrouter',
+    name: 'Claude Sonnet 4.6 (OpenRouter)',
+    specialty: 'Paid Premium Reasoning (via OpenRouter)',
+    score: 'AA Index (48), Code (79), 1M context',
+    cost: '$3/$15',
+    provider: 'openrouter',
+    supportsVision: true,
+    supportsTools: true,
+    parallelCalls: true,
+    structuredOutput: true,
+    maxContext: 1000000,
+  },
   // opus45 removed — Opus 4.6 is same price ($5/$25) with better performance (AA #1, 1M ctx)
   gpt54: {
     id: 'openai/gpt-5.4',
