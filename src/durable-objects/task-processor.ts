@@ -398,30 +398,64 @@ const MAX_TOTAL_TOOLS_FREE = 50;
 const MAX_TOTAL_TOOLS_PAID = 100;
 
 /**
- * Stream split timeout: gracefully stop reading the SSE stream after this
- * duration and return whatever accumulated so far. CF evicts DOs during long
- * streams regardless of keepalive I/O — this controlled split prevents
- * uncontrolled eviction and lost work. The model continues in the next
- * iteration with the partial results.
+ * Provider-aware stream control policy.
  *
- * Base: 85s for standard text/reasoning blocks. CF DO evictions are driven
- * by cumulative CPU exhaustion (30s CPU limit), not a strict wall-clock
- * cutoff, but 85s provides a safe margin under observed ~95s evictions.
+ * The old fixed 85s/120s split was designed around a default 30s CPU limit,
+ * but with cpu_ms raised to 300s (wrangler.jsonc) and the fact that I/O wait
+ * does NOT count toward CPU time, the original fears were overblown.
+ *
+ * Anthropic's reasoning models (Claude 3.7+) routinely spend 60-120s thinking
+ * before emitting any output. The old 85s split killed streams during this
+ * thinking phase, causing 499 "Client disconnected" errors, token waste from
+ * repeated re-transmissions, and exhausted auto-resume budgets.
+ *
+ * New design:
+ * - Anthropic direct: NO soft split. Rely on idle timeout (no bytes for Xs)
+ *   and hard timeout (300s wall-clock) as guardrails. Sparse storage writes
+ *   every 60s to reduce CPU overhead.
+ * - OpenRouter / other direct: Keep 85s/120s split (they stream fast, split
+ *   is a useful safety net for their typical behavior).
  */
+interface StreamPolicy {
+  /** Interval between onKeepAlive calls in the SSE parser (ms) */
+  keepAliveIntervalMs: number;
+  /** How often to flush task state to DO storage during streaming (ms) */
+  persistIntervalMs: number;
+  /** Soft split timeout for text streaming (ms). undefined = no soft split. */
+  softSplitMs: number | undefined;
+  /** Soft split timeout when tool calls are in-flight (ms). undefined = no soft split. */
+  softSplitToolMs: number | undefined;
+  /** Hard wall-clock timeout that aborts the fetch (ms) */
+  hardTimeoutMs: number;
+}
+
+function getStreamPolicy(provider: string, idleTimeoutMs: number): StreamPolicy {
+  if (provider === 'anthropic') {
+    // Anthropic direct: disable soft split entirely.
+    // Reasoning models spend 60-120s+ thinking before first output.
+    // Idle timeout catches truly dead streams; hard timeout is the wall-clock guardrail.
+    return {
+      keepAliveIntervalMs: 20_000,
+      persistIntervalMs: 60_000,
+      softSplitMs: undefined,
+      softSplitToolMs: undefined,
+      hardTimeoutMs: 300_000, // 5 min max
+    };
+  }
+
+  // OpenRouter and other direct providers: keep existing 85s/120s split.
+  // These providers stream fast and the split is a useful safety net.
+  return {
+    keepAliveIntervalMs: 10_000,
+    persistIntervalMs: 10_000,
+    softSplitMs: 85_000,
+    softSplitToolMs: 120_000,
+    hardTimeoutMs: Math.min(Math.max(idleTimeoutMs * 3, 180_000), 300_000),
+  };
+}
+
+// Legacy aliases for OpenRouter path (uses the default policy inline)
 const STREAM_SPLIT_TIMEOUT_MS = 85_000;
-/**
- * Elastic timeout for in-flight tool calls. When the parser detects an open
- * tool_call payload, the timeout expands to 120s. This prevents the infinite
- * truncation trap: slow models (~40 tok/s) need ~125s to stream a 5000-token
- * workspace_write_file — an 85s cap would truncate it every time, exhausting
- * all auto-resumes in a death loop.
- *
- * 120s is safe because I/O-bound SSE reads don't accumulate CPU time the way
- * computation does — DOs sustain I/O streams well past 85s when CPU budget
- * isn't exhausted by prior iterations. The original 180s (2x) was too
- * aggressive; 120s gives slow models enough room while staying under the
- * observed eviction envelope.
- */
 const STREAM_SPLIT_MAX_MS = 120_000;
 
 /**
@@ -2675,25 +2709,42 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               await this.doState.storage.put('task', taskForStorage(task));
               const directStreamStartMs = Date.now();
 
-              // Keepalive + stream split: update storage periodically and signal
-              // graceful stop after STREAM_SPLIT_TIMEOUT_MS. CF evicts DOs during
-              // long streams regardless of I/O — this controlled split returns
-              // partial results before eviction can happen.
+              // Provider-aware stream control: Anthropic gets no soft split
+              // (reasoning models need 60-120s+ thinking time), other providers
+              // keep the 85s/120s split that works well for their fast streaming.
+              const streamPolicy = getStreamPolicy(provider, idleTimeout);
+              let lastPersistMs = Date.now();
               const onKeepAlive = async (ctx: { hasInFlightToolCalls: boolean }): Promise<boolean> => {
-                task.lastUpdate = Date.now();
-                await this.doState.storage.put('task', taskForStorage(task));
-                const elapsed = Date.now() - directStreamStartMs;
-                // Elastic timeout — same as OpenRouter path (85s base, 120s in-flight)
+                const now = Date.now();
+                // Always update in-memory heartbeat (cheap)
+                task.lastUpdate = now;
+
+                // Sparse storage persistence — reduces CPU overhead during long streams.
+                // Anthropic: every 60s. Others: every 10s (unchanged).
+                if (now - lastPersistMs >= streamPolicy.persistIntervalMs) {
+                  await this.doState.storage.put('task', taskForStorage(task));
+                  lastPersistMs = now;
+                }
+
+                const elapsed = now - directStreamStartMs;
+                console.log(`[TaskProcessor] ${provider} keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
+
+                // No soft split configured → always continue (Anthropic path).
+                // Hard timeout + idle timeout are the only guardrails.
+                if (streamPolicy.softSplitMs === undefined) {
+                  return true;
+                }
+
+                // Elastic soft split for providers that benefit from it
                 const effectiveTimeout = ctx.hasInFlightToolCalls
-                  ? STREAM_SPLIT_MAX_MS
-                  : STREAM_SPLIT_TIMEOUT_MS;
-                console.log(`[TaskProcessor] Streaming keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
+                  ? (streamPolicy.softSplitToolMs ?? streamPolicy.softSplitMs)
+                  : streamPolicy.softSplitMs;
                 return elapsed < effectiveTimeout;
               };
 
-              // Hard stream timeout — prevents runaway streams that keep dribbling
-              // tiny chunks for minutes. Max 5 min (or 3× idle timeout, whichever is larger).
-              const hardStreamTimeoutMs = Math.min(Math.max(idleTimeout * 3, 180_000), 300_000);
+              // Hard stream timeout — absolute wall-clock guardrail.
+              // Anthropic: 300s (5 min). Others: 3× idle timeout, clamped 180s-300s.
+              const hardStreamTimeoutMs = streamPolicy.hardTimeoutMs;
               const hardStreamTimeout = setTimeout(() => {
                 console.log(`[TaskProcessor] Hard stream timeout (${Math.round(hardStreamTimeoutMs / 1000)}s) — aborting`);
                 abortController.abort();
@@ -2705,6 +2756,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                     response.body, idleTimeout, onStreamProgress,
                     useTools ? specExec.onToolCallReady : undefined,
                     onKeepAlive,
+                    streamPolicy.keepAliveIntervalMs,
                   );
                 } else {
                   result = await parseSSEStream(
