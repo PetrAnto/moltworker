@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, getToolsForPhase, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, applyFuzzyPatch, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, getToolsForPhase, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, applyFuzzyPatch, encodeGitHubPath, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -5460,5 +5460,64 @@ describe('applyFuzzyPatch', () => {
     const replace = 'THIRD LINE';
     const result = applyFuzzyPatch(content, find, replace, 'test.js');
     expect(result).toBe('first line\nsecond line\nTHIRD LINE');
+  });
+
+  // --- CRLF / EOL normalization tests ---
+
+  it('preserves CRLF line endings on exact-match (fast path)', () => {
+    const content = 'line1\r\nline2\r\nline3\r\n';
+    const result = applyFuzzyPatch(content, 'line2', 'REPLACED', 'test.ts');
+    // Every \n in the result should be \r\n
+    expect(result).toBe('line1\r\nREPLACED\r\nline3\r\n');
+    expect(result).not.toMatch(/(?<!\r)\n/); // no bare LF
+  });
+
+  it('preserves CRLF line endings on fuzzy path', () => {
+    const content = 'line1\r\nline2\r\nline3\r\n';
+    const find = 'line2 '; // trailing space forces fuzzy path
+    const result = applyFuzzyPatch(content, find, 'REPLACED', 'test.ts');
+    expect(result).toContain('REPLACED');
+    expect(result).not.toMatch(/(?<!\r)\n/); // no bare LF
+  });
+
+  it('normalizes stray CRLF in LF-dominant files on exact path', () => {
+    const content = 'line1\nline2\nline3\n';
+    // replacement has CRLF — should be normalized to LF
+    const result = applyFuzzyPatch(content, 'line2', 'A\r\nB', 'test.ts');
+    expect(result).toBe('line1\nA\nB\nline3\n');
+    expect(result).not.toContain('\r\n');
+  });
+
+  it('uses dominant EOL detection (not just includes)', () => {
+    // File is mostly LF with one stray CRLF — should be treated as LF
+    const content = 'line1\nline2\r\nline3\nline4\nline5\n';
+    const result = applyFuzzyPatch(content, 'line4', 'REPLACED', 'test.ts');
+    // The stray \r\n should be normalized to \n since LF is dominant
+    expect(result).not.toMatch(/\r\n/);
+  });
+});
+
+// ─── encodeGitHubPath ──────────────────────────────────────────────────────
+
+describe('encodeGitHubPath', () => {
+  it('encodes spaces and special characters in path segments', () => {
+    expect(encodeGitHubPath('docs/Q&A guide.md')).toBe('docs/Q%26A%20guide.md');
+  });
+
+  it('preserves forward slashes as path separators', () => {
+    expect(encodeGitHubPath('src/components/App.tsx')).toBe('src/components/App.tsx');
+  });
+
+  it('handles deeply nested paths', () => {
+    expect(encodeGitHubPath('a/b/c/d.ts')).toBe('a/b/c/d.ts');
+  });
+
+  it('encodes hash and question mark characters', () => {
+    expect(encodeGitHubPath('docs/C# guide.md')).toBe('docs/C%23%20guide.md');
+    expect(encodeGitHubPath('notes/what?.txt')).toBe('notes/what%3F.txt');
+  });
+
+  it('handles single segment (no slashes)', () => {
+    expect(encodeGitHubPath('README.md')).toBe('README.md');
   });
 });

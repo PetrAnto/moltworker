@@ -11,6 +11,11 @@
 const GITHUB_API = 'https://api.github.com';
 const USER_AGENT = 'moltworker-dream-build';
 
+/** Encode a file path for GitHub Contents API — encode each segment, keep slashes literal. */
+function encodeGitHubPath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 export interface GitHubClientOptions {
   token: string;
 }
@@ -127,7 +132,7 @@ export class GitHubClient {
       // Check if the file already exists (to get its SHA for updates)
       let existingSha: string | undefined;
       const getResponse = await fetch(
-        `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,
+        `${GITHUB_API}/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}?ref=${encodeURIComponent(branch)}`,
         { headers: this.headers() }
       );
 
@@ -148,7 +153,7 @@ export class GitHubClient {
       }
 
       const response = await fetch(
-        `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`,
+        `${GITHUB_API}/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}`,
         {
           method: 'PUT',
           headers: this.headers(),

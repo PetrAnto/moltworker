@@ -31,6 +31,11 @@ const WHITESPACE_SENSITIVE_EXTENSIONS = /\.(py|yaml|yml|pug|makefile)$/i;
  * 4. Skips fuzzy for whitespace-significant file types.
  */
 export function applyFuzzyPatch(content: string, find: string, replace: string, filePath: string): string {
+  // Detect the file's dominant line ending style upfront — used by both paths.
+  const crlfCount = (content.match(/\r\n/g) || []).length;
+  const lfCount = (content.match(/(?<!\r)\n/g) || []).length;
+  const dominantEol: '\r\n' | '\n' = crlfCount >= lfCount && crlfCount > 0 ? '\r\n' : '\n';
+
   // --- Fast path: exact match ---
   const exactIdx = content.indexOf(find);
   if (exactIdx !== -1) {
@@ -39,7 +44,15 @@ export function applyFuzzyPatch(content: string, find: string, replace: string, 
         `PATCH FAILED for "${filePath}": "find" matches multiple times. Include more surrounding context.`
       );
     }
-    return content.substring(0, exactIdx) + replace + content.substring(exactIdx + find.length);
+    let result = content.substring(0, exactIdx) + replace + content.substring(exactIdx + find.length);
+    // Normalize to the file's dominant EOL style — the model often sends \n
+    // replacements even for CRLF files, producing mixed line endings.
+    if (dominantEol === '\r\n') {
+      result = result.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+    } else {
+      result = result.replace(/\r\n/g, '\n');
+    }
+    return result;
   }
 
   // --- Skip fuzzy for whitespace-significant files ---
@@ -53,7 +66,7 @@ export function applyFuzzyPatch(content: string, find: string, replace: string, 
   }
 
   // --- Fuzzy fallback: trimmed line-by-line comparison ---
-  const isCRLF = content.includes('\r\n');
+  const isCRLF = dominantEol === '\r\n';
   const originalLines = content.split('\n');
   const findLines = find.split('\n').map(normalizeLine);
 
@@ -1104,7 +1117,7 @@ const GENERATED_FILES = new Set([
 ]);
 
 /** Encode a file path for GitHub Contents API — encode each segment, keep slashes literal. */
-function encodeGitHubPath(path: string): string {
+export function encodeGitHubPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
@@ -1130,7 +1143,7 @@ export async function githubReadFile(
     return `[Generated file: ${path}] This is an auto-generated dependency lock file. It pins exact package versions for reproducible builds. Reading its content is not useful for code analysis.`;
   }
 
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}${ref ? `?ref=${ref}` : ''}`;
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
 
   const headers: Record<string, string> = {
     'User-Agent': 'MoltworkerBot/1.0',
@@ -1215,7 +1228,7 @@ async function githubListFiles(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}${ref ? `?ref=${ref}` : ''}`;
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
   const response = await fetch(url, { headers });
 
   if (!response.ok) {
