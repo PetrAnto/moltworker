@@ -2029,10 +2029,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Resume from checkpoint — sanitize to fix any orphaned tool_calls from interrupted checkpoints
         conversationMessages = sanitizeToolPairs(checkpoint.messages);
 
-        // Truncate stale large tool results (>4KB) to prevent context saturation.
+        // Truncate stale large tool results to prevent context saturation.
         // By the 3rd resume, 30KB github_read_file payloads accumulate and crowd out
         // new tool results. Replace with truncated summaries showing first/last lines.
-        truncateLargeToolResults(conversationMessages, 4096);
+        // Use 16KB (not 4KB) — aggressive truncation causes models to re-read the same
+        // files on resume because they see "[... N lines truncated ...]" and think they
+        // need the full content. 16KB preserves enough to avoid re-read loops.
+        truncateLargeToolResults(conversationMessages, 16384);
 
         task.toolsUsed = checkpoint.toolsUsed;
         // Reset iteration counter to 0 — give a fresh budget of maxIterations.
@@ -2452,6 +2455,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // on every iteration and exhausting auto-resume budget with minimal progress.
         const providerMultiplier = provider === 'moonshot' ? 2.5
           : provider === 'deepseek' ? 1.8
+          : provider === 'anthropic' ? 1.5  // Direct API: high TTFT + reasoning latency
           : provider === 'dashscope' ? 1.5
           : 1.0;
         // Apply provider multiplier to both free and paid models — free direct

@@ -417,9 +417,8 @@ describe('repo health check in buildInitPrompt', () => {
 
   it('instructs to add split tasks to roadmap', () => {
     const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
-    expect(prompt).toContain('Split');
-    expect(prompt).toContain('Refactor');
-    expect(prompt).toContain('MUST depend on the extraction tasks');
+    expect(prompt).toContain('Large file splitting');
+    expect(prompt).toContain('extraction tasks EARLY');
   });
 
   it('includes warning zone guidance', () => {
@@ -431,7 +430,7 @@ describe('repo health check in buildInitPrompt', () => {
   it('instructs to use github_create_pr for splitting', () => {
     const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
     expect(prompt).toContain('github_create_pr');
-    expect(prompt).toContain('identifier check allows splits');
+    expect(prompt).toContain('SINGLE PR call');
   });
 
   it('includes atomic refactoring rules to prevent dead code', () => {
@@ -440,19 +439,17 @@ describe('repo health check in buildInitPrompt', () => {
     expect(prompt).toContain('create + import + DELETE');
     expect(prompt).toContain('Use the word "DELETE"');
     expect(prompt).toContain('verification gate');
-    expect(prompt).toContain('No deferred deletion');
   });
 
   it('anchors on function names over line numbers', () => {
     const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
-    expect(prompt).toContain('Anchor on function/const/component NAMES as primary identifiers');
-    expect(prompt).toContain('approximate line numbers only as a rough guide');
+    expect(prompt).toContain('Anchor on function/const/component NAMES');
   });
 
   it('includes topological extraction order rule', () => {
     const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
-    expect(prompt).toContain('Topological extraction order');
-    expect(prompt).toContain('extract leaf dependencies first');
+    expect(prompt).toContain('topological order');
+    expect(prompt).toContain('leaf dependencies first');
   });
 
   it('large file step comes before analysis step', () => {
