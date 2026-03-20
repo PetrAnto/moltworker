@@ -2560,3 +2560,51 @@ describe('orphaned threshold constants', () => {
     expect(ORPHANED_THRESHOLD_PAID_MS).toBeGreaterThan(90000);
   });
 });
+
+describe('getStreamPolicy', () => {
+  it('returns generous timeouts for Anthropic direct', async () => {
+    const { getStreamPolicy } = await import('./task-processor');
+    const policy = getStreamPolicy('anthropic', 90_000);
+
+    // Soft split at 270s — gives reasoning models ample thinking time
+    expect(policy.softSplitMs).toBe(270_000);
+    // Tool in-flight gets even more room (290s)
+    expect(policy.softSplitToolMs).toBe(290_000);
+    // Hard abort at 300s — absolute safety net
+    expect(policy.hardTimeoutMs).toBe(300_000);
+    // Soft split must fire before hard abort to preserve partial output
+    expect(policy.softSplitMs).toBeLessThan(policy.hardTimeoutMs);
+    expect(policy.softSplitToolMs).toBeLessThan(policy.hardTimeoutMs);
+    // Sparse persistence to reduce CPU overhead
+    expect(policy.persistIntervalMs).toBe(30_000);
+    // Wider keepalive interval
+    expect(policy.keepAliveIntervalMs).toBe(20_000);
+  });
+
+  it('keeps legacy 85s/120s split for non-Anthropic providers', async () => {
+    const { getStreamPolicy } = await import('./task-processor');
+    for (const provider of ['deepseek', 'moonshot', 'dashscope', 'openrouter']) {
+      const policy = getStreamPolicy(provider, 90_000);
+      expect(policy.softSplitMs).toBe(85_000);
+      expect(policy.softSplitToolMs).toBe(120_000);
+      expect(policy.keepAliveIntervalMs).toBe(10_000);
+      expect(policy.persistIntervalMs).toBe(10_000);
+    }
+  });
+
+  it('clamps non-Anthropic hard timeout between 180s and 300s', async () => {
+    const { getStreamPolicy } = await import('./task-processor');
+    // Small idle timeout → clamped to 180s minimum
+    expect(getStreamPolicy('deepseek', 30_000).hardTimeoutMs).toBe(180_000);
+    // Large idle timeout → clamped to 300s maximum
+    expect(getStreamPolicy('deepseek', 200_000).hardTimeoutMs).toBe(300_000);
+    // Mid-range → 3× idle timeout
+    expect(getStreamPolicy('deepseek', 90_000).hardTimeoutMs).toBe(270_000);
+  });
+
+  it('Anthropic hard timeout is fixed regardless of idle timeout', async () => {
+    const { getStreamPolicy } = await import('./task-processor');
+    expect(getStreamPolicy('anthropic', 30_000).hardTimeoutMs).toBe(300_000);
+    expect(getStreamPolicy('anthropic', 200_000).hardTimeoutMs).toBe(300_000);
+  });
+});
