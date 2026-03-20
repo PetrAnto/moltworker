@@ -410,9 +410,10 @@ const MAX_TOTAL_TOOLS_PAID = 100;
  * repeated re-transmissions, and exhausted auto-resume budgets.
  *
  * New design:
- * - Anthropic direct: NO soft split. Rely on idle timeout (no bytes for Xs)
- *   and hard timeout (300s wall-clock) as guardrails. Sparse storage writes
- *   every 60s to reduce CPU overhead.
+ * - Anthropic direct: Generous soft split at 270s (graceful) + hard abort at
+ *   300s. The soft split preserves partial output and triggers auto-resume;
+ *   the hard abort is the absolute safety net. Sparse storage writes every 30s
+ *   to reduce CPU overhead while keeping recovery fast on eviction.
  * - OpenRouter / other direct: Keep 85s/120s split (they stream fast, split
  *   is a useful safety net for their typical behavior).
  */
@@ -421,25 +422,28 @@ interface StreamPolicy {
   keepAliveIntervalMs: number;
   /** How often to flush task state to DO storage during streaming (ms) */
   persistIntervalMs: number;
-  /** Soft split timeout for text streaming (ms). undefined = no soft split. */
-  softSplitMs: number | undefined;
-  /** Soft split timeout when tool calls are in-flight (ms). undefined = no soft split. */
-  softSplitToolMs: number | undefined;
+  /** Soft split timeout for text streaming (ms). */
+  softSplitMs: number;
+  /** Soft split timeout when tool calls are in-flight (ms). */
+  softSplitToolMs: number;
   /** Hard wall-clock timeout that aborts the fetch (ms) */
   hardTimeoutMs: number;
 }
 
-function getStreamPolicy(provider: string, idleTimeoutMs: number): StreamPolicy {
+/** @internal Exported for testing */
+export function getStreamPolicy(provider: string, idleTimeoutMs: number): StreamPolicy {
   if (provider === 'anthropic') {
-    // Anthropic direct: disable soft split entirely.
-    // Reasoning models spend 60-120s+ thinking before first output.
-    // Idle timeout catches truly dead streams; hard timeout is the wall-clock guardrail.
+    // Anthropic direct: generous soft split at 270s, hard abort at 300s.
+    // Reasoning models spend 60-120s+ thinking before first output — the old
+    // 85s split killed streams during thinking. 270s gives 4.5 min of streaming
+    // time, and if a task genuinely exceeds that, the graceful split preserves
+    // partial output for auto-resume (unlike the hard abort which loses it).
     return {
       keepAliveIntervalMs: 20_000,
-      persistIntervalMs: 60_000,
-      softSplitMs: undefined,
-      softSplitToolMs: undefined,
-      hardTimeoutMs: 300_000, // 5 min max
+      persistIntervalMs: 30_000,
+      softSplitMs: 270_000,
+      softSplitToolMs: 290_000,
+      hardTimeoutMs: 300_000, // 5 min absolute max
     };
   }
 
@@ -2688,14 +2692,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 clearInterval(preFetchHeartbeat);
                 throw new Error(`${provider} API returned no response body`);
               }
-              // Pre-fetch heartbeat no longer needed — streaming flush takes over
-              clearInterval(preFetchHeartbeat);
+              // Keep preFetchHeartbeat running until first chunk arrives.
+              // Anthropic can return headers quickly but delay first SSE event
+              // during reasoning — without this, watchdog sees stale lastUpdate.
 
               // Parse SSE stream — Anthropic uses different event format
               let directProgressCount = 0;
+              let sawFirstChunk = false;
               const onStreamProgress = () => {
                 directProgressCount++;
                 this.lastHeartbeatMs = Date.now();
+                if (!sawFirstChunk) {
+                  sawFirstChunk = true;
+                  clearInterval(preFetchHeartbeat);
+                }
                 if (directProgressCount % 100 === 0) {
                   console.log(`[TaskProcessor] ${provider} streaming: ${directProgressCount} chunks`);
                 }
@@ -2709,36 +2719,28 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               await this.doState.storage.put('task', taskForStorage(task));
               const directStreamStartMs = Date.now();
 
-              // Provider-aware stream control: Anthropic gets no soft split
-              // (reasoning models need 60-120s+ thinking time), other providers
-              // keep the 85s/120s split that works well for their fast streaming.
+              // Provider-aware stream control: Anthropic gets generous 270s soft split
+              // (vs 85s for fast-streaming providers). The soft split preserves partial
+              // output for auto-resume; the hard abort at 300s is the absolute safety net.
               const streamPolicy = getStreamPolicy(provider, idleTimeout);
               let lastPersistMs = Date.now();
               const onKeepAlive = async (ctx: { hasInFlightToolCalls: boolean }): Promise<boolean> => {
                 const now = Date.now();
-                // Always update in-memory heartbeat (cheap)
                 task.lastUpdate = now;
 
-                // Sparse storage persistence — reduces CPU overhead during long streams.
-                // Anthropic: every 60s. Others: every 10s (unchanged).
+                // Throttled storage persistence — reduces CPU overhead during long streams.
+                // Anthropic: every 30s. Others: every 10s (unchanged).
                 if (now - lastPersistMs >= streamPolicy.persistIntervalMs) {
                   await this.doState.storage.put('task', taskForStorage(task));
                   lastPersistMs = now;
                 }
 
                 const elapsed = now - directStreamStartMs;
-                console.log(`[TaskProcessor] ${provider} keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
-
-                // No soft split configured → always continue (Anthropic path).
-                // Hard timeout + idle timeout are the only guardrails.
-                if (streamPolicy.softSplitMs === undefined) {
-                  return true;
-                }
-
-                // Elastic soft split for providers that benefit from it
+                // Elastic soft split: expand timeout when tool calls are in-flight
                 const effectiveTimeout = ctx.hasInFlightToolCalls
-                  ? (streamPolicy.softSplitToolMs ?? streamPolicy.softSplitMs)
+                  ? streamPolicy.softSplitToolMs
                   : streamPolicy.softSplitMs;
+                console.log(`[TaskProcessor] ${provider} keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s/${Math.round(effectiveTimeout / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
                 return elapsed < effectiveTimeout;
               };
 
@@ -2767,6 +2769,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 }
               } finally {
                 clearTimeout(hardStreamTimeout);
+                clearInterval(preFetchHeartbeat); // Safety: clear if no chunks arrived
                 task.isStreaming = false;
               }
 
