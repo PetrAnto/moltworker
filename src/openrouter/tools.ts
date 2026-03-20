@@ -3012,7 +3012,18 @@ async function saveFile(name: string, content: string, context?: ToolContext): P
       const usedMB = (totalExisting / 1_000_000).toFixed(1);
       return `Error: Storage quota exceeded (${usedMB}MB / ${MAX_USER_STORAGE_BYTES / 1_000_000}MB). Delete old files first.`;
     }
-    return await r2SaveFile(context.r2Bucket, context.r2FilePrefix, sanitizedName, content);
+    // Write then verify — rollback new files if concurrent writes caused quota overrun
+    const result = await r2SaveFile(context.r2Bucket, context.r2FilePrefix, sanitizedName, content);
+    if (!existingFile) {
+      // Only verify+rollback for new files (overwrites can't be safely rolled back)
+      const postWriteFiles = await r2ListFiles(context.r2Bucket, context.r2FilePrefix);
+      const postTotal = postWriteFiles.reduce((sum, f) => sum + f.size, 0);
+      if (postWriteFiles.length > MAX_SAVED_FILE_COUNT || postTotal > MAX_USER_STORAGE_BYTES) {
+        await context.r2Bucket.delete(`${context.r2FilePrefix}${sanitizedName}`);
+        return `Error: Storage quota exceeded after write (${(postTotal / 1_000_000).toFixed(1)}MB / ${MAX_USER_STORAGE_BYTES / 1_000_000}MB). Delete old files first.`;
+      }
+    }
+    return result;
   }
 
   // Acontext fallback

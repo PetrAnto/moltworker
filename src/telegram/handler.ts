@@ -1088,7 +1088,7 @@ export class TelegramHandler {
         }
 
         // Usage
-        await this.bot.sendMessage(chatId, '📁 **File Management**\n\n/files — list all files\n/files get <name> — show file content\n/files delete <name> — delete a file\n/files clear — delete all files\n\nModels can also save/read files via save_file, read_saved_file tools during conversations.');
+        await this.bot.sendMessage(chatId, '📁 <b>File Management</b>\n\n/files — list all files\n/files get &lt;name&gt; — show file content\n/files delete &lt;name&gt; — delete a file\n/files clear — delete all files\n\nModels can also save/read files via save_file, read_saved_file tools during conversations.', { parseMode: 'HTML' });
         break;
       }
 

@@ -407,7 +407,7 @@ function createMockR2(): R2Bucket & { _store: Map<string, { content: string; met
       return {
         text: async () => item.content,
         key,
-        size: item.content.length,
+        size: new TextEncoder().encode(item.content).byteLength,
         uploaded: new Date(),
         customMetadata: item.metadata,
       } as unknown as R2ObjectBody;
@@ -415,17 +415,21 @@ function createMockR2(): R2Bucket & { _store: Map<string, { content: string; met
     head: vi.fn(async (key: string) => {
       const item = store.get(key);
       if (!item) return null;
-      return { key, size: item.content.length, uploaded: new Date() } as unknown as R2Object;
+      return { key, size: new TextEncoder().encode(item.content).byteLength, uploaded: new Date() } as unknown as R2Object;
     }),
     list: vi.fn(async (opts?: { prefix?: string; limit?: number }) => {
       const prefix = opts?.prefix || '';
       const objects = [...store.entries()]
         .filter(([k]) => k.startsWith(prefix))
-        .map(([key, val]) => ({ key, size: val.content.length, uploaded: new Date('2026-03-19T00:00:00Z') }));
+        .map(([key, val]) => ({ key, size: new TextEncoder().encode(val.content).byteLength, uploaded: new Date('2026-03-19T00:00:00Z') }));
       return { objects, truncated: false } as unknown as R2Objects;
     }),
     delete: vi.fn(async (key: string | string[]) => {
-      if (typeof key === 'string') store.delete(key);
+      if (Array.isArray(key)) {
+        for (const k of key) store.delete(k);
+      } else {
+        store.delete(key);
+      }
     }),
   } as unknown as R2Bucket & { _store: Map<string, { content: string; metadata: Record<string, string> }> };
 }
@@ -635,6 +639,46 @@ describe('R2 file tools via executeTool', () => {
     }, { r2Bucket: bucket, r2FilePrefix: prefix });
 
     expect(result.content).toBe('File saved: f0.txt (7 bytes)');
+  });
+
+  it('reports byte-accurate sizes for multibyte content', async () => {
+    const bucket = createMockR2();
+    const prefix = 'files/user1/';
+
+    // 'é' is 2 bytes in UTF-8, '😀' is 4 bytes, '漢' is 3 bytes
+    const result1 = await executeTool({
+      id: 'mb-1',
+      type: 'function',
+      function: { name: 'save_file', arguments: JSON.stringify({ name: 'emoji.txt', content: '😀😀😀' }) },
+    }, { r2Bucket: bucket, r2FilePrefix: prefix });
+    expect(result1.content).toBe('File saved: emoji.txt (12 bytes)'); // 3 emoji × 4 bytes
+
+    const result2 = await executeTool({
+      id: 'mb-2',
+      type: 'function',
+      function: { name: 'save_file', arguments: JSON.stringify({ name: 'cjk.txt', content: '漢字テスト' }) },
+    }, { r2Bucket: bucket, r2FilePrefix: prefix });
+    expect(result2.content).toBe('File saved: cjk.txt (15 bytes)'); // 5 chars × 3 bytes
+
+    // Verify list returns byte-accurate sizes
+    const files = await r2ListFiles(bucket, prefix);
+    const emojiFile = files.find(f => f.name === 'emoji.txt');
+    const cjkFile = files.find(f => f.name === 'cjk.txt');
+    expect(emojiFile?.size).toBe(12);
+    expect(cjkFile?.size).toBe(15);
+  });
+
+  it('batch deletes files via array key', async () => {
+    const bucket = createMockR2();
+    const prefix = 'files/user1/';
+    await r2SaveFile(bucket, prefix, 'a.txt', 'x');
+    await r2SaveFile(bucket, prefix, 'b.txt', 'y');
+    await r2SaveFile(bucket, prefix, 'c.txt', 'z');
+
+    // Batch delete (same pattern as /files clear)
+    await bucket.delete([`${prefix}a.txt`, `${prefix}b.txt`, `${prefix}c.txt`]);
+    const files = await r2ListFiles(bucket, prefix);
+    expect(files).toHaveLength(0);
   });
 
   it('prefers R2 over Acontext when both are available', async () => {
