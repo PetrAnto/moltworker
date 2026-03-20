@@ -458,6 +458,26 @@ describe('repo health check in buildInitPrompt', () => {
     const analyzeIdx = prompt.indexOf('### Step 2: ANALYZE THE PROJECT REQUEST');
     expect(flagIdx).toBeLessThan(analyzeIdx);
   });
+
+  it('includes hard tool call limit for init', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('budget of 12 total tool calls');
+  });
+
+  it('includes fast-path for copy tasks', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('just find it and copy it');
+  });
+
+  it('includes one extraction per task rule', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('One extraction per task');
+  });
+
+  it('includes cross-file reference rule', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('cross-file references');
+  });
 });
 
 describe('repo health check in buildRedoPrompt', () => {

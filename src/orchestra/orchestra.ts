@@ -159,6 +159,8 @@ When a task involves moving code from one file to new module files, the ENTIRE m
 - Anchor on function/const/component NAMES, not line numbers (they shift)
 - Include a verification gate (e.g., "grep for 'function X' returns 0 in source file")
 - Extract in topological order: leaf dependencies first, then parents
+- One extraction per task — don't combine multiple unrelated extractions
+- List ALL cross-file references — if other files import the extracted code, update their imports in the same task
 
 - **Large file splitting:** If Step 1.5 found large files (>${LARGE_FILE_THRESHOLD_LINES} lines) or warning-zone files (>${LARGE_FILE_WARNING_LINES} lines), add extraction tasks EARLY in the roadmap. Use \`github_create_pr\` with BOTH new modules AND updated source in a SINGLE PR call.
 
