@@ -1080,6 +1080,11 @@ const GENERATED_FILES = new Set([
   'go.sum', 'flake.lock', 'Pipfile.lock',
 ]);
 
+/** Encode a file path for GitHub Contents API — encode each segment, keep slashes literal. */
+function encodeGitHubPath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 export async function githubReadFile(
   owner: string,
   repo: string,
@@ -1494,7 +1499,7 @@ async function githubPushFiles(
     if (change.action !== 'patch' || !change.patches) continue;
 
     const fileResponse = await fetch(
-      `${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${fetchBranch}`,
+      `${apiBase}/contents/${encodeGitHubPath(change.path)}?ref=${fetchBranch}`,
       { headers }
     );
     if (!fileResponse.ok) {
@@ -1977,7 +1982,7 @@ async function githubCreatePr(
 
     // Fetch the original file content from the correct branch
     const fileResponse = await fetch(
-      `${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`,
+      `${apiBase}/contents/${encodeGitHubPath(change.path)}?ref=${patchFetchRef}`,
       { headers }
     );
     if (!fileResponse.ok) {
@@ -2054,7 +2059,7 @@ async function githubCreatePr(
     if (change.action !== 'update' || !change.content) continue;
 
     try {
-      const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
+      const fileResponse = await fetch(`${apiBase}/contents/${encodeGitHubPath(change.path)}?ref=${patchFetchRef}`, { headers });
       if (fileResponse.ok) {
         const fileData = await fileResponse.json() as { size: number; content?: string; encoding?: string };
         const originalSize = fileData.size;
@@ -2116,7 +2121,7 @@ async function githubCreatePr(
                       for (const file of codeFiles.slice(0, 15)) {
                         if (stillMissing.length === 0) break;
                         try {
-                          const contentResp = await fetch(`${apiBase}/contents/${encodeURIComponent(file.path)}?ref=${fullBranch}`, { headers });
+                          const contentResp = await fetch(`${apiBase}/contents/${encodeGitHubPath(file.path)}?ref=${fullBranch}`, { headers });
                           if (contentResp.ok) {
                             const contentData = await contentResp.json() as { content?: string; encoding?: string };
                             if (contentData.content && contentData.encoding === 'base64') {
@@ -2281,7 +2286,7 @@ async function githubCreatePr(
       const newLineCount = change.content.split('\n').length;
 
       try {
-        const origResp = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
+        const origResp = await fetch(`${apiBase}/contents/${encodeGitHubPath(change.path)}?ref=${patchFetchRef}`, { headers });
         if (origResp.ok) {
           const origData = await origResp.json() as { content?: string; encoding?: string };
           if (origData.content && origData.encoding === 'base64') {
@@ -2339,7 +2344,7 @@ async function githubCreatePr(
 
       // Fetch original line count
       try {
-        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
+        const fileResponse = await fetch(`${apiBase}/contents/${encodeGitHubPath(change.path)}?ref=${patchFetchRef}`, { headers });
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
@@ -2387,7 +2392,7 @@ async function githubCreatePr(
     // 7a. WORK_LOG.md — rows can be added but existing rows must not be deleted
     if (fileName === 'WORK_LOG.MD') {
       try {
-        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
+        const fileResponse = await fetch(`${apiBase}/contents/${encodeGitHubPath(change.path)}?ref=${patchFetchRef}`, { headers });
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
@@ -2460,7 +2465,7 @@ async function githubCreatePr(
     // 7b. ROADMAP.md — block unchecking tasks ([ ] ← [x]) and deleting task lines
     if (fileName === 'ROADMAP.MD') {
       try {
-        const fileResponse = await fetch(`${apiBase}/contents/${encodeURIComponent(change.path)}?ref=${patchFetchRef}`, { headers });
+        const fileResponse = await fetch(`${apiBase}/contents/${encodeGitHubPath(change.path)}?ref=${patchFetchRef}`, { headers });
         if (fileResponse.ok) {
           const fileData = await fileResponse.json() as { content?: string; encoding?: string };
           if (fileData.content && fileData.encoding === 'base64') {
@@ -3012,7 +3017,18 @@ async function saveFile(name: string, content: string, context?: ToolContext): P
       const usedMB = (totalExisting / 1_000_000).toFixed(1);
       return `Error: Storage quota exceeded (${usedMB}MB / ${MAX_USER_STORAGE_BYTES / 1_000_000}MB). Delete old files first.`;
     }
-    return await r2SaveFile(context.r2Bucket, context.r2FilePrefix, sanitizedName, content);
+    // Write then verify — rollback new files if concurrent writes caused quota overrun
+    const result = await r2SaveFile(context.r2Bucket, context.r2FilePrefix, sanitizedName, content);
+    if (!existingFile) {
+      // Only verify+rollback for new files (overwrites can't be safely rolled back)
+      const postWriteFiles = await r2ListFiles(context.r2Bucket, context.r2FilePrefix);
+      const postTotal = postWriteFiles.reduce((sum, f) => sum + f.size, 0);
+      if (postWriteFiles.length > MAX_SAVED_FILE_COUNT || postTotal > MAX_USER_STORAGE_BYTES) {
+        await context.r2Bucket.delete(`${context.r2FilePrefix}${sanitizedName}`);
+        return `Error: Storage quota exceeded after write (${(postTotal / 1_000_000).toFixed(1)}MB / ${MAX_USER_STORAGE_BYTES / 1_000_000}MB). Delete old files first.`;
+      }
+    }
+    return result;
   }
 
   // Acontext fallback
