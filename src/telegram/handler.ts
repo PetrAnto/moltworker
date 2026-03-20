@@ -5,7 +5,7 @@
 
 import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type ChatMessage } from '../openrouter/client';
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
-import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike } from '../openrouter/tools';
+import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike, r2ListFiles, r2ReadFile, r2DeleteFile, validateSavedFileName, sanitizeSavedFileName } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
 import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, formatLearningSummary, loadLastTaskSummary, formatLastTaskForPrompt, loadSessionHistory, getRelevantSessions, formatSessionsForPrompt } from '../openrouter/learnings';
 import { getMemoryContext, loadUserMemory, addManualFact, deleteMemoryFact, clearUserMemory, formatMemoryDisplay } from '../openrouter/memory';
@@ -1010,6 +1010,84 @@ export class TelegramHandler {
           break;
         }
         await this.bot.sendMessage(chatId, formatMemoryDisplay(userMemory));
+        break;
+      }
+
+      case '/files': {
+        // Persistent file management (F.4) — R2-backed per-user storage
+        const fileArgs = text.slice('/files'.length).trim();
+        const r2Prefix = `files/${userId}/`;
+
+        if (!fileArgs || fileArgs === 'list') {
+          // List all files
+          const files = await r2ListFiles(this.r2Bucket, r2Prefix);
+          if (files.length === 0) {
+            await this.bot.sendMessage(chatId, '📁 No saved files. Models can save files during tool-calling, or use:\n/files save <name> <content>');
+            break;
+          }
+          const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+          const lines = files
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map(f => `  ${f.name} (${f.size} bytes)`);
+          await this.bot.sendMessage(chatId, `📁 Your files (${files.length}, ${(totalSize / 1024).toFixed(1)}KB):\n${lines.join('\n')}\n\nUse /files get <name> or /files delete <name>`);
+          break;
+        }
+
+        if (fileArgs.startsWith('get ')) {
+          const fileName = fileArgs.slice('get '.length).trim();
+          if (!fileName) {
+            await this.bot.sendMessage(chatId, '⚠️ Usage: /files get <name>');
+            break;
+          }
+          const nameError = validateSavedFileName(fileName);
+          if (nameError) {
+            await this.bot.sendMessage(chatId, `⚠️ ${nameError}`);
+            break;
+          }
+          const content = await r2ReadFile(this.r2Bucket, r2Prefix, sanitizeSavedFileName(fileName));
+          if (content.startsWith('File not found:')) {
+            await this.bot.sendMessage(chatId, `⚠️ ${content}`);
+          } else {
+            // Truncate for Telegram (4096 char limit)
+            const display = content.length > 3800
+              ? content.slice(0, 3800) + `\n\n... (truncated, ${content.length} bytes total)`
+              : content;
+            await this.bot.sendMessage(chatId, `📄 **${sanitizeSavedFileName(fileName)}**:\n\`\`\`\n${display}\n\`\`\``);
+          }
+          break;
+        }
+
+        if (fileArgs.startsWith('delete ')) {
+          const fileName = fileArgs.slice('delete '.length).trim();
+          if (!fileName) {
+            await this.bot.sendMessage(chatId, '⚠️ Usage: /files delete <name>');
+            break;
+          }
+          const nameError = validateSavedFileName(fileName);
+          if (nameError) {
+            await this.bot.sendMessage(chatId, `⚠️ ${nameError}`);
+            break;
+          }
+          const deleted = await r2DeleteFile(this.r2Bucket, r2Prefix, sanitizeSavedFileName(fileName));
+          await this.bot.sendMessage(chatId, deleted ? `🗑️ Deleted: ${sanitizeSavedFileName(fileName)}` : `⚠️ File not found: ${sanitizeSavedFileName(fileName)}`);
+          break;
+        }
+
+        if (fileArgs === 'clear') {
+          const files = await r2ListFiles(this.r2Bucket, r2Prefix);
+          if (files.length === 0) {
+            await this.bot.sendMessage(chatId, '📁 No files to clear.');
+            break;
+          }
+          for (const f of files) {
+            await this.r2Bucket.delete(`${r2Prefix}${f.name}`);
+          }
+          await this.bot.sendMessage(chatId, `🗑️ Cleared ${files.length} files.`);
+          break;
+        }
+
+        // Usage
+        await this.bot.sendMessage(chatId, '📁 **File Management**\n\n/files — list all files\n/files get <name> — show file content\n/files delete <name> — delete a file\n/files clear — delete all files\n\nModels can also save/read files via save_file, read_saved_file tools during conversations.');
         break;
       }
 
@@ -2507,7 +2585,7 @@ export class TelegramHandler {
           modelAlias, messages, {
             maxToolCalls: 10,
             maxTimeMs: 120000,
-            toolContext: { githubToken: this.githubToken, braveSearchKey: this.braveSearchKey, cloudflareApiToken: this.cloudflareApiToken, browser: this.browser, sandbox: this.sandbox, acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl), acontextSessionId: `chat-${userId}` },
+            toolContext: { githubToken: this.githubToken, braveSearchKey: this.braveSearchKey, cloudflareApiToken: this.cloudflareApiToken, browser: this.browser, sandbox: this.sandbox, acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl), acontextSessionId: `chat-${userId}`, r2Bucket: this.r2Bucket, r2FilePrefix: `files/${userId}/` },
           }
         );
 
@@ -2956,6 +3034,8 @@ export class TelegramHandler {
               sandbox: this.sandbox,
               acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl),
               acontextSessionId: `chat-${userId}`,
+              r2Bucket: this.r2Bucket,
+              r2FilePrefix: `files/${userId}/`,
             },
             reasoningLevel: reasoningLevel ?? undefined,
             responseFormat: requestJson && supportsStructuredOutput(modelAlias)
@@ -5211,6 +5291,12 @@ Quick switch: /deep /grok /sonnet /flash /opus etc.
 /memory add <fact> — Manually add a fact
 /memory remove <id> — Remove a specific fact
 /memory clear — Clear all memories
+
+━━━ Files ━━━
+/files — List your saved files
+/files get <name> — Show file content
+/files delete <name> — Delete a file
+/files clear — Delete all files
 
 ━━━ Image Generation ━━━
 /img <prompt> — Generate (default: FLUX.2 Pro)

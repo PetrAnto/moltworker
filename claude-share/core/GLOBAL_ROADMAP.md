@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-19 (F.3 Code Execution Sandbox in Orchestra — 1865 tests)
+**Last Updated:** 2026-03-19 (F.4 R2 File Management Tools — 1890 tests)
 
 ---
 
@@ -397,7 +397,7 @@
 | F.1 | ai-hub data feeds — RSS, market, proactive notifications | ⏸️ Blocked | 6-8h | Depends on ai-hub `/api/situation/*` endpoints |
 | F.2 | Browser tool enhancement (CDP) — a11y tree, click/fill/scroll | ✅ | 4-6h | 4 new actions + session persistence, 14 tests |
 | F.3 | Code execution sandbox in Orchestra (Cloudflare Containers) | ✅ | 3h | sandbox_exec in DO via capability-aware filtering, plain-string parse fix, 15-call safety limit, /simulate/sandbox-test endpoint, orchestra prompts inject verification step (clone→test→fix→PR), 1865 tests |
-| F.4 | File management tools (R2 or Acontext Disk) | 🔲 | 4-6h | Maps to Phase 5.4 |
+| F.4 | File management tools (R2 primary, Acontext fallback) | ✅ | 1h | R2-backed save/read/list/delete with per-user scoping (files/{userId}/), 10MB quota + 100 file limit, /files Telegram command (list/get/delete/clear), 25 new tests (1890 total) |
 | F.5 | Observability dashboard enhancement | ✅ | 4-6h | Analytics API + metrics UI: summary cards, bar charts, tasks table, orchestra timeline, 2 tests |
 | F.8 | Long-term user memory (fact extraction + injection) | ✅ | 4-6h | 4th context layer: 100 facts/user, flash extraction, dedup, /memory cmd, 26 tests |
 | F.9 | Orchestra hardening (post-task validation, historical ranking, stall detection) | ✅ | 3-4h | Multi-turn deliverable validation (3 escalation levels), sticky context anchor on resume, Bayesian completion rates in /orch advise, orchestra resume limits (6/3), read-loop stall abort, extraction source-shrank check, stream_options parity for direct APIs, /status shows API source |

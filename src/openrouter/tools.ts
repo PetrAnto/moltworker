@@ -174,6 +174,8 @@ export interface ToolContext {
   acontextClient?: AcontextClient | null; // Acontext client for persistent multi-language code execution
   acontextSessionId?: string; // Acontext session ID for sandbox state persistence
   cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
+  r2Bucket?: R2Bucket; // R2 bucket for persistent file storage (always available)
+  r2FilePrefix?: string; // Per-user R2 key prefix, e.g. "files/123456/"
   // Workspace operations — callbacks provided by TaskProcessor DO
   workspaceWrite?: (file: WorkspaceFile) => Promise<void>;
   workspaceList?: () => Promise<WorkspaceFile[]>;
@@ -2902,17 +2904,19 @@ async function runCode(
   return output;
 }
 
-// --- Acontext Disk file management tools ---
+// --- Persistent file management tools (R2 primary, Acontext fallback) ---
 
-const MAX_SAVED_FILE_SIZE = 1_000_000;
-const MAX_SAVED_FILE_COUNT = 100;
+const MAX_SAVED_FILE_SIZE = 1_000_000; // 1MB per file
+const MAX_SAVED_FILE_COUNT = 100; // Max files per user
 const MAX_SAVED_FILE_NAME_LENGTH = 255;
+/** Total storage quota per user (10MB) */
+const MAX_USER_STORAGE_BYTES = 10_000_000;
 
-function sanitizeSavedFileName(name: string): string {
+export function sanitizeSavedFileName(name: string): string {
   return name.trim().replace(/[\x01-\x1F\x7F]/g, '');
 }
 
-function validateSavedFileName(name: string): string | null {
+export function validateSavedFileName(name: string): string | null {
   if (typeof name !== 'string' || name.trim().length === 0) {
     return 'Invalid file name. Provide a non-empty relative path.';
   }
@@ -2942,122 +2946,178 @@ function validateSavedFileName(name: string): string | null {
   return null;
 }
 
-async function saveFile(name: string, content: string, context?: ToolContext): Promise<string> {
-  if (!context?.acontextClient) {
-    return 'Error: File storage not available (Acontext not configured)';
-  }
+// --- R2-backed file operations ---
 
+export async function r2SaveFile(bucket: R2Bucket, prefix: string, name: string, content: string): Promise<string> {
+  const key = `${prefix}${name}`;
+  await bucket.put(key, content, {
+    customMetadata: { originalName: name, savedAt: new Date().toISOString() },
+  });
+  return `File saved: ${name} (${content.length} bytes)`;
+}
+
+export async function r2ReadFile(bucket: R2Bucket, prefix: string, name: string): Promise<string> {
+  const key = `${prefix}${name}`;
+  const obj = await bucket.get(key);
+  if (!obj) return `File not found: ${name}`;
+  return await obj.text();
+}
+
+export async function r2ListFiles(bucket: R2Bucket, prefix: string, filterPrefix?: string): Promise<{ name: string; size: number; uploaded: string }[]> {
+  const fullPrefix = filterPrefix ? `${prefix}${filterPrefix}` : prefix;
+  const listed = await bucket.list({ prefix: fullPrefix, limit: MAX_SAVED_FILE_COUNT + 1 });
+  return listed.objects.map(obj => ({
+    name: obj.key.slice(prefix.length), // Strip the per-user prefix
+    size: obj.size,
+    uploaded: obj.uploaded.toISOString(),
+  }));
+}
+
+export async function r2DeleteFile(bucket: R2Bucket, prefix: string, name: string): Promise<boolean> {
+  const key = `${prefix}${name}`;
+  // Check existence first (R2 delete doesn't tell us if key existed)
+  const obj = await bucket.head(key);
+  if (!obj) return false;
+  await bucket.delete(key);
+  return true;
+}
+
+// --- Unified file functions (R2 primary → Acontext fallback) ---
+
+async function saveFile(name: string, content: string, context?: ToolContext): Promise<string> {
   const nameError = validateSavedFileName(name);
-  if (nameError) {
-    return `Error: ${nameError}`;
-  }
+  if (nameError) return `Error: ${nameError}`;
   const sanitizedName = sanitizeSavedFileName(name);
 
-  if (typeof content !== 'string') {
-    return 'Error: Content must be a string.';
-  }
-
-  if (content.includes('\0')) {
-    return 'Error: Binary content is not supported. Save text content only.';
-  }
-
+  if (typeof content !== 'string') return 'Error: Content must be a string.';
+  if (content.includes('\0')) return 'Error: Binary content is not supported. Save text content only.';
   if (content.length > MAX_SAVED_FILE_SIZE) {
     return `Error: File too large (${content.length} bytes). Maximum is ${MAX_SAVED_FILE_SIZE} bytes.`;
   }
 
-  const sessionId = context.acontextSessionId || 'default';
-  const files = await context.acontextClient.listFiles({ sessionId });
-  const exists = files.some(file => file.name === sanitizedName);
-  if (!exists && files.length >= MAX_SAVED_FILE_COUNT) {
-    return `Error: File limit reached (${MAX_SAVED_FILE_COUNT} files per session). Delete old files first.`;
+  // R2 path (primary)
+  if (context?.r2Bucket && context.r2FilePrefix) {
+    // Check file count quota
+    const existing = await r2ListFiles(context.r2Bucket, context.r2FilePrefix);
+    const existingFile = existing.find(f => f.name === sanitizedName);
+    if (!existingFile && existing.length >= MAX_SAVED_FILE_COUNT) {
+      return `Error: File limit reached (${MAX_SAVED_FILE_COUNT} files). Delete old files first.`;
+    }
+    // Check total storage quota (sum of existing sizes + new content)
+    const totalExisting = existing.reduce((sum, f) => sum + f.size, 0);
+    const newTotal = totalExisting - (existingFile?.size || 0) + content.length;
+    if (newTotal > MAX_USER_STORAGE_BYTES) {
+      const usedMB = (totalExisting / 1_000_000).toFixed(1);
+      return `Error: Storage quota exceeded (${usedMB}MB / ${MAX_USER_STORAGE_BYTES / 1_000_000}MB). Delete old files first.`;
+    }
+    return await r2SaveFile(context.r2Bucket, context.r2FilePrefix, sanitizedName, content);
   }
 
-  const result = await context.acontextClient.writeFile({
-    sessionId,
-    name: sanitizedName,
-    content,
-  });
+  // Acontext fallback
+  if (context?.acontextClient) {
+    const sessionId = context.acontextSessionId || 'default';
+    const files = await context.acontextClient.listFiles({ sessionId });
+    const exists = files.some(file => file.name === sanitizedName);
+    if (!exists && files.length >= MAX_SAVED_FILE_COUNT) {
+      return `Error: File limit reached (${MAX_SAVED_FILE_COUNT} files per session). Delete old files first.`;
+    }
+    const result = await context.acontextClient.writeFile({ sessionId, name: sanitizedName, content });
+    return `File saved: ${sanitizedName} (${result.bytesWritten} bytes)`;
+  }
 
-  return `File saved: ${sanitizedName} (${result.bytesWritten} bytes)`;
+  return 'Error: File storage not available (no R2 bucket or Acontext configured)';
 }
 
 async function readSavedFile(name: string, context?: ToolContext): Promise<string> {
-  if (!context?.acontextClient) {
-    return 'Error: File storage not available (Acontext not configured)';
-  }
-
   const nameError = validateSavedFileName(name);
-  if (nameError) {
-    return `Error: ${nameError}`;
-  }
+  if (nameError) return `Error: ${nameError}`;
   const sanitizedName = sanitizeSavedFileName(name);
 
-  const result = await context.acontextClient.readFile({
-    sessionId: context.acontextSessionId || 'default',
-    name: sanitizedName,
-  });
-
-  if (!result) {
-    return `File not found: ${sanitizedName}`;
+  // R2 path (primary)
+  if (context?.r2Bucket && context.r2FilePrefix) {
+    return await r2ReadFile(context.r2Bucket, context.r2FilePrefix, sanitizedName);
   }
 
-  return result.content;
+  // Acontext fallback
+  if (context?.acontextClient) {
+    const result = await context.acontextClient.readFile({
+      sessionId: context.acontextSessionId || 'default',
+      name: sanitizedName,
+    });
+    if (!result) return `File not found: ${sanitizedName}`;
+    return result.content;
+  }
+
+  return 'Error: File storage not available (no R2 bucket or Acontext configured)';
 }
 
 async function listSavedFiles(prefix: string | undefined, context?: ToolContext): Promise<string> {
-  if (!context?.acontextClient) {
-    return 'Error: File storage not available (Acontext not configured)';
-  }
-
+  let filterPrefix: string | undefined;
   if (typeof prefix === 'string' && prefix.trim().length > 0) {
     const prefixError = validateSavedFileName(prefix);
-    if (prefixError) {
-      return `Error: ${prefixError}`;
+    if (prefixError) return `Error: ${prefixError}`;
+    filterPrefix = sanitizeSavedFileName(prefix);
+  }
+
+  // R2 path (primary)
+  if (context?.r2Bucket && context.r2FilePrefix) {
+    const files = await r2ListFiles(context.r2Bucket, context.r2FilePrefix, filterPrefix);
+    if (files.length === 0) {
+      return filterPrefix ? `No saved files found for prefix: ${filterPrefix}` : 'No saved files found.';
     }
-    prefix = sanitizeSavedFileName(prefix);
-  } else {
-    prefix = undefined;
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    const lines = files
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(file => `${file.name} (${file.size} bytes, uploaded ${file.uploaded})`);
+    const header = filterPrefix
+      ? `Saved files (${files.length}) for prefix "${filterPrefix}":`
+      : `Saved files (${files.length}, ${(totalSize / 1024).toFixed(1)}KB total):`;
+    return `${header}\n${lines.join('\n')}`;
   }
 
-  const files = await context.acontextClient.listFiles({
-    sessionId: context.acontextSessionId || 'default',
-    prefix,
-  });
-
-  if (files.length === 0) {
-    return prefix ? `No saved files found for prefix: ${prefix}` : 'No saved files found.';
+  // Acontext fallback
+  if (context?.acontextClient) {
+    const files = await context.acontextClient.listFiles({
+      sessionId: context.acontextSessionId || 'default',
+      prefix: filterPrefix,
+    });
+    if (files.length === 0) {
+      return filterPrefix ? `No saved files found for prefix: ${filterPrefix}` : 'No saved files found.';
+    }
+    const lines = files
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(file => `${file.name} (${file.size} bytes, updated ${file.updatedAt})`);
+    return filterPrefix
+      ? `Saved files (${files.length}) for prefix "${filterPrefix}":\n${lines.join('\n')}`
+      : `Saved files (${files.length}):\n${lines.join('\n')}`;
   }
 
-  const lines = files
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map(file => `${file.name} (${file.size} bytes, updated ${file.updatedAt})`);
-
-  return prefix
-    ? `Saved files (${files.length}) for prefix "${prefix}":\n${lines.join('\n')}`
-    : `Saved files (${files.length}):\n${lines.join('\n')}`;
+  return 'Error: File storage not available (no R2 bucket or Acontext configured)';
 }
 
 async function deleteSavedFile(name: string, context?: ToolContext): Promise<string> {
-  if (!context?.acontextClient) {
-    return 'Error: File storage not available (Acontext not configured)';
-  }
-
   const nameError = validateSavedFileName(name);
-  if (nameError) {
-    return `Error: ${nameError}`;
-  }
+  if (nameError) return `Error: ${nameError}`;
   const sanitizedName = sanitizeSavedFileName(name);
 
-  const result = await context.acontextClient.deleteFile({
-    sessionId: context.acontextSessionId || 'default',
-    name: sanitizedName,
-  });
-
-  if (!result.success) {
-    return `File not found: ${sanitizedName}`;
+  // R2 path (primary)
+  if (context?.r2Bucket && context.r2FilePrefix) {
+    const deleted = await r2DeleteFile(context.r2Bucket, context.r2FilePrefix, sanitizedName);
+    if (!deleted) return `File not found: ${sanitizedName}`;
+    return `File deleted: ${sanitizedName}`;
   }
 
-  return `File deleted: ${sanitizedName}`;
+  // Acontext fallback
+  if (context?.acontextClient) {
+    const result = await context.acontextClient.deleteFile({
+      sessionId: context.acontextSessionId || 'default',
+      name: sanitizedName,
+    });
+    if (!result.success) return `File not found: ${sanitizedName}`;
+    return `File deleted: ${sanitizedName}`;
+  }
+
+  return 'Error: File storage not available (no R2 bucket or Acontext configured)';
 }
 
 /**

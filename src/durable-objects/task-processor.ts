@@ -1919,6 +1919,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       sandbox, // Sandbox container for sandbox_exec tool (undefined if binding unavailable)
       acontextClient: createAcontextClient(request.acontextKey, request.acontextBaseUrl),
       acontextSessionId: task.taskId,
+      r2Bucket: this.r2, // R2 bucket for persistent file storage
+      r2FilePrefix: `files/${request.userId}/`, // Per-user file scoping
       // Workspace callbacks — persist to DO storage, not in-memory
       workspaceWrite: (file: WorkspaceFile) => workspace.writeFile(file),
       workspaceList: () => workspace.listFiles(),
