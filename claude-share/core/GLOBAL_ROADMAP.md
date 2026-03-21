@@ -758,9 +758,10 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | **AGENT_SKILLS_ENGINE_SPEC.md** | `brainstorming/` | Full spec — §2.2/§4.2/§5.1/§5.3/§8.2 implemented as Phase 7A (CoVe, Smart Context, Destructive Guard, Step Decomposition) |
 | **audit-build-improvement-plan.md** | `brainstorming/` | Phase 1-2 (model routing, hallucination reduction) → implemented as Phase 7A/7B + Audit P2 |
 | **code-mode-mcp.md** | `brainstorming/` | Tier 1.5/2 recommendation → implemented as Phase 5.2 (MCP integration) |
-| **storia-free-apis-catalog.md** | `brainstorming/` | 25+ free API integrations ($0/month) |
+| **storia-free-apis-catalog.md** | `claude-share/core/` | 25+ free API integrations ($0/month) — implemented as Phase 2.5 (10 free tools) |
 | **future-integrations.md** | `brainstorming/` | Priority 1-5 feature roadmap, technical debt |
-| **dream-machine-moltworker-brief.md** | `brainstorming/` | Dream Machine build skill spec (v1.2, Grok-reviewed) |
+| **dream-machine-moltworker-brief.md** | `brainstorming/` | Dream Machine build skill spec (v1.2, Grok-reviewed) — implemented as DM.1-DM.14 |
+| **phase-4.1-audit.md** | `brainstorming/` | Token-budgeted context retrieval audit — implemented as Phase 4.1, Phase 4.2 (real tokenizer) remains future |
 | **CODE_MODE_MCP_STORIA_SPEC.md** | `claude-share/brainstorming/wave5/` | Code Mode MCP Sprint A/B/C |
 | **MOLTWORKER_ROADMAP-claude_review.md** | `claude-share/core/` | Strategic roadmap review (Feb 28) — merged into this file |
 | **README.md** | project root | User-facing documentation |
