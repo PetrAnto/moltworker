@@ -463,15 +463,70 @@ export async function scanCrossFileReferences(
     );
 
     if (staleRefs.length > 0) {
+      // Find the actual import line for a concrete fix suggestion
+      const lines = content.split('\n');
+      const importLine = lines.find(l =>
+        l.includes('import') && l.includes(sourceBasename),
+      );
+
+      // Build concrete fix: derive the new module's import path relative to the consumer
+      const newFile = extraction.newFiles[0] || 'new-module';
+
+      // Derive relative path from consumer to new file
+      const relativePath = computeRelativeImportPath(filePath, newFile);
+
+      let fixSuggestion = '';
+      if (importLine) {
+        fixSuggestion = `\nFIX: In "${filePath}", add a new import: \`import { ${staleRefs.join(', ')} } from '${relativePath}';\``;
+        // If all refs from this import are stale, suggest removing the old import entirely
+        const otherNamesUsed = extraction.extractedNames.length < 10 &&
+          lines.some(l => l.includes('import') && l.includes(sourceBasename) &&
+            !staleRefs.every(r => l.includes(r)));
+        if (!otherNamesUsed) {
+          fixSuggestion += `\nIf "${sourceBasename}" has no other exports used in this file, you can also change the import to: \`import { ${staleRefs.join(', ')} } from '${relativePath}';\``;
+        }
+        fixSuggestion += `\nFound import line: \`${importLine.trim()}\``;
+      }
+
       warnings.push(
         `STALE REFERENCES: "${filePath}" imports from "${sourceBasename}" and references ` +
         `extracted identifiers [${staleRefs.join(', ')}] — these imports need updating to point ` +
-        `at the new module(s): ${extraction.newFiles.join(', ')}`,
+        `at the new module(s): ${extraction.newFiles.join(', ')}` + fixSuggestion,
       );
     }
   }
 
   return warnings;
+}
+
+// ─── Path Utilities ─────────────────────────────────────────────────────────
+
+/**
+ * Compute a relative import path from a consumer file to a target file.
+ * E.g., computeRelativeImportPath('src/pages/Dashboard.jsx', 'src/components/Section.jsx')
+ * → '../components/Section.jsx'
+ */
+export function computeRelativeImportPath(fromFile: string, toFile: string): string {
+  const fromParts = fromFile.includes('/') ? fromFile.substring(0, fromFile.lastIndexOf('/')).split('/') : [];
+  const toParts = toFile.split('/');
+  const toFileName = toParts.pop()!;
+  // toParts is now the directory segments of the target
+
+  // Find common prefix length
+  let common = 0;
+  while (common < fromParts.length && common < toParts.length && fromParts[common] === toParts[common]) {
+    common++;
+  }
+
+  // Go up from consumer dir to common ancestor, then down to target dir
+  const ups = fromParts.length - common;
+  const downs = toParts.slice(common);
+
+  const segments = [...Array(ups).fill('..'), ...downs, toFileName];
+  const result = segments.join('/');
+
+  // Ensure it starts with ./ or ../
+  return result.startsWith('.') ? result : './' + result;
 }
 
 // ─── Syntax Integrity ───────────────────────────────────────────────────────

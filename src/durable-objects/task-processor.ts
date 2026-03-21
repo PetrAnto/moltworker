@@ -3961,11 +3961,22 @@ If you already created the new file and just need to patch the original, call gi
                       role: 'assistant',
                       content: choice.message.content || '',
                     });
+                    // Determine if issues are purely stale-reference (import fix only)
+                    const hasStaleRefs = extractionResult.issues.some(i => i.includes('STALE REFERENCES'));
+                    const staleRefOnly = extractionResult.issues.every(i =>
+                      i.includes('STALE REFERENCES') || i.includes('import'));
+
                     conversationMessages.push({
                       role: 'user',
                       content: `[EXTRACTION VERIFICATION FAILED — FIX REQUIRED]\n` +
                         `The deterministic post-edit file check found these issues on branch "${extractedBranch}":\n\n` +
                         extractionResult.issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n') + '\n\n' +
+                        (hasStaleRefs && staleRefOnly
+                          ? `This is a SIMPLE import fix. Do NOT re-extract, re-create, or re-write files. ` +
+                            `The ONLY fix needed is updating the import statement(s) in the consumer file(s) listed above. ` +
+                            `Use github_push_files with a single "patch" action to fix the import line. ` +
+                            `The exact import line and fix are provided above — apply the patch and report ORCHESTRA_RESULT.\n\n`
+                          : '') +
                         `You MUST fix these issues before reporting ORCHESTRA_RESULT. ` +
                         `Push a corrective commit to the same branch using github_push_files with patch action, ` +
                         `then report your result. The source file on the branch was READ just now — ` +
