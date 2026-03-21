@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-19 (F.4 R2 File Management Tools — 1890 tests)
+**Last Updated:** 2026-03-21 (EOL normalization fix + orchestra branch retry fix — 1911 tests)
 
 ---
 
@@ -405,6 +405,8 @@
 | F.11 | Orchestra observability (R2-persisted events + /orch stats) | ✅ | 1h | OrchestraEvent type, JSONL append to R2, 5 event types at 6 injection points in task-processor, `/orch stats` command with per-model aggregation, 9 tests |
 | F.13 | MiniMax M2.7 upgrade + death loop fix | ✅ | 2h | Upgraded MiniMax to M2.7-20260318, added escalating stream-split nudges (consecutiveEmptySplits: gentle→ALL-CAPS→bail at 5), size guards on workspace_write_file (create ≤250 lines/10KB, update ≤300 lines), 13 new tests (1848 total) |
 | F.14 | Fuzzy patch fallback + bracket balance pre-commit checks | ✅ | 1h | applyFuzzyPatch: exact indexOf fast path → trimmed line-by-line fuzzy fallback, skips whitespace-significant files (.py/.yaml/.pug/Makefile), unique match enforcement. checkBracketBalance wired into githubPushFiles + githubCreatePr before blob creation. 14 new tests (1861 total). Validated: MiniMax M2.7 PR #98 cleanest Step 3 across 16+ attempts |
+| F.15 | EOL normalization on exact-match path + GitHub path encoding | ✅ | 30min | applyFuzzyPatch exact path now normalizes to file's dominant EOL style (CRLF vs LF counting), fixes mixed endings from model-sent \n on CRLF files. encodeGitHubPath applied to all 7 GitHub Contents API URLs (was only used in write ops). 9 new tests (1911 total) |
+| F.16 | Orchestra "retry with different branch" fix | ✅ | 15min | Root cause from PR #108 (GPT-5.4 Nano): model creates new branch on retry → forks from main → loses prior commits. Updated 5 prompt locations to instruct "push fix commit to SAME branch first" |
 
 ### Future: Platform Evolution (M3 Gate)
 
@@ -487,6 +489,9 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-21 | Claude Opus 4.6 (Session: session_01HJCxEZZKUaxd4SNFiQQSq7) | fix(orchestra): F.16 prevent "retry with different branch" from losing prior work — updated 5 prompt locations across orchestra.ts + task-processor.ts to instruct models to push fix commits to SAME branch | src/orchestra/orchestra.ts, src/durable-objects/task-processor.ts
+2026-03-21 | Claude Opus 4.6 (Session: session_01HJCxEZZKUaxd4SNFiQQSq7) | fix(tools): F.15 EOL normalization on exact-match path + GitHub path encoding — applyFuzzyPatch dominant EOL detection, encodeGitHubPath on all 7 GitHub Contents API URLs, 9 new tests (1911 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts, src/durable-objects/task-processor.ts, src/dream/github-client.ts, src/orchestra/orchestra.ts
+2026-03-21 | Claude Opus 4.6 (Session: session_01HJCxEZZKUaxd4SNFiQQSq7) | docs: sync roadmap, future-integrations, claude-log — mark 6 completed features in future-integrations.md, add brainstorming cross-references to roadmap, update test count to 1911 | claude-share/core/*.md, brainstorming/future-integrations.md
 2026-03-19 | Claude Opus 4.6 | feat(tools): F.14 fuzzy patch fallback + bracket balance pre-commit — applyFuzzyPatch with exact→fuzzy fallback (trimmed line-by-line), checkBracketBalance wired before blob creation in githubPushFiles + githubCreatePr, 14 new tests (1861 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts
 2026-03-19 | Claude Opus 4.6 | fix(task-processor): F.13 break stream split death loop — escalating nudges (consecutiveEmptySplits), size guards on workspace_write_file, MiniMax M2.7 upgrade, 13 new tests (1848 total) | src/durable-objects/task-processor.ts, src/openrouter/models.ts
 2026-03-17 | Claude Opus 4.6 (Session: session_01KxpZF4pir5V2D91zPwnBHo) | feat(orchestra): F.12 event-based model scoring — getEventBasedModelScores() computes per-model reliability from R2 events (stalls, validation fails, retries), wired into /orch advise with ±20pt scoring + stall/validation penalties, 8 new tests | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/openrouter/models.ts, src/telegram/handler.ts
@@ -734,7 +739,7 @@ ai-hub /api/situation/* endpoints 🔲
 | Task success rate | Tracked (CoVe verification) | >85% | >95% |
 | Context compression | Token-budgeted + summarized | Same | Adaptive |
 | Cross-session learning | Active (R2 learnings + sessions) | Pattern library | Autonomous improvement |
-| Tests | 1526 | 1600+ | 2000+ |
+| Tests | 1911 | 2000+ | 2500+ |
 
 ---
 
@@ -750,10 +755,13 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | Spec | Location | Covers |
 |------|----------|--------|
 | **tool-calling-analysis.md** | `brainstorming/` | R1-R13 recommendations, gap analysis, model landscape |
-| **AGENT_SKILLS_ENGINE_SPEC.md** | `brainstorming/` | Full spec (Phase 7 extracts high-ROI pieces only) |
-| **storia-free-apis-catalog.md** | `brainstorming/` | 25+ free API integrations ($0/month) |
+| **AGENT_SKILLS_ENGINE_SPEC.md** | `brainstorming/` | Full spec — §2.2/§4.2/§5.1/§5.3/§8.2 implemented as Phase 7A (CoVe, Smart Context, Destructive Guard, Step Decomposition) |
+| **audit-build-improvement-plan.md** | `brainstorming/` | Phase 1-2 (model routing, hallucination reduction) → implemented as Phase 7A/7B + Audit P2 |
+| **code-mode-mcp.md** | `brainstorming/` | Tier 1.5/2 recommendation → implemented as Phase 5.2 (MCP integration) |
+| **storia-free-apis-catalog.md** | `claude-share/core/` | 25+ free API integrations ($0/month) — implemented as Phase 2.5 (10 free tools) |
 | **future-integrations.md** | `brainstorming/` | Priority 1-5 feature roadmap, technical debt |
-| **dream-machine-moltworker-brief.md** | `brainstorming/` | Dream Machine build skill spec (v1.2, Grok-reviewed) |
+| **dream-machine-moltworker-brief.md** | `brainstorming/` | Dream Machine build skill spec (v1.2, Grok-reviewed) — implemented as DM.1-DM.14 |
+| **phase-4.1-audit.md** | `brainstorming/` | Token-budgeted context retrieval audit — implemented as Phase 4.1, Phase 4.2 (real tokenizer) remains future |
 | **CODE_MODE_MCP_STORIA_SPEC.md** | `claude-share/brainstorming/wave5/` | Code Mode MCP Sprint A/B/C |
 | **MOLTWORKER_ROADMAP-claude_review.md** | `claude-share/core/` | Strategic roadmap review (Feb 28) — merged into this file |
 | **README.md** | project root | User-facing documentation |

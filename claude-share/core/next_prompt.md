@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-19 (F.4 R2 File Management Tools — 1890 tests)
+**Last Updated:** 2026-03-21 (F.15 EOL fix + F.16 orchestra branch retry fix — 1911 tests)
 
 ---
 
@@ -15,6 +15,9 @@
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-21 | F.16 — Orchestra branch retry fix | Claude Opus 4.6 | Root cause from PR #108: "retry with different branch" loses prior commits. Updated 5 prompt locations |
+| 2026-03-21 | F.15 — EOL normalization + GitHub path encoding | Claude Opus 4.6 | 1911 tests. applyFuzzyPatch dominant EOL detection, encodeGitHubPath on all 7 API URLs, 9 new tests |
+| 2026-03-21 | Docs sync — roadmap, future-integrations, claude-log | Claude Opus 4.6 | Marked 6 completed features in future-integrations.md, added brainstorming cross-refs to roadmap |
 | 2026-03-19 | F.4 — R2 File Management Tools | Claude Opus 4.6 | 1890 tests. R2-backed save/read/list/delete (primary, Acontext fallback), per-user scoping `files/{userId}/`, 10MB quota + 100 file limit, /files Telegram command, 25 new tests |
 | 2026-03-19 | F.3 — Code Execution Sandbox in Orchestra | Claude Opus 4.6 | 1865 tests. sandbox_exec in DO via capability-aware filtering, 15-call safety limit, /simulate/sandbox-test endpoint, orchestra prompts inject verification step |
 | 2026-03-19 | F.14 — Fuzzy patch fallback + bracket balance pre-commit | Claude Opus 4.6 | 1861 tests |
