@@ -6,6 +6,7 @@ import {
   formatVerificationForContext,
   scanCrossFileReferences,
   checkBracketBalance,
+  computeRelativeImportPath,
   type ExtractionCheck,
   type ExtractionVerification,
 } from './extraction-verifier';
@@ -557,6 +558,50 @@ describe('scanCrossFileReferences', () => {
     // Should include concrete fix suggestion with import line
     expect(warnings[0]).toContain('FIX:');
     expect(warnings[0]).toContain("import { Section, KPI, Slider } from './components/UIAtoms'");
+  });
+});
+
+// ─── computeRelativeImportPath ───────────────────────────────────────────────
+
+describe('computeRelativeImportPath', () => {
+  it('handles same directory', () => {
+    expect(computeRelativeImportPath('src/components/Grid.jsx', 'src/components/Section.jsx'))
+      .toBe('./Section.jsx');
+  });
+
+  it('handles child directory', () => {
+    expect(computeRelativeImportPath('src/App.jsx', 'src/components/Section.jsx'))
+      .toBe('./components/Section.jsx');
+  });
+
+  it('handles sibling directories', () => {
+    expect(computeRelativeImportPath('src/pages/Dashboard.jsx', 'src/components/Section.jsx'))
+      .toBe('../components/Section.jsx');
+  });
+
+  it('handles deeply nested to shallow', () => {
+    expect(computeRelativeImportPath('src/components/sub/Deep.jsx', 'src/utils/helpers.js'))
+      .toBe('../../utils/helpers.js');
+  });
+
+  it('handles root-level consumer', () => {
+    expect(computeRelativeImportPath('App.jsx', 'src/components/Section.jsx'))
+      .toBe('./src/components/Section.jsx');
+  });
+
+  it('handles both at root', () => {
+    expect(computeRelativeImportPath('index.js', 'utils.js'))
+      .toBe('./utils.js');
+  });
+
+  it('handles cross-top-level directories', () => {
+    expect(computeRelativeImportPath('tests/App.test.jsx', 'src/components/Section.jsx'))
+      .toBe('../src/components/Section.jsx');
+  });
+
+  it('handles deep nesting with common prefix', () => {
+    expect(computeRelativeImportPath('a/b/c/d.js', 'a/x.js'))
+      .toBe('../../x.js');
   });
 });
 

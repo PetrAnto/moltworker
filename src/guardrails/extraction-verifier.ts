@@ -471,21 +471,9 @@ export async function scanCrossFileReferences(
 
       // Build concrete fix: derive the new module's import path relative to the consumer
       const newFile = extraction.newFiles[0] || 'new-module';
-      const newBasename = (newFile.split('/').pop() || '')
-        .replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/, '');
 
       // Derive relative path from consumer to new file
-      const consumerDir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
-      const newFileDir = newFile.includes('/') ? newFile.substring(0, newFile.lastIndexOf('/')) : '';
-      const newFileWithExt = newFile.split('/').pop() || newFile;
-      let relativePath: string;
-      if (consumerDir === newFileDir) {
-        relativePath = `./${newFileWithExt}`;
-      } else if (newFile.startsWith(consumerDir + '/')) {
-        relativePath = './' + newFile.substring(consumerDir.length + 1);
-      } else {
-        relativePath = `./${newFileDir ? newFileDir.split('/').slice(-1)[0] + '/' : ''}${newFileWithExt}`;
-      }
+      const relativePath = computeRelativeImportPath(filePath, newFile);
 
       let fixSuggestion = '';
       if (importLine) {
@@ -509,6 +497,36 @@ export async function scanCrossFileReferences(
   }
 
   return warnings;
+}
+
+// ─── Path Utilities ─────────────────────────────────────────────────────────
+
+/**
+ * Compute a relative import path from a consumer file to a target file.
+ * E.g., computeRelativeImportPath('src/pages/Dashboard.jsx', 'src/components/Section.jsx')
+ * → '../components/Section.jsx'
+ */
+export function computeRelativeImportPath(fromFile: string, toFile: string): string {
+  const fromParts = fromFile.includes('/') ? fromFile.substring(0, fromFile.lastIndexOf('/')).split('/') : [];
+  const toParts = toFile.split('/');
+  const toFileName = toParts.pop()!;
+  // toParts is now the directory segments of the target
+
+  // Find common prefix length
+  let common = 0;
+  while (common < fromParts.length && common < toParts.length && fromParts[common] === toParts[common]) {
+    common++;
+  }
+
+  // Go up from consumer dir to common ancestor, then down to target dir
+  const ups = fromParts.length - common;
+  const downs = toParts.slice(common);
+
+  const segments = [...Array(ups).fill('..'), ...downs, toFileName];
+  const result = segments.join('/');
+
+  // Ensure it starts with ./ or ../
+  return result.startsWith('.') ? result : './' + result;
 }
 
 // ─── Syntax Integrity ───────────────────────────────────────────────────────
