@@ -17,6 +17,8 @@ import {
   cleanupStaleTasks,
   formatOrchestraHistory,
   parseRoadmapPhases,
+  resolveNextRoadmapTask,
+  scoreTaskConcreteness,
   formatRoadmapStatus,
   findMatchingTasks,
   resetRoadmapTasks,
@@ -1659,6 +1661,247 @@ describe('parseRoadmapPhases robustness', () => {
     const phases = parseRoadmapPhases(content);
     expect(phases).toHaveLength(1);
     expect(phases[0].name).toBe('Setup');
+  });
+});
+
+// --- parseRoadmapPhases hierarchy ---
+
+describe('parseRoadmapPhases hierarchy', () => {
+  it('nests indented checkboxes under their parent top-level task', () => {
+    const content = `### Phase 1: Refactoring
+- [x] **Step 1**: Extract utility functions — create \`src/utils.js\`
+  - [x] Create the new file with the extracted code
+  - [x] Add the import to App.jsx
+  - [x] Delete the original code from App.jsx
+- [ ] **Step 2**: Extract destination data — create \`src/destinations.js\`
+  - [ ] Create the new file with the extracted code
+  - [ ] Add the import to App.jsx`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+
+    // Flat list should have all 7 items (backwards compat)
+    expect(phases[0].tasks).toHaveLength(7);
+
+    // Top-level should only have 2 items
+    expect(phases[0].topLevelTasks).toHaveLength(2);
+    expect(phases[0].topLevelTasks[0].title).toContain('Extract utility functions');
+    expect(phases[0].topLevelTasks[0].children).toHaveLength(3);
+    expect(phases[0].topLevelTasks[0].children[0].title).toBe('Create the new file with the extracted code');
+
+    expect(phases[0].topLevelTasks[1].title).toContain('Extract destination data');
+    expect(phases[0].topLevelTasks[1].children).toHaveLength(2);
+  });
+
+  it('treats 0-indent tasks as top-level even after indented ones', () => {
+    const content = `### Setup
+- [x] Step A
+  - [x] Sub A1
+  - [x] Sub A2
+- [ ] Step B`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].topLevelTasks).toHaveLength(2);
+    expect(phases[0].topLevelTasks[0].children).toHaveLength(2);
+    expect(phases[0].topLevelTasks[1].children).toHaveLength(0);
+    expect(phases[0].topLevelTasks[1].title).toBe('Step B');
+  });
+
+  it('tracks indent level on each task', () => {
+    const content = `### Phase 1: Work
+- [ ] Top-level task
+  - [ ] Indented child`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].topLevelTasks[0].indent).toBe(0);
+    expect(phases[0].topLevelTasks[0].children[0].indent).toBe(2);
+  });
+
+  it('assigns correct kind to checkbox vs numbered tasks', () => {
+    const content = `### Phase 1: MVP
+- [x] Checkbox task
+1. [x] Numbered checkbox task
+2. Plain numbered task`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks[0].kind).toBe('checkbox');
+    expect(phases[0].tasks[1].kind).toBe('numbered-checkbox');
+    expect(phases[0].tasks[2].kind).toBe('numbered-plain');
+  });
+});
+
+// --- scoreTaskConcreteness ---
+
+describe('scoreTaskConcreteness', () => {
+  it('scores tasks with file paths high', () => {
+    expect(scoreTaskConcreteness('Extract utility functions — create `src/utils.js`')).toBeGreaterThanOrEqual(5);
+  });
+
+  it('scores tasks with backtick identifiers high', () => {
+    expect(scoreTaskConcreteness('Modify the `Section` component to accept collapsible prop')).toBeGreaterThanOrEqual(5);
+  });
+
+  it('scores generic boilerplate tasks low', () => {
+    expect(scoreTaskConcreteness('Create the new file with the extracted code')).toBeLessThan(3);
+    expect(scoreTaskConcreteness('Add the import to App.jsx')).toBeLessThan(3);
+    expect(scoreTaskConcreteness('Delete the original code from App.jsx')).toBeLessThan(3);
+    expect(scoreTaskConcreteness('Verify the app still renders without errors')).toBeLessThan(3);
+  });
+
+  it('scores Step N labels as moderately concrete', () => {
+    expect(scoreTaskConcreteness('Step 7: Add collapsible sections')).toBeGreaterThanOrEqual(2);
+  });
+
+  it('penalizes very short titles', () => {
+    expect(scoreTaskConcreteness('Add tests')).toBeLessThan(scoreTaskConcreteness('Add unit tests for financial calculations in src/utils.js'));
+  });
+});
+
+// --- resolveNextRoadmapTask ---
+
+describe('resolveNextRoadmapTask', () => {
+  it('prefers concrete top-level tasks over generic sub-tasks', () => {
+    const content = `### Critical Refactoring
+- [ ] Create the new file with the extracted code
+- [ ] Add the import to App.jsx
+- [ ] Delete the original code from App.jsx
+- [ ] Verify the app still renders without errors
+- [x] **Step 1**: Extract utility functions — create \`src/utils.js\`, delete from App.jsx
+- [x] **Step 2**: Extract destination data — create \`src/destinations.js\`
+- [ ] **Step 7**: Add collapsible sections for cleaner mobile view
+  - [ ] Modify the \`Section\` component in \`src/components/UIAtoms.jsx\` to accept an optional \`collapsible\` prop
+  - [ ] Add local state (\`useState\`) inside \`Section\` to track open/closed`;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    expect(resolved).not.toBeNull();
+    // Should pick Step 7 (concrete) instead of "Create the new file" (generic)
+    expect(resolved!.title).toContain('Step 7');
+    expect(resolved!.concreteScore).toBeGreaterThanOrEqual(3);
+    expect(resolved!.pendingChildren.length).toBeGreaterThan(0);
+  });
+
+  it('skips generic orphaned sub-tasks whose parent is complete', () => {
+    const content = `### Refactoring
+- [x] **Step 3**: Extract UI atoms — create \`src/components/UIAtoms.jsx\`
+  - [ ] Create the new file with the extracted code
+  - [ ] Add the import to App.jsx
+  - [ ] Delete the original code from App.jsx
+- [ ] **Step 7**: Add collapsible sections for cleaner mobile view`;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    expect(resolved).not.toBeNull();
+    // Should skip the generic children of completed Step 3 and pick Step 7
+    expect(resolved!.title).toContain('Step 7');
+  });
+
+  it('returns null when all tasks are complete', () => {
+    const content = `### Phase 1
+- [x] Task A
+- [x] Task B`;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+    expect(resolved).toBeNull();
+  });
+
+  it('includes completed context in execution brief', () => {
+    const content = `### Refactoring
+- [x] Step 1: Extract utils
+- [x] Step 2: Extract destinations
+- [ ] Step 3: Extract UI atoms — create \`src/components/UIAtoms.jsx\``;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved!.executionBrief).toContain('Already completed');
+    expect(resolved!.executionBrief).toContain('Step 1: Extract utils');
+    expect(resolved!.executionBrief).toContain('Step 2: Extract destinations');
+  });
+
+  it('marks generic tasks as high ambiguity', () => {
+    const content = `### Phase 1
+- [ ] Create the new file with the extracted code`;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved!.ambiguity).toBe('high');
+    expect(resolved!.executionBrief).toContain('generic');
+  });
+
+  it('marks concrete tasks as no ambiguity', () => {
+    const content = `### Phase 1
+- [ ] **Step 3**: Extract UI atoms — create \`src/components/UIAtoms.jsx\`, delete from App.jsx`;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved!.ambiguity).toBe('none');
+  });
+
+  it('bundles parent context for concrete sub-tasks under a done parent', () => {
+    const content = `### Refactoring
+- [x] **Step 3**: Extract UI atoms — create \`src/components/UIAtoms.jsx\`
+  - [x] Create the new file
+  - [ ] Add the import to \`App.jsx\` for \`Section\` component
+  - [ ] Delete the original \`Section\` code from App.jsx`;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    // The second child has backtick identifiers → concrete enough
+    // Should include parent context
+    expect(resolved).not.toBeNull();
+    if (resolved!.parent) {
+      expect(resolved!.parent.title).toContain('Extract UI atoms');
+    }
+  });
+
+  it('reproduces the exact wagmi ROADMAP failure scenario', () => {
+    // This is the exact roadmap structure that caused PR #106-#113 degradation
+    const content = `### Critical Refactoring (Foundations)
+- [ ] Create the new file with the extracted code
+- [ ] Add the import to App.jsx
+- [ ] **Delete the original code from App.jsx** (not rename, not comment out — delete)
+- [ ] Verify the app still renders without errors
+- [x] **Step 1**: Extract utility functions — create \`src/utils.js\`, delete from App.jsx (lines 20-33: \`clamp\`, \`fmt\`, \`fmtUsd\`, \`shortTax\`)
+- [x] **Step 2**: Extract destination data — create \`src/destinations.js\`, delete from App.jsx (lines 34-267: \`INITIAL_DESTS\` array, ~234 lines)
+- [x] **Step 3**: Extract UI atoms — create \`src/components/UIAtoms.jsx\`, delete from App.jsx (lines 674-737: \`Section\`, \`KPI\`, \`Slider\`, \`NumberBox\`, \`TextBox\`, \`FeatBox\`)
+- [x] **Step 4**: Extract destination editor — create \`src/components/DestEditor.jsx\`, delete from App.jsx (lines 738-805: \`DestRow\`, \`NewDestRow\`)
+- [x] **Step 5**: Extract chart component — create \`src/components/Chart.jsx\`, delete from App.jsx (lines 807-847: \`LineChart\`)
+- [x] **Step 6**: Extract banner component — create \`src/components/BannerImg.jsx\`, delete from App.jsx (lines 4-18: \`BannerImg\`)
+- [x] Added Singapore and Lisbon (2026-02-14)
+- [x] Add 5+ more destinations (emerging markets, tax-friendly jurisdictions)
+- [ ] Update existing destination data with current tax rates and costs
+- [ ] Add source/date annotations to destination data for freshness tracking
+- [ ] **Step 7**: Add collapsible sections for cleaner mobile view
+  - [ ] Modify the \`Section\` component in \`src/components/UIAtoms.jsx\` to accept an optional \`collapsible\` prop (default \`true\`)
+  - [ ] Add local state (\`useState\`) inside \`Section\` to track open/closed
+  - [ ] When collapsed, hide \`children\` (don't unmount — use CSS \`display:none\` or a wrapper with conditional rendering)
+  - [ ] Add a visual indicator in the header: ▶ when collapsed, ▼ when expanded (plain text, no icon library needed)
+  - [ ] Keep the existing card/header styling — just add the toggle behavior
+  - [ ] The header should have \`cursor: pointer\` when collapsible`;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    expect(resolved).not.toBeNull();
+    // CRITICAL: Must NOT pick "Create the new file with the extracted code"
+    expect(resolved!.title).not.toBe('Create the new file with the extracted code');
+    // Should pick a concrete task — either "Update existing destination data" or "Step 7"
+    // Both are more concrete than the generic boilerplate at the top
+    expect(resolved!.concreteScore).toBeGreaterThanOrEqual(2);
+    // The generic tasks at the top should be skipped
+    expect(resolved!.title).not.toContain('Add the import');
+    expect(resolved!.title).not.toContain('Delete the original code');
+    expect(resolved!.title).not.toContain('Verify the app still');
   });
 });
 

@@ -29,7 +29,9 @@ import {
   resetRoadmapTasks,
   createRoadmapResetPR,
   parseRoadmapPhases,
+  resolveNextRoadmapTask,
   type OrchestraTask,
+  type ResolvedTask,
   getRecentOrchestraEvents,
   aggregateOrchestraStats,
   getEventBasedModelScores,
@@ -1821,22 +1823,16 @@ export class TelegramHandler {
         const { content } = await fetchRoadmapFromGitHub(owner, repoName, this.githubToken);
         const phases = parseRoadmapPhases(content);
 
-        // Find the next uncompleted task
-        let nextTask: { title: string; phase: string } | null = null;
-        for (const phase of phases) {
-          for (const task of phase.tasks) {
-            if (!task.done) {
-              nextTask = { title: task.title, phase: phase.name };
-              break;
-            }
-          }
-          if (nextTask) break;
-        }
+        // Use the hierarchical resolver to find the best next task
+        const resolved = resolveNextRoadmapTask(phases);
 
-        if (!nextTask) {
+        if (!resolved) {
           await this.bot.sendMessage(chatId, '✅ All roadmap tasks are complete! Nothing to advise on.');
           return;
         }
+
+        // Use resolved task for advise display
+        const nextTask = { title: resolved.title, phase: resolved.phase };
 
         // Classify task complexity and recommend models
         const taskLower = nextTask.title.toLowerCase();
@@ -1857,6 +1853,9 @@ export class TelegramHandler {
           '',
         ];
 
+        if (resolved.ambiguity === 'high') {
+          lines.push('⚠️ Task title is generic — consider fixing the roadmap or using a strong model');
+        }
         if (isHeavyCoding) {
           lines.push('🔴 Complex coding task — strong model recommended');
         } else if (isSimple) {
@@ -2209,6 +2208,7 @@ export class TelegramHandler {
     // For run/redo mode, pre-fetch roadmap + work log to inject into prompt.
     // This eliminates 1-2 LLM round-trips (Step 1: READ ROADMAP + read WORK_LOG).
     let resolvedTask = prompt;
+    let resolvedExecutionBrief: string | undefined;
     let prefetchedRoadmap: string | undefined;
     let prefetchedRoadmapPath: string | undefined;
     let prefetchedWorkLog: string | undefined;
@@ -2219,17 +2219,14 @@ export class TelegramHandler {
         prefetchedRoadmap = content;
         prefetchedRoadmapPath = roadmapPath;
 
-        // Also resolve next task if not specified
+        // Resolve next task using hierarchical resolver (not flat first-undone)
         if (mode === 'run' && !prompt) {
           const phases = parseRoadmapPhases(content);
-          for (const phase of phases) {
-            for (const task of phase.tasks) {
-              if (!task.done) {
-                resolvedTask = task.title;
-                break;
-              }
-            }
-            if (resolvedTask) break;
+          const resolved = resolveNextRoadmapTask(phases);
+          if (resolved) {
+            resolvedTask = resolved.title;
+            // Store the execution brief for injection into the user message
+            resolvedExecutionBrief = resolved.executionBrief;
           }
         }
 
@@ -2301,10 +2298,13 @@ export class TelegramHandler {
       : '';
 
     // Build messages for the task
+    // Build user message — use structured execution brief when available
     const userMessage = mode === 'init'
       ? prompt
       : mode === 'redo'
       ? `Redo this task: ${prompt}`
+      : resolvedExecutionBrief
+      ? `Execute this roadmap work item.\n\n${resolvedExecutionBrief}\n\nDo not switch to another task unless this one is impossible.`
       : resolvedTask
       ? `Execute this task: ${resolvedTask}`
       : 'Execute the next uncompleted task from the roadmap.';

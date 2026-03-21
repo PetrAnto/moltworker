@@ -1042,25 +1042,100 @@ export async function fetchRoadmapFromGitHub(
   throw new Error('No roadmap file found. Run `/orch init` to create one.');
 }
 
+/** Single task in a roadmap phase — now with hierarchy metadata */
+export interface RoadmapTask {
+  title: string;
+  done: boolean;
+  /** Indentation level (0 = top-level, 2/4 = sub-task) */
+  indent: number;
+  /** Child sub-tasks nested under this task */
+  children: RoadmapTask[];
+  /** How the task was parsed */
+  kind: 'checkbox' | 'numbered-checkbox' | 'numbered-plain';
+}
+
 /** Parsed phase from a roadmap */
-interface RoadmapPhase {
+export interface RoadmapPhase {
   name: string;
-  tasks: { title: string; done: boolean }[];
+  /** Flat list of ALL tasks (top-level + children) — backwards-compatible */
+  tasks: RoadmapTask[];
+  /** Only top-level tasks (indent=0); children are nested in .children */
+  topLevelTasks: RoadmapTask[];
+}
+
+/** Result from resolveNextRoadmapTask() */
+export interface ResolvedTask {
+  /** The primary task title */
+  title: string;
+  /** Phase this task belongs to */
+  phase: string;
+  /** Full task object */
+  task: RoadmapTask;
+  /** Parent task if this is a sub-task */
+  parent?: RoadmapTask;
+  /** Pending sub-tasks if this is a parent */
+  pendingChildren: RoadmapTask[];
+  /** Recently completed siblings for context */
+  completedContext: string[];
+  /** How concrete/actionable the task title is (0–10) */
+  concreteScore: number;
+  /** Ambiguity level */
+  ambiguity: 'none' | 'low' | 'high';
+  /** Structured execution brief for the model */
+  executionBrief: string;
+}
+
+/**
+ * Score how concrete/actionable a task title is (0–10).
+ * Higher = more specific, lower = generic boilerplate.
+ */
+export function scoreTaskConcreteness(title: string): number {
+  let score = 0;
+
+  // File paths or extensions → very concrete
+  if (/\b(src\/|app\/|components\/|pages\/|lib\/|\.tsx?|\.jsx?|\.css|\.json|\.vue|\.svelte)\b/.test(title)) score += 3;
+  // Backtick-quoted identifiers (function names, components, etc.)
+  if (/`[^`]+`/.test(title)) score += 3;
+  // Numbered step labels like "Step 7", "Task 2.1"
+  if (/\b(?:step|task|phase)\s+\d+(?:\.\d+)?\b/i.test(title)) score += 2;
+  // Domain-specific nouns (component, hook, function, etc.)
+  if (/\b(component|hook|function|class|schema|route|import|export|module|endpoint|middleware)\b/i.test(title)) score += 2;
+  // Longer titles tend to be more descriptive
+  if (title.length > 80) score += 1;
+
+  // Negative signals — generic boilerplate fragments
+  if (/^create the new file/i.test(title)) score -= 4;
+  if (/^add the import/i.test(title)) score -= 4;
+  if (/^delete the original code/i.test(title)) score -= 4;
+  if (/^verify the app still/i.test(title)) score -= 4;
+  if (/^update existing/i.test(title)) score -= 2;
+  // Very short titles are usually vague
+  if (title.length < 24) score -= 1;
+
+  return Math.max(0, Math.min(10, score));
 }
 
 /**
  * Parse a ROADMAP.md into phases and tasks.
  *
+ * Now builds a hierarchy: indented checkboxes become children of the
+ * nearest preceding top-level task. The flat `.tasks` array is preserved
+ * for backwards compatibility; `.topLevelTasks` has the hierarchical view.
+ *
  * Supports multiple formats:
  * - Standard: `### Phase N: Title` headers + `- [x]` task lines
  * - H2 headers: `## Phase N: Title` or `## Title`
  * - Numbered lists: `1. [x] Task title` or `1. Task title` (treated as done=false)
- * - Indented checkboxes: `  - [x] Task title` (up to 4 spaces / 1 tab indent)
+ * - Indented checkboxes: `  - [x] Task title` (children of nearest top-level task)
  * - Flat checklists: `- [x] Task` with no phase headers (grouped into "Tasks")
  */
 export function parseRoadmapPhases(content: string): RoadmapPhase[] {
-  const phases: RoadmapPhase[] = [];
-  let current: RoadmapPhase | null = null;
+  type Accum = { name: string; flatTasks: RoadmapTask[]; topLevel: RoadmapTask[] };
+  const accums: Accum[] = [];
+  let current: Accum | null = null;
+
+  // Track the last top-level task so indented items become its children
+  let lastTopLevel: RoadmapTask | null = null;
 
   for (const line of content.split('\n')) {
     // Match phase headers:
@@ -1071,25 +1146,41 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
       || line.match(/^##\s+(?:(?:Phase|Step|Sprint)\s+\d+\s*[:.—\-]\s*)?(.+)/i)
       || line.match(/^#\s+(?:Phase|Step|Sprint)\s+\d+\s*[:.—\-]\s*(.+)/i);
     if (phaseMatch) {
-      current = { name: phaseMatch[1].trim(), tasks: [] };
-      phases.push(current);
+      current = { name: phaseMatch[1].trim(), flatTasks: [], topLevel: [] };
+      accums.push(current);
+      lastTopLevel = null;
       continue;
     }
 
-    // Match task lines (with optional leading whitespace up to 4 spaces or 1 tab):
-    // "- [x] Task", "* [ ] Task", "  - [x] Task", "\t- [ ] Task"
+    // Measure leading whitespace to determine nesting
+    const indentMatch = line.match(/^(\t| +)/);
+    const rawIndent = indentMatch ? (indentMatch[1] === '\t' ? 4 : indentMatch[1].length) : 0;
+
+    // Match task lines: "- [x] Task", "* [ ] Task", "  - [x] Task", "\t- [ ] Task"
     const taskMatch = line.match(/^[\t ]{0,4}[-*]\s+\[([ xX])\]\s+(.+)/);
     if (taskMatch) {
       const done = taskMatch[1].toLowerCase() === 'x';
       const title = taskMatch[2]
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
+        .replace(/\*\*/g, '')
         .trim();
-      // If no phase header was seen yet, create a default "Tasks" phase
+      const task: RoadmapTask = { title, done, indent: rawIndent, children: [], kind: 'checkbox' };
+
       if (!current) {
-        current = { name: 'Tasks', tasks: [] };
-        phases.push(current);
+        current = { name: 'Tasks', flatTasks: [], topLevel: [] };
+        accums.push(current);
       }
-      current.tasks.push({ title, done });
+
+      // Always add to flat list (backwards compat)
+      current.flatTasks.push(task);
+
+      // Hierarchy: indented (≥2 spaces) → child of last top-level task
+      if (rawIndent >= 2 && lastTopLevel) {
+        lastTopLevel.children.push(task);
+      } else {
+        current.topLevel.push(task);
+        lastTopLevel = task;
+      }
       continue;
     }
 
@@ -1099,12 +1190,22 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
       const done = numberedCheckboxMatch[1].toLowerCase() === 'x';
       const title = numberedCheckboxMatch[2]
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
+        .replace(/\*\*/g, '')
         .trim();
+      const task: RoadmapTask = { title, done, indent: rawIndent, children: [], kind: 'numbered-checkbox' };
+
       if (!current) {
-        current = { name: 'Tasks', tasks: [] };
-        phases.push(current);
+        current = { name: 'Tasks', flatTasks: [], topLevel: [] };
+        accums.push(current);
       }
-      current.tasks.push({ title, done });
+      current.flatTasks.push(task);
+
+      if (rawIndent >= 2 && lastTopLevel) {
+        lastTopLevel.children.push(task);
+      } else {
+        current.topLevel.push(task);
+        lastTopLevel = task;
+      }
       continue;
     }
 
@@ -1114,15 +1215,167 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
     if (numberedPlainMatch && current) {
       const title = numberedPlainMatch[1]
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
+        .replace(/\*\*/g, '')
         .trim();
       // Skip lines that look like sub-descriptions (start with lowercase, very short)
       if (title.length > 5) {
-        current.tasks.push({ title, done: false });
+        const task: RoadmapTask = { title, done: false, indent: rawIndent, children: [], kind: 'numbered-plain' };
+        current.flatTasks.push(task);
+        current.topLevel.push(task);
+        lastTopLevel = task;
       }
     }
   }
 
-  return phases.filter(phase => phase.tasks.length > 0);
+  return accums
+    .filter(p => p.flatTasks.length > 0)
+    .map(p => ({ name: p.name, tasks: p.flatTasks, topLevelTasks: p.topLevel }));
+}
+
+/**
+ * Resolve the best next task from parsed roadmap phases.
+ *
+ * Selection policy (in order):
+ * 1. Prefer top-level unchecked tasks with high concreteness scores
+ * 2. If only generic sub-tasks remain, bundle with parent context
+ * 3. Skip completed parents whose children are just boilerplate
+ * 4. Never return a high-ambiguity task without enriching it
+ */
+export function resolveNextRoadmapTask(phases: RoadmapPhase[]): ResolvedTask | null {
+  // First pass: find the best concrete top-level task
+  for (const phase of phases) {
+    for (const task of phase.topLevelTasks) {
+      // Skip fully completed tasks (task + all children done)
+      if (task.done && task.children.every(c => c.done)) continue;
+
+      // Case 1: Top-level task itself is undone → check concreteness
+      if (!task.done) {
+        let score = scoreTaskConcreteness(task.title);
+        // Boost score if children provide concrete context (file paths, identifiers)
+        const pendingChildren = task.children.filter(c => !c.done);
+        if (pendingChildren.some(c => scoreTaskConcreteness(c.title) >= 3)) {
+          score = Math.max(score, 3); // Children anchor the task
+        }
+        if (score >= 3) {
+          const completedContext = collectCompletedContext(phase);
+          return buildResolvedTask(task, phase.name, score, pendingChildren, completedContext);
+        }
+      }
+
+      // Case 2: Top-level task is undone but generic (score < 3)
+      // → skip it, look for a better task downstream
+      if (!task.done) continue;
+
+      // Case 3: Top-level task is done but has pending children
+      // These children are likely sub-steps of an already-started parent.
+      // Bundle them under the parent for context.
+      const pendingChildren = task.children.filter(c => !c.done);
+      if (pendingChildren.length > 0) {
+        // Check if the children are generic boilerplate
+        const allGeneric = pendingChildren.every(c => scoreTaskConcreteness(c.title) < 3);
+        if (allGeneric) {
+          // Skip — these are orphaned boilerplate sub-steps of a completed parent
+          continue;
+        }
+        // Some children are concrete — bundle under parent
+        const bestChild = pendingChildren.reduce((best, c) =>
+          scoreTaskConcreteness(c.title) > scoreTaskConcreteness(best.title) ? c : best
+        );
+        const score = scoreTaskConcreteness(bestChild.title);
+        const completedContext = collectCompletedContext(phase);
+        return buildResolvedTask(bestChild, phase.name, score, pendingChildren, completedContext, task);
+      }
+    }
+  }
+
+  // Second pass: no task scored ≥3. Pick the highest-scoring undone task
+  // across all phases (prefer less-generic tasks even if they come later).
+  let bestCandidate: { task: RoadmapTask; phase: RoadmapPhase; score: number; pendingChildren: RoadmapTask[] } | null = null;
+
+  for (const phase of phases) {
+    for (const task of phase.topLevelTasks) {
+      if (task.done && task.children.every(c => c.done)) continue;
+      if (!task.done) {
+        const score = scoreTaskConcreteness(task.title);
+        const pendingChildren = task.children.filter(c => !c.done);
+        if (!bestCandidate || score > bestCandidate.score) {
+          bestCandidate = { task, phase, score, pendingChildren };
+        }
+      }
+    }
+  }
+
+  if (bestCandidate) {
+    const completedContext = collectCompletedContext(bestCandidate.phase);
+    return buildResolvedTask(
+      bestCandidate.task, bestCandidate.phase.name, bestCandidate.score,
+      bestCandidate.pendingChildren, completedContext,
+    );
+  }
+
+  return null;
+}
+
+/** Collect recently completed task titles for context injection */
+function collectCompletedContext(phase: RoadmapPhase): string[] {
+  return phase.topLevelTasks
+    .filter(t => t.done)
+    .map(t => t.title)
+    .slice(-6); // Last 6 completed tasks
+}
+
+/** Build a ResolvedTask with execution brief */
+function buildResolvedTask(
+  task: RoadmapTask,
+  phaseName: string,
+  score: number,
+  pendingChildren: RoadmapTask[],
+  completedContext: string[],
+  parent?: RoadmapTask,
+): ResolvedTask {
+  const ambiguity: ResolvedTask['ambiguity'] =
+    score >= 5 ? 'none' : score >= 3 ? 'low' : 'high';
+
+  // Build execution brief
+  const briefLines: string[] = [];
+  briefLines.push(`Phase: ${phaseName}`);
+  if (parent) {
+    briefLines.push(`Parent task (completed): ${parent.title}`);
+  }
+  briefLines.push(`Primary task: ${task.title}`);
+
+  if (pendingChildren.length > 0) {
+    briefLines.push('');
+    briefLines.push('Sub-steps to complete:');
+    for (const child of pendingChildren) {
+      briefLines.push(`- ${child.title}`);
+    }
+  }
+
+  if (completedContext.length > 0) {
+    briefLines.push('');
+    briefLines.push('Already completed in this phase:');
+    for (const ctx of completedContext) {
+      briefLines.push(`✅ ${ctx}`);
+    }
+  }
+
+  if (ambiguity === 'high') {
+    briefLines.push('');
+    briefLines.push('⚠️ This task title is generic. Use the completed tasks above and the roadmap for full context. If it refers to code extraction, identify WHICH code from the existing codebase should be extracted based on completed steps.');
+  }
+
+  return {
+    title: task.title,
+    phase: phaseName,
+    task,
+    parent,
+    pendingChildren,
+    completedContext,
+    concreteScore: score,
+    ambiguity,
+    executionBrief: briefLines.join('\n'),
+  };
 }
 
 /**
@@ -1210,6 +1463,7 @@ export function findMatchingTasks(
       const done = taskMatch[1].toLowerCase() === 'x';
       const rawTitle = taskMatch[2]
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
+        .replace(/\*\*/g, '')
         .trim();
 
       // Check if this task matches the query
