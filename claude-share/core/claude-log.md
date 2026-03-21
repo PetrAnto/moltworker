@@ -4,6 +4,48 @@
 
 ---
 
+## Session: 2026-03-21 | F.15 EOL Fix + F.16 Orchestra Branch Retry + Docs Sync (Session: session_01HJCxEZZKUaxd4SNFiQQSq7)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/add-minimax-model-support-Otzqt`
+**Status:** ✅ Complete
+**Summary:** Three fixes + comprehensive documentation sync.
+
+**Changes Made:**
+1. **F.15 — EOL normalization + GitHub path encoding** (fix):
+   - `applyFuzzyPatch` exact-match path now normalizes to file's dominant EOL style (counting CRLF vs bare LF). Previously, model-sent `\n` replacements on CRLF files produced mixed endings.
+   - `encodeGitHubPath()` applied to all 7 GitHub Contents API URL constructions (was only used in write operations). Fixes breakage on paths with spaces, `#`, `?`, `&`, or unicode.
+   - Also encode `ref` query parameter with `encodeURIComponent`.
+   - 9 new tests (4 CRLF/EOL + 5 encodeGitHubPath).
+
+2. **F.16 — Orchestra "retry with different branch" fix** (fix):
+   - Root cause analysis from PR #108 (GPT-5.4 Nano): model hit 422 → prompt said "retry with different branch name" → model created new branch from main → lost all prior commits → missing React import.
+   - Updated 5 prompt locations across `orchestra.ts` and `task-processor.ts` to instruct models to push fix commits to the SAME branch first.
+
+3. **Documentation sync**:
+   - GLOBAL_ROADMAP.md: Added F.15+F.16, updated test count 1890→1911, added 3 changelog entries, added brainstorming cross-references
+   - WORK_STATUS.md: Updated sprint 3 count (12→14), test count, parallel tracking
+   - next_prompt.md: Added 3 recent completion entries
+   - future-integrations.md: Marked 6 completed features (Browser CDP, Web Search, Code Execution, File Management, Long-Term Memory + 7 tech debt items)
+   - claude-log.md: Added this session entry
+
+**Files Modified:**
+- `src/openrouter/tools.ts` — EOL normalization, encodeGitHubPath export
+- `src/openrouter/tools.test.ts` — 9 new tests (CRLF + encodeGitHubPath)
+- `src/durable-objects/task-processor.ts` — encodeGitHubPath import + usage, ORCHESTRA_REVIEW_PROMPT fix
+- `src/dream/github-client.ts` — local encodeGitHubPath + usage in writeFile
+- `src/orchestra/orchestra.ts` — 4 prompt location fixes + encodeURIComponent on roadmap path
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+- `brainstorming/future-integrations.md`
+
+**Tests:** 1911 passing (was 1890, +21 net new across this and prior session)
+**Notes for Next Session:** All brainstorming items are now cross-referenced in roadmap. Remaining unstarted items: F.1 (blocked), F.6, F.7, 6.3-6.6, Slack, error tracking (Sentry), rate limiting.
+
+---
+
 ## Session: 2026-03-17 | F.12 Event-Based Model Scoring (Session: session_01KxpZF4pir5V2D91zPwnBHo)
 
 **AI:** Claude Opus 4.6

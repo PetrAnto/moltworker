@@ -2,16 +2,20 @@
 
 This document tracks potential features and integrations for the Moltworker Telegram bot with OpenRouter.
 
-## Current State (as of Feb 2026)
+## Current State (updated Mar 2026)
 
 ### What We Have
-- **26+ AI models** via OpenRouter (DeepSeek, GPT, Claude, Gemini, Grok, Qwen, etc.)
+- **30+ AI models** via OpenRouter + automated full-catalog sync (curated + auto-sync)
+- **16 tools** including web search, browser automation, code execution, file management
 - **Image generation** with FLUX.2 models (klein, pro, flex, max)
-- **GitHub tools** (read files, list directories, API calls) with auto-auth
+- **GitHub tools** (read files, list directories, API calls, create PRs) with auto-auth
 - **Durable Objects** for unlimited task time (no timeout)
 - **User allowlist** security
 - **Skills loading** from R2 storage
 - **Status updates** during long operations
+- **Long-term memory** (fact extraction + injection per user)
+- **Browser automation** (CDP: a11y tree, click, fill, scroll)
+- **Orchestra mode** for multi-model competitive task execution
 
 ### Architecture
 ```
@@ -25,7 +29,7 @@ Telegram Webhook → Worker → Durable Object (for tool-using models)
 ## Priority 1: High Value, Low Effort
 
 ### 1.1 Browser Tool (CDP Integration)
-**Status:** Not started
+**Status:** ✅ Complete (F.2 — Phase 5/7, Mar 2026) — 4 actions (a11y tree, click, fill, scroll) + session persistence
 **Effort:** Low (binding already exists)
 **Value:** High
 
@@ -133,7 +137,7 @@ Full two-way Discord integration like Telegram:
 ## Priority 3: More Tools
 
 ### 3.1 Web Search Tool
-**Status:** Not started
+**Status:** ✅ Complete (Phase 5.5, Feb 2026) — web_search tool with result formatting
 **Effort:** Medium
 **Value:** High
 
@@ -153,7 +157,7 @@ web_search({
 ```
 
 ### 3.2 Code Execution Tool
-**Status:** Not started
+**Status:** ✅ Complete (F.3, Phase 5.3, Mar 2026) — sandbox_exec via Cloudflare Containers, 15-call safety limit
 **Effort:** High
 **Value:** High
 
@@ -172,7 +176,7 @@ run_code({
 ```
 
 ### 3.3 File Management Tools
-**Status:** Not started
+**Status:** ✅ Complete (F.4, Mar 2026) — R2-backed save/read/list/delete, per-user scoping, 10MB quota
 **Effort:** Low
 **Value:** Medium
 
@@ -236,7 +240,7 @@ Share context between users:
 - Role-based access
 
 ### 4.4 Long-Term Memory
-**Status:** Not started
+**Status:** ✅ Complete (F.8, Mar 2026) — 100 facts/user, flash extraction, dedup, /memory command, 26 tests
 **Effort:** Medium
 **Value:** High
 
@@ -277,20 +281,20 @@ Via WhatsApp Business API (requires approval).
 ## Technical Debt & Improvements
 
 ### Code Quality
-- [ ] Add unit tests for tools
-- [ ] Add integration tests for Telegram handler
+- [x] Add unit tests for tools — 1911 tests total (Mar 2026)
+- [x] Add integration tests for Telegram handler — partial via /simulate endpoint
 - [ ] Add error tracking (Sentry?)
-- [ ] Add request logging/analytics
+- [x] Add request logging/analytics — partial (Acontext Phase 2.3, Orchestra events F.11)
 
 ### Performance
-- [ ] Cache frequent API responses
-- [ ] Optimize token usage (shorter system prompts)
-- [ ] Batch tool calls where possible
+- [x] Cache frequent API responses — tool result cache (Phase 4.3)
+- [x] Optimize token usage (shorter system prompts) — smart context loading (7A.2)
+- [x] Batch tool calls where possible — parallel execution (Phase 1.1, PARALLEL_SAFE_TOOLS)
 
 ### Security
 - [ ] Rate limiting per user
-- [ ] Input sanitization for tools
-- [ ] Audit logging for sensitive operations
+- [x] Input sanitization for tools — destructive op guard (7A.3)
+- [x] Audit logging for sensitive operations — partial (Acontext sessions, orchestra events)
 
 ---
 
