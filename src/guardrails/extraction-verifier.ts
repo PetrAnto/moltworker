@@ -463,10 +463,47 @@ export async function scanCrossFileReferences(
     );
 
     if (staleRefs.length > 0) {
+      // Find the actual import line for a concrete fix suggestion
+      const lines = content.split('\n');
+      const importLine = lines.find(l =>
+        l.includes('import') && l.includes(sourceBasename),
+      );
+
+      // Build concrete fix: derive the new module's import path relative to the consumer
+      const newFile = extraction.newFiles[0] || 'new-module';
+      const newBasename = (newFile.split('/').pop() || '')
+        .replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/, '');
+
+      // Derive relative path from consumer to new file
+      const consumerDir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
+      const newFileDir = newFile.includes('/') ? newFile.substring(0, newFile.lastIndexOf('/')) : '';
+      const newFileWithExt = newFile.split('/').pop() || newFile;
+      let relativePath: string;
+      if (consumerDir === newFileDir) {
+        relativePath = `./${newFileWithExt}`;
+      } else if (newFile.startsWith(consumerDir + '/')) {
+        relativePath = './' + newFile.substring(consumerDir.length + 1);
+      } else {
+        relativePath = `./${newFileDir ? newFileDir.split('/').slice(-1)[0] + '/' : ''}${newFileWithExt}`;
+      }
+
+      let fixSuggestion = '';
+      if (importLine) {
+        fixSuggestion = `\nFIX: In "${filePath}", add a new import: \`import { ${staleRefs.join(', ')} } from '${relativePath}';\``;
+        // If all refs from this import are stale, suggest removing the old import entirely
+        const otherNamesUsed = extraction.extractedNames.length < 10 &&
+          lines.some(l => l.includes('import') && l.includes(sourceBasename) &&
+            !staleRefs.every(r => l.includes(r)));
+        if (!otherNamesUsed) {
+          fixSuggestion += `\nIf "${sourceBasename}" has no other exports used in this file, you can also change the import to: \`import { ${staleRefs.join(', ')} } from '${relativePath}';\``;
+        }
+        fixSuggestion += `\nFound import line: \`${importLine.trim()}\``;
+      }
+
       warnings.push(
         `STALE REFERENCES: "${filePath}" imports from "${sourceBasename}" and references ` +
         `extracted identifiers [${staleRefs.join(', ')}] — these imports need updating to point ` +
-        `at the new module(s): ${extraction.newFiles.join(', ')}`,
+        `at the new module(s): ${extraction.newFiles.join(', ')}` + fixSuggestion,
       );
     }
   }

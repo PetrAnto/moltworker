@@ -554,6 +554,9 @@ describe('scanCrossFileReferences', () => {
     expect(warnings[0]).toContain('App.jsx');
     expect(warnings[0]).toContain('Section');
     expect(warnings[0]).toContain('Section.jsx');
+    // Should include concrete fix suggestion with import line
+    expect(warnings[0]).toContain('FIX:');
+    expect(warnings[0]).toContain("import { Section, KPI, Slider } from './components/UIAtoms'");
   });
 });
 
