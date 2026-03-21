@@ -2206,22 +2206,39 @@ export class TelegramHandler {
     const history = await loadOrchestraHistory(this.r2Bucket, userId);
     const previousTasks = history?.tasks.filter(t => t.repo === repo) || [];
 
-    // For run mode with no specific task, pre-identify the next task from the roadmap
-    // so the model doesn't pick a different one than /orch advise showed
+    // For run/redo mode, pre-fetch roadmap + work log to inject into prompt.
+    // This eliminates 1-2 LLM round-trips (Step 1: READ ROADMAP + read WORK_LOG).
     let resolvedTask = prompt;
-    if (mode === 'run' && !prompt && this.githubToken) {
+    let prefetchedRoadmap: string | undefined;
+    let prefetchedRoadmapPath: string | undefined;
+    let prefetchedWorkLog: string | undefined;
+    if (mode !== 'init' && this.githubToken) {
+      const [owner, repoName] = repo.split('/');
       try {
-        const [owner, repoName] = repo.split('/');
-        const { content } = await fetchRoadmapFromGitHub(owner, repoName, this.githubToken);
-        const phases = parseRoadmapPhases(content);
-        for (const phase of phases) {
-          for (const task of phase.tasks) {
-            if (!task.done) {
-              resolvedTask = task.title;
-              break;
+        const { content, path: roadmapPath } = await fetchRoadmapFromGitHub(owner, repoName, this.githubToken);
+        prefetchedRoadmap = content;
+        prefetchedRoadmapPath = roadmapPath;
+
+        // Also resolve next task if not specified
+        if (mode === 'run' && !prompt) {
+          const phases = parseRoadmapPhases(content);
+          for (const phase of phases) {
+            for (const task of phase.tasks) {
+              if (!task.done) {
+                resolvedTask = task.title;
+                break;
+              }
             }
+            if (resolvedTask) break;
           }
-          if (resolvedTask) break;
+        }
+
+        // Pre-fetch WORK_LOG.md (best-effort)
+        try {
+          const { githubReadFile: readFile } = await import('../openrouter/tools');
+          prefetchedWorkLog = await readFile(owner, repoName, 'WORK_LOG.md', undefined, this.githubToken);
+        } catch {
+          // WORK_LOG.md may not exist yet — that's fine
         }
       } catch {
         // Roadmap fetch failed — let the model figure it out
@@ -2258,6 +2275,9 @@ export class TelegramHandler {
         specificTask: resolvedTask || undefined,
         branchSlug,
         hasSandbox: !!this.sandbox,
+        roadmapContent: prefetchedRoadmap,
+        roadmapPath: prefetchedRoadmapPath,
+        workLogContent: prefetchedWorkLog,
       });
     }
 

@@ -232,6 +232,12 @@ interface BuildRunPromptParams {
   specificTask?: string; // Optional: user-specified task instead of "next"
   branchSlug?: string; // Pre-generated branch slug (without bot/ prefix)
   hasSandbox?: boolean; // If true, sandbox_exec is available — prompt encourages testing
+  /** Pre-fetched roadmap content — eliminates Step 1 github_read_file call. */
+  roadmapContent?: string;
+  /** Pre-fetched roadmap file path (e.g. ROADMAP.md). */
+  roadmapPath?: string;
+  /** Pre-fetched WORK_LOG.md content — eliminates another read call. */
+  workLogContent?: string;
 }
 
 /**
@@ -254,6 +260,20 @@ function getPromptTier(modelAlias: string): 'minimal' | 'standard' | 'full' {
   if (!model.isFree) return 'full';  // Paid models are generally stronger
   if ((model.maxContext || 0) >= 200000) return 'standard';
   return 'minimal';
+}
+
+/**
+ * Build the pre-fetched roadmap/worklog section for injection into prompts.
+ * Eliminates 1-2 LLM round-trips by providing the content directly.
+ */
+function buildPrefetchedDocsSection(params: BuildRunPromptParams): string {
+  if (!params.roadmapContent) return '';
+  const sections: string[] = [];
+  sections.push(`\n\n## PRE-LOADED: ${params.roadmapPath || 'ROADMAP.md'} (already fetched — do NOT re-read)\n\`\`\`\n${params.roadmapContent}\n\`\`\``);
+  if (params.workLogContent) {
+    sections.push(`\n## PRE-LOADED: WORK_LOG.md (already fetched — do NOT re-read)\n\`\`\`\n${params.workLogContent}\n\`\`\``);
+  }
+  return sections.join('\n');
 }
 
 /**
@@ -297,13 +317,9 @@ Execute the next task from the roadmap for **${repo}**.
 - Do NOT regenerate entire files from memory — use "patch" action for edits.
 - Always finish with a github_create_pr call + ORCHESTRA_RESULT block. Use github_push_files to batch large changes before the PR.
 
-## Step 1: READ ROADMAP
-Use \`github_read_file\` with owner="${owner}" repo="${repoName}" to read ROADMAP.md.
-Check paths: ${ROADMAP_FILE_CANDIDATES.slice(0, 3).join(', ')}. Also read WORK_LOG.md if it exists.
-${taskInstruction}
-
-## Step 2: READ RELEVANT FILES
-Read only the files you need to implement the task. Stop reading when you have enough.
+${params.roadmapContent
+    ? `## Step 1: TASK SELECTION\nThe roadmap and work log are pre-loaded below — do NOT re-read them.\n${taskInstruction}\n\n## Step 2: READ RELEVANT FILES\nRead only the code files you need to implement the task. Call multiple github_read_file in parallel when possible. Stop reading when you have enough.\n${buildPrefetchedDocsSection(params)}`
+    : `## Step 1: READ ROADMAP\nUse \`github_read_file\` with owner="${owner}" repo="${repoName}" to read ROADMAP.md.\nCheck paths: ${ROADMAP_FILE_CANDIDATES.slice(0, 3).join(', ')}. Also read WORK_LOG.md if it exists.\n${taskInstruction}\n\n## Step 2: READ RELEVANT FILES\nRead only the files you need to implement the task. Stop reading when you have enough.`}
 
 ## Step 3: IMPLEMENT
 For "patch" action: \`{"path":"file.js","action":"patch","patches":[{"find":"exact text","replace":"new text"}]}\`
@@ -386,14 +402,9 @@ Execute the next task from the roadmap for **${repo}**.
 - Do NOT regenerate entire files from memory — use "patch" action for edits.
 - Always finish with a github_create_pr call + ORCHESTRA_RESULT block. Use github_push_files to batch large changes before the PR.
 
-## Step 1: READ ROADMAP
-Use \`github_read_file\` with owner="${owner}" repo="${repoName}" to read ROADMAP.md.
-Check paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.
-${taskInstruction}
-
-## Step 2: UNDERSTAND CODEBASE
-Use \`github_list_files\` and \`github_read_file\` to read files related to the task.
-If any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you may split it as part of this task.
+${params.roadmapContent
+    ? `## Step 1: TASK SELECTION\nThe roadmap and work log are pre-loaded below — do NOT re-read them.\n${taskInstruction}\n\n## Step 2: UNDERSTAND CODEBASE\nUse \`github_list_files\` and \`github_read_file\` to read files related to the task. Call multiple reads in parallel when possible.\nIf any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you may split it as part of this task.\n${buildPrefetchedDocsSection(params)}`
+    : `## Step 1: READ ROADMAP\nUse \`github_read_file\` with owner="${owner}" repo="${repoName}" to read ROADMAP.md.\nCheck paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.\n${taskInstruction}\n\n## Step 2: UNDERSTAND CODEBASE\nUse \`github_list_files\` and \`github_read_file\` to read files related to the task.\nIf any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you may split it as part of this task.`}
 
 ## Step 3: IMPLEMENT
 Branch: \`${branch}\` (bot/ prefix added automatically)
@@ -508,19 +519,11 @@ Execute the next task from the project roadmap for **${repo}**.
 - After calling github_create_pr, CHECK THE RESULT. If it returned an error, fix and retry. Never claim success if the tool returned an error.
 - Always finish with a github_create_pr call + ORCHESTRA_RESULT block with a real PR URL. Use github_push_files to batch large changes before the PR.
 
-## Step 1: READ ROADMAP
-Use \`github_read_file\` with owner="${owner}" repo="${repoName}" to read the roadmap.
-Check paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.
-If no roadmap found: "No roadmap found. Run \`/orchestra init ${repo} <description>\` first."
+${params.roadmapContent
+    ? `## Step 1: SELECT TASK\nThe roadmap and work log are pre-loaded below — do NOT re-read them.\n${taskSelection}\n\n## Step 2: UNDERSTAND CODEBASE\nUse \`github_list_files\` and \`github_read_file\` to read files related to the task. Call multiple reads in parallel when possible.\nIf any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you can split it as part of this task.\n${buildPrefetchedDocsSection(params)}`
+    : `## Step 1: READ ROADMAP\nUse \`github_read_file\` with owner="${owner}" repo="${repoName}" to read the roadmap.\nCheck paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.\nIf no roadmap found: "No roadmap found. Run \`/orchestra init ${repo} <description>\` first."\n\n## Step 2: SELECT TASK\n${taskSelection}\n\n## Step 3: UNDERSTAND CODEBASE\nUse \`github_list_files\` and \`github_read_file\` to read files related to the task.\nIf any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you can split it as part of this task.`}
 
-## Step 2: SELECT TASK
-${taskSelection}
-
-## Step 3: UNDERSTAND CODEBASE
-Use \`github_list_files\` and \`github_read_file\` to read files related to the task.
-If any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you can split it as part of this task.
-
-## Step 4: IMPLEMENT
+## Step ${params.roadmapContent ? '3' : '4'}: IMPLEMENT
 
 **Use "patch" action for editing existing files (especially files >100 lines):**
 - Read the file first with \`github_read_file\`
@@ -609,7 +612,7 @@ summary: {1-2 sentence summary}
 - **USE "patch" ACTION for editing existing files** — never regenerate entire files from memory. Never delete work log entries or roadmap tasks.
 - Use "${modelAlias}" in branch names and commit messages.
 - You MUST produce an ORCHESTRA_RESULT: block with a real PR URL — the task is NOT complete without it
-- **Do NOT output a plan, outline, or list of steps.** CALL tools directly. Your first action must be a github_read_file tool call.
+- **Do NOT output a plan, outline, or list of steps.** CALL tools directly. ${params.roadmapContent ? 'Your first action must be reading the code files needed for the task.' : 'Your first action must be a github_read_file tool call.'}
 ${historyContext}`;
 }
 
