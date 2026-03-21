@@ -504,16 +504,17 @@ describe('scanCrossFileReferences', () => {
     expect(warnings).toHaveLength(0);
   });
 
-  it('limits scan to 5 files', async () => {
+  it('limits scan to 8 files', async () => {
     const readFile = vi.fn(async () => "import { something } from './App';");
     const listFiles = vi.fn(async () => [
       'src/App.jsx', 'src/utils.js', // excluded
-      'src/A.jsx', 'src/B.jsx', 'src/C.jsx', 'src/D.jsx', 'src/E.jsx', 'src/F.jsx', 'src/G.jsx',
+      'src/A.jsx', 'src/B.jsx', 'src/C.jsx', 'src/D.jsx', 'src/E.jsx',
+      'src/F.jsx', 'src/G.jsx', 'src/H.jsx', 'src/I.jsx', 'src/J.jsx',
     ]);
 
     await scanCrossFileReferences(extraction, readFile, listFiles);
-    // Should read at most 5 sibling files (7 total minus 2 excluded = 5, capped at 5)
-    expect(readFile.mock.calls.length).toBeLessThanOrEqual(5);
+    // Should read at most 8 files (covers parent dirs too)
+    expect(readFile.mock.calls.length).toBeLessThanOrEqual(8);
   });
 
   it('handles listFiles failure gracefully', async () => {
@@ -522,6 +523,37 @@ describe('scanCrossFileReferences', () => {
 
     const warnings = await scanCrossFileReferences(extraction, readFile, listFiles);
     expect(warnings).toHaveLength(0);
+  });
+
+  it('detects stale references in parent directory (PR #110 regression)', async () => {
+    // Simulates: Section extracted from src/components/UIAtoms.jsx to src/components/Section.jsx
+    // but src/App.jsx (parent dir) still imports Section from UIAtoms
+    const nestedExtraction: ExtractionCheck = {
+      sourceFile: 'src/components/UIAtoms.jsx',
+      newFiles: ['src/components/Section.jsx'],
+      extractedNames: ['Section'],
+      sourceInitialLineCount: null,
+      newFileLineCount: null,
+    };
+
+    const readFile = vi.fn(async (path: string) => {
+      if (path === 'src/App.jsx') {
+        return "import { Section, KPI, Slider } from './components/UIAtoms';\nexport default function App() { return <Section />; }";
+      }
+      return null;
+    });
+    const listFiles = vi.fn(async (dir: string) => {
+      if (dir === 'src/components') return ['src/components/UIAtoms.jsx', 'src/components/Section.jsx', 'src/components/Other.jsx'];
+      if (dir === 'src') return ['src/App.jsx', 'src/index.js'];
+      return [];
+    });
+
+    const warnings = await scanCrossFileReferences(nestedExtraction, readFile, listFiles);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('STALE REFERENCES');
+    expect(warnings[0]).toContain('App.jsx');
+    expect(warnings[0]).toContain('Section');
+    expect(warnings[0]).toContain('Section.jsx');
   });
 });
 

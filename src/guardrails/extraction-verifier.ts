@@ -401,13 +401,34 @@ export async function scanCrossFileReferences(
     ? extraction.sourceFile.substring(0, extraction.sourceFile.lastIndexOf('/'))
     : '';
 
-  // List sibling files
-  let siblingFiles: string[];
-  try {
-    siblingFiles = await listFiles(sourceDir);
-  } catch {
-    return []; // Can't list files — skip cross-reference check
+  // Build list of directories to scan: source dir + parent dirs (up to 2 levels)
+  // This catches consumers in parent directories (e.g., src/App.jsx importing from src/components/UIAtoms.jsx)
+  const dirsToScan = [sourceDir];
+  let parentDir = sourceDir;
+  for (let i = 0; i < 2 && parentDir.includes('/'); i++) {
+    parentDir = parentDir.substring(0, parentDir.lastIndexOf('/'));
+    dirsToScan.push(parentDir);
   }
+  // Also scan root if source is nested (e.g., src/components/ → also scan '')
+  if (parentDir !== '' && !dirsToScan.includes('')) {
+    dirsToScan.push('');
+  }
+
+  // List files from all directories (parallel), deduplicate
+  const seenFiles = new Set<string>();
+  const allFiles: string[] = [];
+  const dirResults = await Promise.allSettled(dirsToScan.map(d => listFiles(d)));
+  for (const result of dirResults) {
+    if (result.status === 'fulfilled') {
+      for (const f of result.value) {
+        if (!seenFiles.has(f)) {
+          seenFiles.add(f);
+          allFiles.push(f);
+        }
+      }
+    }
+  }
+  if (allFiles.length === 0) return [];
 
   // Filter to code files, exclude source file and new files
   const codeExtensions = new Set(['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs']);
@@ -415,14 +436,14 @@ export async function scanCrossFileReferences(
     extraction.sourceFile,
     ...extraction.newFiles,
   ]);
-  const filesToScan = siblingFiles.filter(f => {
+  const filesToScan = allFiles.filter(f => {
     if (excludeFiles.has(f)) return false;
     const ext = f.split('.').pop()?.toLowerCase() || '';
     return codeExtensions.has(ext);
   });
 
-  // Limit to 5 files to keep API calls lightweight
-  const scanTargets = filesToScan.slice(0, 5);
+  // Limit to 8 files to keep API calls lightweight (increased from 5 to cover parent dirs)
+  const scanTargets = filesToScan.slice(0, 8);
 
   // Build source file basename for import detection (e.g., "App" from "src/App.jsx")
   const sourceBasename = (extraction.sourceFile.split('/').pop() || '')
