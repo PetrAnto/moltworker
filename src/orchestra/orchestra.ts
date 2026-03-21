@@ -238,6 +238,8 @@ interface BuildRunPromptParams {
   roadmapPath?: string;
   /** Pre-fetched WORK_LOG.md content — eliminates another read call. */
   workLogContent?: string;
+  /** Pre-resolved execution brief — overrides specificTask in the system prompt. */
+  executionBrief?: string;
 }
 
 /**
@@ -297,11 +299,13 @@ export function buildRunPrompt(params: BuildRunPromptParams): string {
  * with explicit guardrail mentions to avoid audit trail blocks.
  */
 function buildMinimalRunPrompt(params: BuildRunPromptParams): string {
-  const { repo, modelAlias, specificTask, branchSlug } = params;
+  const { repo, modelAlias, specificTask, branchSlug, executionBrief } = params;
   const [owner, repoName] = repo.split('/');
   const branch = branchSlug || `task-${modelAlias}`;
 
-  const taskInstruction = specificTask
+  const taskInstruction = executionBrief
+    ? `Execute this work item (pre-resolved from roadmap):\n${executionBrief}`
+    : specificTask
     ? `Find and execute this task: "${specificTask}"`
     : 'Find the first unchecked task `- [ ]` whose dependencies are done.';
 
@@ -371,11 +375,13 @@ Begin now. Read the roadmap first.`;
  * file splitting rules, and history context over minimal.
  */
 function buildStandardRunPrompt(params: BuildRunPromptParams): string {
-  const { repo, modelAlias, previousTasks, specificTask, branchSlug } = params;
+  const { repo, modelAlias, previousTasks, specificTask, branchSlug, executionBrief } = params;
   const [owner, repoName] = repo.split('/');
   const branch = branchSlug || `task-${modelAlias}`;
 
-  const taskInstruction = specificTask
+  const taskInstruction = executionBrief
+    ? `Execute this work item (pre-resolved from roadmap):\n${executionBrief}\nDo not switch to another task.`
+    : specificTask
     ? `The user requested: "${specificTask}"\nFind this task in the roadmap and execute it.`
     : `Find the NEXT uncompleted task: first \`- [ ]\` whose dependencies are all \`- [x]\`.`;
 
@@ -480,7 +486,7 @@ Begin now. Read the roadmap first.`;
  * file splitting guidance, audit trail enforcement, verification steps.
  */
 function buildFullRunPrompt(params: BuildRunPromptParams): string {
-  const { repo, modelAlias, previousTasks, specificTask, branchSlug } = params;
+  const { repo, modelAlias, previousTasks, specificTask, branchSlug, executionBrief } = params;
   const [owner, repoName] = repo.split('/');
   const branch = branchSlug || `{task-slug}-${modelAlias}`;
 
@@ -497,7 +503,9 @@ function buildFullRunPrompt(params: BuildRunPromptParams): string {
     historyContext = `\n\n## Recent Orchestra History\n${lines.join('\n')}\n\nAvoid duplicating work already done.`;
   }
 
-  const taskSelection = specificTask
+  const taskSelection = executionBrief
+    ? `The task has been PRE-RESOLVED from the roadmap. Execute this work item:\n\n${executionBrief}\n\nDo not switch to a different task unless this one is truly impossible.`
+    : specificTask
     ? `The user has requested a SPECIFIC task: "${specificTask}"
 Find this task (or the closest match) in the roadmap and execute it.
 If the task is not in the roadmap, execute it anyway and add it to the roadmap as a completed item.`
@@ -1092,23 +1100,27 @@ export interface ResolvedTask {
 export function scoreTaskConcreteness(title: string): number {
   let score = 0;
 
-  // File paths or extensions → very concrete
-  if (/\b(src\/|app\/|components\/|pages\/|lib\/|\.tsx?|\.jsx?|\.css|\.json|\.vue|\.svelte)\b/.test(title)) score += 3;
+  // File paths or extensions → very concrete (frontend + backend)
+  if (/\b(src\/|app\/|components\/|pages\/|lib\/|\.tsx?|\.jsx?|\.css|\.json|\.vue|\.svelte|\.py|\.go|\.rs|\.java|\.rb|\.php|\.sql|\.proto|\.yaml|\.yml|\.toml|\.sh)\b/.test(title)) score += 3;
   // Backtick-quoted identifiers (function names, components, etc.)
   if (/`[^`]+`/.test(title)) score += 3;
   // Numbered step labels like "Step 7", "Task 2.1"
   if (/\b(?:step|task|phase)\s+\d+(?:\.\d+)?\b/i.test(title)) score += 2;
   // Domain-specific nouns (component, hook, function, etc.)
-  if (/\b(component|hook|function|class|schema|route|import|export|module|endpoint|middleware)\b/i.test(title)) score += 2;
+  if (/\b(component|hook|function|class|schema|route|import|export|module|endpoint|middleware|model|controller|service|handler|migration|fixture|template|view)\b/i.test(title)) score += 2;
   // Longer titles tend to be more descriptive
   if (title.length > 80) score += 1;
 
   // Negative signals — generic boilerplate fragments
-  if (/^create the new file/i.test(title)) score -= 4;
-  if (/^add the import/i.test(title)) score -= 4;
-  if (/^delete the original code/i.test(title)) score -= 4;
-  if (/^verify the app still/i.test(title)) score -= 4;
-  if (/^update existing/i.test(title)) score -= 2;
+  // Only penalize when there are NO strong positive anchors (backticks or directory paths)
+  const hasAnchors = /`[^`]+`|\b\w+\/\w+/.test(title);
+  if (!hasAnchors) {
+    if (/^create the new file/i.test(title)) score -= 4;
+    if (/^add the import/i.test(title)) score -= 4;
+    if (/^delete the original code/i.test(title)) score -= 4;
+    if (/^verify the app still/i.test(title)) score -= 4;
+    if (/^verify it still/i.test(title)) score -= 3;
+  }
   // Very short titles are usually vague
   if (title.length < 24) score -= 1;
 
@@ -1157,7 +1169,7 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
     const rawIndent = indentMatch ? (indentMatch[1] === '\t' ? 4 : indentMatch[1].length) : 0;
 
     // Match task lines: "- [x] Task", "* [ ] Task", "  - [x] Task", "\t- [ ] Task"
-    const taskMatch = line.match(/^[\t ]{0,4}[-*]\s+\[([ xX])\]\s+(.+)/);
+    const taskMatch = line.match(/^[\t ]{0,8}[-*]\s+\[([ xX])\]\s+(.+)/);
     if (taskMatch) {
       const done = taskMatch[1].toLowerCase() === 'x';
       const title = taskMatch[2]
@@ -1185,7 +1197,7 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
     }
 
     // Match numbered list items with checkboxes: "1. [x] Task title"
-    const numberedCheckboxMatch = line.match(/^[\t ]{0,4}\d+\.\s+\[([ xX])\]\s+(.+)/);
+    const numberedCheckboxMatch = line.match(/^[\t ]{0,8}\d+\.\s+\[([ xX])\]\s+(.+)/);
     if (numberedCheckboxMatch) {
       const done = numberedCheckboxMatch[1].toLowerCase() === 'x';
       const title = numberedCheckboxMatch[2]
@@ -1211,7 +1223,7 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
 
     // Match plain numbered list items (no checkbox, treated as not done): "1. Task title"
     // Only match if we're already inside a phase (to avoid matching random numbered text)
-    const numberedPlainMatch = line.match(/^[\t ]{0,4}\d+\.\s+(.+)/);
+    const numberedPlainMatch = line.match(/^[\t ]{0,8}\d+\.\s+(.+)/);
     if (numberedPlainMatch && current) {
       const title = numberedPlainMatch[1]
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
@@ -1245,6 +1257,8 @@ export function resolveNextRoadmapTask(phases: RoadmapPhase[]): ResolvedTask | n
   // First pass: find the best concrete top-level task
   for (const phase of phases) {
     for (const task of phase.topLevelTasks) {
+      // Skip numbered-plain items — they're notes/prose, not executable tasks
+      if (task.kind === 'numbered-plain') continue;
       // Skip fully completed tasks (task + all children done)
       if (task.done && task.children.every(c => c.done)) continue;
 
@@ -1290,16 +1304,33 @@ export function resolveNextRoadmapTask(phases: RoadmapPhase[]): ResolvedTask | n
 
   // Second pass: no task scored ≥3. Pick the highest-scoring undone task
   // across all phases (prefer less-generic tasks even if they come later).
-  let bestCandidate: { task: RoadmapTask; phase: RoadmapPhase; score: number; pendingChildren: RoadmapTask[] } | null = null;
+  // Also considers pending children of completed parents (Gemini Fix 3).
+  let bestCandidate: { task: RoadmapTask; phase: RoadmapPhase; score: number; pendingChildren: RoadmapTask[]; parent?: RoadmapTask } | null = null;
 
   for (const phase of phases) {
     for (const task of phase.topLevelTasks) {
+      // Skip numbered-plain items — they're notes/prose, not executable tasks
+      if (task.kind === 'numbered-plain') continue;
+
       if (task.done && task.children.every(c => c.done)) continue;
+
       if (!task.done) {
         const score = scoreTaskConcreteness(task.title);
         const pendingChildren = task.children.filter(c => !c.done);
         if (!bestCandidate || score > bestCandidate.score) {
           bestCandidate = { task, phase, score, pendingChildren };
+        }
+      } else {
+        // Parent is done but has pending children — evaluate the best child
+        const pendingChildren = task.children.filter(c => !c.done && c.kind !== 'numbered-plain');
+        if (pendingChildren.length > 0) {
+          const bestChild = pendingChildren.reduce((best, c) =>
+            scoreTaskConcreteness(c.title) > scoreTaskConcreteness(best.title) ? c : best
+          );
+          const score = scoreTaskConcreteness(bestChild.title);
+          if (!bestCandidate || score > bestCandidate.score) {
+            bestCandidate = { task: bestChild, phase, score, pendingChildren, parent: task };
+          }
         }
       }
     }
@@ -1309,7 +1340,7 @@ export function resolveNextRoadmapTask(phases: RoadmapPhase[]): ResolvedTask | n
     const completedContext = collectCompletedContext(bestCandidate.phase);
     return buildResolvedTask(
       bestCandidate.task, bestCandidate.phase.name, bestCandidate.score,
-      bestCandidate.pendingChildren, completedContext,
+      bestCandidate.pendingChildren, completedContext, bestCandidate.parent,
     );
   }
 

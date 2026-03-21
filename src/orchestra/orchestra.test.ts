@@ -352,6 +352,37 @@ describe('buildRunPrompt', () => {
     expect(prompt).toContain('NEVER assume deletion will happen in a later task');
     expect(prompt).toContain('function/const/component name');
   });
+
+  it('uses executionBrief in system prompt when provided', () => {
+    const brief = 'Phase: Refactoring\nPrimary task: Step 7: Add collapsible sections\n\nSub-steps:\n- Modify Section component';
+    const prompt = buildRunPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks: [],
+      executionBrief: brief,
+    });
+    // Brief should appear in the system prompt
+    expect(prompt).toContain('PRE-RESOLVED');
+    expect(prompt).toContain('Step 7: Add collapsible sections');
+    expect(prompt).toContain('Modify Section component');
+    // Should NOT contain bare specificTask instructions
+    expect(prompt).not.toContain('SPECIFIC task');
+    expect(prompt).not.toContain('NEXT uncompleted task');
+  });
+
+  it('executionBrief overrides specificTask', () => {
+    const prompt = buildRunPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks: [],
+      specificTask: 'Some old task',
+      executionBrief: 'Phase: Work\nPrimary task: Better task',
+    });
+    // Brief takes precedence
+    expect(prompt).toContain('Better task');
+    // specificTask should NOT appear in the prompt since brief overrides it
+    expect(prompt).toContain('PRE-RESOLVED');
+  });
 });
 
 // --- Large file health check constants ---
@@ -1755,6 +1786,21 @@ describe('scoreTaskConcreteness', () => {
   it('penalizes very short titles', () => {
     expect(scoreTaskConcreteness('Add tests')).toBeLessThan(scoreTaskConcreteness('Add unit tests for financial calculations in src/utils.js'));
   });
+
+  it('scores backend file extensions high', () => {
+    expect(scoreTaskConcreteness('Create auth middleware in src/auth.py')).toBeGreaterThanOrEqual(5);
+    expect(scoreTaskConcreteness('Add handler.go for API routes')).toBeGreaterThanOrEqual(3);
+    expect(scoreTaskConcreteness('Update schema.sql for user table')).toBeGreaterThanOrEqual(3);
+  });
+
+  it('does not penalize generic boilerplate when positive anchors exist', () => {
+    // "Add the import" normally gets -4, but the backtick anchor should cancel it
+    expect(scoreTaskConcreteness('Add the import to `App.jsx` for `Section` component')).toBeGreaterThanOrEqual(3);
+  });
+
+  it('does not penalize update existing tasks (removed broad penalty)', () => {
+    expect(scoreTaskConcreteness('Update existing destination data with current tax rates and costs')).toBeGreaterThanOrEqual(0);
+  });
 });
 
 // --- resolveNextRoadmapTask ---
@@ -1902,6 +1948,46 @@ describe('resolveNextRoadmapTask', () => {
     expect(resolved!.title).not.toContain('Add the import');
     expect(resolved!.title).not.toContain('Delete the original code');
     expect(resolved!.title).not.toContain('Verify the app still');
+  });
+
+  it('skips numbered-plain items as non-executable', () => {
+    const content = `### Phase 1: MVP
+1. Build the login page
+2. Add password reset
+- [ ] **Step 1**: Create auth module in \`src/auth.ts\``;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    expect(resolved).not.toBeNull();
+    // Should pick the checkbox task, not the numbered-plain items
+    expect(resolved!.title).toContain('Create auth module');
+  });
+
+  it('considers pending children of completed parents in second pass', () => {
+    const content = `### Refactoring
+- [x] Step 1: Extract utils
+  - [ ] Verify utils integration still works`;
+
+    const phases = parseRoadmapPhases(content);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    // The child is under a completed parent — second pass should find it
+    expect(resolved).not.toBeNull();
+    expect(resolved!.title).toBe('Verify utils integration still works');
+    expect(resolved!.parent?.title).toContain('Extract utils');
+  });
+
+  it('handles deeply indented tasks (6+ spaces)', () => {
+    const content = `### Phase 1
+- [ ] Top-level task
+      - [ ] Deeply indented sub-task`;
+
+    const phases = parseRoadmapPhases(content);
+    // Should still parse — indent regex widened to 8 spaces
+    expect(phases[0].tasks).toHaveLength(2);
+    expect(phases[0].topLevelTasks[0].children).toHaveLength(1);
+    expect(phases[0].topLevelTasks[0].children[0].title).toBe('Deeply indented sub-task');
   });
 });
 

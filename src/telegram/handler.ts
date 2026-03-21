@@ -2269,7 +2269,10 @@ export class TelegramHandler {
         repo,
         modelAlias,
         previousTasks,
-        specificTask: resolvedTask || undefined,
+        // When we have an execution brief, pass it instead of the bare task title
+        // so the system prompt has full context, not just a title
+        specificTask: resolvedExecutionBrief ? undefined : (resolvedTask || undefined),
+        executionBrief: resolvedExecutionBrief,
         branchSlug,
         hasSandbox: !!this.sandbox,
         roadmapContent: prefetchedRoadmap,
