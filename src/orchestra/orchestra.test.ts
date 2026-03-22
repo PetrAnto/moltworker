@@ -385,6 +385,63 @@ describe('buildRunPrompt', () => {
   });
 });
 
+// --- Integration: end-to-end resolver → prompt pipeline ---
+
+describe('execution brief integration (resolver → buildRunPrompt)', () => {
+  const roadmap = `### Phase 1: Refactoring
+- [x] Step 1: Extract utility functions — create \`src/utils.js\`
+- [x] Step 2: Extract destination data
+- [ ] Step 3: Extract UI atoms — create \`src/components/UIAtoms.jsx\`
+  - [ ] Create the new file with the extracted code
+  - [ ] Add the import to \`App.jsx\``;
+
+  it('resolved executionBrief contains phase, task, children, and completed context', () => {
+    const phases = parseRoadmapPhases(roadmap);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved!.executionBrief).toContain('Phase: Refactoring');
+    expect(resolved!.executionBrief).toContain('Primary task:');
+    expect(resolved!.executionBrief).toContain('Extract UI atoms');
+    expect(resolved!.executionBrief).toContain('Sub-steps to complete:');
+    expect(resolved!.executionBrief).toContain('Already completed');
+    expect(resolved!.executionBrief).toContain('Step 1: Extract utility functions');
+  });
+
+  it('resolved executionBrief appears in system prompt via buildRunPrompt', () => {
+    const phases = parseRoadmapPhases(roadmap);
+    const resolved = resolveNextRoadmapTask(phases);
+
+    const prompt = buildRunPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks: [],
+      executionBrief: resolved!.executionBrief,
+    });
+
+    // Brief should be in the system prompt (not just user message)
+    expect(prompt).toContain('PRE-RESOLVED');
+    expect(prompt).toContain('Extract UI atoms');
+    expect(prompt).toContain('Sub-steps to complete:');
+    expect(prompt).toContain('Already completed');
+    // specificTask path should NOT be triggered
+    expect(prompt).not.toContain('SPECIFIC task');
+    expect(prompt).not.toContain('NEXT uncompleted task');
+  });
+
+  it('findMatchingTasks and resetRoadmapTasks use same AST as resolver', () => {
+    // The child task "Add the import to App.jsx" should be findable
+    const matches = findMatchingTasks(roadmap, 'import');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].title).toContain('Add the import');
+
+    // Reset should work using the lineIndex from the parsed AST
+    const result = resetRoadmapTasks(roadmap, 'Step 1');
+    expect(result.resetCount).toBe(1);
+    expect(result.taskNames[0]).toContain('Extract utility functions');
+  });
+});
+
 // --- Large file health check constants ---
 
 describe('LARGE_FILE_THRESHOLD constants', () => {
@@ -1094,6 +1151,27 @@ describe('findMatchingTasks', () => {
     const matches = findMatchingTasks(roadmap, 'API');
     expect(matches).toHaveLength(1);
     expect(matches[0].phase).toBe('Core');
+  });
+
+  it('finds indented child tasks (uses parsed AST, not just top-level regex)', () => {
+    const roadmapWithChildren = `### Phase 1: Refactoring
+- [x] Step 1: Extract utils
+  - [x] Create \`src/utils.js\`
+  - [ ] Add import to \`App.jsx\`
+- [ ] Step 2: Extract data`;
+
+    const matches = findMatchingTasks(roadmapWithChildren, 'import');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].title).toContain('Add import');
+    expect(matches[0].done).toBe(false);
+  });
+
+  it('returns correct lineIndex for reset compatibility', () => {
+    const matches = findMatchingTasks(roadmap, 'Initialize');
+    expect(matches).toHaveLength(1);
+    // "- [x] **Task 1.1**: Initialize project structure" is on a specific line
+    expect(typeof matches[0].lineIndex).toBe('number');
+    expect(matches[0].lineIndex).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -1988,6 +2066,64 @@ describe('resolveNextRoadmapTask', () => {
     expect(phases[0].tasks).toHaveLength(2);
     expect(phases[0].topLevelTasks[0].children).toHaveLength(1);
     expect(phases[0].topLevelTasks[0].children[0].title).toBe('Deeply indented sub-task');
+  });
+
+  it('supports true N-level nesting (3+ levels) via indent stack', () => {
+    const content = `### Phase 1: Deep Nesting
+- [ ] Level 0 task
+  - [ ] Level 1 child
+    - [ ] Level 2 grandchild
+    - [ ] Level 2 sibling
+  - [ ] Level 1 second child`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].topLevelTasks).toHaveLength(1);
+
+    const level0 = phases[0].topLevelTasks[0];
+    expect(level0.title).toBe('Level 0 task');
+    expect(level0.children).toHaveLength(2); // Level 1 child + Level 1 second child
+
+    const level1 = level0.children[0];
+    expect(level1.title).toBe('Level 1 child');
+    expect(level1.children).toHaveLength(2); // Level 2 grandchild + Level 2 sibling
+
+    expect(level1.children[0].title).toBe('Level 2 grandchild');
+    expect(level1.children[1].title).toBe('Level 2 sibling');
+
+    // Second Level 1 child should be a sibling, not nested under Level 2
+    expect(level0.children[1].title).toBe('Level 1 second child');
+    expect(level0.children[1].children).toHaveLength(0);
+  });
+
+  it('tracks lineIndex on all parsed tasks', () => {
+    const content = `### Phase 1: Setup
+- [x] First task
+- [ ] Second task
+  - [ ] Sub-task`;
+
+    const phases = parseRoadmapPhases(content);
+    // Line 0: "### Phase 1: Setup"
+    // Line 1: "- [x] First task"
+    // Line 2: "- [ ] Second task"
+    // Line 3: "  - [ ] Sub-task"
+    expect(phases[0].topLevelTasks[0].lineIndex).toBe(1);
+    expect(phases[0].topLevelTasks[1].lineIndex).toBe(2);
+    expect(phases[0].topLevelTasks[1].children[0].lineIndex).toBe(3);
+  });
+
+  it('flat tasks list still contains all tasks for backwards compat with N-level nesting', () => {
+    const content = `### Phase 1
+- [ ] A
+  - [ ] B
+    - [ ] C`;
+
+    const phases = parseRoadmapPhases(content);
+    // Flat list should have all 3
+    expect(phases[0].tasks).toHaveLength(3);
+    // Top-level should have only 1
+    expect(phases[0].topLevelTasks).toHaveLength(1);
+    // Hierarchy: A → B → C
+    expect(phases[0].topLevelTasks[0].children[0].children[0].title).toBe('C');
   });
 });
 
