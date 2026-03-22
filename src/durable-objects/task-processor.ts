@@ -1967,10 +1967,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     // Capability flags for tool filtering — sandbox_exec only if sandbox is ready
+    // AND execution profile doesn't explicitly disable it (simple+concrete tasks skip sandbox)
+    const profileAllowsSandbox = request.executionProfile?.bounds.requiresSandbox ?? true;
     const toolCaps: ToolCapabilities = {
       browser: false, // Browser Rendering binding not available in DOs
-      sandbox: !!sandbox,
+      sandbox: !!sandbox && profileAllowsSandbox,
     };
+    if (sandbox && !profileAllowsSandbox) {
+      console.log('[TaskProcessor] Sandbox available but profile says requiresSandbox=false — sandbox_exec removed from tool set');
+    }
 
     const toolContext: ToolContext = {
       githubToken: request.githubToken,

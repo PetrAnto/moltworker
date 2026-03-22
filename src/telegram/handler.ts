@@ -2131,7 +2131,7 @@ export class TelegramHandler {
       return;
     }
 
-    const modelAlias = await this.storage.getUserModel(userId);
+    let modelAlias = await this.storage.getUserModel(userId);
     const modelInfo = getModel(modelAlias);
 
     if (!modelInfo?.supportsTools) {
@@ -2252,6 +2252,32 @@ export class TelegramHandler {
       }
     }
 
+    // Force-escalation: if profile detects heavy task on weak model, auto-upgrade
+    // to the top-ranked free orchestra model. User sees notification but task proceeds.
+    if (executionProfile?.routing.forceEscalation) {
+      const recs = getOrchestraRecommendations();
+      const upgrade = recs.free[0]; // Top-ranked free model
+      if (upgrade && upgrade.alias !== modelAlias) {
+        const origAlias = modelAlias;
+        modelAlias = upgrade.alias;
+        // Re-resolve model info for the upgraded model
+        const upgradedInfo = getModel(modelAlias);
+        if (upgradedInfo) {
+          // Recompute profile with upgraded model
+          const phases = prefetchedRoadmap ? parseRoadmapPhases(prefetchedRoadmap) : [];
+          const resolved = phases.length > 0 ? resolveNextRoadmapTask(phases) : undefined;
+          if (resolved) {
+            executionProfile = buildExecutionProfile(resolved, modelAlias);
+          }
+        }
+        await this.bot.sendMessage(
+          chatId,
+          `⚡ Auto-escalated: /${origAlias} → /${modelAlias} (heavy task requires stronger model)`,
+        );
+        console.log(`[orchestra] forceEscalation: ${origAlias} → ${modelAlias} for heavy task "${resolvedTask?.substring(0, 80)}"`);
+      }
+    }
+
     // Determine branch name — append short timestamp suffix to prevent branch collisions
     const branchSuffix = Date.now().toString(36).slice(-4); // 4-char unique suffix
     const taskSlug = mode === 'init'
@@ -2286,6 +2312,8 @@ export class TelegramHandler {
         branchSlug,
         // Profile-driven sandbox gating: skip sandbox instructions for simple+concrete tasks
         hasSandbox: !!this.sandbox && (executionProfile?.bounds.requiresSandbox ?? true),
+        // Profile-driven prompt tier: single source of truth (avoids recomputing in buildRunPrompt)
+        promptTierOverride: executionProfile?.routing.promptTier,
         roadmapContent: prefetchedRoadmap,
         roadmapPath: prefetchedRoadmapPath,
         workLogContent: prefetchedWorkLog,

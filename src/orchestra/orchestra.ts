@@ -238,6 +238,8 @@ interface BuildRunPromptParams {
   roadmapPath?: string;
   /** Pre-fetched WORK_LOG.md content — eliminates another read call. */
   workLogContent?: string;
+  /** Override prompt tier from execution profile (avoids recomputing). */
+  promptTierOverride?: 'minimal' | 'standard' | 'full';
   /** Pre-resolved execution brief — overrides specificTask in the system prompt. */
   executionBrief?: string;
 }
@@ -286,8 +288,9 @@ function buildPrefetchedDocsSection(params: BuildRunPromptParams): string {
  * - full (~3500 tokens): strong models that benefit from detailed rules
  */
 export function buildRunPrompt(params: BuildRunPromptParams): string {
-  const tier = getPromptTier(params.modelAlias);
-  console.log(`[orchestra] buildRunPrompt tier=${tier} for /${params.modelAlias}`);
+  // Use profile-provided tier when available; fall back to model-based heuristic
+  const tier = params.promptTierOverride ?? getPromptTier(params.modelAlias);
+  console.log(`[orchestra] buildRunPrompt tier=${tier} for /${params.modelAlias}${params.promptTierOverride ? ' (from profile)' : ''}`);
   if (tier === 'minimal') return buildMinimalRunPrompt(params);
   if (tier === 'standard') return buildStandardRunPrompt(params);
   return buildFullRunPrompt(params);
