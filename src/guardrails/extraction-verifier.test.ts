@@ -59,6 +59,49 @@ describe('isExtractionTask', () => {
   it('returns false for empty tools', () => {
     expect(isExtractionTask([])).toBe(false);
   });
+
+  // --- Precise detection with messages ---
+
+  it('returns true with messages when push has both create and patch actions', () => {
+    const messages: ChatMessage[] = [
+      assistantWithTools(null, [{ id: 'tc1', name: 'github_push_files', args: JSON.stringify({
+        changes: JSON.stringify([
+          { path: 'src/utils.js', action: 'create', content: 'export function clamp() {}' },
+          { path: 'src/App.jsx', action: 'patch', patches: [{ find: 'function clamp', replace: '' }] },
+        ]),
+      }) }]),
+    ];
+    expect(isExtractionTask(['github_push_files'], messages)).toBe(true);
+  });
+
+  it('returns false with messages when push only has create actions (feature-add, not extraction)', () => {
+    const messages: ChatMessage[] = [
+      assistantWithTools(null, [{ id: 'tc1', name: 'github_push_files', args: JSON.stringify({
+        changes: JSON.stringify([
+          { path: 'src/collapsible.jsx', action: 'create', content: 'export function Collapsible() {}' },
+          { path: 'ROADMAP.md', action: 'create', content: '- [x] Done' },
+        ]),
+      }) }]),
+      assistantWithTools(null, [{ id: 'tc2', name: 'github_create_pr', args: JSON.stringify({
+        title: 'Add collapsible sections',
+        changes: JSON.stringify([
+          { path: 'src/components/Section.jsx', action: 'create', content: 'updated component' },
+        ]),
+      }) }]),
+    ];
+    expect(isExtractionTask(['github_push_files', 'github_create_pr'], messages)).toBe(false);
+  });
+
+  it('returns false with messages for update-only changes (no create)', () => {
+    const messages: ChatMessage[] = [
+      assistantWithTools(null, [{ id: 'tc1', name: 'github_push_files', args: JSON.stringify({
+        changes: JSON.stringify([
+          { path: 'src/App.jsx', action: 'update', content: 'modified content' },
+        ]),
+      }) }]),
+    ];
+    expect(isExtractionTask(['github_push_files'], messages)).toBe(false);
+  });
 });
 
 // ─── detectExtractionDetails ────────────────────────────────────────────────
