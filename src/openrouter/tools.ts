@@ -2840,20 +2840,43 @@ async function sandboxExec(
         env: Object.keys(env).length > 0 ? env : undefined,
       });
 
-      // Wait for the process to finish (poll getLogs until we get output or timeout)
+      // Wait for the process to finish (poll getLogs with backoff + stagnation detection)
       const startTime = Date.now();
       const maxWaitMs = (timeoutSec + 10) * 1000; // Extra 10s buffer
       let logs: { stdout?: string; stderr?: string } = {};
+      let lastFingerprint = '';
+      let stagnantPolls = 0;
+      let pollIntervalMs = 500; // Start fast, back off
+      const MAX_STAGNANT_POLLS = 10; // ~45s of identical output before early termination
+      let stagnationDetected = false;
 
       while (Date.now() - startTime < maxWaitMs) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
         logs = await process.getLogs();
 
-        // Check if process is done by checking if status changed
-        // The process.getLogs() returns accumulated output
+        // Check if process is done
         if (process.status === 'completed' || process.status === 'failed') {
           break;
         }
+
+        // Stagnation detection: fingerprint stdout+stderr length
+        const fingerprint = `${logs.stdout?.length ?? 0}:${logs.stderr?.length ?? 0}`;
+        if (fingerprint === lastFingerprint) {
+          stagnantPolls++;
+          if (stagnantPolls >= MAX_STAGNANT_POLLS) {
+            console.log(`[Sandbox] Stagnation detected: output unchanged for ${stagnantPolls} polls (~${Math.round((Date.now() - startTime) / 1000)}s). Killing process.`);
+            try { await process.kill(); } catch { /* best-effort */ }
+            stagnationDetected = true;
+            break;
+          }
+        } else {
+          stagnantPolls = 0; // Reset on progress
+          pollIntervalMs = 500; // Reset backoff on progress
+        }
+        lastFingerprint = fingerprint;
+
+        // Exponential backoff: 500ms → 1s → 2s → 4s (cap at 5s)
+        pollIntervalMs = Math.min(pollIntervalMs * 2, 5000);
       }
 
       // Collect final logs
@@ -2873,6 +2896,10 @@ async function sandboxExec(
       }
       if (!logs.stdout && !logs.stderr) {
         results.push('(no output)');
+      }
+
+      if (stagnationDetected) {
+        results.push('⚠️ Process stalled (output unchanged for ~45s). Terminated early.');
       }
 
       results.push('');
