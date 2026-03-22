@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-22 (F.17 sandbox stagnation + F.18 OrchestraExecutionProfile — 1982 tests)
+**Last Updated:** 2026-03-22 (F.18.1 ExecutionProfile authoritative enforcement + F.20–F.24 review backlog — 1982 tests)
 
 ---
 
@@ -18,6 +18,7 @@
 
 | Task ID | Description | Assignee | Status | Branch |
 |---------|-------------|----------|--------|--------|
+| F.18.1 | ExecutionProfile authoritative enforcement (reviewer feedback) | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
 | F.18 | OrchestraExecutionProfile — centralized task classification | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
 | F.17 | Sandbox stagnation detection + run health scoring | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
 | F.16 | Orchestra "retry with different branch" fix | Claude Opus 4.6 | ✅ Complete | `claude/add-minimax-model-support-Otzqt` |
@@ -40,7 +41,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | F.18 COMPLETE — architecture review findings addressed | `claude/review-ai-feedback-Zo8hq` | 2026-03-22 |
+| Claude | F.18.1 COMPLETE — profile now authoritative + F.20–F.24 tracked | `claude/review-ai-feedback-Zo8hq` | 2026-03-22 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -56,9 +57,15 @@
 4. **6.3** — Voice messages (Whisper + TTS)
 5. **6.4** — Calendar/reminder tools
 
-### Unresolved from Gemini/Grok Feedback (lower priority)
+### Tracked from AI Architecture Reviews (F.20–F.24)
 
-- _(Cleared — observability implemented as F.11)_
+| ID | Task | Source | Priority |
+|----|------|--------|----------|
+| F.20 | Runtime/diff-based risk classification | GPT/Grok/Gemini | High — biggest remaining gap |
+| F.21 | `pendingChildren` downstream consumers | GPT | Medium |
+| F.22 | Tests for profile enforcement behavior | GPT | Medium |
+| F.23 | Branch-level concurrency mutex | Gemini | High — data safety |
+| F.24 | Broader escalation policy (model floor) | GPT | Low-Medium |
 
 ---
 

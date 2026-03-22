@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-22 (F.17 sandbox stagnation + F.18 OrchestraExecutionProfile — 1982 tests)
+**Last Updated:** 2026-03-22 (F.18.1 ExecutionProfile authoritative enforcement + F.20–F.24 review backlog tracked — 1982 tests)
 
 ---
 
@@ -409,6 +409,20 @@
 | F.16 | Orchestra "retry with different branch" fix | ✅ | 15min | Root cause from PR #108 (GPT-5.4 Nano): model creates new branch on retry → forks from main → loses prior commits. Updated 5 prompt locations to instruct "push fix commit to SAME branch first" |
 | F.17 | Sandbox stagnation detection + run health scoring | ✅ | 1h | `detectSandboxStagnation()` catches sandbox loops (>3 identical cmds, >5 clone attempts), run health signals (`sandboxStalled`, `prefetch404Count`) persisted in TaskState, 8 new tests |
 | F.18 | OrchestraExecutionProfile — centralized task classification | ✅ | 1h | `buildExecutionProfile()` computed once after `resolveNextRoadmapTask()`, bundles intent signals (concreteScore, ambiguity, isHeavyCoding, isSimple, pendingChildren) → derives sandbox gate, resume cap (3/4/6/8 by ambiguity), force-escalation flag, prompt tier. Flows through TaskRequest → TaskState → getAutoResumeLimit(). Profile displayed in Telegram confirmation. 8 new tests (1982 total) |
+| F.18.1 | ExecutionProfile authoritative enforcement | ✅ | 30m | Three gaps from AI reviewer feedback: (1) promptTier now uses profile as single source of truth via `promptTierOverride` — no more recomputing in `buildRunPrompt()`. (2) `sandbox_exec` removed from tool set (not just prompt) when `requiresSandbox=false`. (3) `forceEscalation` auto-upgrades to top-ranked free model + recomputes profile. |
+
+### Future: Orchestra Evolution (Post-F.18 — AI Review Backlog)
+
+> **Source**: GPT/Grok/Gemini architecture reviews of commits ca00708 + 50611b8.
+> **Status**: Tracked. Items below are acknowledged future work, not current blockers.
+
+| ID | Task | Status | Effort | Notes |
+|----|------|--------|--------|-------|
+| F.20 | Runtime/diff-based risk classification | 🔲 | 8-12h | Second-stage profiling: after tool use begins, classify risk from files touched, config changes, diff size vs title prediction. All 3 reviewers flagged this as the biggest remaining gap. |
+| F.21 | `pendingChildren` downstream consumers | 🔲 | 2-4h | Profile captures `pendingChildren` count but nothing consumes it yet. Wire into: model floor (parent tasks get stronger models), validator strictness, review intensity. |
+| F.22 | Tests for profile enforcement behavior | 🔲 | 2-3h | Add tests for: (a) `promptTierOverride` beating `getPromptTier()`, (b) `sandbox_exec` absent when `requiresSandbox=false`, (c) auto-escalation recomputing profile + changing model alias. GPT flagged missing regression coverage. |
+| F.23 | Branch-level concurrency mutex | 🔲 | 4-6h | Gemini flagged: parallel task ingestion via webhooks can cause branch collisions. Need persistent branch-level lock via KV or R2. DO internal queue is not sufficient for cross-DO coordination. |
+| F.24 | Broader escalation policy (model floor) | 🔲 | 2-4h | Current auto-escalation picks `recs.free[0]`. GPT asks: what if best free model is still too weak? Consider paid escalation with user consent, or hard model floor per task heaviness tier. |
 
 ### Future: Platform Evolution (M3 Gate)
 
@@ -491,6 +505,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | fix(orchestra): F.18.1 make ExecutionProfile authoritative — promptTierOverride (single source of truth), sandbox_exec removed from tool set when requiresSandbox=false, forceEscalation auto-upgrades model. Tracked F.20–F.24 from AI reviewer feedback | src/orchestra/orchestra.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts, claude-share/core/*.md, brainstorming/*.md
 2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(orchestra): F.18 OrchestraExecutionProfile — centralized task classification computed once after resolveNextRoadmapTask(), bundles intent (concreteScore, ambiguity, isHeavyCoding, isSimple, pendingChildren) → derives sandbox gate, resume cap modulation (3/4/6/8), force-escalation, prompt tier. Flows TaskRequest→TaskState→getAutoResumeLimit(). 8 new tests (1982 total) | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts
 2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(orchestra): F.17 sandbox stagnation detection + run health scoring — detectSandboxStagnation(), sandboxStalled/prefetch404Count in TaskState | src/durable-objects/task-processor.ts, src/orchestra/orchestra.ts
 2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | docs(brainstorming): architecture review prompt for external AI opinions — 5 decisions under review | brainstorming/ai-review-prompt.md

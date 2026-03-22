@@ -278,7 +278,44 @@ Via WhatsApp Business API (requires approval).
 
 ---
 
-## Technical Debt & Improvements
+## Orchestra Evolution (Post-F.18 Review Backlog)
+
+> Identified by GPT/Grok/Gemini architecture reviews of the ExecutionProfile work.
+> Tracked in GLOBAL_ROADMAP.md as F.20–F.24.
+
+### Runtime Risk Classification (F.20)
+**Status:** 🔲 Not started
+**Effort:** High (8-12h)
+**Value:** High — biggest remaining architectural gap per all three reviewers
+
+Currently, task classification happens entirely pre-execution based on the roadmap title. A second-stage profiler would observe runtime behavior:
+- Files actually touched (config/build files = higher risk)
+- Single-file → multi-file expansion
+- Diff size vs title prediction divergence
+- Error patterns during execution
+
+This would enable dynamic re-routing mid-task (e.g., escalate model if task turns out harder than predicted).
+
+### Branch-Level Concurrency Mutex (F.23)
+**Status:** 🔲 Not started
+**Effort:** Medium (4-6h)
+**Value:** High — prevents data corruption from parallel tasks
+
+Durable Objects handle internal queuing, but parallel task ingestion from external webhooks can cause branch collisions. Need persistent branch-level lock via KV or R2 to guarantee exclusive write access during active orchestration runs.
+
+### Profile Enforcement Tests (F.22)
+**Status:** 🔲 Not started
+**Effort:** Low (2-3h)
+**Value:** Medium — regression safety
+
+Test coverage for:
+- `promptTierOverride` overriding `getPromptTier()`
+- `sandbox_exec` absent from tool set when `requiresSandbox=false`
+- Auto-escalation changing model alias + recomputing profile
+
+---
+
+
 
 ### Code Quality
 - [x] Add unit tests for tools — 1911 tests total (Mar 2026)

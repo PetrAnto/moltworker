@@ -49,10 +49,57 @@
 - [x] Typecheck passes
 
 ### Notes for Next Session
-All 5 architecture review decisions addressed. Remaining work:
-- **F.1** (ai-hub data feeds) — blocked on ai-hub API
-- **F.7** (Discord full integration) — next unblocked feature
-- Could wire `forceEscalation` into actual model upgrade logic (currently just warns in Telegram)
+All 5 architecture review decisions addressed. F.18.1 makes profile authoritative (see below).
+
+---
+
+## Session: 2026-03-22 | F.18.1 Authoritative Enforcement + Review Backlog Tracking (Session: session_01TR79yEcqjQJYt4VddLUx7W, continued)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+**Summary:** Processed GPT/Grok/Gemini architecture review feedback. Fixed 3 enforcement gaps in ExecutionProfile. Tracked 5 future work items (F.20–F.24) across all docs.
+
+### Changes Made
+1. **F.18.1 — ExecutionProfile authoritative enforcement** (fix):
+   - `promptTierOverride` on `BuildRunPromptParams` — profile is now single source of truth for prompt tier
+   - `sandbox_exec` removed from tool set (not just prompt) when `requiresSandbox=false` via `ToolCapabilities.sandbox`
+   - `forceEscalation` auto-upgrades to top-ranked free orchestra model + recomputes profile + Telegram notification
+
+2. **F.20–F.24 — Review backlog tracked** (docs):
+   - F.20: Runtime/diff-based risk classification (biggest remaining gap per all 3 reviewers)
+   - F.21: `pendingChildren` downstream consumers
+   - F.22: Tests for profile enforcement behavior
+   - F.23: Branch-level concurrency mutex (Gemini safety concern)
+   - F.24: Broader escalation policy (model floor)
+
+3. **ai-review-prompt.md** — Resolution status table added with per-decision status + reviewer consensus
+
+4. **future-integrations.md** — Orchestra Evolution section with F.20, F.22, F.23
+
+5. **Documentation sync** — GLOBAL_ROADMAP, WORK_STATUS, next_prompt, claude-log all updated
+
+### Files Modified
+- `src/orchestra/orchestra.ts` — `promptTierOverride` param, fallback logic
+- `src/durable-objects/task-processor.ts` — `profileAllowsSandbox` in ToolCapabilities
+- `src/telegram/handler.ts` — `forceEscalation` auto-upgrade block, `promptTierOverride` passed
+- `brainstorming/ai-review-prompt.md` — Resolution status section
+- `brainstorming/future-integrations.md` — Orchestra Evolution section
+- `claude-share/core/GLOBAL_ROADMAP.md` — F.18.1 row + F.20–F.24 section
+- `claude-share/core/WORK_STATUS.md` — Updated status + review backlog table
+- `claude-share/core/next_prompt.md` — Updated priorities (F.22/F.20/F.23 now top)
+- `claude-share/core/claude-log.md` — This session entry
+
+### Tests
+- [x] Tests pass (1982/1982)
+- [x] Typecheck passes
+
+### Notes for Next Session
+Profile enforcement is now authoritative (D1–D3, D5 closed). Remaining architectural work:
+- **F.22** (enforcement tests) — quickest win, 2-3h
+- **F.20** (runtime risk classification) — biggest gap, 8-12h
+- **F.23** (branch concurrency mutex) — safety-critical, 4-6h
+- **F.1** (ai-hub data feeds) — still blocked on ai-hub API
 
 ---
 
