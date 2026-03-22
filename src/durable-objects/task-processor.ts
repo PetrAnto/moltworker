@@ -25,6 +25,7 @@ import { validateToolResult, createToolErrorTracker, trackToolError, generateCom
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
 import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext, scanCrossFileReferences } from '../guardrails/extraction-verifier';
 import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
+import { computeRunHealth, formatHealthFooter } from '../guardrails/run-health';
 import { STRUCTURED_PLAN_PROMPT, parseStructuredPlan, prefetchPlanFiles, formatPlanSummary, awaitAndFormatPrefetchedFiles, type StructuredPlan } from './step-decomposition';
 import { formatProgressMessage, extractToolContext, shouldSendUpdate, type ProgressState } from './progress-formatter';
 import { createSpeculativeExecutor } from './speculative-tools';
@@ -296,6 +297,9 @@ interface TaskState {
   isOrchestraTask?: boolean;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
+  // Run health signals — tracked across the task lifetime
+  sandboxStalled?: boolean; // Set true if any sandbox_exec detected stagnation
+  prefetch404Count?: number; // Count of prefetch 404 errors
   // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
   // The alarm handler resumes immediately without stall detection or auto-resume counting.
   yieldPending?: boolean;
@@ -3384,6 +3388,11 @@ If you already created the new file and just need to patch the original, call gi
               tool_call_id: toolResult.tool_call_id,
             });
 
+            // Detect sandbox stagnation from successful result text
+            if (toolName === 'sandbox_exec' && toolResult.content.includes('Process stalled')) {
+              task.sandboxStalled = true;
+            }
+
             // P2 guardrails: validate and track tool errors
             const toolCall = choice.message.tool_calls!.find(tc => tc.id === toolResult.tool_call_id);
             const validation = validateToolResult(toolName, toolResult.content);
@@ -3395,6 +3404,15 @@ If you already created the new file and just need to patch the original, call gi
               const shortError = toolResult.content.slice(0, 120).replace(/\n/g, ' ');
               task.lastToolErrors.push(`${toolName}: ${shortError}`);
               if (task.lastToolErrors.length > 5) task.lastToolErrors = task.lastToolErrors.slice(-5);
+
+              // Track prefetch 404s for run health
+              if (validation.errorType === 'not_found' && toolName === 'github_read_file') {
+                task.prefetch404Count = (task.prefetch404Count ?? 0) + 1;
+              }
+              // Track sandbox stalls for run health
+              if (toolName === 'sandbox_exec' && validation.errorType === 'timeout') {
+                task.sandboxStalled = true;
+              }
 
               // Error threshold guardrail: detect identical errors repeating
               const errorSig = `${toolName}:${toolResult.content.slice(0, 200)}`;
@@ -4516,9 +4534,21 @@ If you already created the new file and just need to patch the original, call gi
                   durationMs: Date.now() - task.startTime,
                 };
                 await storeOrchestraTask(this.r2, task.userId, completedTask);
+                // Compute run health for event metadata
+                const orchResumeCount = task.autoResumeCount ?? 0;
+                const orchRunHealth = computeRunHealth({
+                  resumeCount: orchResumeCount,
+                  toolErrors: toolErrorTracker,
+                  sandboxStalled: !!task.sandboxStalled,
+                  prefetch404Count: task.prefetch404Count ?? 0,
+                  taskSucceeded: taskStatus === 'completed',
+                });
                 this.emitOrchestraEvent(task, taskStatus === 'completed' ? 'task_complete' : 'task_abort', {
                   repo, mode: orchestraMode, branch: orchestraResult.branch,
                   prUrl: verifiedPrUrl, durationMs: Date.now() - task.startTime,
+                  runHealth: orchRunHealth.level,
+                  runHealthIssues: orchRunHealth.issues.length,
+                  resumes: orchResumeCount,
                   ...(taskStatus !== 'completed' && failureReason ? { reason: failureReason } : {}),
                 });
                 const statusLabel = taskStatus === 'completed'
@@ -4553,6 +4583,22 @@ If you already created the new file and just need to patch the original, call gi
           finalResponse += ` | ${formatCostFooter(totalUsage, task.modelAlias)}`;
         }
 
+        // Run health footer — distinguishes task success from platform health
+        if (isOrchestraRun || task.autoResumeCount || toolErrorTracker.totalErrors > 0) {
+          const resumeCount = task.autoResumeCount ?? 0;
+          const runHealth = computeRunHealth({
+            resumeCount,
+            toolErrors: toolErrorTracker,
+            sandboxStalled: !!task.sandboxStalled,
+            prefetch404Count: task.prefetch404Count ?? 0,
+            taskSucceeded: task.status === 'completed',
+          });
+          finalResponse += `\n${formatHealthFooter(runHealth, resumeCount)}`;
+
+          // Log for observability
+          console.log(`[TaskProcessor] Run health: ${runHealth.level} (${runHealth.issues.length} issue(s), ${resumeCount} resumes)`);
+        }
+
         // Send final result (split if too long)
         await this.sendLongMessage(request.telegramToken, request.chatId, finalResponse);
 
@@ -4584,11 +4630,20 @@ If you already created the new file and just need to patch the original, call gi
         }
 
         const failProgress = this.buildProgressSummary(task);
+        const failResumeCount = task.autoResumeCount ?? 0;
+        const failRunHealth = computeRunHealth({
+          resumeCount: failResumeCount,
+          toolErrors: toolErrorTracker,
+          sandboxStalled: !!task.sandboxStalled,
+          prefetch404Count: task.prefetch404Count ?? 0,
+          taskSucceeded: false,
+        });
         await this.sendTelegramMessage(
           request.telegramToken,
           request.chatId,
           `❌ Task failed: ${task.error}${failProgress}\n\n` +
-          `${task.toolsUsed.length} tools used across ${task.iterations} iterations.`,
+          `${task.toolsUsed.length} tools used across ${task.iterations} iterations.\n` +
+          formatHealthFooter(failRunHealth, failResumeCount),
         );
       } else {
         // Hit iteration limit — save checkpoint so resume can continue from here
@@ -4624,10 +4679,18 @@ If you already created the new file and just need to patch the original, call gi
         }
 
         const limitProgress = this.buildProgressSummary(task);
+        const limitResumeCount = task.autoResumeCount ?? 0;
+        const limitRunHealth = computeRunHealth({
+          resumeCount: limitResumeCount,
+          toolErrors: toolErrorTracker,
+          sandboxStalled: !!task.sandboxStalled,
+          prefetch404Count: task.prefetch404Count ?? 0,
+          taskSucceeded: false,
+        });
         await this.sendTelegramMessageWithButtons(
           request.telegramToken,
           request.chatId,
-          `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${task.iterations} iterations.${limitProgress}\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
+          `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${task.iterations} iterations.${limitProgress}\n${formatHealthFooter(limitRunHealth, limitResumeCount)}\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
           [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
         );
       }
