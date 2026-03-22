@@ -46,17 +46,67 @@ export interface ExtractionVerification {
 
 /**
  * Detect whether the current task involves file extraction/splitting by
- * analyzing the tool call patterns in the conversation. An extraction task
- * has BOTH file creation (workspace_write_file or github_push_files) AND
- * file patching (github_create_pr or github_push_files with patch action)
- * in the same session.
+ * analyzing the tool call patterns in the conversation.
+ *
+ * An extraction task is one where code is MOVED from an existing file to a new
+ * file — that requires both file creation AND patch-action deletions on an
+ * existing source file. Simply creating files + making a PR is NOT extraction
+ * (it could be feature-add, bug-fix, or any other task that writes new code).
+ *
+ * When `messages` are provided, we do a precise check: scan for
+ * github_push_files/github_create_pr calls that contain BOTH 'create' AND
+ * 'patch' actions (or 'update' actions that look like deletions).
+ *
+ * When only `toolsUsed` is provided (legacy), we require detectExtractionDetails
+ * to have found actual extraction metadata (source + new files + patched files).
  */
-export function isExtractionTask(toolsUsed: string[]): boolean {
+export function isExtractionTask(
+  toolsUsed: string[],
+  messages?: readonly ChatMessage[],
+): boolean {
+  // Fast path: if no file creation tools were used at all, it's not extraction
   const hasFileCreation = toolsUsed.includes('workspace_write_file')
     || toolsUsed.includes('github_push_files');
+  if (!hasFileCreation) return false;
+
+  // If we have messages, do a precise check: look for push/PR calls with
+  // BOTH 'create' and 'patch'/'delete' actions in the same call
+  if (messages) {
+    let hasCreateAction = false;
+    let hasPatchAction = false;
+
+    for (const msg of messages) {
+      if (msg.role !== 'assistant' || !msg.tool_calls) continue;
+      for (const tc of msg.tool_calls) {
+        if (tc.function.name !== 'github_push_files' && tc.function.name !== 'github_create_pr') continue;
+        let args: Record<string, unknown>;
+        try { args = JSON.parse(tc.function.arguments); } catch { continue; }
+
+        const changesRaw = args.changes;
+        let changes: Array<Record<string, unknown>> = [];
+        if (typeof changesRaw === 'string') {
+          try { changes = JSON.parse(changesRaw); } catch { /* skip */ }
+        } else if (Array.isArray(changesRaw)) {
+          changes = changesRaw;
+        }
+
+        for (const change of changes) {
+          const action = change.action as string;
+          if (action === 'create') hasCreateAction = true;
+          if (action === 'patch' || action === 'update') hasPatchAction = true;
+        }
+      }
+    }
+
+    // Extraction requires BOTH: new file created AND existing file patched/modified
+    return hasCreateAction && hasPatchAction;
+  }
+
+  // Legacy fallback (no messages): require both file creation AND PR/push
+  // This is the old broad check — kept for backwards compatibility but should
+  // be phased out as callers switch to passing messages
   const hasPrOrPush = toolsUsed.includes('github_create_pr')
     || toolsUsed.includes('github_push_files');
-  // Must have both creation of new files AND modification of existing ones
   return hasFileCreation && hasPrOrPush;
 }
 

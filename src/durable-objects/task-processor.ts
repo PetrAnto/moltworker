@@ -3904,7 +3904,7 @@ If you already created the new file and just need to patch the original, call gi
           // Reads actual files from the branch to ground the model's summary in reality.
           // BLOCKING: if verification fails, model gets one retry to fix the issues
           // before transitioning to review.
-          if (isOrchestraRun && isExtractionTask(task.toolsUsed) && request.githubToken) {
+          if (isOrchestraRun && isExtractionTask(task.toolsUsed, conversationMessages) && request.githubToken) {
             const extraction = detectExtractionDetails(conversationMessages);
             if (extraction) {
               const { repoOwner, repoName: extractedRepo, branch: extractedBranch } =
@@ -4022,7 +4022,7 @@ If you already created the new file and just need to patch the original, call gi
             );
 
             // For extraction tasks, also check that source file shrank
-            const isExtraction = isExtractionTask(task.toolsUsed);
+            const isExtraction = isExtractionTask(task.toolsUsed, conversationMessages);
             const sourceShrank = !isExtraction || toolOutputs.some(o =>
               /source.*shrank|line count.*drop|deleted.*from.*source|EXTRACTION.*PASS/i.test(o)
             );
@@ -4569,45 +4569,68 @@ If you already created the new file and just need to patch the original, call gi
         return;
       }
 
-      // Hit iteration limit — save checkpoint so resume can continue from here
-      if (this.r2) {
-        await this.saveCheckpoint(
-          this.r2,
-          request.userId,
-          request.taskId,
-          conversationMessages,
-          task.toolsUsed,
-          task.iterations,
-          request.prompt,
-          'latest',
-          false, // NOT completed — allow resume to pick this up
-          task.phase,
-          request.modelAlias
+      // If the task was already marked as failed (e.g., FAILED_DELIVERABLE),
+      // respect that status — don't overwrite with 'completed' or offer Resume.
+      if (task.status === 'failed') {
+        console.log(`[TaskProcessor] Task already failed: ${task.error}`);
+
+        // Terminal state — clean up
+        try { await workspace.clear(); } catch { /* best-effort */ }
+        try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+        await this.doState.storage.deleteAlarm();
+
+        if (statusMessageId) {
+          await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
+        }
+
+        const failProgress = this.buildProgressSummary(task);
+        await this.sendTelegramMessage(
+          request.telegramToken,
+          request.chatId,
+          `❌ Task failed: ${task.error}${failProgress}\n\n` +
+          `${task.toolsUsed.length} tools used across ${task.iterations} iterations.`,
+        );
+      } else {
+        // Hit iteration limit — save checkpoint so resume can continue from here
+        if (this.r2) {
+          await this.saveCheckpoint(
+            this.r2,
+            request.userId,
+            request.taskId,
+            conversationMessages,
+            task.toolsUsed,
+            task.iterations,
+            request.prompt,
+            'latest',
+            false, // NOT completed — allow resume to pick this up
+            task.phase,
+            request.modelAlias
+          );
+        }
+
+        task.status = 'completed';
+        task.result = 'Task hit iteration limit (100). Last response may be incomplete.';
+        await this.doState.storage.put('task', taskForStorage(task));
+
+        // Terminal state — clean up workspace staging to prevent storage leaks
+        try { await workspace.clear(); } catch { /* best-effort */ }
+        try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+
+        // Cancel watchdog alarm
+        await this.doState.storage.deleteAlarm();
+
+        if (statusMessageId) {
+          await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
+        }
+
+        const limitProgress = this.buildProgressSummary(task);
+        await this.sendTelegramMessageWithButtons(
+          request.telegramToken,
+          request.chatId,
+          `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${task.iterations} iterations.${limitProgress}\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
+          [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
         );
       }
-
-      task.status = 'completed';
-      task.result = 'Task hit iteration limit (100). Last response may be incomplete.';
-      await this.doState.storage.put('task', taskForStorage(task));
-
-      // Terminal state — clean up workspace staging to prevent storage leaks
-      try { await workspace.clear(); } catch { /* best-effort */ }
-      try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
-
-      // Cancel watchdog alarm
-      await this.doState.storage.deleteAlarm();
-
-      if (statusMessageId) {
-        await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
-      }
-
-      const limitProgress = this.buildProgressSummary(task);
-      await this.sendTelegramMessageWithButtons(
-        request.telegramToken,
-        request.chatId,
-        `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${task.iterations} iterations.${limitProgress}\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
-        [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
-      );
 
     } catch (error) {
       // Phase budget circuit breaker: save checkpoint and let watchdog auto-resume

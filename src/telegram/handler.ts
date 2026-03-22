@@ -1454,6 +1454,8 @@ export class TelegramHandler {
 
       default:
         // Check if it's a model alias command (e.g., /deep, /gpt)
+        // Ensure auto-synced models are loaded first (may not be ready on cold start)
+        await this.dynamicModelsReady;
         const modelAlias = cmd.slice(1); // Remove leading /
         if (getModel(modelAlias)) {
           await this.handleUseCommand(chatId, userId, username, [modelAlias]);
@@ -1482,6 +1484,8 @@ export class TelegramHandler {
     }
 
     const alias = args[0].toLowerCase();
+    // Ensure auto-synced models are loaded (may not be ready on cold start)
+    await this.dynamicModelsReady;
     const model = getModel(alias);
 
     if (!model) {
