@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-21 (F.15 EOL fix + F.16 orchestra branch retry fix — 1911 tests)
+**Last Updated:** 2026-03-22 (F.17 sandbox stagnation + F.18 OrchestraExecutionProfile — 1982 tests)
 
 ---
 
@@ -15,6 +15,9 @@
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-22 | F.18 — OrchestraExecutionProfile | Claude Opus 4.6 | Centralized task classification: sandbox gate, resume cap modulation, force-escalation. 8 tests (1982 total) |
+| 2026-03-22 | F.17 — Sandbox stagnation detection + run health | Claude Opus 4.6 | detectSandboxStagnation(), sandboxStalled/prefetch404Count signals |
+| 2026-03-22 | Architecture review prompt | Claude Opus 4.6 | 5 architectural decisions documented for external AI review |
 | 2026-03-21 | F.16 — Orchestra branch retry fix | Claude Opus 4.6 | Root cause from PR #108: "retry with different branch" loses prior commits. Updated 5 prompt locations |
 | 2026-03-21 | F.15 — EOL normalization + GitHub path encoding | Claude Opus 4.6 | 1911 tests. applyFuzzyPatch dominant EOL detection, encodeGitHubPath on all 7 API URLs, 9 new tests |
 | 2026-03-21 | Docs sync — roadmap, future-integrations, claude-log | Claude Opus 4.6 | Marked 6 completed features in future-integrations.md, added brainstorming cross-refs to roadmap |

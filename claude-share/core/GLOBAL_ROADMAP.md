@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-21 (EOL normalization fix + orchestra branch retry fix — 1911 tests)
+**Last Updated:** 2026-03-22 (F.17 sandbox stagnation + F.18 OrchestraExecutionProfile — 1982 tests)
 
 ---
 
@@ -407,6 +407,8 @@
 | F.14 | Fuzzy patch fallback + bracket balance pre-commit checks | ✅ | 1h | applyFuzzyPatch: exact indexOf fast path → trimmed line-by-line fuzzy fallback, skips whitespace-significant files (.py/.yaml/.pug/Makefile), unique match enforcement. checkBracketBalance wired into githubPushFiles + githubCreatePr before blob creation. 14 new tests (1861 total). Validated: MiniMax M2.7 PR #98 cleanest Step 3 across 16+ attempts |
 | F.15 | EOL normalization on exact-match path + GitHub path encoding | ✅ | 30min | applyFuzzyPatch exact path now normalizes to file's dominant EOL style (CRLF vs LF counting), fixes mixed endings from model-sent \n on CRLF files. encodeGitHubPath applied to all 7 GitHub Contents API URLs (was only used in write ops). 9 new tests (1911 total) |
 | F.16 | Orchestra "retry with different branch" fix | ✅ | 15min | Root cause from PR #108 (GPT-5.4 Nano): model creates new branch on retry → forks from main → loses prior commits. Updated 5 prompt locations to instruct "push fix commit to SAME branch first" |
+| F.17 | Sandbox stagnation detection + run health scoring | ✅ | 1h | `detectSandboxStagnation()` catches sandbox loops (>3 identical cmds, >5 clone attempts), run health signals (`sandboxStalled`, `prefetch404Count`) persisted in TaskState, 8 new tests |
+| F.18 | OrchestraExecutionProfile — centralized task classification | ✅ | 1h | `buildExecutionProfile()` computed once after `resolveNextRoadmapTask()`, bundles intent signals (concreteScore, ambiguity, isHeavyCoding, isSimple, pendingChildren) → derives sandbox gate, resume cap (3/4/6/8 by ambiguity), force-escalation flag, prompt tier. Flows through TaskRequest → TaskState → getAutoResumeLimit(). Profile displayed in Telegram confirmation. 8 new tests (1982 total) |
 
 ### Future: Platform Evolution (M3 Gate)
 
@@ -489,6 +491,9 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(orchestra): F.18 OrchestraExecutionProfile — centralized task classification computed once after resolveNextRoadmapTask(), bundles intent (concreteScore, ambiguity, isHeavyCoding, isSimple, pendingChildren) → derives sandbox gate, resume cap modulation (3/4/6/8), force-escalation, prompt tier. Flows TaskRequest→TaskState→getAutoResumeLimit(). 8 new tests (1982 total) | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts
+2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(orchestra): F.17 sandbox stagnation detection + run health scoring — detectSandboxStagnation(), sandboxStalled/prefetch404Count in TaskState | src/durable-objects/task-processor.ts, src/orchestra/orchestra.ts
+2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | docs(brainstorming): architecture review prompt for external AI opinions — 5 decisions under review | brainstorming/ai-review-prompt.md
 2026-03-21 | Claude Opus 4.6 (Session: session_01HJCxEZZKUaxd4SNFiQQSq7) | fix(orchestra): F.16 prevent "retry with different branch" from losing prior work — updated 5 prompt locations across orchestra.ts + task-processor.ts to instruct models to push fix commits to SAME branch | src/orchestra/orchestra.ts, src/durable-objects/task-processor.ts
 2026-03-21 | Claude Opus 4.6 (Session: session_01HJCxEZZKUaxd4SNFiQQSq7) | fix(tools): F.15 EOL normalization on exact-match path + GitHub path encoding — applyFuzzyPatch dominant EOL detection, encodeGitHubPath on all 7 GitHub Contents API URLs, 9 new tests (1911 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts, src/durable-objects/task-processor.ts, src/dream/github-client.ts, src/orchestra/orchestra.ts
 2026-03-21 | Claude Opus 4.6 (Session: session_01HJCxEZZKUaxd4SNFiQQSq7) | docs: sync roadmap, future-integrations, claude-log — mark 6 completed features in future-integrations.md, add brainstorming cross-references to roadmap, update test count to 1911 | claude-share/core/*.md, brainstorming/future-integrations.md
@@ -761,7 +766,7 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | **storia-free-apis-catalog.md** | `claude-share/core/` | 25+ free API integrations ($0/month) — implemented as Phase 2.5 (10 free tools) |
 | **future-integrations.md** | `brainstorming/` | Priority 1-5 feature roadmap, technical debt |
 | **dream-machine-moltworker-brief.md** | `brainstorming/` | Dream Machine build skill spec (v1.2, Grok-reviewed) — implemented as DM.1-DM.14 |
-| **phase-4.1-audit.md** | `brainstorming/` | Token-budgeted context retrieval audit — implemented as Phase 4.1, Phase 4.2 (real tokenizer) remains future |
+| **phase-4.1-audit.md** | `brainstorming/` | Token-budgeted context retrieval audit — implemented as Phase 4.1; Phase 4.2 (real tokenizer via gpt-tokenizer) also ✅ complete |
 | **CODE_MODE_MCP_STORIA_SPEC.md** | `claude-share/brainstorming/wave5/` | Code Mode MCP Sprint A/B/C |
 | **MOLTWORKER_ROADMAP-claude_review.md** | `claude-share/core/` | Strategic roadmap review (Feb 28) — merged into this file |
 | **README.md** | project root | User-facing documentation |

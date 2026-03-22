@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-21 (F.15 EOL fix + F.16 orchestra branch retry fix — 1911 tests)
+**Last Updated:** 2026-03-22 (F.17 sandbox stagnation + F.18 OrchestraExecutionProfile — 1982 tests)
 
 ---
 
@@ -18,6 +18,8 @@
 
 | Task ID | Description | Assignee | Status | Branch |
 |---------|-------------|----------|--------|--------|
+| F.18 | OrchestraExecutionProfile — centralized task classification | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
+| F.17 | Sandbox stagnation detection + run health scoring | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
 | F.16 | Orchestra "retry with different branch" fix | Claude Opus 4.6 | ✅ Complete | `claude/add-minimax-model-support-Otzqt` |
 | F.15 | EOL normalization + GitHub path encoding | Claude Opus 4.6 | ✅ Complete | `claude/add-minimax-model-support-Otzqt` |
 | F.4 | R2 file management tools | Claude Opus 4.6 | ✅ Complete | `claude/add-minimax-model-support-Otzqt` |
@@ -38,7 +40,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | F.16 COMPLETE — awaiting next task | `claude/add-minimax-model-support-Otzqt` | 2026-03-21 |
+| Claude | F.18 COMPLETE — architecture review findings addressed | `claude/review-ai-feedback-Zo8hq` | 2026-03-22 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -66,4 +68,4 @@
 |--------|-------------|----------------|-------|
 | Sprint 1 (Feb 6-13) | 8 | 64 | Phase 0-4, 5.1+5.2+5.5, Dream Machine, Model Sync, Phase 7 ALL, 12 bugs |
 | Sprint 2 (Feb 23-Mar 1) | — | 38 | Phase 8 operational hardening, /simulate endpoint, 1526 tests |
-| Sprint 3 (Mar 1-21) | — | 14 | F.2 Browser CDP, F.3 Sandbox in Orchestra, F.4 R2 File Management, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, F.13 MiniMax M2.7 + death loop fix, F.14 Fuzzy patch + bracket balance, F.15 EOL + path encoding, F.16 Orchestra branch retry, 1911 tests |
+| Sprint 3 (Mar 1-22) | — | 16 | F.2 Browser CDP, F.3 Sandbox in Orchestra, F.4 R2 File Management, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, F.13 MiniMax M2.7 + death loop fix, F.14 Fuzzy patch + bracket balance, F.15 EOL + path encoding, F.16 Orchestra branch retry, F.17 Sandbox stagnation, F.18 ExecutionProfile, 1982 tests |
