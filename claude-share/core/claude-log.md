@@ -4,6 +4,58 @@
 
 ---
 
+## Session: 2026-03-22 | Architecture Review — F.17 + F.18 + Docs Sync (Session: session_01TR79yEcqjQJYt4VddLUx7W)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+**Summary:** Addressed all 5 architectural decisions from `ai-review-prompt.md`. Built `OrchestraExecutionProfile` as the central classification object. Updated all follow-up documentation.
+
+### Changes Made
+1. **F.17 — Sandbox stagnation detection + run health scoring** (already merged):
+   - `detectSandboxStagnation()` catches sandbox loops (>3 identical cmds, >5 clone attempts)
+   - Run health signals (`sandboxStalled`, `prefetch404Count`) persisted in TaskState
+
+2. **F.18 — OrchestraExecutionProfile** (feat):
+   - `buildExecutionProfile()` computed once after `resolveNextRoadmapTask()`
+   - Bundles intent signals: concreteScore, ambiguity, isHeavyCoding, isSimple, pendingChildren
+   - Derives bounds: `requiresSandbox` (simple+concrete = skip), `maxAutoResumes` (3/4/6/8 by ambiguity)
+   - Derives routing: `promptTier`, `forceEscalation` (heavy task on weak model)
+   - Flows through `TaskRequest` → `TaskState` → `getAutoResumeLimit()`
+   - Profile displayed in Telegram confirmation message
+   - 8 new tests (1982 total)
+
+3. **Architecture review prompt** (docs):
+   - `brainstorming/ai-review-prompt.md` — 5 decisions documented for external AI opinions
+
+4. **Documentation sync**:
+   - GLOBAL_ROADMAP.md: F.17+F.18 feature rows, 3 changelog entries, fixed stale Phase 4.2 reference
+   - WORK_STATUS.md: Sprint 3 updated (14→16 features, 1911→1982 tests)
+   - next_prompt.md: 3 new completion entries
+   - claude-log.md: This session entry
+
+### Files Modified
+- `src/orchestra/orchestra.ts` — `OrchestraExecutionProfile` interface + `buildExecutionProfile()`
+- `src/orchestra/orchestra.test.ts` — 8 new tests
+- `src/durable-objects/task-processor.ts` — Profile on TaskRequest/TaskState, profile-aware `getAutoResumeLimit()`
+- `src/telegram/handler.ts` — Compute profile, sandbox gating, pass to DO, display in confirmation
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+
+### Tests
+- [x] Tests pass (1982/1982)
+- [x] Typecheck passes
+
+### Notes for Next Session
+All 5 architecture review decisions addressed. Remaining work:
+- **F.1** (ai-hub data feeds) — blocked on ai-hub API
+- **F.7** (Discord full integration) — next unblocked feature
+- Could wire `forceEscalation` into actual model upgrade logic (currently just warns in Telegram)
+
+---
+
 ## Session: 2026-03-21 | F.15 EOL Fix + F.16 Orchestra Branch Retry + Docs Sync (Session: session_01HJCxEZZKUaxd4SNFiQQSq7)
 
 **AI:** Claude Opus 4.6
