@@ -17,7 +17,7 @@ import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSumma
 import { loadUserMemory, storeMemoryFact, buildExtractionPrompt, parseExtractionResponse, MIN_EXTRACTION_LENGTH, EXTRACTION_DEBOUNCE_MS } from '../openrouter/memory';
 import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extractor';
 import { UserStorage } from '../openrouter/storage';
-import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, type OrchestraTask, type OrchestraEvent } from '../orchestra/orchestra';
+import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
@@ -295,6 +295,8 @@ interface TaskState {
   validationRetryCount?: number;
   // Whether this is an orchestra task (persisted so alarm handler can use tighter limits)
   isOrchestraTask?: boolean;
+  // Centralized execution profile — drives resume caps, sandbox gating, prompt tier
+  executionProfile?: OrchestraExecutionProfile;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
   // Run health signals — tracked across the task lifetime
@@ -337,6 +339,8 @@ export interface TaskRequest {
   // Acontext observability
   acontextKey?: string;
   acontextBaseUrl?: string;
+  // Orchestra execution profile — centralized classification signals
+  executionProfile?: OrchestraExecutionProfile;
 }
 
 // DO environment with R2 + Sandbox bindings
@@ -506,8 +510,12 @@ export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & {
   return result;
 }
 
-/** Get the auto-resume limit based on model cost and task type */
-function getAutoResumeLimit(modelAlias: string, isOrchestra = false): number {
+/** Get the auto-resume limit based on model cost, task type, and execution profile */
+function getAutoResumeLimit(modelAlias: string, isOrchestra = false, profile?: OrchestraExecutionProfile): number {
+  // Profile-driven cap takes precedence for orchestra tasks
+  if (profile) {
+    return profile.bounds.maxAutoResumes;
+  }
   const model = getModel(modelAlias);
   if (isOrchestra) {
     return model?.isFree ? MAX_AUTO_RESUMES_ORCHESTRA_FREE : MAX_AUTO_RESUMES_ORCHESTRA;
@@ -1188,7 +1196,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     const resumeCount = task.autoResumeCount ?? 0;
-    const maxResumes = getAutoResumeLimit(task.modelAlias, task.isOrchestraTask);
+    const maxResumes = getAutoResumeLimit(task.modelAlias, task.isOrchestraTask, task.executionProfile);
 
     // Check if auto-resume is enabled and under limit.
     // Direct-API models (DeepSeek, Moonshot, DashScope) may not have an OpenRouter key
@@ -1887,6 +1895,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.autoResume = request.autoResume;
     task.reasoningLevel = request.reasoningLevel;
     task.responseFormat = request.responseFormat;
+    task.executionProfile = request.executionProfile;
     // Initialize structured task phase — skip plan for simple queries
     const skipPlan = isSimpleQuery(request.messages);
     task.phase = skipPlan ? 'work' : 'plan';

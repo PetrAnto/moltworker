@@ -35,6 +35,8 @@ import {
   getRecentOrchestraEvents,
   aggregateOrchestraStats,
   getEventBasedModelScores,
+  buildExecutionProfile,
+  type OrchestraExecutionProfile,
 } from '../orchestra/orchestra';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
@@ -2213,6 +2215,7 @@ export class TelegramHandler {
     // This eliminates 1-2 LLM round-trips (Step 1: READ ROADMAP + read WORK_LOG).
     let resolvedTask = prompt;
     let resolvedExecutionBrief: string | undefined;
+    let executionProfile: OrchestraExecutionProfile | undefined;
     let prefetchedRoadmap: string | undefined;
     let prefetchedRoadmapPath: string | undefined;
     let prefetchedWorkLog: string | undefined;
@@ -2231,6 +2234,9 @@ export class TelegramHandler {
             resolvedTask = resolved.title;
             // Store the execution brief for injection into the user message
             resolvedExecutionBrief = resolved.executionBrief;
+            // Build centralized execution profile — drives sandbox, resume, and routing decisions
+            executionProfile = buildExecutionProfile(resolved, modelAlias);
+            console.log(`[orchestra] executionProfile: ambiguity=${executionProfile.intent.ambiguity} sandbox=${executionProfile.bounds.requiresSandbox} maxResumes=${executionProfile.bounds.maxAutoResumes} tier=${executionProfile.routing.promptTier}`);
           }
         }
 
@@ -2278,7 +2284,8 @@ export class TelegramHandler {
         specificTask: resolvedExecutionBrief ? undefined : (resolvedTask || undefined),
         executionBrief: resolvedExecutionBrief,
         branchSlug,
-        hasSandbox: !!this.sandbox,
+        // Profile-driven sandbox gating: skip sandbox instructions for simple+concrete tasks
+        hasSandbox: !!this.sandbox && (executionProfile?.bounds.requiresSandbox ?? true),
         roadmapContent: prefetchedRoadmap,
         roadmapPath: prefetchedRoadmapPath,
         workLogContent: prefetchedWorkLog,
@@ -2360,6 +2367,7 @@ export class TelegramHandler {
       prompt: `[Orchestra ${modeLabel}] ${repo}: ${(resolvedTask || prompt || 'next task').substring(0, 150)}`,
       acontextKey: this.acontextKey,
       acontextBaseUrl: this.acontextBaseUrl,
+      executionProfile,
     };
 
     const doId = this.taskProcessor.idFromName(userId);
@@ -2402,13 +2410,20 @@ export class TelegramHandler {
       const taskDesc = effectiveTask
         ? `📝 Task: ${effectiveTask.substring(0, 100)}${effectiveTask.length > 100 ? '...' : ''}`
         : '📝 Task: next uncompleted from roadmap';
+      // Build profile info line for the confirmation message
+      const profileInfo = executionProfile
+        ? `\n📊 Profile: ${executionProfile.intent.ambiguity} ambiguity, ` +
+          `${executionProfile.bounds.requiresSandbox ? 'sandbox' : 'no sandbox'}, ` +
+          `${executionProfile.bounds.maxAutoResumes} resumes` +
+          (executionProfile.routing.forceEscalation ? '\n⚠️ Heavy task on weak model — consider upgrading' : '')
+        : '';
       await this.bot.sendMessage(
         chatId,
         `🎼 Orchestra RUN started!\n\n` +
         `📦 Repo: ${repo}\n` +
         `🤖 Model: /${modelAlias}\n` +
         `🌿 Branch: ${branchName}\n` +
-        `${taskDesc}\n\n` +
+        `${taskDesc}${profileInfo}\n\n` +
         `The bot will read the roadmap, implement the task, update ROADMAP.md + WORK_LOG.md, and create a PR.\n` +
         `Use /cancel to stop.`
       );

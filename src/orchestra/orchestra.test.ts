@@ -30,9 +30,12 @@ import {
   LARGE_FILE_THRESHOLD_LINES,
   LARGE_FILE_THRESHOLD_KB,
   LARGE_FILE_WARNING_LINES,
+  buildExecutionProfile,
   type OrchestraTask,
   type OrchestraHistory,
   type OrchestraEvent,
+  type OrchestraExecutionProfile,
+  type ResolvedTask,
 } from './orchestra';
 
 // --- generateTaskSlug ---
@@ -2487,5 +2490,97 @@ describe('cleanupExpiredOrchestraEvents', () => {
     mockBucket.list.mockRejectedValue(new Error('R2 down'));
     const deleted = await cleanupExpiredOrchestraEvents(mockBucket as unknown as R2Bucket);
     expect(deleted).toBe(0);
+  });
+});
+
+// --- buildExecutionProfile ---
+
+describe('buildExecutionProfile', () => {
+  function makeResolved(overrides: Partial<ResolvedTask> = {}): ResolvedTask {
+    return {
+      title: overrides.title ?? 'Implement user auth middleware',
+      phase: overrides.phase ?? 'Phase 1',
+      task: overrides.task ?? { title: 'Implement user auth middleware', done: false, indent: 0, children: [], kind: 'checkbox', lineIndex: 0 },
+      pendingChildren: overrides.pendingChildren ?? [],
+      completedContext: overrides.completedContext ?? [],
+      concreteScore: overrides.concreteScore ?? 5,
+      ambiguity: overrides.ambiguity ?? 'none',
+      executionBrief: overrides.executionBrief ?? 'Phase: Phase 1\nPrimary task: Implement user auth middleware',
+    };
+  }
+
+  it('returns correct structure', () => {
+    const profile = buildExecutionProfile(makeResolved(), 'claude');
+    expect(profile).toHaveProperty('intent');
+    expect(profile).toHaveProperty('bounds');
+    expect(profile).toHaveProperty('routing');
+    expect(profile.intent.concreteScore).toBe(5);
+    expect(profile.intent.ambiguity).toBe('none');
+  });
+
+  it('detects simple tasks and skips sandbox', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Update README with new badges', concreteScore: 6, ambiguity: 'none' }),
+      'claude',
+    );
+    expect(profile.intent.isSimple).toBe(true);
+    expect(profile.bounds.requiresSandbox).toBe(false);
+  });
+
+  it('detects heavy coding tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor auth module into separate files' }),
+      'claude',
+    );
+    expect(profile.intent.isHeavyCoding).toBe(true);
+    expect(profile.bounds.requiresSandbox).toBe(true);
+  });
+
+  it('caps resumes for high-ambiguity tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Create the new file', concreteScore: 1, ambiguity: 'high' }),
+      'claude',
+    );
+    expect(profile.intent.ambiguity).toBe('high');
+    expect(profile.bounds.maxAutoResumes).toBeLessThanOrEqual(3);
+  });
+
+  it('gives full budget to heavy tasks on strong models', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor the entire auth system', concreteScore: 7, ambiguity: 'none' }),
+      'claude',
+    );
+    expect(profile.intent.isHeavyCoding).toBe(true);
+    // Strong model + heavy coding → base + 2
+    expect(profile.bounds.maxAutoResumes).toBeGreaterThanOrEqual(6);
+  });
+
+  it('forces escalation for heavy task on weak model', () => {
+    // 'trinity' is a free model → intelligenceIndex fallback is 20 (< 28)
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor multi-file architecture' }),
+      'trinity',
+    );
+    expect(profile.routing.forceEscalation).toBe(true);
+  });
+
+  it('does not force escalation for simple task on weak model', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Bump version in package.json' }),
+      'trinity',
+    );
+    expect(profile.routing.forceEscalation).toBe(false);
+  });
+
+  it('carries pendingChildren count from resolved task', () => {
+    const children = [
+      { title: 'Sub-task 1', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 1 },
+      { title: 'Sub-task 2', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 2 },
+    ];
+    const profile = buildExecutionProfile(
+      makeResolved({ pendingChildren: children }),
+      'claude',
+    );
+    expect(profile.intent.pendingChildren).toBe(2);
   });
 });

@@ -1095,6 +1095,101 @@ export interface ResolvedTask {
   executionBrief: string;
 }
 
+// ============================================================
+// EXECUTION PROFILE — centralized classification for downstream consumers
+// ============================================================
+
+/** Ambiguity level derived from concreteness score */
+export type TaskAmbiguity = 'none' | 'low' | 'high';
+
+/**
+ * Centralized classification object computed once after task resolution.
+ * Bundles all task signals so sandbox gate, resume policy, model floor,
+ * and prompt tier react to the exact same data.
+ */
+export interface OrchestraExecutionProfile {
+  /** A priori intent signals from task title + roadmap structure */
+  intent: {
+    concreteScore: number;       // 0–10 from scoreTaskConcreteness()
+    ambiguity: TaskAmbiguity;
+    isHeavyCoding: boolean;
+    isSimple: boolean;
+    pendingChildren: number;
+  };
+
+  /** Deterministic execution bounds derived from intent signals */
+  bounds: {
+    /** Whether to include sandbox verification in the prompt and expose the tool */
+    requiresSandbox: boolean;
+    /** Max auto-resumes before giving up (tighter for ambiguous tasks) */
+    maxAutoResumes: number;
+  };
+
+  /** Model routing directives */
+  routing: {
+    promptTier: 'minimal' | 'standard' | 'full';
+    /** Force escalation if heavy task lands on a weak model */
+    forceEscalation: boolean;
+  };
+}
+
+/**
+ * Build an execution profile from a resolved task and model info.
+ * Called once in executeOrchestra() after resolveNextRoadmapTask(),
+ * then passed through the entire pipeline.
+ */
+export function buildExecutionProfile(
+  resolved: ResolvedTask,
+  modelAlias: string,
+): OrchestraExecutionProfile {
+  const title = resolved.title;
+  const isSimple = /add comment|update readme|rename|typo|config|bump|version/i.test(title);
+  const isHeavyCoding = /refactor|split|migrat|rewrite|architect|complex|multi.?file|test suite/i.test(title);
+
+  const model = getModel(modelAlias);
+  const intelligenceIndex = model?.intelligenceIndex ?? (model?.isFree ? 20 : 50);
+
+  // Prompt tier (same logic as getPromptTier but using already-resolved model)
+  const promptTier: OrchestraExecutionProfile['routing']['promptTier'] =
+    intelligenceIndex >= 45 ? 'full' :
+    intelligenceIndex >= 28 ? 'standard' :
+    'minimal';
+
+  // Sandbox bypass: only skip if explicitly simple AND highly concrete
+  const requiresSandbox = !(isSimple && resolved.ambiguity === 'none');
+
+  // Resume cap: tighter for ambiguous tasks to prevent thrashing
+  const isFree = model?.isFree ?? true;
+  const baseResumes = isFree ? 6 : 6; // Orchestra default is 6 for both
+  const maxAutoResumes =
+    resolved.ambiguity === 'high' ? Math.min(baseResumes, 3) :
+    resolved.ambiguity === 'low' ? Math.min(baseResumes, 4) :
+    // Heavy coding with strong model gets full budget
+    isHeavyCoding && intelligenceIndex >= 45 ? baseResumes + 2 :
+    baseResumes;
+
+  // Force escalation if heavy task on weak model
+  const forceEscalation = isHeavyCoding && intelligenceIndex < 28;
+
+  return {
+    intent: {
+      concreteScore: resolved.concreteScore,
+      ambiguity: resolved.ambiguity,
+      isHeavyCoding,
+      isSimple,
+      pendingChildren: resolved.pendingChildren.length,
+    },
+    bounds: {
+      requiresSandbox,
+      maxAutoResumes,
+    },
+    routing: {
+      promptTier,
+      forceEscalation,
+    },
+  };
+}
+
 /**
  * Score how concrete/actionable a task title is (0–10).
  * Higher = more specific, lower = generic boilerplate.
