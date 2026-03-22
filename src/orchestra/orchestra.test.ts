@@ -31,6 +31,11 @@ import {
   LARGE_FILE_THRESHOLD_KB,
   LARGE_FILE_WARNING_LINES,
   buildExecutionProfile,
+  createRuntimeRiskProfile,
+  updateRuntimeRisk,
+  isHighRiskFile,
+  formatRuntimeRisk,
+  type RuntimeRiskProfile,
   type OrchestraTask,
   type OrchestraHistory,
   type OrchestraEvent,
@@ -2582,5 +2587,193 @@ describe('buildExecutionProfile', () => {
       'claude',
     );
     expect(profile.intent.pendingChildren).toBe(2);
+  });
+});
+
+// --- RuntimeRiskProfile (F.20) ---
+
+describe('createRuntimeRiskProfile', () => {
+  it('creates a profile with default values', () => {
+    const profile = createRuntimeRiskProfile(false);
+    expect(profile.level).toBe('low');
+    expect(profile.score).toBe(0);
+    expect(profile.files.modifiedCount).toBe(0);
+    expect(profile.files.configFilesTouched).toEqual([]);
+    expect(profile.files.scopeExpanded).toBe(false);
+    expect(profile.errors.totalErrors).toBe(0);
+    expect(profile.drift.predictedSimple).toBe(false);
+    expect(profile.drift.driftDetected).toBe(false);
+  });
+
+  it('records predictedSimple flag', () => {
+    const profile = createRuntimeRiskProfile(true);
+    expect(profile.drift.predictedSimple).toBe(true);
+  });
+});
+
+describe('isHighRiskFile', () => {
+  it('detects package.json as high risk', () => {
+    expect(isHighRiskFile('package.json')).toBe(true);
+    expect(isHighRiskFile('src/package.json')).toBe(true);
+  });
+
+  it('detects wrangler config as high risk', () => {
+    expect(isHighRiskFile('wrangler.jsonc')).toBe(true);
+    expect(isHighRiskFile('wrangler.toml')).toBe(true);
+  });
+
+  it('detects CI files as high risk', () => {
+    expect(isHighRiskFile('.github/workflows/deploy.yml')).toBe(true);
+  });
+
+  it('detects tsconfig files as high risk', () => {
+    expect(isHighRiskFile('tsconfig.json')).toBe(true);
+    expect(isHighRiskFile('tsconfig.worker.json')).toBe(true);
+  });
+
+  it('does not flag regular source files', () => {
+    expect(isHighRiskFile('src/index.ts')).toBe(false);
+    expect(isHighRiskFile('src/utils/helpers.ts')).toBe(false);
+    expect(isHighRiskFile('README.md')).toBe(false);
+  });
+});
+
+describe('updateRuntimeRisk', () => {
+  it('stays low with few files and no errors', () => {
+    const profile = createRuntimeRiskProfile(false);
+    updateRuntimeRisk(profile, [
+      { toolName: 'github_read_file', isError: false },
+    ], ['src/index.ts']);
+    expect(profile.level).toBe('low');
+    expect(profile.score).toBeLessThan(15);
+  });
+
+  it('detects config file modifications', () => {
+    const profile = createRuntimeRiskProfile(false);
+    updateRuntimeRisk(profile, [
+      { toolName: 'workspace_write_file', isError: false },
+    ], ['package.json', 'tsconfig.json']);
+    expect(profile.files.configFilesTouched).toContain('package.json');
+    expect(profile.files.configFilesTouched).toContain('tsconfig.json');
+    expect(profile.score).toBeGreaterThan(0);
+  });
+
+  it('detects scope expansion (1 file → 5+ files)', () => {
+    const profile = createRuntimeRiskProfile(false);
+    // First update: 1 file
+    updateRuntimeRisk(profile, [
+      { toolName: 'workspace_write_file', isError: false },
+    ], ['src/a.ts']);
+    expect(profile.files.initialModifiedCount).toBe(1);
+    expect(profile.files.scopeExpanded).toBe(false);
+
+    // Second update: now 5 files
+    updateRuntimeRisk(profile, [
+      { toolName: 'workspace_write_file', isError: false },
+    ], ['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts']);
+    expect(profile.files.scopeExpanded).toBe(true);
+  });
+
+  it('accumulates errors across iterations', () => {
+    const profile = createRuntimeRiskProfile(false);
+    updateRuntimeRisk(profile, [
+      { toolName: 'github_api', isError: true },
+      { toolName: 'github_read_file', isError: false },
+    ], []);
+    expect(profile.errors.totalErrors).toBe(1);
+    expect(profile.errors.consecutiveErrorIterations).toBe(0); // mixed success/fail
+
+    updateRuntimeRisk(profile, [
+      { toolName: 'github_api', isError: true },
+    ], []);
+    expect(profile.errors.totalErrors).toBe(2);
+    expect(profile.errors.consecutiveErrorIterations).toBe(1); // all failed
+  });
+
+  it('tracks mutation errors separately', () => {
+    const profile = createRuntimeRiskProfile(false);
+    updateRuntimeRisk(profile, [
+      { toolName: 'github_create_pr', isError: true },
+      { toolName: 'github_read_file', isError: true },
+    ], []);
+    expect(profile.errors.mutationErrors).toBe(1); // only github_create_pr is mutation
+    expect(profile.errors.totalErrors).toBe(2);
+  });
+
+  it('detects drift when simple task touches many files', () => {
+    const profile = createRuntimeRiskProfile(true); // predictedSimple = true
+    updateRuntimeRisk(profile, [
+      { toolName: 'workspace_write_file', isError: false },
+    ], ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts']);
+    expect(profile.drift.driftDetected).toBe(true);
+    expect(profile.drift.driftReason).toContain('5 files');
+  });
+
+  it('detects drift when simple task modifies config files', () => {
+    const profile = createRuntimeRiskProfile(true);
+    updateRuntimeRisk(profile, [
+      { toolName: 'workspace_write_file', isError: false },
+    ], ['package.json', 'tsconfig.json']);
+    expect(profile.drift.driftDetected).toBe(true);
+    expect(profile.drift.driftReason).toContain('config files');
+  });
+
+  it('does not detect drift for non-simple tasks', () => {
+    const profile = createRuntimeRiskProfile(false); // predictedSimple = false
+    updateRuntimeRisk(profile, [
+      { toolName: 'workspace_write_file', isError: false },
+    ], ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts', 'g.ts']);
+    expect(profile.drift.driftDetected).toBe(false);
+  });
+
+  it('escalates to high risk with config files + errors', () => {
+    const profile = createRuntimeRiskProfile(false);
+    // Add config files
+    updateRuntimeRisk(profile, [], ['package.json', 'wrangler.jsonc', 'tsconfig.json']);
+    // Add several errors
+    for (let i = 0; i < 4; i++) {
+      updateRuntimeRisk(profile, [
+        { toolName: 'github_api', isError: true },
+      ], ['package.json', 'wrangler.jsonc', 'tsconfig.json']);
+    }
+    expect(profile.level).toBe('high');
+  });
+
+  it('escalates to critical with drift + config + errors', () => {
+    const profile = createRuntimeRiskProfile(true); // simple task
+    // Touch many files including config
+    const files = ['package.json', 'tsconfig.json', 'a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'];
+    updateRuntimeRisk(profile, [], files);
+    // Add mutation errors
+    for (let i = 0; i < 3; i++) {
+      updateRuntimeRisk(profile, [
+        { toolName: 'github_create_pr', isError: true },
+        { toolName: 'github_api', isError: true },
+      ], files);
+    }
+    expect(profile.level).toBe('critical');
+    expect(profile.score).toBeGreaterThanOrEqual(60);
+  });
+});
+
+describe('formatRuntimeRisk', () => {
+  it('formats low-risk profile compactly', () => {
+    const profile = createRuntimeRiskProfile(false);
+    const formatted = formatRuntimeRisk(profile);
+    expect(formatted).toContain('Risk: low (0/100)');
+  });
+
+  it('includes config file names', () => {
+    const profile = createRuntimeRiskProfile(false);
+    updateRuntimeRisk(profile, [], ['package.json']);
+    const formatted = formatRuntimeRisk(profile);
+    expect(formatted).toContain('package.json');
+  });
+
+  it('includes drift reason', () => {
+    const profile = createRuntimeRiskProfile(true);
+    updateRuntimeRisk(profile, [], ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts']);
+    const formatted = formatRuntimeRisk(profile);
+    expect(formatted).toContain('Drift');
   });
 });

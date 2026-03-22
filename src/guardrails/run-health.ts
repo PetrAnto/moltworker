@@ -12,6 +12,7 @@
  */
 
 import type { ToolErrorTracker } from './tool-validator';
+import type { RuntimeRiskProfile } from '../orchestra/orchestra';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ export interface RunHealth {
 }
 
 export interface RunHealthIssue {
-  category: 'resumes' | 'auth_errors' | 'sandbox_stall' | 'prefetch_404s' | 'tool_errors';
+  category: 'resumes' | 'auth_errors' | 'sandbox_stall' | 'prefetch_404s' | 'tool_errors' | 'runtime_risk';
   detail: string;
   severity: 'warning' | 'critical';
 }
@@ -61,6 +62,8 @@ export interface RunHealthInput {
   prefetch404Count: number;
   /** Whether the task itself succeeded (PR created, deliverables met) */
   taskSucceeded: boolean;
+  /** F.20: Runtime risk profile (optional — only present for orchestra tasks) */
+  runtimeRisk?: RuntimeRiskProfile;
 }
 
 /**
@@ -143,7 +146,31 @@ export function computeRunHealth(input: RunHealthInput): RunHealth {
     escalate('yellow');
   }
 
-  // 6. Task failure itself doesn't change run health color —
+  // 6. Runtime risk profile (F.20)
+  if (input.runtimeRisk) {
+    if (input.runtimeRisk.level === 'critical') {
+      const parts: string[] = [`runtime risk critical (score ${input.runtimeRisk.score})`];
+      if (input.runtimeRisk.drift.driftDetected) parts.push(`drift: ${input.runtimeRisk.drift.driftReason}`);
+      if (input.runtimeRisk.files.configFilesTouched.length > 0) parts.push(`config files: ${input.runtimeRisk.files.configFilesTouched.join(', ')}`);
+      issues.push({
+        category: 'runtime_risk',
+        detail: parts.join(', '),
+        severity: 'critical',
+      });
+      escalate('red');
+    } else if (input.runtimeRisk.level === 'high') {
+      const parts: string[] = [`runtime risk high (score ${input.runtimeRisk.score})`];
+      if (input.runtimeRisk.drift.driftDetected) parts.push(`drift: ${input.runtimeRisk.drift.driftReason}`);
+      issues.push({
+        category: 'runtime_risk',
+        detail: parts.join(', '),
+        severity: 'warning',
+      });
+      escalate('yellow');
+    }
+  }
+
+  // 7. Task failure itself doesn't change run health color —
   //    a model producing wrong code is not a platform issue.
   //    But if the task failed AND there are platform issues, stay red.
 

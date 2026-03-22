@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computeRunHealth, formatHealthFooter, type RunHealthInput } from './run-health';
 import type { ToolErrorTracker } from './tool-validator';
+import { createRuntimeRiskProfile, updateRuntimeRisk } from '../orchestra/orchestra';
 
 function emptyTracker(): ToolErrorTracker {
   return { errors: [], mutationErrors: 0, totalErrors: 0 };
@@ -145,5 +146,54 @@ describe('formatHealthFooter', () => {
     expect(footer).toContain('🔴');
     expect(footer).toContain('Unhealthy');
     expect(footer).toContain('❌');
+  });
+
+  // F.20: Runtime risk integration
+  it('stays green when runtime risk is low', () => {
+    const runtimeRisk = createRuntimeRiskProfile(false);
+    const health = computeRunHealth(defaultInput({ runtimeRisk }));
+    expect(health.level).toBe('green');
+    expect(health.issues.filter(i => i.category === 'runtime_risk')).toHaveLength(0);
+  });
+
+  it('returns yellow when runtime risk is high', () => {
+    const runtimeRisk = createRuntimeRiskProfile(false);
+    // Drive risk to "high" by touching config files + accumulating errors
+    updateRuntimeRisk(runtimeRisk, [], ['package.json', 'wrangler.jsonc', 'tsconfig.json']);
+    for (let i = 0; i < 4; i++) {
+      updateRuntimeRisk(runtimeRisk, [{ toolName: 'github_api', isError: true }], ['package.json', 'wrangler.jsonc', 'tsconfig.json']);
+    }
+    expect(runtimeRisk.level).toBe('high');
+
+    const health = computeRunHealth(defaultInput({ runtimeRisk }));
+    expect(health.level).toBe('yellow');
+    const riskIssues = health.issues.filter(i => i.category === 'runtime_risk');
+    expect(riskIssues).toHaveLength(1);
+    expect(riskIssues[0].severity).toBe('warning');
+  });
+
+  it('returns red when runtime risk is critical', () => {
+    const runtimeRisk = createRuntimeRiskProfile(true); // simple task
+    const files = ['package.json', 'tsconfig.json', 'a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'];
+    updateRuntimeRisk(runtimeRisk, [], files);
+    for (let i = 0; i < 3; i++) {
+      updateRuntimeRisk(runtimeRisk, [
+        { toolName: 'github_create_pr', isError: true },
+        { toolName: 'github_api', isError: true },
+      ], files);
+    }
+    expect(runtimeRisk.level).toBe('critical');
+
+    const health = computeRunHealth(defaultInput({ runtimeRisk }));
+    expect(health.level).toBe('red');
+    const riskIssues = health.issues.filter(i => i.category === 'runtime_risk');
+    expect(riskIssues).toHaveLength(1);
+    expect(riskIssues[0].severity).toBe('critical');
+    expect(riskIssues[0].detail).toContain('drift');
+  });
+
+  it('does not add runtime_risk issue when profile is absent', () => {
+    const health = computeRunHealth(defaultInput()); // no runtimeRisk
+    expect(health.issues.filter(i => i.category === 'runtime_risk')).toHaveLength(0);
   });
 });

@@ -1193,6 +1193,287 @@ export function buildExecutionProfile(
   };
 }
 
+// ─── Runtime Risk Profile (F.20) ────────────────────────────────────────────
+
+/**
+ * Risk level for runtime behavior classification.
+ * Computed incrementally during tool execution in the DO.
+ */
+export type RuntimeRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+
+/**
+ * Runtime risk profile — second-stage classification that observes
+ * what the model actually does during execution, complementing the
+ * pre-execution OrchestraExecutionProfile.
+ *
+ * Updated after every tool call batch in the DO loop.
+ * Persisted in TaskState for survival across auto-resumes.
+ */
+export interface RuntimeRiskProfile {
+  /** Current computed risk level */
+  level: RuntimeRiskLevel;
+  /** Numeric risk score (0–100). Drives the level. */
+  score: number;
+
+  /** File-based risk signals */
+  files: {
+    /** Total unique files modified (workspace_write, github_create_pr, github_push_files) */
+    modifiedCount: number;
+    /** Config/build/infra files touched (package.json, wrangler.jsonc, tsconfig, CI, Dockerfile, etc.) */
+    configFilesTouched: string[];
+    /** Whether task expanded from single-file to multi-file modification */
+    scopeExpanded: boolean;
+    /** Initial file count when first modification was observed */
+    initialModifiedCount: number;
+  };
+
+  /** Error-based risk signals */
+  errors: {
+    /** Total tool errors */
+    totalErrors: number;
+    /** Consecutive error iterations (no successful tool call in an iteration) */
+    consecutiveErrorIterations: number;
+    /** Mutation tool errors (github_create_pr, github_push_files, github_api) */
+    mutationErrors: number;
+  };
+
+  /** Scope drift: predicted vs actual complexity */
+  drift: {
+    /** Pre-execution profile predicted simple task */
+    predictedSimple: boolean;
+    /** Actual behavior contradicts prediction */
+    driftDetected: boolean;
+    /** Reason for drift detection */
+    driftReason?: string;
+  };
+
+  /** Timestamps for observability */
+  firstUpdate: number;
+  lastUpdate: number;
+}
+
+/**
+ * Patterns for files that indicate higher risk when modified.
+ * These are infrastructure/config files where changes have broad impact.
+ */
+const HIGH_RISK_FILE_PATTERNS = [
+  /package\.json$/,
+  /package-lock\.json$/,
+  /tsconfig(\.\w+)?\.json$/,
+  /wrangler\.(jsonc?|toml)$/,
+  /\.github\/workflows\//,
+  /Dockerfile/,
+  /docker-compose/,
+  /\.env(\.\w+)?$/,
+  /vitest\.config/,
+  /eslint/,
+  /prettier/,
+  /\.gitignore$/,
+  /jest\.config/,
+  /webpack\.config/,
+  /vite\.config/,
+  /rollup\.config/,
+  /Makefile$/,
+  /\.npmrc$/,
+  /\.nvmrc$/,
+];
+
+/**
+ * Check if a file path matches high-risk patterns.
+ */
+export function isHighRiskFile(path: string): boolean {
+  return HIGH_RISK_FILE_PATTERNS.some(pattern => pattern.test(path));
+}
+
+/**
+ * Create an initial (empty) RuntimeRiskProfile.
+ */
+export function createRuntimeRiskProfile(predictedSimple: boolean): RuntimeRiskProfile {
+  const now = Date.now();
+  return {
+    level: 'low',
+    score: 0,
+    files: {
+      modifiedCount: 0,
+      configFilesTouched: [],
+      scopeExpanded: false,
+      initialModifiedCount: 0,
+    },
+    errors: {
+      totalErrors: 0,
+      consecutiveErrorIterations: 0,
+      mutationErrors: 0,
+    },
+    drift: {
+      predictedSimple,
+      driftDetected: false,
+    },
+    firstUpdate: now,
+    lastUpdate: now,
+  };
+}
+
+/** Mutation tools whose errors carry extra risk weight */
+const MUTATION_TOOLS = new Set([
+  'github_create_pr', 'github_push_files', 'github_api',
+  'workspace_write_file', 'workspace_commit', 'workspace_delete_file',
+  'sandbox_exec',
+]);
+
+/**
+ * Update runtime risk profile after a batch of tool results.
+ *
+ * Called in the DO loop after all tool results in an iteration are processed.
+ * Mutates the profile in place for efficiency (it's persisted on TaskState).
+ *
+ * @param profile - The runtime risk profile to update
+ * @param toolResults - Array of {toolName, isError, isMutationError} from this iteration
+ * @param filesModified - Current task.filesModified array
+ */
+export function updateRuntimeRisk(
+  profile: RuntimeRiskProfile,
+  toolResults: Array<{ toolName: string; isError: boolean }>,
+  filesModified: string[],
+): void {
+  profile.lastUpdate = Date.now();
+
+  // ─── File risk signals ───────────────────────────────────────────────
+  const prevModified = profile.files.modifiedCount;
+  profile.files.modifiedCount = filesModified.length;
+
+  // Track initial modification count for scope expansion detection
+  if (prevModified === 0 && filesModified.length > 0) {
+    profile.files.initialModifiedCount = filesModified.length;
+  }
+
+  // Detect scope expansion: started with ≤2 files, now touching 5+
+  if (!profile.files.scopeExpanded &&
+      profile.files.initialModifiedCount > 0 &&
+      profile.files.initialModifiedCount <= 2 &&
+      filesModified.length >= 5) {
+    profile.files.scopeExpanded = true;
+  }
+
+  // Check new files for high-risk patterns
+  for (const filePath of filesModified) {
+    if (isHighRiskFile(filePath) && !profile.files.configFilesTouched.includes(filePath)) {
+      profile.files.configFilesTouched.push(filePath);
+    }
+  }
+
+  // ─── Error risk signals ──────────────────────────────────────────────
+  const iterationErrors = toolResults.filter(r => r.isError);
+  profile.errors.totalErrors += iterationErrors.length;
+
+  const mutationErrors = iterationErrors.filter(r => MUTATION_TOOLS.has(r.toolName));
+  profile.errors.mutationErrors += mutationErrors.length;
+
+  // Track consecutive error iterations
+  if (iterationErrors.length > 0 && iterationErrors.length === toolResults.length) {
+    // ALL tools in this iteration failed
+    profile.errors.consecutiveErrorIterations++;
+  } else if (iterationErrors.length < toolResults.length) {
+    // At least one tool succeeded — reset consecutive counter
+    profile.errors.consecutiveErrorIterations = 0;
+  }
+
+  // ─── Scope drift detection ──────────────────────────────────────────
+  if (profile.drift.predictedSimple && !profile.drift.driftDetected) {
+    if (filesModified.length >= 5) {
+      profile.drift.driftDetected = true;
+      profile.drift.driftReason = `simple task touching ${filesModified.length} files`;
+    } else if (profile.files.configFilesTouched.length >= 2) {
+      profile.drift.driftDetected = true;
+      profile.drift.driftReason = `simple task modifying ${profile.files.configFilesTouched.length} config files: ${profile.files.configFilesTouched.join(', ')}`;
+    } else if (profile.errors.totalErrors >= 5) {
+      profile.drift.driftDetected = true;
+      profile.drift.driftReason = `simple task with ${profile.errors.totalErrors} tool errors`;
+    }
+  }
+
+  // ─── Compute score ──────────────────────────────────────────────────
+  profile.score = computeRiskScore(profile);
+  profile.level = scoreToLevel(profile.score);
+}
+
+/**
+ * Compute a numeric risk score (0–100) from accumulated signals.
+ */
+function computeRiskScore(profile: RuntimeRiskProfile): number {
+  let score = 0;
+
+  // File risk: 0–35 points
+  // Many files modified
+  if (profile.files.modifiedCount >= 10) score += 15;
+  else if (profile.files.modifiedCount >= 5) score += 8;
+  else if (profile.files.modifiedCount >= 3) score += 3;
+
+  // Config files touched (high impact per file)
+  score += Math.min(profile.files.configFilesTouched.length * 8, 20);
+
+  // Scope expansion detected
+  if (profile.files.scopeExpanded) score += 10;
+
+  // Error risk: 0–35 points
+  // Total errors
+  if (profile.errors.totalErrors >= 8) score += 15;
+  else if (profile.errors.totalErrors >= 4) score += 8;
+  else if (profile.errors.totalErrors >= 2) score += 3;
+
+  // Mutation errors (extra weight)
+  score += Math.min(profile.errors.mutationErrors * 5, 15);
+
+  // Consecutive error iterations (model is stuck)
+  if (profile.errors.consecutiveErrorIterations >= 3) score += 10;
+  else if (profile.errors.consecutiveErrorIterations >= 2) score += 5;
+
+  // Drift risk: 0–30 points
+  if (profile.drift.driftDetected) score += 20;
+
+  // Drift + config files = compound risk
+  if (profile.drift.driftDetected && profile.files.configFilesTouched.length > 0) {
+    score += 10;
+  }
+
+  return Math.min(score, 100);
+}
+
+/**
+ * Map numeric score to risk level.
+ */
+function scoreToLevel(score: number): RuntimeRiskLevel {
+  if (score >= 60) return 'critical';
+  if (score >= 35) return 'high';
+  if (score >= 15) return 'medium';
+  return 'low';
+}
+
+/**
+ * Format runtime risk for logging / Telegram status messages.
+ */
+export function formatRuntimeRisk(profile: RuntimeRiskProfile): string {
+  const parts: string[] = [];
+  parts.push(`Risk: ${profile.level} (${profile.score}/100)`);
+
+  if (profile.files.modifiedCount > 0) {
+    parts.push(`Files: ${profile.files.modifiedCount} modified`);
+  }
+  if (profile.files.configFilesTouched.length > 0) {
+    parts.push(`Config: ${profile.files.configFilesTouched.join(', ')}`);
+  }
+  if (profile.files.scopeExpanded) {
+    parts.push('Scope expanded');
+  }
+  if (profile.drift.driftDetected) {
+    parts.push(`Drift: ${profile.drift.driftReason}`);
+  }
+  if (profile.errors.totalErrors > 0) {
+    parts.push(`Errors: ${profile.errors.totalErrors} (${profile.errors.mutationErrors} mutation)`);
+  }
+
+  return parts.join(' | ');
+}
+
 /**
  * Score how concrete/actionable a task title is (0–10).
  * Higher = more specific, lower = generic boilerplate.
