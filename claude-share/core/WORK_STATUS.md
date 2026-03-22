@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-22 (F.18.1 ExecutionProfile authoritative enforcement + F.20–F.24 review backlog — 1982 tests)
+**Last Updated:** 2026-03-22 (F.20 runtime/diff-based risk classification — 2006 tests)
 
 ---
 
@@ -41,7 +41,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | F.18.1 COMPLETE — profile now authoritative + F.20–F.24 tracked | `claude/review-ai-feedback-Zo8hq` | 2026-03-22 |
+| Claude | F.20 COMPLETE — runtime risk classification (2006 tests) | `claude/review-ai-feedback-Zo8hq` | 2026-03-22 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -61,7 +61,7 @@
 
 | ID | Task | Source | Priority |
 |----|------|--------|----------|
-| F.20 | Runtime/diff-based risk classification | GPT/Grok/Gemini | High — biggest remaining gap |
+| F.20 | Runtime/diff-based risk classification | GPT/Grok/Gemini | ✅ Complete (2006 tests) |
 | F.21 | `pendingChildren` downstream consumers | GPT | Medium |
 | F.22 | Tests for profile enforcement behavior | GPT | Medium |
 | F.23 | Branch-level concurrency mutex | Gemini | High — data safety |

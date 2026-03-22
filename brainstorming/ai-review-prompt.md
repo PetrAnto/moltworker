@@ -319,12 +319,12 @@ Premium:     $5.00+/M output (Opus, GPT-5.4, Gemini Pro)
 ## Resolution Status (Updated 2026-03-22)
 
 > Tracking which decisions have been resolved and which gaps remain.
-> Commits: `ca00708` (F.18), `50611b8` (F.18.1)
+> Commits: `ca00708` (F.18), `50611b8` (F.18.1), `1b6e24e` (F.20)
 
 | Decision | Status | Commits | Remaining Gaps |
 |----------|--------|---------|----------------|
 | **D1: Selective Sandbox** | ✅ Closed | F.18 profile → `requiresSandbox`, F.18.1 → tool-level gating | — |
-| **D2: Classification Gap** | ✅ Closed | F.18 `buildExecutionProfile()` centralizes all signals | F.20: runtime/diff risk classification (future) |
+| **D2: Classification Gap** | ✅ Closed | F.18 pre-execution + F.20 runtime risk (both stages now covered) | — |
 | **D3: Resume Frequency** | ✅ Closed | F.18 profile-driven `maxAutoResumes` (3/4/6/8) | — |
 | **D4: Checkpoint Truncation** | ⚠️ Partial | Existing boundary-aware chunking | Gemini: token-aware chunking that respects JSON/YAML structure |
 | **D5: Model Tiering** | ✅ Closed | F.18.1 `forceEscalation` auto-upgrades weak models | F.24: broader model floor policy (future) |

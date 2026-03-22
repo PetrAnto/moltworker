@@ -95,11 +95,48 @@ All 5 architecture review decisions addressed. F.18.1 makes profile authoritativ
 - [x] Typecheck passes
 
 ### Notes for Next Session
-Profile enforcement is now authoritative (D1–D3, D5 closed). Remaining architectural work:
+Profile enforcement is now authoritative (D1–D3, D5 closed). F.20 also completed (see below).
+
+---
+
+## Session: 2026-03-22 | F.20 Runtime Risk Classification (Session: session_01TR79yEcqjQJYt4VddLUx7W, continued)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+**Summary:** Implemented the biggest remaining architectural gap: second-stage runtime risk profiling that observes what the model actually does during execution.
+
+### Changes Made
+1. **F.20 — RuntimeRiskProfile** (feat):
+   - `RuntimeRiskProfile` interface with file, error, and drift tracking
+   - `createRuntimeRiskProfile()` — initializer with `predictedSimple` flag
+   - `updateRuntimeRisk()` — accumulator called after every tool batch in DO
+   - `isHighRiskFile()` — 16 regex patterns for config/build/CI files
+   - `computeRiskScore()` — 0–100 score from file count, config files, scope expansion, errors, drift
+   - `scoreToLevel()` — maps to low/medium/high/critical
+   - `formatRuntimeRisk()` — compact display for logging/Telegram
+   - Risk-triggered actions: caution injection (high), Telegram warning (critical)
+   - Integrated into `computeRunHealth()` via new `runtime_risk` issue category
+   - Persisted in `TaskState.runtimeRisk`, survives auto-resumes
+   - 24 new tests (2006 total)
+
+### Files Modified
+- `src/orchestra/orchestra.ts` — RuntimeRiskProfile types + functions (~300 lines)
+- `src/orchestra/orchestra.test.ts` — 20 new tests
+- `src/durable-objects/task-processor.ts` — Initialize, update, act on risk in DO loop
+- `src/guardrails/run-health.ts` — `runtime_risk` category in health scoring
+- `src/guardrails/run-health.test.ts` — 4 new tests
+
+### Tests
+- [x] Tests pass (2006/2006)
+- [x] Typecheck passes
+
+### Notes for Next Session
+F.20 closes the biggest gap from all 3 reviewers. Remaining:
 - **F.22** (enforcement tests) — quickest win, 2-3h
-- **F.20** (runtime risk classification) — biggest gap, 8-12h
 - **F.23** (branch concurrency mutex) — safety-critical, 4-6h
-- **F.1** (ai-hub data feeds) — still blocked on ai-hub API
+- **F.21** (pendingChildren consumers) — medium priority
+- **F.1** (ai-hub data feeds) — still blocked
 
 ---
 

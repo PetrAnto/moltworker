@@ -17,7 +17,7 @@ import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSumma
 import { loadUserMemory, storeMemoryFact, buildExtractionPrompt, parseExtractionResponse, MIN_EXTRACTION_LENGTH, EXTRACTION_DEBOUNCE_MS } from '../openrouter/memory';
 import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extractor';
 import { UserStorage } from '../openrouter/storage';
-import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile } from '../orchestra/orchestra';
+import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile, type RuntimeRiskProfile, createRuntimeRiskProfile, updateRuntimeRisk, formatRuntimeRisk } from '../orchestra/orchestra';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
@@ -297,6 +297,8 @@ interface TaskState {
   isOrchestraTask?: boolean;
   // Centralized execution profile — drives resume caps, sandbox gating, prompt tier
   executionProfile?: OrchestraExecutionProfile;
+  // F.20: Runtime risk profile — second-stage classification updated during execution
+  runtimeRisk?: RuntimeRiskProfile;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
   // Run health signals — tracked across the task lifetime
@@ -1896,6 +1898,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.reasoningLevel = request.reasoningLevel;
     task.responseFormat = request.responseFormat;
     task.executionProfile = request.executionProfile;
+    // F.20: Initialize runtime risk profile for second-stage classification
+    if (!task.runtimeRisk) {
+      const predictedSimple = request.executionProfile?.intent.isSimple ?? false;
+      task.runtimeRisk = createRuntimeRiskProfile(predictedSimple);
+    }
     // Initialize structured task phase — skip plan for simple queries
     const skipPlan = isSimpleQuery(request.messages);
     task.phase = skipPlan ? 'work' : 'plan';
@@ -1918,6 +1925,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.noProgressResumes = existingTask.noProgressResumes;
       // Preserve tool signatures for cross-resume duplicate detection
       task.toolSignatures = existingTask.toolSignatures;
+      // Preserve runtime risk profile across resumes
+      if (existingTask.runtimeRisk) {
+        task.runtimeRisk = existingTask.runtimeRisk;
+      }
     }
     await this.doState.storage.put('task', taskForStorage(task));
 
@@ -3546,6 +3557,79 @@ If you already created the new file and just need to patch the original, call gi
             }
           }
 
+          // F.20: Update runtime risk profile after each tool batch
+          if (task.runtimeRisk) {
+            const prevLevel = task.runtimeRisk.level;
+            // Build tool result summaries for risk assessment
+            const riskToolResults = toolResults.map(({ toolName, toolResult }) => {
+              const validation = validateToolResult(toolName, toolResult.content);
+              return { toolName, isError: validation.isError };
+            });
+            updateRuntimeRisk(task.runtimeRisk, riskToolResults, task.filesModified || []);
+
+            // Log risk changes at medium+ levels
+            if (task.runtimeRisk.level !== 'low') {
+              console.log(`[TaskProcessor] Runtime risk: ${formatRuntimeRisk(task.runtimeRisk)}`);
+            }
+
+            // ─── Risk-triggered actions (only on level transitions) ──────
+            const newLevel = task.runtimeRisk.level;
+            if (newLevel !== prevLevel) {
+              // HIGH: inject caution message into context to make model more careful
+              if (newLevel === 'high' || newLevel === 'critical') {
+                const cautionParts: string[] = [
+                  '⚠️ RUNTIME RISK ELEVATED:',
+                ];
+                if (task.runtimeRisk.drift.driftDetected) {
+                  cautionParts.push(`Scope drift detected: ${task.runtimeRisk.drift.driftReason}.`);
+                }
+                if (task.runtimeRisk.files.configFilesTouched.length > 0) {
+                  cautionParts.push(`Config files modified: ${task.runtimeRisk.files.configFilesTouched.join(', ')}.`);
+                }
+                if (task.runtimeRisk.files.scopeExpanded) {
+                  cautionParts.push(`Task scope expanded from ${task.runtimeRisk.files.initialModifiedCount} to ${task.runtimeRisk.files.modifiedCount} files.`);
+                }
+                cautionParts.push(
+                  'Proceed carefully: verify each change is necessary. ' +
+                  'Do NOT modify config/build files unless the task explicitly requires it. ' +
+                  'Prefer minimal, targeted changes.',
+                );
+                conversationMessages.push({
+                  role: 'user',
+                  content: cautionParts.join(' '),
+                });
+                console.log(`[TaskProcessor] Injected caution message at risk level ${newLevel}`);
+              }
+
+              // CRITICAL: notify user via Telegram
+              if (newLevel === 'critical') {
+                try {
+                  await this.sendTelegramMessage(
+                    request.telegramToken,
+                    request.chatId,
+                    `⚠️ High runtime risk detected for task ${task.taskId.slice(0, 8)}:\n` +
+                    formatRuntimeRisk(task.runtimeRisk) +
+                    '\n\nTask continues but review carefully before merging.',
+                  );
+                } catch { /* non-fatal */ }
+              }
+
+              // Emit orchestra event for observability (high + critical)
+              if (task.isOrchestraTask) {
+                this.emitOrchestraEvent(task, 'runtime_risk_escalation', {
+                  fromLevel: prevLevel,
+                  toLevel: newLevel,
+                  score: task.runtimeRisk.score,
+                  configFiles: task.runtimeRisk.files.configFilesTouched,
+                  filesModified: task.runtimeRisk.files.modifiedCount,
+                  scopeExpanded: task.runtimeRisk.files.scopeExpanded,
+                  driftDetected: task.runtimeRisk.drift.driftDetected,
+                  driftReason: task.runtimeRisk.drift.driftReason,
+                });
+              }
+            }
+          }
+
           // Invalid JSON args tracking: detect models that can't format tool calls
           const invalidArgResults = toolResults.filter(
             tr => tr.toolResult.content.startsWith('Error: Invalid JSON arguments:')
@@ -4556,6 +4640,7 @@ If you already created the new file and just need to patch the original, call gi
                   sandboxStalled: !!task.sandboxStalled,
                   prefetch404Count: task.prefetch404Count ?? 0,
                   taskSucceeded: taskStatus === 'completed',
+                  runtimeRisk: task.runtimeRisk,
                 });
                 this.emitOrchestraEvent(task, taskStatus === 'completed' ? 'task_complete' : 'task_abort', {
                   repo, mode: orchestraMode, branch: orchestraResult.branch,
@@ -4606,6 +4691,7 @@ If you already created the new file and just need to patch the original, call gi
             sandboxStalled: !!task.sandboxStalled,
             prefetch404Count: task.prefetch404Count ?? 0,
             taskSucceeded: task.status === 'completed',
+            runtimeRisk: task.runtimeRisk,
           });
           finalResponse += `\n${formatHealthFooter(runHealth, resumeCount)}`;
 
@@ -4651,6 +4737,7 @@ If you already created the new file and just need to patch the original, call gi
           sandboxStalled: !!task.sandboxStalled,
           prefetch404Count: task.prefetch404Count ?? 0,
           taskSucceeded: false,
+          runtimeRisk: task.runtimeRisk,
         });
         await this.sendTelegramMessage(
           request.telegramToken,
@@ -4700,6 +4787,7 @@ If you already created the new file and just need to patch the original, call gi
           sandboxStalled: !!task.sandboxStalled,
           prefetch404Count: task.prefetch404Count ?? 0,
           taskSucceeded: false,
+          runtimeRisk: task.runtimeRisk,
         });
         await this.sendTelegramMessageWithButtons(
           request.telegramToken,
