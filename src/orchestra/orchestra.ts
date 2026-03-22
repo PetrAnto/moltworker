@@ -1060,6 +1060,8 @@ export interface RoadmapTask {
   children: RoadmapTask[];
   /** How the task was parsed */
   kind: 'checkbox' | 'numbered-checkbox' | 'numbered-plain';
+  /** Line index in the original content (0-based) — used by reset/find */
+  lineIndex: number;
 }
 
 /** Parsed phase from a roadmap */
@@ -1146,10 +1148,16 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
   const accums: Accum[] = [];
   let current: Accum | null = null;
 
-  // Track the last top-level task so indented items become its children
-  let lastTopLevel: RoadmapTask | null = null;
+  // Indent stack for true N-level nesting.
+  // Each entry is { indent, task } — the task at that indentation level.
+  // When a new task arrives, we pop entries with indent >= the new task's indent,
+  // then the top of the stack is the parent (or empty = top-level).
+  let indentStack: { indent: number; task: RoadmapTask }[] = [];
 
-  for (const line of content.split('\n')) {
+  const lines = content.split('\n');
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx];
+
     // Match phase headers:
     // "### Phase 1: Setup", "### Phase 1 — Setup", "### Setup" (any ### header)
     // "## Phase 1: Setup", "## Step 1: Setup", "## Setup" (any ## header)
@@ -1160,7 +1168,7 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
     if (phaseMatch) {
       current = { name: phaseMatch[1].trim(), flatTasks: [], topLevel: [] };
       accums.push(current);
-      lastTopLevel = null;
+      indentStack = [];
       continue;
     }
 
@@ -1176,7 +1184,7 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
         .replace(/\*\*/g, '')
         .trim();
-      const task: RoadmapTask = { title, done, indent: rawIndent, children: [], kind: 'checkbox' };
+      const task: RoadmapTask = { title, done, indent: rawIndent, children: [], kind: 'checkbox', lineIndex: lineIdx };
 
       if (!current) {
         current = { name: 'Tasks', flatTasks: [], topLevel: [] };
@@ -1186,13 +1194,8 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
       // Always add to flat list (backwards compat)
       current.flatTasks.push(task);
 
-      // Hierarchy: indented (≥2 spaces) → child of last top-level task
-      if (rawIndent >= 2 && lastTopLevel) {
-        lastTopLevel.children.push(task);
-      } else {
-        current.topLevel.push(task);
-        lastTopLevel = task;
-      }
+      // Hierarchy via indent stack
+      nestTask(task, rawIndent, indentStack, current);
       continue;
     }
 
@@ -1204,7 +1207,7 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
         .replace(/\*\*/g, '')
         .trim();
-      const task: RoadmapTask = { title, done, indent: rawIndent, children: [], kind: 'numbered-checkbox' };
+      const task: RoadmapTask = { title, done, indent: rawIndent, children: [], kind: 'numbered-checkbox', lineIndex: lineIdx };
 
       if (!current) {
         current = { name: 'Tasks', flatTasks: [], topLevel: [] };
@@ -1212,12 +1215,7 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
       }
       current.flatTasks.push(task);
 
-      if (rawIndent >= 2 && lastTopLevel) {
-        lastTopLevel.children.push(task);
-      } else {
-        current.topLevel.push(task);
-        lastTopLevel = task;
-      }
+      nestTask(task, rawIndent, indentStack, current);
       continue;
     }
 
@@ -1231,10 +1229,10 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
         .trim();
       // Skip lines that look like sub-descriptions (start with lowercase, very short)
       if (title.length > 5) {
-        const task: RoadmapTask = { title, done: false, indent: rawIndent, children: [], kind: 'numbered-plain' };
+        const task: RoadmapTask = { title, done: false, indent: rawIndent, children: [], kind: 'numbered-plain', lineIndex: lineIdx };
         current.flatTasks.push(task);
         current.topLevel.push(task);
-        lastTopLevel = task;
+        indentStack = [{ indent: rawIndent, task }];
       }
     }
   }
@@ -1242,6 +1240,35 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
   return accums
     .filter(p => p.flatTasks.length > 0)
     .map(p => ({ name: p.name, tasks: p.flatTasks, topLevelTasks: p.topLevel }));
+}
+
+/**
+ * Nest a task into the hierarchy using an indent stack.
+ * Pop entries with indent >= the new task's indent, then:
+ * - If the stack is non-empty, the top entry is the parent → add as child
+ * - If empty, it's a top-level task
+ * Then push this task onto the stack.
+ */
+function nestTask(
+  task: RoadmapTask,
+  rawIndent: number,
+  indentStack: { indent: number; task: RoadmapTask }[],
+  current: { topLevel: RoadmapTask[] },
+): void {
+  // Pop tasks at same or deeper indent — they can't be parents
+  while (indentStack.length > 0 && indentStack[indentStack.length - 1].indent >= rawIndent) {
+    indentStack.pop();
+  }
+
+  if (indentStack.length > 0) {
+    // Parent is the top of the stack (nearest less-indented task)
+    indentStack[indentStack.length - 1].task.children.push(task);
+  } else {
+    // No parent → top-level
+    current.topLevel.push(task);
+  }
+
+  indentStack.push({ indent: rawIndent, task });
 }
 
 /**
@@ -1460,6 +1487,7 @@ export function formatRoadmapStatus(content: string, repo: string, filePath: str
 
 /**
  * Find tasks in roadmap content that match a query string.
+ * Uses the same parsed AST as the resolver for consistent semantics.
  * Matches against task titles (case-insensitive, substring match).
  * Also matches "Phase N" to select all tasks in a phase.
  */
@@ -1467,6 +1495,7 @@ export function findMatchingTasks(
   content: string,
   query: string
 ): { lineIndex: number; title: string; done: boolean; phase: string }[] {
+  const phases = parseRoadmapPhases(content);
   const matches: { lineIndex: number; title: string; done: boolean; phase: string }[] = [];
   const queryLower = query.toLowerCase().trim();
   const lines = content.split('\n');
@@ -1474,43 +1503,37 @@ export function findMatchingTasks(
   // Check if the query targets a whole phase (e.g. "Phase 2" or "phase 2")
   const phaseQuery = queryLower.match(/^phase\s+(\d+)$/i);
 
-  let currentPhase = '';
-  let currentPhaseNum = 0;
+  // Collect all tasks (flat) from each phase, including children
+  for (let phaseIdx = 0; phaseIdx < phases.length; phaseIdx++) {
+    const phase = phases[phaseIdx];
+    const phaseNum = phaseIdx + 1;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Track current phase
-    const phaseMatch = line.match(/^###\s+(?:Phase\s+(\d+)[:.—-]\s*)?(.+)/i);
-    if (phaseMatch) {
-      currentPhaseNum = phaseMatch[1] ? parseInt(phaseMatch[1], 10) : currentPhaseNum + 1;
-      currentPhase = phaseMatch[2]?.trim() || `Phase ${currentPhaseNum}`;
-      continue;
+    // Recursively collect all tasks in phase order
+    const allTasks: RoadmapTask[] = [];
+    function collectTasks(tasks: RoadmapTask[]): void {
+      for (const task of tasks) {
+        allTasks.push(task);
+        if (task.children.length > 0) {
+          collectTasks(task.children);
+        }
+      }
     }
+    collectTasks(phase.topLevelTasks);
 
-    // Match task lines
-    const taskMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)/);
-    if (taskMatch && currentPhase) {
-      const done = taskMatch[1].toLowerCase() === 'x';
-      const rawTitle = taskMatch[2]
-        .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
-        .replace(/\*\*/g, '')
-        .trim();
-
-      // Check if this task matches the query
-      const titleLower = rawTitle.toLowerCase();
-      const fullLineLower = line.toLowerCase();
+    for (const task of allTasks) {
+      const titleLower = task.title.toLowerCase();
+      // For full-line matching, use the original source line
+      const fullLineLower = lines[task.lineIndex]?.toLowerCase() ?? '';
 
       if (phaseQuery) {
-        // Phase-level match: select all tasks in the matching phase
-        if (currentPhaseNum === parseInt(phaseQuery[1], 10)) {
-          matches.push({ lineIndex: i, title: rawTitle, done, phase: currentPhase });
+        if (phaseNum === parseInt(phaseQuery[1], 10)) {
+          matches.push({ lineIndex: task.lineIndex, title: task.title, done: task.done, phase: phase.name });
         }
       } else if (
         titleLower.includes(queryLower) ||
         fullLineLower.includes(queryLower)
       ) {
-        matches.push({ lineIndex: i, title: rawTitle, done, phase: currentPhase });
+        matches.push({ lineIndex: task.lineIndex, title: task.title, done: task.done, phase: phase.name });
       }
     }
   }
