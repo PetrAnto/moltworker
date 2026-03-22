@@ -205,4 +205,38 @@ describe('extractGitHubContext', () => {
       expect(result).toEqual({ owner: 'PetrAnto', repo: 'moltworker' });
     });
   });
+
+  describe('.git suffix stripping', () => {
+    it('strips .git from GitHub URL repo name', () => {
+      const result = extractGitHubContext([
+        msg('system', 'Clone from https://github.com/PetrAnto/wagmi.git'),
+        msg('user', 'Fix the bug'),
+      ]);
+      expect(result).toEqual({ owner: 'PetrAnto', repo: 'wagmi' });
+    });
+
+    it('strips .git from explicit repo pattern', () => {
+      const result = extractGitHubContext([
+        msg('system', 'Repository: PetrAnto/wagmi.git'),
+        msg('user', 'Fix the bug'),
+      ]);
+      expect(result).toEqual({ owner: 'PetrAnto', repo: 'wagmi' });
+    });
+
+    it('strips .git from user message repo pattern', () => {
+      const result = extractGitHubContext([
+        msg('system', 'You are a helpful assistant'),
+        msg('user', 'Fix the bug in PetrAnto/wagmi.git'),
+      ]);
+      expect(result).toEqual({ owner: 'PetrAnto', repo: 'wagmi' });
+    });
+
+    it('does not strip .git from middle of repo name', () => {
+      const result = extractGitHubContext([
+        msg('system', 'See https://github.com/vercel/next.js for details'),
+        msg('user', 'Fix'),
+      ]);
+      expect(result).toEqual({ owner: 'vercel', repo: 'next.js' });
+    });
+  });
 });

@@ -94,7 +94,7 @@ export function extractGitHubContext(
     );
     if (explicitMatch) {
       const [owner, repo] = explicitMatch[1].split('/');
-      return { owner, repo };
+      return { owner, repo: stripGitSuffix(repo) };
     }
 
     // Look for GitHub URL patterns
@@ -102,7 +102,7 @@ export function extractGitHubContext(
       /github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)/
     );
     if (urlMatch) {
-      return { owner: urlMatch[1], repo: urlMatch[2] };
+      return { owner: urlMatch[1], repo: stripGitSuffix(urlMatch[2]) };
     }
   }
 
@@ -115,7 +115,8 @@ export function extractGitHubContext(
       /(?:in|from|on|at|of)\s+([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i
     );
     if (repoMatch) {
-      const [owner, repo] = repoMatch[1].split('/');
+      const [owner, rawRepo] = repoMatch[1].split('/');
+      const repo = stripGitSuffix(rawRepo);
       if (owner && repo && !isExcludedRepo(`${owner}/${repo}`)) {
         return { owner, repo };
       }
@@ -123,6 +124,11 @@ export function extractGitHubContext(
   }
 
   return null;
+}
+
+/** Strip .git suffix from repo names (e.g. "wagmi.git" → "wagmi"). */
+function stripGitSuffix(repo: string): string {
+  return repo.replace(/\.git$/, '');
 }
 
 /** Strip line numbers and leading ./ from a path. */
