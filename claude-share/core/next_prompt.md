@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-22 (F.18.1 authoritative enforcement + F.20–F.24 review backlog tracked — 1982 tests)
+**Last Updated:** 2026-03-22 (F.20 runtime risk classification — 2006 tests)
 
 ---
 
@@ -15,6 +15,7 @@
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-22 | F.20 — Runtime/diff-based risk classification | Claude Opus 4.6 | RuntimeRiskProfile: file tracking (16 config patterns), scope expansion, error accumulation, drift detection. Integrated into DO loop + RunHealth. 24 new tests (2006 total) |
 | 2026-03-22 | F.18.1 — ExecutionProfile authoritative enforcement | Claude Opus 4.6 | promptTierOverride, sandbox tool-level gating, forceEscalation auto-upgrade. F.20–F.24 tracked from reviewer feedback |
 | 2026-03-22 | F.18 — OrchestraExecutionProfile | Claude Opus 4.6 | Centralized task classification: sandbox gate, resume cap modulation, force-escalation. 8 tests (1982 total) |
 | 2026-03-22 | F.17 — Sandbox stagnation detection + run health | Claude Opus 4.6 | detectSandboxStagnation(), sandboxStalled/prefetch404Count signals |
@@ -36,8 +37,8 @@
 ## Alternative Next Tasks
 
 1. **F.22** — Tests for profile enforcement behavior (2-3h, fills GPT-flagged coverage gap)
-2. **F.20** — Runtime/diff-based risk classification (8-12h, biggest remaining arch gap)
-3. **F.23** — Branch-level concurrency mutex (4-6h, Gemini safety concern)
+2. **F.23** — Branch-level concurrency mutex (4-6h, Gemini safety concern)
+3. **F.21** — pendingChildren downstream consumers (2-4h)
 4. **F.1** — ai-hub data feeds (blocked on ai-hub `/api/situation/*`)
 5. **F.7** — Discord full integration (read-only → two-way)
 6. **6.3** — Voice messages (Whisper + TTS)

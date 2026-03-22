@@ -284,8 +284,8 @@ Via WhatsApp Business API (requires approval).
 > Tracked in GLOBAL_ROADMAP.md as F.20–F.24.
 
 ### Runtime Risk Classification (F.20)
-**Status:** 🔲 Not started
-**Effort:** High (8-12h)
+**Status:** ✅ Complete (2026-03-22, 24 tests, 2006 total)
+**Effort:** 2h (actual, vs 8-12h estimated)
 **Value:** High — biggest remaining architectural gap per all three reviewers
 
 Currently, task classification happens entirely pre-execution based on the roadmap title. A second-stage profiler would observe runtime behavior:
