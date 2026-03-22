@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-22 (F.17 sandbox stagnation + F.18 OrchestraExecutionProfile — 1982 tests)
+**Last Updated:** 2026-03-22 (F.18.1 authoritative enforcement + F.20–F.24 review backlog tracked — 1982 tests)
 
 ---
 
@@ -15,6 +15,7 @@
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-22 | F.18.1 — ExecutionProfile authoritative enforcement | Claude Opus 4.6 | promptTierOverride, sandbox tool-level gating, forceEscalation auto-upgrade. F.20–F.24 tracked from reviewer feedback |
 | 2026-03-22 | F.18 — OrchestraExecutionProfile | Claude Opus 4.6 | Centralized task classification: sandbox gate, resume cap modulation, force-escalation. 8 tests (1982 total) |
 | 2026-03-22 | F.17 — Sandbox stagnation detection + run health | Claude Opus 4.6 | detectSandboxStagnation(), sandboxStalled/prefetch404Count signals |
 | 2026-03-22 | Architecture review prompt | Claude Opus 4.6 | 5 architectural decisions documented for external AI review |
@@ -34,7 +35,10 @@
 
 ## Alternative Next Tasks
 
-1. **F.1 — ai-hub data feeds** — Blocked on ai-hub `/api/situation/*`
-2. **F.7** — Discord full integration (read-only → two-way)
-3. **6.3** — Voice messages (Whisper + TTS)
-4. **Slack integration** — Two-way Slack bot support
+1. **F.22** — Tests for profile enforcement behavior (2-3h, fills GPT-flagged coverage gap)
+2. **F.20** — Runtime/diff-based risk classification (8-12h, biggest remaining arch gap)
+3. **F.23** — Branch-level concurrency mutex (4-6h, Gemini safety concern)
+4. **F.1** — ai-hub data feeds (blocked on ai-hub `/api/situation/*`)
+5. **F.7** — Discord full integration (read-only → two-way)
+6. **6.3** — Voice messages (Whisper + TTS)
+7. **Slack integration** — Two-way Slack bot support

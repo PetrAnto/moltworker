@@ -313,3 +313,34 @@ Premium:     $5.00+/M output (Opus, GPT-5.4, Gemini Pro)
 1. **Priority** — If you could only change ONE of these 5 areas, which would have the highest impact on task success rate?
 2. **Simplification** — Which of these systems is over-engineered and could be simplified without meaningful loss?
 3. **Missing** — What architectural concern are we NOT considering that matters more than any of the above?
+
+---
+
+## Resolution Status (Updated 2026-03-22)
+
+> Tracking which decisions have been resolved and which gaps remain.
+> Commits: `ca00708` (F.18), `50611b8` (F.18.1)
+
+| Decision | Status | Commits | Remaining Gaps |
+|----------|--------|---------|----------------|
+| **D1: Selective Sandbox** | ✅ Closed | F.18 profile → `requiresSandbox`, F.18.1 → tool-level gating | — |
+| **D2: Classification Gap** | ✅ Closed | F.18 `buildExecutionProfile()` centralizes all signals | F.20: runtime/diff risk classification (future) |
+| **D3: Resume Frequency** | ✅ Closed | F.18 profile-driven `maxAutoResumes` (3/4/6/8) | — |
+| **D4: Checkpoint Truncation** | ⚠️ Partial | Existing boundary-aware chunking | Gemini: token-aware chunking that respects JSON/YAML structure |
+| **D5: Model Tiering** | ✅ Closed | F.18.1 `forceEscalation` auto-upgrades weak models | F.24: broader model floor policy (future) |
+
+### Tracked Follow-Up Items (in GLOBAL_ROADMAP.md)
+
+| ID | Description | Source |
+|----|-------------|--------|
+| F.20 | Runtime/diff-based risk classification | GPT, Grok, Gemini — all three flagged this |
+| F.21 | `pendingChildren` downstream consumers | GPT |
+| F.22 | Tests for profile enforcement behavior | GPT |
+| F.23 | Branch-level concurrency mutex | Gemini |
+| F.24 | Broader escalation policy (model floor) | GPT |
+
+### Reviewer Consensus Summary
+
+- **Grok**: Decision 2 fully closed. Profile is now the control plane. Remaining items are optimization, not correctness.
+- **GPT**: Three immediate gaps fixed. Still flags runtime risk classification (F.20) as the deepest remaining root cause.
+- **Gemini**: Architecture centralization resolved. Flags branch-level concurrency (F.23) as critical for multi-task safety.
