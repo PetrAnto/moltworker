@@ -304,8 +304,8 @@ This would enable dynamic re-routing mid-task (e.g., escalate model if task turn
 Durable Objects handle internal queuing, but parallel task ingestion from external webhooks can cause branch collisions. Need persistent branch-level lock via KV or R2 to guarantee exclusive write access during active orchestration runs.
 
 ### Profile Enforcement Tests (F.22)
-**Status:** 🔲 Not started
-**Effort:** Low (2-3h)
+**Status:** ✅ Complete (2026-03-22, 14 tests, 2020 total)
+**Effort:** 30m (actual, vs 2-3h estimated)
 **Value:** Medium — regression safety
 
 Test coverage for:
