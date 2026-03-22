@@ -3613,6 +3613,20 @@ If you already created the new file and just need to patch the original, call gi
                   );
                 } catch { /* non-fatal */ }
               }
+
+              // Emit orchestra event for observability (high + critical)
+              if (task.isOrchestraTask) {
+                this.emitOrchestraEvent(task, 'runtime_risk_escalation', {
+                  fromLevel: prevLevel,
+                  toLevel: newLevel,
+                  score: task.runtimeRisk.score,
+                  configFiles: task.runtimeRisk.files.configFilesTouched,
+                  filesModified: task.runtimeRisk.files.modifiedCount,
+                  scopeExpanded: task.runtimeRisk.files.scopeExpanded,
+                  driftDetected: task.runtimeRisk.drift.driftDetected,
+                  driftReason: task.runtimeRisk.drift.driftReason,
+                });
+              }
             }
           }
 

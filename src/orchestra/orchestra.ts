@@ -2208,7 +2208,7 @@ export interface OrchestraEvent {
   taskId: string;
   userId?: string;
   modelAlias: string;
-  eventType: 'stall_abort' | 'validation_fail' | 'task_abort' | 'task_complete' | 'deliverable_retry';
+  eventType: 'stall_abort' | 'validation_fail' | 'task_abort' | 'task_complete' | 'deliverable_retry' | 'runtime_risk_escalation';
   details: Record<string, unknown>;
 }
 
