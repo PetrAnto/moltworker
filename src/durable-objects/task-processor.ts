@@ -18,6 +18,7 @@ import { loadUserMemory, storeMemoryFact, buildExtractionPrompt, parseExtraction
 import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extractor';
 import { UserStorage } from '../openrouter/storage';
 import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile, type RuntimeRiskProfile, createRuntimeRiskProfile, updateRuntimeRisk, formatRuntimeRisk } from '../orchestra/orchestra';
+import { releaseRepoLock } from '../concurrency/branch-lock';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
@@ -299,6 +300,8 @@ interface TaskState {
   executionProfile?: OrchestraExecutionProfile;
   // F.20: Runtime risk profile — second-stage classification updated during execution
   runtimeRisk?: RuntimeRiskProfile;
+  // F.23: Repo for branch-lock release on completion/failure (set for orchestra tasks)
+  orchestraRepo?: string;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
   // Run health signals — tracked across the task lifetime
@@ -343,6 +346,8 @@ export interface TaskRequest {
   acontextBaseUrl?: string;
   // Orchestra execution profile — centralized classification signals
   executionProfile?: OrchestraExecutionProfile;
+  // F.23: Repo for branch-lock release (set for orchestra tasks)
+  orchestraRepo?: string;
 }
 
 // DO environment with R2 + Sandbox bindings
@@ -1088,6 +1093,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       await this.doState.storage.put('task', taskForStorage(task));
       try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
       try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+      // F.23: Release branch lock for stale tasks
+      if (this.r2 && task.orchestraRepo) {
+        releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+      }
       return;
     }
 
@@ -1117,6 +1126,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         autoResume: task.autoResume,
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
+        orchestraRepo: task.orchestraRepo,
       };
 
       this.doState.waitUntil(this.processTask(taskRequest).catch(async (error) => {
@@ -1258,6 +1268,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           // Update orchestra history so failed tasks don't stay at 'started' forever
           await this.updateOrchestraHistoryOnFailure(task, stallReason);
           this.emitOrchestraEvent(task, 'stall_abort', { reason: stallReason, resumes: noProgressResumes, iterations: task.iterations, tools: toolCountNow });
+          // F.23: Release branch lock on stall abort
+          if (this.r2 && task.orchestraRepo) {
+            releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+          }
 
           if (task.telegramToken) {
             const stallProgress = this.buildProgressSummary(task);
@@ -1289,6 +1303,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
         await this.updateOrchestraHistoryOnFailure(task, orchStallReason);
         this.emitOrchestraEvent(task, 'stall_abort', { reason: orchStallReason, resumes: resumeCount, tools: toolCountNow, orchestra: true });
+        // F.23: Release branch lock on orchestra stall abort
+        if (this.r2 && task.orchestraRepo) {
+          releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+        }
         if (task.telegramToken) {
           const orchProgress = this.buildProgressSummary(task);
           await this.sendTelegramMessageWithButtons(
@@ -1351,6 +1369,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         autoResume: task.autoResume,
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
+        orchestraRepo: task.orchestraRepo,
       };
 
       // Use waitUntil to trigger resume without blocking alarm
@@ -1372,6 +1391,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Update orchestra history so failed tasks don't stay at 'started' forever
     await this.updateOrchestraHistoryOnFailure(task, failureReason);
     this.emitOrchestraEvent(task, 'task_abort', { reason: failureReason, resumes: resumeCount, maxResumes, elapsed });
+    // F.23: Release branch lock on task abort
+    if (this.r2 && task.orchestraRepo) {
+      releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+    }
 
     if (task.telegramToken) {
       const limitReachedMsg = resumeCount >= maxResumes
@@ -1898,6 +1921,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.reasoningLevel = request.reasoningLevel;
     task.responseFormat = request.responseFormat;
     task.executionProfile = request.executionProfile;
+    // F.23: Persist orchestraRepo for lock release on completion/failure
+    if (request.orchestraRepo) {
+      task.orchestraRepo = request.orchestraRepo;
+    }
     // F.20: Initialize runtime risk profile for second-stage classification
     if (!task.runtimeRisk) {
       const predictedSimple = request.executionProfile?.intent.isSimple ?? false;
@@ -1928,6 +1955,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Preserve runtime risk profile across resumes
       if (existingTask.runtimeRisk) {
         task.runtimeRisk = existingTask.runtimeRisk;
+      }
+      // F.23: Preserve orchestraRepo for lock release across resumes
+      if (existingTask.orchestraRepo) {
+        task.orchestraRepo = existingTask.orchestraRepo;
       }
     }
     await this.doState.storage.put('task', taskForStorage(task));
@@ -4958,6 +4989,13 @@ If you already created the new file and just need to patch the original, call gi
       }
     } finally {
       this.isRunning = false;
+      // F.23: Release branch-level concurrency lock for orchestra tasks.
+      // Runs on all terminal paths (success, failure, error) to prevent deadlocks.
+      if (this.r2 && task.orchestraRepo && task.status !== 'processing') {
+        releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(err => {
+          console.error(`[TaskProcessor] Failed to release repo lock for ${task.orchestraRepo}:`, err);
+        });
+      }
     }
   }
 
