@@ -7,7 +7,76 @@
 
 ---
 
-## Current Task: Pick next from alternatives below
+## Current Task: E2E Bot Testing — Coding Agent Smoke Tests
+
+### Context
+
+We just completed F.1 + F.1b (ai-hub data feeds + proactive alerts). Before moving to the next feature, we need to validate the bot's orchestra mode with real coding tasks — the kind users actually send.
+
+### Step 1: Create the test repo
+
+The bot can create repos via `github_api`. Send this to the bot (via Telegram or /simulate):
+
+```
+Use the github_api tool to create a new public repository called "moltbot-test-arena" under the PetrAnto account with this description: "Test repo for moltbot orchestra coding tasks". Then push an initial commit with a README.md and a basic package.json for a TypeScript Node.js project (name: moltbot-test-arena, typescript + vitest as devDependencies).
+```
+
+If that fails (permissions), create the repo manually:
+```bash
+gh repo create PetrAnto/moltbot-test-arena --public --description "Test repo for moltbot orchestra coding tasks"
+# Then push a basic TS project scaffold
+```
+
+### Step 2: Run the test battery
+
+Use `/simulate/chat` or Telegram to send these tasks **one at a time via orchestra mode** (`/orch`). Each tests a different common coding pattern.
+
+**Test 1 — Scaffold + implement from scratch** (most common request)
+```
+/orch In PetrAnto/moltbot-test-arena, create a src/utils/string-helpers.ts file with these functions: capitalize(str), slugify(str), truncate(str, maxLen, suffix?), camelToKebab(str), escapeHtml(str). Add comprehensive tests in src/utils/string-helpers.test.ts. Use vitest. Make sure all tests pass.
+```
+
+**Test 2 — Bug fix from issue description** (second most common)
+```
+/orch In PetrAnto/moltbot-test-arena, there's a bug in src/utils/string-helpers.ts: the slugify function doesn't handle consecutive hyphens or leading/trailing hyphens. For example slugify("--hello--world--") should return "hello-world", not "--hello--world--". Fix the bug and add regression tests.
+```
+
+**Test 3 — Add feature to existing code** (extending existing code)
+```
+/orch In PetrAnto/moltbot-test-arena, add a new file src/http/fetch-retry.ts that implements a fetchWithRetry(url, options?) function. It should retry on 429/500/502/503 with exponential backoff (default 3 retries, 1s/2s/4s delays). Add tests using vi.fn() to mock fetch — test success, retry on 503, give up after max retries, and respect Retry-After header.
+```
+
+**Test 4 — Refactor existing code** (restructuring without breaking)
+```
+/orch In PetrAnto/moltbot-test-arena, refactor src/utils/string-helpers.ts: split it into separate files under src/utils/strings/ (capitalize.ts, slugify.ts, truncate.ts, camel-to-kebab.ts, escape-html.ts) with an index.ts barrel export. Update all imports in test files. All existing tests must still pass.
+```
+
+**Test 5 — Multi-file feature with config** (complex, cross-file task)
+```
+/orch In PetrAnto/moltbot-test-arena, implement a simple key-value cache in src/cache/memory-cache.ts with: get(key), set(key, value, ttlMs?), delete(key), clear(), size(), has(key). TTL should auto-expire entries. Add a src/cache/cache.config.ts with defaults (maxSize: 1000, defaultTtlMs: 300000). Add comprehensive tests including TTL expiration (use vi.useFakeTimers). Create a PR with all changes.
+```
+
+### Step 3: Score each test
+
+For each test, record:
+
+| Test | ✅/❌ | PR link | Tools used | Iterations | Duration | Notes |
+|------|-------|---------|------------|------------|----------|-------|
+| T1 Scaffold | | | | | | |
+| T2 Bug fix | | | | | | |
+| T3 Add feature | | | | | | |
+| T4 Refactor | | | | | | |
+| T5 Multi-file | | | | | | |
+
+**Pass criteria:** PR created, tests pass, code is correct, no destructive rewrites.
+
+### Step 4: Report
+
+After all 5 tests, summarize:
+- Overall pass rate
+- Average iterations/duration
+- Any model failures or tool errors
+- Recommendations for prompt tuning or guardrail adjustments
 
 ---
 
@@ -30,19 +99,11 @@
 | 2026-03-21 | F.16 — Orchestra branch retry fix | Claude Opus 4.6 | Root cause from PR #108: "retry with different branch" loses prior commits. Updated 5 prompt locations |
 | 2026-03-21 | F.15 — EOL normalization + GitHub path encoding | Claude Opus 4.6 | 1911 tests. applyFuzzyPatch dominant EOL detection, encodeGitHubPath on all 7 API URLs, 9 new tests |
 | 2026-03-21 | Docs sync — roadmap, future-integrations, claude-log | Claude Opus 4.6 | Marked 6 completed features in future-integrations.md, added brainstorming cross-refs to roadmap |
-| 2026-03-19 | F.4 — R2 File Management Tools | Claude Opus 4.6 | 1890 tests. R2-backed save/read/list/delete (primary, Acontext fallback), per-user scoping `files/{userId}/`, 10MB quota + 100 file limit, /files Telegram command, 25 new tests |
-| 2026-03-19 | F.3 — Code Execution Sandbox in Orchestra | Claude Opus 4.6 | 1865 tests. sandbox_exec in DO via capability-aware filtering, 15-call safety limit, /simulate/sandbox-test endpoint, orchestra prompts inject verification step |
-| 2026-03-19 | F.14 — Fuzzy patch fallback + bracket balance pre-commit | Claude Opus 4.6 | 1861 tests |
-| 2026-03-19 | F.13 — MiniMax M2.7 upgrade + death loop fix | Claude Opus 4.6 | 1848 tests |
-| 2026-03-18 | Orchestra gate bypass for proven models (event history) | Claude Opus 4.6 | 1848 tests |
-| 2026-03-18 | Prompt dedup fix + Fix Proceed button loop | Claude Opus 4.6 | 1848 tests |
-| 2026-03-17 | F.12 — Event-based model scoring in /orch advise | Claude Opus 4.6 | 1848 tests |
-| 2026-03-17 | F.11 — Orchestra observability (R2 events + /orch stats) | Claude Opus 4.6 | 1840 tests |
 
 ---
 
-## Alternative Next Tasks
+## Alternative Next Tasks (after testing)
 
 1. **F.7** — Discord full integration (read-only → two-way)
-5. **6.3** — Voice messages (Whisper + TTS)
-6. **Slack integration** — Two-way Slack bot support
+2. **6.3** — Voice messages (Whisper + TTS)
+3. **Slack integration** — Two-way Slack bot support
