@@ -445,8 +445,9 @@ describe('promptTierOverride enforcement (F.22)', () => {
       repo: 'o/r',
       modelAlias: 'deep',
       previousTasks: [{
-        id: 't1', prompt: 'Previous task', status: 'completed',
-        repo: 'o/r', branchName: 'b1', startTime: 0,
+        taskId: 't1', prompt: 'Previous task', status: 'completed',
+        repo: 'o/r', branchName: 'b1', timestamp: 0,
+        modelAlias: 'deep', mode: 'run', filesChanged: [],
       }],
       promptTierOverride: 'standard',
     });
