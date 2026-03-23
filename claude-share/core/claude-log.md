@@ -2098,3 +2098,37 @@ Created comprehensive tool-calling landscape analysis and multi-AI orchestration
 - Start with Phase 0 quick wins (tasks 0.1-0.3 in GLOBAL_ROADMAP.md)
 - See `next_prompt.md` for ready-to-copy task prompt
 - Model IDs for GPT-OSS-120B and GLM 4.7 need verification on OpenRouter
+
+---
+
+## Session: 2026-03-23 — F.1 ai-hub Data Feeds Integration
+
+**AI:** Claude Opus 4.6 (session_01TR79yEcqjQJYt4VddLUx7W)
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+
+### Summary
+Integrated ai-hub Situation Monitor endpoints (`/api/situation/rss` and `/api/situation/market`) into Moltworker's daily briefing. This was the last cross-repo blocker (F.1) — ai-hub exposed the endpoints, Moltworker now consumes them.
+
+### Changes
+- Added `fetchAiHubRss(limit)` and `fetchAiHubMarket(symbols)` functions in `src/openrouter/tools.ts`
+- Wired both into `generateDailyBriefing()` — new sections: 💰 Markets (after Weather), 📰 News (after Markets)
+- Graceful degradation: if ai-hub is unavailable, sections show "Unavailable" but briefing continues
+- 11 new tests (4 RSS, 5 market, 2 integration) — 2073 total
+
+### Files Modified
+- `src/openrouter/tools.ts` — ai-hub types + fetch functions + briefing wiring
+- `src/openrouter/tools.test.ts` — 11 new tests
+- `claude-share/core/GLOBAL_ROADMAP.md` — F.1 ✅, changelog, test count, dependency tree updated
+- `claude-share/core/WORK_STATUS.md` — F.1 complete, sprint velocity updated
+- `claude-share/core/next_prompt.md` — F.1 → recently completed, F.1b (alerts/cron) added as next alternative
+- `claude-share/core/claude-log.md` — this entry
+
+### Tests
+- Typecheck: ✅ clean
+- Tests: 2073/2073 passing
+
+### Notes for Next Session
+- `/api/situation/alerts` endpoint is live but not yet consumed — wire to cron trigger (F.1b)
+- All ai-hub endpoints use mock data for now; will switch to real feeds later
+- Market data: BTC, ETH, SOL default symbols; configurable via `symbols` param
