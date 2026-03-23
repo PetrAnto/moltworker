@@ -23,7 +23,7 @@ describe('TelegramHandler executeOrchestra stale cleanup', () => {
     handler._setBot({ sendMessage } as unknown as never);
 
     await (handler as unknown as {
-      executeOrchestra: (chatId: number, userId: string, mode: 'init' | 'run' | 'redo', repo: string, prompt: string) => Promise<void>;
+      executeOrchestra: (chatId: number, userId: string, mode: 'init' | 'run' | 'redo' | 'do', repo: string, prompt: string) => Promise<void>;
     }).executeOrchestra(123, 'user-1', 'run', 'owner/repo', 'Implement auth');
 
     expect(cleanupStaleTasksMock).toHaveBeenCalledWith(bucket, 'user-1');
@@ -39,7 +39,7 @@ describe('TelegramHandler executeOrchestra stale cleanup', () => {
     handler._setBot({ sendMessage } as unknown as never);
 
     await (handler as unknown as {
-      executeOrchestra: (chatId: number, userId: string, mode: 'init' | 'run' | 'redo', repo: string, prompt: string) => Promise<void>;
+      executeOrchestra: (chatId: number, userId: string, mode: 'init' | 'run' | 'redo' | 'do', repo: string, prompt: string) => Promise<void>;
     }).executeOrchestra(456, 'user-2', 'init', 'owner/repo', 'init project');
 
     expect(cleanupStaleTasksMock).toHaveBeenCalledWith(bucket, 'user-2');
