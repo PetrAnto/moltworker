@@ -4437,6 +4437,85 @@ interface NagerHoliday {
   types: string[];     // ["Public"]
 }
 
+// ─── ai-hub Situation Monitor types ───────────────────────────────────
+
+const AIHUB_BASE_URL = 'https://ai.petranto.com';
+
+interface AiHubRssItem {
+  title: string;
+  url: string;
+  source: string;
+  category: string;
+  publishedAt: string;
+  summary?: string;
+}
+
+interface AiHubMarketItem {
+  symbol: string;
+  price: number;
+  change24h: number;
+  changePercent: number;
+  volume24h: number;
+  updatedAt: string;
+}
+
+interface AiHubResponse<T> {
+  status: 'ok' | 'error';
+  items: T[];
+  metadata: Record<string, unknown>;
+  error?: string;
+}
+
+/**
+ * Fetch top RSS/news items from ai-hub Situation Monitor.
+ */
+export async function fetchAiHubRss(limit: number = 5): Promise<string> {
+  const url = `${AIHUB_BASE_URL}/api/situation/rss?limit=${limit}`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'MoltworkerBot/1.0' },
+  });
+
+  if (!response.ok) throw new Error(`ai-hub RSS HTTP ${response.status}`);
+
+  const data = await response.json() as AiHubResponse<AiHubRssItem>;
+  if (data.status !== 'ok') throw new Error(data.error || 'ai-hub RSS error');
+  if (!data.items || data.items.length === 0) return 'No news items available';
+
+  return data.items
+    .map((item, i) => {
+      const src = item.source ? ` [${item.source}]` : '';
+      return `${i + 1}. ${item.title}${src}\n   ${item.url}`;
+    })
+    .join('\n');
+}
+
+/**
+ * Fetch market/crypto snapshot from ai-hub Situation Monitor.
+ */
+export async function fetchAiHubMarket(symbols?: string): Promise<string> {
+  const params = new URLSearchParams();
+  if (symbols) params.set('symbols', symbols);
+  const url = `${AIHUB_BASE_URL}/api/situation/market${params.toString() ? '?' + params.toString() : ''}`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'MoltworkerBot/1.0' },
+  });
+
+  if (!response.ok) throw new Error(`ai-hub Market HTTP ${response.status}`);
+
+  const data = await response.json() as AiHubResponse<AiHubMarketItem>;
+  if (data.status !== 'ok') throw new Error(data.error || 'ai-hub Market error');
+  if (!data.items || data.items.length === 0) return 'No market data available';
+
+  return data.items
+    .map((item) => {
+      const arrow = item.change24h >= 0 ? '📈' : '📉';
+      const sign = item.change24h >= 0 ? '+' : '';
+      const pct = (item.changePercent * 100).toFixed(1);
+      return `${arrow} ${item.symbol}: $${item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${sign}${pct}%)`;
+    })
+    .join('\n');
+}
+
 /**
  * Fetch today's public holidays for the user's location via Nager.Date API.
  * Steps: (1) Reverse geocode lat/lon → country code, (2) Fetch holidays for that country, (3) Filter for today.
@@ -4524,17 +4603,21 @@ export async function generateDailyBriefing(
   }
 
   // Fetch all sections in parallel (holiday lookup is non-blocking alongside others)
-  const [weatherResult, hnResult, redditResult, arxivResult, holidayResult, quoteResult] = await Promise.allSettled([
+  const [weatherResult, hnResult, redditResult, arxivResult, holidayResult, quoteResult, rssResult, marketResult] = await Promise.allSettled([
     fetchBriefingWeather(latitude, longitude),
     fetchBriefingHN(),
     fetchBriefingReddit(subreddit),
     fetchBriefingArxiv(arxivCategory),
     fetchBriefingHolidays(latitude, longitude),
     fetchBriefingQuote(),
+    fetchAiHubRss(5),
+    fetchAiHubMarket('BTC,ETH,SOL'),
   ]);
 
   const sections: BriefingSection[] = [
     extractSection(weatherResult, '☀️ Weather'),
+    extractSection(marketResult, '💰 Markets'),
+    extractSection(rssResult, '📰 News (ai-hub)'),
     extractSection(hnResult, '🔥 HackerNews Top 5'),
     extractSection(redditResult, `💬 Reddit r/${subreddit}`),
     extractSection(arxivResult, `📚 arXiv ${arxivCategory}`),

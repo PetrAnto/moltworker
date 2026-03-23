@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, getToolsForPhase, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, githubReadFile, applyFuzzyPatch, encodeGitHubPath, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, getToolsForPhase, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, fetchAiHubRss, fetchAiHubMarket, githubReadFile, applyFuzzyPatch, encodeGitHubPath, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -5519,5 +5519,252 @@ describe('encodeGitHubPath', () => {
 
   it('handles single segment (no slashes)', () => {
     expect(encodeGitHubPath('README.md')).toBe('README.md');
+  });
+});
+
+// ─── ai-hub Situation Monitor tests ───────────────────────────────────
+
+describe('fetchAiHubRss', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should return formatted RSS items', async () => {
+    const mockResponse: { status: string; items: Array<{ title: string; url: string; source: string; category: string; publishedAt: string; summary: string }>; metadata: { lastUpdated: string; totalSources: number } } = {
+      status: 'ok',
+      items: [
+        { title: 'AI Breakthrough', url: 'https://example.com/ai', source: 'TechCrunch', category: 'tech', publishedAt: '2026-03-23T10:00:00Z', summary: 'Big news' },
+        { title: 'Crypto Rally', url: 'https://example.com/crypto', source: 'CoinDesk', category: 'crypto', publishedAt: '2026-03-23T09:00:00Z', summary: 'Markets up' },
+      ],
+      metadata: { lastUpdated: '2026-03-23T10:05:00Z', totalSources: 5 },
+    };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockResponse),
+    }));
+
+    const result = await fetchAiHubRss(5);
+    expect(result).toContain('1. AI Breakthrough [TechCrunch]');
+    expect(result).toContain('https://example.com/ai');
+    expect(result).toContain('2. Crypto Rally [CoinDesk]');
+  });
+
+  it('should handle empty items', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok', items: [], metadata: {} }),
+    }));
+
+    const result = await fetchAiHubRss();
+    expect(result).toBe('No news items available');
+  });
+
+  it('should throw on HTTP error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    await expect(fetchAiHubRss()).rejects.toThrow('ai-hub RSS HTTP 503');
+  });
+
+  it('should throw on error status in response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'error', error: 'Service unavailable', items: [] }),
+    }));
+    await expect(fetchAiHubRss()).rejects.toThrow('Service unavailable');
+  });
+});
+
+describe('fetchAiHubMarket', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should return formatted market data', async () => {
+    const mockResponse = {
+      status: 'ok',
+      items: [
+        { symbol: 'BTC', price: 67432.50, change24h: -2300, changePercent: -0.034, volume24h: 28000000000, updatedAt: '2026-03-23T10:00:00Z' },
+        { symbol: 'ETH', price: 3456.78, change24h: 120, changePercent: 0.035, volume24h: 15000000000, updatedAt: '2026-03-23T10:00:00Z' },
+      ],
+      metadata: { lastUpdated: '2026-03-23T10:00:00Z', source: 'coingecko' },
+    };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockResponse),
+    }));
+
+    const result = await fetchAiHubMarket('BTC,ETH');
+    expect(result).toContain('BTC');
+    expect(result).toContain('67,432.50');
+    expect(result).toContain('📉'); // negative change
+    expect(result).toContain('ETH');
+    expect(result).toContain('3,456.78');
+    expect(result).toContain('📈'); // positive change
+  });
+
+  it('should handle empty items', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok', items: [], metadata: {} }),
+    }));
+
+    const result = await fetchAiHubMarket();
+    expect(result).toBe('No market data available');
+  });
+
+  it('should throw on HTTP error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+    await expect(fetchAiHubMarket()).rejects.toThrow('ai-hub Market HTTP 500');
+  });
+
+  it('should pass symbols as query parameter', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok', items: [], metadata: {} }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await fetchAiHubMarket('BTC,SOL');
+    expect(mockFetch.mock.calls[0][0]).toContain('symbols=BTC%2CSOL');
+  });
+
+  it('should omit symbols param when not provided', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok', items: [], metadata: {} }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await fetchAiHubMarket();
+    expect(mockFetch.mock.calls[0][0]).not.toContain('symbols');
+  });
+});
+
+describe('generateDailyBriefing ai-hub integration', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    clearBriefingCache();
+  });
+
+  it('should include ai-hub sections when available', async () => {
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('open-meteo.com')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            current_weather: { temperature: 20, windspeed: 10, weathercode: 0 },
+            daily: { time: [], temperature_2m_max: [], temperature_2m_min: [], weathercode: [] },
+          }),
+        });
+      }
+      if (url.includes('nominatim')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ address: {} }) });
+      }
+      if (url.includes('hacker-news') && url.includes('topstories')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([1]) });
+      }
+      if (url.includes('hacker-news') && url.includes('/item/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 1, title: 'HN Story', score: 100, url: 'https://hn.com' }) });
+      }
+      if (url.includes('reddit.com')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: { children: [] } }) });
+      }
+      if (url.includes('arxiv.org')) {
+        return Promise.resolve({ ok: true, text: () => Promise.resolve('<feed></feed>') });
+      }
+      if (url.includes('date.nager.at')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('quotable.io')) {
+        return Promise.resolve({ ok: false, status: 500 });
+      }
+      if (url.includes('adviceslip.com')) {
+        return Promise.resolve({ ok: false, status: 500 });
+      }
+      // ai-hub RSS
+      if (url.includes('ai.petranto.com') && url.includes('/rss')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            status: 'ok',
+            items: [{ title: 'AI News Item', url: 'https://news.example.com', source: 'TestSource', category: 'tech', publishedAt: '2026-03-23T10:00:00Z' }],
+            metadata: {},
+          }),
+        });
+      }
+      // ai-hub Market
+      if (url.includes('ai.petranto.com') && url.includes('/market')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            status: 'ok',
+            items: [{ symbol: 'BTC', price: 65000, change24h: 500, changePercent: 0.008, volume24h: 20000000000, updatedAt: '2026-03-23T10:00:00Z' }],
+            metadata: {},
+          }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await generateDailyBriefing();
+    expect(result).toContain('📰 News (ai-hub)');
+    expect(result).toContain('AI News Item');
+    expect(result).toContain('💰 Markets');
+    expect(result).toContain('BTC');
+  });
+
+  it('should degrade gracefully when ai-hub is down', async () => {
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('open-meteo.com')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            current_weather: { temperature: 20, windspeed: 10, weathercode: 0 },
+            daily: { time: [], temperature_2m_max: [], temperature_2m_min: [], weathercode: [] },
+          }),
+        });
+      }
+      if (url.includes('nominatim')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ address: {} }) });
+      }
+      if (url.includes('hacker-news') && url.includes('topstories')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([1]) });
+      }
+      if (url.includes('hacker-news') && url.includes('/item/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 1, title: 'HN Story', score: 100, url: 'https://hn.com' }) });
+      }
+      if (url.includes('reddit.com')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: { children: [] } }) });
+      }
+      if (url.includes('arxiv.org')) {
+        return Promise.resolve({ ok: true, text: () => Promise.resolve('<feed></feed>') });
+      }
+      if (url.includes('date.nager.at')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('quotable.io')) {
+        return Promise.resolve({ ok: false, status: 500 });
+      }
+      if (url.includes('adviceslip.com')) {
+        return Promise.resolve({ ok: false, status: 500 });
+      }
+      // ai-hub endpoints are down
+      if (url.includes('ai.petranto.com')) {
+        return Promise.resolve({ ok: false, status: 503 });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await generateDailyBriefing();
+    // Should still produce a valid briefing
+    expect(result).toContain('Daily Briefing');
+    expect(result).toContain('HN Story');
+    // ai-hub sections should show as unavailable
+    expect(result).toContain('Unavailable');
   });
 });
