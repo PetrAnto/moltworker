@@ -33,6 +33,7 @@ import { redactSensitiveParams, redactWsPayload } from './utils/logging';
 import loadingPageHtml from './assets/loading.html';
 import configErrorHtml from './assets/config-error.html';
 import { createDiscordHandler } from './discord/handler';
+import { fetchAiHubAlerts, formatAlertForTelegram } from './openrouter/tools';
 
 /**
  * Transform error messages from the gateway to be more user-friendly.
@@ -546,6 +547,34 @@ async function scheduled(
       console.log(`[cron] Discord check complete: ${totalNew} new messages across ${results.length} channels`);
     } catch (error) {
       console.error('[cron] Discord check failed:', error);
+    }
+  }
+
+  // === ai-hub proactive alerts check (every 5 min) ===
+  if (env.TELEGRAM_BOT_TOKEN && env.DISCORD_FORWARD_TO_TELEGRAM) {
+    try {
+      const telegramChatId = parseInt(env.DISCORD_FORWARD_TO_TELEGRAM, 10);
+      // Use the chat ID as userId for alerts (single-user for now)
+      const alerts = await fetchAiHubAlerts(String(telegramChatId), { ack: true });
+
+      if (alerts.length > 0) {
+        console.log(`[cron] ai-hub: ${alerts.length} pending alert(s), sending to Telegram...`);
+        const { TelegramBot } = await import('./telegram/handler');
+        const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
+
+        for (const alert of alerts) {
+          const text = formatAlertForTelegram(alert);
+          try {
+            await bot.sendMessage(telegramChatId, text);
+          } catch (err) {
+            console.error(`[cron] Failed to send alert ${alert.id}:`, err);
+          }
+        }
+        console.log(`[cron] ai-hub alerts: ${alerts.length} sent`);
+      }
+    } catch (error) {
+      // ai-hub down is non-fatal — just log and continue
+      console.error('[cron] ai-hub alerts check failed:', error);
     }
   }
 }
