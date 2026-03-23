@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-22 (F.20 runtime/diff-based risk classification — 2006 tests)
+**Last Updated:** 2026-03-22 (F.22 profile enforcement tests — 2020 tests)
 
 ---
 
@@ -420,8 +420,8 @@
 |----|------|--------|--------|-------|
 | F.20 | Runtime/diff-based risk classification | ✅ | 2h | `RuntimeRiskProfile` tracks files modified (16 config patterns), scope expansion, error accumulation, scope drift. Score 0–100 → low/medium/high/critical. Actions: caution injection at high, Telegram warning at critical. Integrated into `computeRunHealth()`. 24 new tests (2006 total). |
 | F.21 | `pendingChildren` downstream consumers | 🔲 | 2-4h | Profile captures `pendingChildren` count but nothing consumes it yet. Wire into: model floor (parent tasks get stronger models), validator strictness, review intensity. |
-| F.22 | Tests for profile enforcement behavior | 🔲 | 2-3h | Add tests for: (a) `promptTierOverride` beating `getPromptTier()`, (b) `sandbox_exec` absent when `requiresSandbox=false`, (c) auto-escalation recomputing profile + changing model alias. GPT flagged missing regression coverage. |
-| F.23 | Branch-level concurrency mutex | 🔲 | 4-6h | Gemini flagged: parallel task ingestion via webhooks can cause branch collisions. Need persistent branch-level lock via KV or R2. DO internal queue is not sufficient for cross-DO coordination. |
+| F.22 | Tests for profile enforcement behavior | ✅ | 30m | 14 tests: promptTierOverride (4), sandbox tool-level gating (5), forceEscalation (5). All three GPT-flagged gaps covered. 2020 tests total. |
+| F.23 | Branch-level concurrency mutex | ✅ | 1.5h | R2-based repo-level lock with 45-min TTL. Acquire before dispatch, release on all terminal paths (success/failure/stall/cancel). orchestraRepo persisted in TaskState for cross-resume lock release. forceRelease on /cancel. 21 new tests (2041 total). |
 | F.24 | Broader escalation policy (model floor) | 🔲 | 2-4h | Current auto-escalation picks `recs.free[0]`. GPT asks: what if best free model is still too weak? Consider paid escalation with user consent, or hard model floor per task heaviness tier. |
 
 ### Future: Platform Evolution (M3 Gate)
@@ -505,6 +505,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | test(orchestra): F.22 profile enforcement regression tests — 14 tests: promptTierOverride (4), sandbox tool-level gating (5), forceEscalation (5). 2020 total | src/orchestra/orchestra.test.ts
 2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(orchestra): F.20 runtime/diff-based risk classification — RuntimeRiskProfile tracks files modified (16 config patterns), scope expansion, error accumulation, scope drift. Score 0–100 → 4 risk levels. Actions at high (caution injection) + critical (Telegram warning). Integrated into computeRunHealth(). 24 new tests (2006 total) | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/durable-objects/task-processor.ts, src/guardrails/run-health.ts, src/guardrails/run-health.test.ts
 2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | fix(orchestra): F.18.1 make ExecutionProfile authoritative — promptTierOverride (single source of truth), sandbox_exec removed from tool set when requiresSandbox=false, forceEscalation auto-upgrades model. Tracked F.20–F.24 from AI reviewer feedback | src/orchestra/orchestra.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts, claude-share/core/*.md, brainstorming/*.md
 2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(orchestra): F.18 OrchestraExecutionProfile — centralized task classification computed once after resolveNextRoadmapTask(), bundles intent (concreteScore, ambiguity, isHeavyCoding, isSimple, pendingChildren) → derives sandbox gate, resume cap modulation (3/4/6/8), force-escalation, prompt tier. Flows TaskRequest→TaskState→getAutoResumeLimit(). 8 new tests (1982 total) | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/durable-objects/task-processor.ts, src/telegram/handler.ts

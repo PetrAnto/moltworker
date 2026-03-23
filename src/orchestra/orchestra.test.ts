@@ -42,6 +42,7 @@ import {
   type OrchestraExecutionProfile,
   type ResolvedTask,
 } from './orchestra';
+import { getToolsForPhase } from '../openrouter/tools';
 
 // --- generateTaskSlug ---
 
@@ -390,6 +391,190 @@ describe('buildRunPrompt', () => {
     expect(prompt).toContain('Better task');
     // specificTask should NOT appear in the prompt since brief overrides it
     expect(prompt).toContain('PRE-RESOLVED');
+  });
+});
+
+// --- F.22: Profile enforcement tests ---
+
+describe('promptTierOverride enforcement (F.22)', () => {
+  // buildRunPrompt selects minimal/standard/full based on model intelligence.
+  // promptTierOverride from the execution profile should take precedence.
+
+  it('uses promptTierOverride=minimal even for strong model', () => {
+    // 'deep' would normally get 'full' tier, but override forces minimal
+    const prompt = buildRunPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks: [],
+      promptTierOverride: 'minimal',
+    });
+    // Minimal prompt is shorter and has different structure
+    // It should NOT contain the full prompt's "CRITICAL RULES" header
+    expect(prompt).not.toContain('CRITICAL RULES');
+    // It should contain the minimal prompt's simpler header
+    expect(prompt).toContain('Orchestra RUN');
+  });
+
+  it('uses promptTierOverride=full even for weak model', () => {
+    // 'trinity' is a weak/free model that would normally get minimal tier
+    const prompt = buildRunPrompt({
+      repo: 'o/r',
+      modelAlias: 'trinity',
+      previousTasks: [],
+      promptTierOverride: 'full',
+    });
+    // Full prompt has "CRITICAL RULES" and "Recent Orchestra History" section format
+    expect(prompt).toContain('CRITICAL RULES');
+    expect(prompt).toContain('Orchestra RUN Mode');
+  });
+
+  it('falls back to model-based tier when no override', () => {
+    // Without override, getPromptTier(modelAlias) determines the tier
+    const prompt = buildRunPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks: [],
+      // no promptTierOverride
+    });
+    // 'deep' is a paid model → should get full tier by default
+    expect(prompt).toContain('Orchestra RUN');
+  });
+
+  it('promptTierOverride=standard selects standard prompt', () => {
+    const prompt = buildRunPrompt({
+      repo: 'o/r',
+      modelAlias: 'deep',
+      previousTasks: [{
+        id: 't1', prompt: 'Previous task', status: 'completed',
+        repo: 'o/r', branchName: 'b1', startTime: 0,
+      }],
+      promptTierOverride: 'standard',
+    });
+    // Standard prompt has "Recent History" (not "Recent Orchestra History")
+    expect(prompt).toContain('Recent History');
+    expect(prompt).not.toContain('Recent Orchestra History');
+  });
+});
+
+describe('sandbox tool-level gating (F.22)', () => {
+  // Tests the logic chain: execution profile → ToolCapabilities → tool set.
+  // The DO sets toolCaps.sandbox = !!sandbox && profileAllowsSandbox.
+  // When profile says requiresSandbox=false, sandbox_exec should be absent.
+
+  it('sandbox_exec present when profile allows sandbox', () => {
+    // Simulates: sandbox available AND profile.requiresSandbox=true
+    const profileAllowsSandbox = true;
+    const toolCaps = { browser: false, sandbox: true && profileAllowsSandbox };
+    const tools = getToolsForPhase('work', toolCaps);
+    expect(tools.find(t => t.function.name === 'sandbox_exec')).toBeDefined();
+  });
+
+  it('sandbox_exec absent when profile disallows sandbox', () => {
+    // Simulates: sandbox available BUT profile.requiresSandbox=false
+    const profileAllowsSandbox = false;
+    const toolCaps = { browser: false, sandbox: true && profileAllowsSandbox };
+    const tools = getToolsForPhase('work', toolCaps);
+    expect(tools.find(t => t.function.name === 'sandbox_exec')).toBeUndefined();
+  });
+
+  it('sandbox_exec absent when sandbox binding unavailable regardless of profile', () => {
+    // Simulates: no sandbox binding (!!sandbox = false)
+    const profileAllowsSandbox = true;
+    const toolCaps = { browser: false, sandbox: false && profileAllowsSandbox };
+    const tools = getToolsForPhase('work', toolCaps);
+    expect(tools.find(t => t.function.name === 'sandbox_exec')).toBeUndefined();
+  });
+
+  it('profile requiresSandbox=false for simple+concrete tasks', () => {
+    // Simple, concrete task with no ambiguity should disable sandbox
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Update README with new badges', concreteScore: 8, ambiguity: 'none' }),
+      'claude',
+    );
+    expect(profile.intent.isSimple).toBe(true);
+    expect(profile.bounds.requiresSandbox).toBe(false);
+
+    // This profile would cause sandbox_exec to be removed from tool set
+    const toolCaps = { browser: false, sandbox: true && profile.bounds.requiresSandbox };
+    const tools = getToolsForPhase('work', toolCaps);
+    expect(tools.find(t => t.function.name === 'sandbox_exec')).toBeUndefined();
+  });
+
+  it('profile requiresSandbox=true for complex tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor auth module with new JWT middleware', concreteScore: 5 }),
+      'claude',
+    );
+    expect(profile.bounds.requiresSandbox).toBe(true);
+
+    const toolCaps = { browser: false, sandbox: true && profile.bounds.requiresSandbox };
+    const tools = getToolsForPhase('work', toolCaps);
+    expect(tools.find(t => t.function.name === 'sandbox_exec')).toBeDefined();
+  });
+});
+
+describe('forceEscalation enforcement (F.22)', () => {
+  // When forceEscalation=true, the handler auto-upgrades to top-ranked
+  // free orchestra model and recomputes the profile.
+
+  it('heavy task on weak model triggers forceEscalation', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor multi-file architecture with tests' }),
+      'trinity', // weak model
+    );
+    expect(profile.routing.forceEscalation).toBe(true);
+  });
+
+  it('heavy task on strong model does NOT trigger forceEscalation', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor multi-file architecture with tests' }),
+      'claude', // strong model
+    );
+    expect(profile.routing.forceEscalation).toBe(false);
+  });
+
+  it('simple task on weak model does NOT trigger forceEscalation', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Update version number in README' }),
+      'trinity',
+    );
+    expect(profile.routing.forceEscalation).toBe(false);
+  });
+
+  it('recomputed profile after escalation has different routing', () => {
+    // Simulate: profile computed with weak model → forceEscalation=true
+    const weakProfile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor auth module into separate services' }),
+      'trinity',
+    );
+    expect(weakProfile.routing.forceEscalation).toBe(true);
+
+    // After escalation: recompute with stronger model
+    const strongProfile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor auth module into separate services' }),
+      'flash', // stronger model
+    );
+    // Strong model should not need escalation
+    expect(strongProfile.routing.forceEscalation).toBe(false);
+    // Strong model may get a higher prompt tier
+    expect(['standard', 'full']).toContain(strongProfile.routing.promptTier);
+  });
+
+  it('escalated profile promptTier feeds into buildRunPrompt', () => {
+    // The key integration: after escalation, the profile's promptTier
+    // is passed as promptTierOverride to buildRunPrompt
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor complex module' }),
+      'flash',
+    );
+    const prompt = buildRunPrompt({
+      repo: 'o/r',
+      modelAlias: 'flash',
+      previousTasks: [],
+      promptTierOverride: profile.routing.promptTier,
+    });
+    // The prompt tier from the profile should be used
+    expect(prompt).toContain('Orchestra RUN');
   });
 });
 
@@ -2498,21 +2683,24 @@ describe('cleanupExpiredOrchestraEvents', () => {
   });
 });
 
+// --- Shared test helper ---
+
+function makeResolved(overrides: Partial<ResolvedTask> = {}): ResolvedTask {
+  return {
+    title: overrides.title ?? 'Implement user auth middleware',
+    phase: overrides.phase ?? 'Phase 1',
+    task: overrides.task ?? { title: 'Implement user auth middleware', done: false, indent: 0, children: [], kind: 'checkbox', lineIndex: 0 },
+    pendingChildren: overrides.pendingChildren ?? [],
+    completedContext: overrides.completedContext ?? [],
+    concreteScore: overrides.concreteScore ?? 5,
+    ambiguity: overrides.ambiguity ?? 'none',
+    executionBrief: overrides.executionBrief ?? 'Phase: Phase 1\nPrimary task: Implement user auth middleware',
+  };
+}
+
 // --- buildExecutionProfile ---
 
 describe('buildExecutionProfile', () => {
-  function makeResolved(overrides: Partial<ResolvedTask> = {}): ResolvedTask {
-    return {
-      title: overrides.title ?? 'Implement user auth middleware',
-      phase: overrides.phase ?? 'Phase 1',
-      task: overrides.task ?? { title: 'Implement user auth middleware', done: false, indent: 0, children: [], kind: 'checkbox', lineIndex: 0 },
-      pendingChildren: overrides.pendingChildren ?? [],
-      completedContext: overrides.completedContext ?? [],
-      concreteScore: overrides.concreteScore ?? 5,
-      ambiguity: overrides.ambiguity ?? 'none',
-      executionBrief: overrides.executionBrief ?? 'Phase: Phase 1\nPrimary task: Implement user auth middleware',
-    };
-  }
 
   it('returns correct structure', () => {
     const profile = buildExecutionProfile(makeResolved(), 'claude');

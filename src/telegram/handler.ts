@@ -40,6 +40,7 @@ import {
 } from '../orchestra/orchestra';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
+import { acquireRepoLock, forceReleaseRepoLock } from '../concurrency/branch-lock';
 import { runSmokeTests, formatTestResults, getTestNames } from './smoke-tests';
 import { classifyTaskComplexity } from '../utils/task-classifier';
 import { routeByComplexity } from '../openrouter/model-router';
@@ -1120,6 +1121,19 @@ export class TelegramHandler {
             const result = await response.json() as { status: string };
             if (result.status === 'cancelled') {
               // Message already sent by DO
+              // F.23: Release any branch locks held by cancelled orchestra tasks
+              if (this.r2Bucket) {
+                try {
+                  const history = await loadOrchestraHistory(this.r2Bucket, userId);
+                  if (history) {
+                    for (const t of history.tasks) {
+                      if (t.status === 'started') {
+                        await forceReleaseRepoLock(this.r2Bucket, userId, t.repo);
+                      }
+                    }
+                  }
+                } catch { /* best-effort lock cleanup */ }
+              }
             } else {
               await this.bot.sendMessage(chatId, 'No task is currently running.');
             }
@@ -2370,6 +2384,24 @@ export class TelegramHandler {
       status: 'started',
       filesChanged: [],
     };
+
+    // F.23: Acquire repo-level concurrency lock to prevent parallel tasks on same repo.
+    // Must happen before storeOrchestraTask to avoid storing an entry we'll never execute.
+    if (this.r2Bucket) {
+      const { acquired, existingLock } = await acquireRepoLock(
+        this.r2Bucket, userId, repo, orchestraTask.taskId, branchName
+      );
+      if (!acquired && existingLock) {
+        const elapsed = Math.round((Date.now() - existingLock.acquiredAt) / 60000);
+        await this.bot.sendMessage(chatId,
+          `🔒 Another orchestra task is already running on ${repo}.\n\n` +
+          `Active: ${existingLock.branchName} (started ${elapsed}min ago)\n\n` +
+          `Wait for it to finish, or use /cancel to stop it first.`,
+        );
+        return;
+      }
+    }
+
     await storeOrchestraTask(this.r2Bucket, userId, orchestraTask);
 
     // Dispatch to TaskProcessor DO
@@ -2396,6 +2428,7 @@ export class TelegramHandler {
       acontextKey: this.acontextKey,
       acontextBaseUrl: this.acontextBaseUrl,
       executionProfile,
+      orchestraRepo: repo,
     };
 
     const doId = this.taskProcessor.idFromName(userId);
