@@ -24,7 +24,7 @@ import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './co
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
 import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, type ToolErrorTracker } from '../guardrails/tool-validator';
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
-import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext, scanCrossFileReferences } from '../guardrails/extraction-verifier';
+import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext, scanCrossFileReferences, type ExtractionCheck } from '../guardrails/extraction-verifier';
 import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
 import { computeRunHealth, formatHealthFooter } from '../guardrails/run-health';
 import { STRUCTURED_PLAN_PROMPT, parseStructuredPlan, prefetchPlanFiles, formatPlanSummary, awaitAndFormatPrefetchedFiles, type StructuredPlan } from './step-decomposition';
@@ -292,6 +292,18 @@ interface TaskState {
   coveRetried?: boolean;
   // 7A.2: Extraction verification retry flag (only one retry allowed)
   extractionRetried?: boolean;
+  // 7A.2b: Persisted extraction metadata — survives message truncation on resume.
+  // Populated on first extraction detection so verification doesn't depend on transient context.
+  extractionMeta?: {
+    repoOwner: string;
+    repoName: string;
+    branch: string;
+    sourceFile: string;
+    newFiles: string[];
+    extractedNames: string[];
+    sourceInitialLineCount: number | null;
+    newFileLineCount: number | null;
+  };
   // Post-completion deliverable validation retry count (escalating: 0→reminder, 1→strict, 2→abort)
   validationRetryCount?: number;
   // Whether this is an orchestra task (persisted so alarm handler can use tighter limits)
@@ -502,16 +514,31 @@ export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & {
   const { messages: _msgs, workPhaseContent: _wpc, structuredPlan: _sp, ...rest } = task;
   const result = { ...rest, messages: [] as never[] };
   // Guard against 128KB DO storage limit — truncate growable arrays if needed
+  // IMPORTANT: Use actual UTF-8 byte length, not JS string length (char count ≠ byte count)
   const MAX_DO_VALUE_BYTES = 131072;
-  const serialized = JSON.stringify(result);
-  if (serialized.length > MAX_DO_VALUE_BYTES * 0.8) {
-    console.log(`[TaskProcessor] WARNING: task storage near limit (${serialized.length} bytes), trimming arrays`);
+  const encoder = new TextEncoder();
+  let serialized = JSON.stringify(result);
+  let serializedBytes = encoder.encode(serialized).byteLength;
+  if (serializedBytes > MAX_DO_VALUE_BYTES * 0.8) {
+    console.log(`[TaskProcessor] WARNING: task storage near limit (${serializedBytes} bytes), trimming arrays`);
     // Trim the largest growable arrays to fit
     if (result.toolSignatures && result.toolSignatures.length > 20) {
       result.toolSignatures = result.toolSignatures.slice(-20);
     }
     if (result.lastToolErrors && result.lastToolErrors.length > 3) {
       result.lastToolErrors = result.lastToolErrors.slice(-3);
+    }
+    // Re-check after trimming to verify we're actually under the threshold
+    serialized = JSON.stringify(result);
+    serializedBytes = encoder.encode(serialized).byteLength;
+    if (serializedBytes > MAX_DO_VALUE_BYTES * 0.8) {
+      console.log(`[TaskProcessor] WARNING: still near limit after trim (${serializedBytes} bytes), aggressive truncation`);
+      if (result.toolSignatures && result.toolSignatures.length > 5) {
+        result.toolSignatures = result.toolSignatures.slice(-5);
+      }
+      if (result.lastToolErrors && result.lastToolErrors.length > 1) {
+        result.lastToolErrors = result.lastToolErrors.slice(-1);
+      }
     }
   }
   return result;
@@ -4051,11 +4078,44 @@ If you already created the new file and just need to patch the original, call gi
           // Reads actual files from the branch to ground the model's summary in reality.
           // BLOCKING: if verification fails, model gets one retry to fix the issues
           // before transitioning to review.
-          if (isOrchestraRun && isExtractionTask(task.toolsUsed, conversationMessages) && request.githubToken) {
-            const extraction = detectExtractionDetails(conversationMessages);
+          // Detection uses persisted extractionMeta (survives resume truncation) with
+          // message-based detection as the primary source on first encounter.
+          if (isOrchestraRun && (isExtractionTask(task.toolsUsed, conversationMessages) || task.extractionMeta) && request.githubToken) {
+            // Prefer message-based detection (freshest), fall back to persisted metadata
+            const extraction = detectExtractionDetails(conversationMessages) || (task.extractionMeta ? {
+              sourceFile: task.extractionMeta.sourceFile,
+              newFiles: task.extractionMeta.newFiles,
+              extractedNames: task.extractionMeta.extractedNames,
+              sourceInitialLineCount: task.extractionMeta.sourceInitialLineCount,
+              newFileLineCount: task.extractionMeta.newFileLineCount,
+            } as ExtractionCheck : null);
             if (extraction) {
-              const { repoOwner, repoName: extractedRepo, branch: extractedBranch } =
-                extractRepoAndBranch(conversationMessages);
+              // Resolve repo/branch: try persisted metadata first, fall back to message scan
+              let repoOwner: string | null = task.extractionMeta?.repoOwner ?? null;
+              let extractedRepo: string | null = task.extractionMeta?.repoName ?? null;
+              let extractedBranch: string | null = task.extractionMeta?.branch ?? null;
+              if (!repoOwner || !extractedRepo || !extractedBranch) {
+                const fromMessages = extractRepoAndBranch(conversationMessages);
+                repoOwner = fromMessages.repoOwner;
+                extractedRepo = fromMessages.repoName;
+                extractedBranch = fromMessages.branch;
+              }
+
+              // Persist extraction metadata on first detection so it survives resume truncation
+              if (!task.extractionMeta && repoOwner && extractedRepo && extractedBranch) {
+                task.extractionMeta = {
+                  repoOwner,
+                  repoName: extractedRepo,
+                  branch: extractedBranch,
+                  sourceFile: extraction.sourceFile,
+                  newFiles: extraction.newFiles,
+                  extractedNames: extraction.extractedNames,
+                  sourceInitialLineCount: extraction.sourceInitialLineCount,
+                  newFileLineCount: extraction.newFileLineCount,
+                };
+                await this.doState.storage.put('task', taskForStorage(task));
+              }
+
               if (repoOwner && extractedRepo && extractedBranch) {
                 try {
                   const token = request.githubToken;
@@ -4099,6 +4159,24 @@ If you already created the new file and just need to patch the original, call gi
                   if (!extractionResult.passed && !task.extractionRetried) {
                     // BLOCKING: inject failures and let the model retry
                     task.extractionRetried = true;
+
+                    // Escalate to a reasoning model if the current model lacks spatial reasoning
+                    // capability. This prevents burning tokens retrying with an inadequate model.
+                    const currentModel = getModel(task.modelAlias);
+                    const hasReasoning = currentModel?.reasoning === 'configurable' || currentModel?.reasoning === 'fixed';
+                    if (!hasReasoning) {
+                      const escalationTargets = ['sonnet', 'o4mini', 'deepseek'];
+                      for (const target of escalationTargets) {
+                        const candidate = getModel(target);
+                        if (candidate && candidate.supportsTools && (candidate.reasoning === 'configurable' || candidate.reasoning === 'fixed')) {
+                          const prevAlias = task.modelAlias;
+                          task.modelAlias = target;
+                          console.log(`[TaskProcessor] Extraction escalation: /${prevAlias} → /${target} (reasoning model for spatial fix)`);
+                          break;
+                        }
+                      }
+                    }
+
                     await this.doState.storage.put('task', taskForStorage(task));
                     console.log('[TaskProcessor] Extraction verification FAILED — retrying work phase');
                     for (const issue of extractionResult.issues) {

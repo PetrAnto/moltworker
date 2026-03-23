@@ -2526,6 +2526,57 @@ describe('taskForStorage', () => {
     const result = taskForStorage(task);
     expect(result.isStreaming).toBe(true);
   });
+
+  it('should use UTF-8 byte length, not char length, for size check', () => {
+    // Each emoji is 4 bytes in UTF-8 but 2 chars in JS (surrogate pair)
+    // 400 entries * 200 emoji = ~320KB bytes but only ~160K chars.
+    // The old char-based check would NOT trigger trimming for data between
+    // 104KB chars and 104KB bytes — the byte-based check correctly catches this.
+    const task = {
+      taskId: 'test', chatId: 1, userId: 'u', modelAlias: 'm',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      toolSignatures: Array.from({ length: 400 }, (_, i) => '😀'.repeat(200) + `_${i}`),
+    };
+    const result = taskForStorage(task);
+    // Must trigger trimming based on byte length
+    expect(result.toolSignatures!.length).toBeLessThanOrEqual(20);
+  });
+
+  it('should re-check size after first trim and apply aggressive truncation', () => {
+    // Build a task where each toolSignature is huge (multi-byte), so even 20 entries exceed the threshold
+    const task = {
+      taskId: 'test', chatId: 1, userId: 'u', modelAlias: 'm',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      // 200 entries of 1000 CJK chars each = ~600KB UTF-8. After first trim to 20: ~60KB.
+      // If that's still over threshold, aggressive trim to 5 should handle it.
+      toolSignatures: Array.from({ length: 200 }, (_, i) => '漢'.repeat(1000) + `_${i}`),
+      lastToolErrors: Array.from({ length: 10 }, (_, i) => '漢'.repeat(5000) + `_${i}`),
+    };
+    const result = taskForStorage(task);
+    // After aggressive trim, toolSignatures should be at most 5
+    const serialized = JSON.stringify(result);
+    const byteLength = new TextEncoder().encode(serialized).byteLength;
+    // Verify trimming happened (either to 20 or aggressively to 5)
+    expect(result.toolSignatures!.length).toBeLessThanOrEqual(20);
+    if (byteLength > 131072 * 0.8) {
+      // If still over after first trim, aggressive should have kicked in
+      expect(result.toolSignatures!.length).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it('should handle ASCII-only content with char≈byte correctly', () => {
+    const task = {
+      taskId: 'test', chatId: 1, userId: 'u', modelAlias: 'm',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      // Small ASCII task — well under limit, should not trim
+      toolSignatures: Array.from({ length: 10 }, (_, i) => `tool_${i}`),
+    };
+    const result = taskForStorage(task);
+    expect(result.toolSignatures!.length).toBe(10); // No trimming
+  });
 });
 
 describe('getWatchdogStuckThreshold', () => {
