@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-22 (F.22 profile enforcement tests — 2020 tests)
+**Last Updated:** 2026-03-23 (F.23 branch-level concurrency mutex — 2041 tests)
 
 ---
 
@@ -15,6 +15,7 @@
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-23 | F.23 — Branch-level concurrency mutex | Claude Opus 4.6 | R2-based repo-level lock with 45-min TTL. Acquire before dispatch, release on all terminal paths. 21 new tests (2041 total) |
 | 2026-03-22 | F.22 — Profile enforcement regression tests | Claude Opus 4.6 | 14 tests: promptTierOverride (4), sandbox tool-level gating (5), forceEscalation (5). 2020 total |
 | 2026-03-22 | F.20 — Runtime/diff-based risk classification | Claude Opus 4.6 | RuntimeRiskProfile: file tracking (16 config patterns), scope expansion, error accumulation, drift detection. Integrated into DO loop + RunHealth. 24 new tests (2006 total) |
 | 2026-03-22 | F.18.1 — ExecutionProfile authoritative enforcement | Claude Opus 4.6 | promptTierOverride, sandbox tool-level gating, forceEscalation auto-upgrade. F.20–F.24 tracked from reviewer feedback |
@@ -37,9 +38,9 @@
 
 ## Alternative Next Tasks
 
-1. **F.23** — Branch-level concurrency mutex (4-6h, Gemini safety concern)
-3. **F.21** — pendingChildren downstream consumers (2-4h)
-4. **F.1** — ai-hub data feeds (blocked on ai-hub `/api/situation/*`)
-5. **F.7** — Discord full integration (read-only → two-way)
-6. **6.3** — Voice messages (Whisper + TTS)
-7. **Slack integration** — Two-way Slack bot support
+1. **F.21** — pendingChildren downstream consumers (2-4h)
+2. **F.24** — Broader escalation policy / model floor (2-4h)
+3. **F.1** — ai-hub data feeds (blocked on ai-hub `/api/situation/*`)
+4. **F.7** — Discord full integration (read-only → two-way)
+5. **6.3** — Voice messages (Whisper + TTS)
+6. **Slack integration** — Two-way Slack bot support

@@ -64,7 +64,7 @@
 | F.20 | Runtime/diff-based risk classification | GPT/Grok/Gemini | ✅ Complete (2006 tests) |
 | F.21 | `pendingChildren` downstream consumers | GPT | Medium |
 | F.22 | Tests for profile enforcement behavior | GPT | ✅ Complete (2020 tests) |
-| F.23 | Branch-level concurrency mutex | Gemini | High — data safety |
+| F.23 | Branch-level concurrency mutex | Gemini | ✅ Complete (2041 tests) |
 | F.24 | Broader escalation policy (model floor) | GPT | Low-Medium |
 
 ---

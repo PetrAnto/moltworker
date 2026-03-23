@@ -4,6 +4,37 @@
 
 ---
 
+## Session: 2026-03-23 | F.23 Branch-Level Concurrency Mutex (Session: session_01TR79yEcqjQJYt4VddLUx7W)
+
+### What was done
+- **F.23**: Implemented branch-level concurrency mutex to prevent parallel orchestra tasks from colliding on the same repo
+  - New module: `src/concurrency/branch-lock.ts` — R2-based repo-level lock with 45-min TTL
+  - `acquireRepoLock()`: blocks dispatch if another task is active on same user+repo
+  - `releaseRepoLock()`: ownership-checked release (only lock owner can release)
+  - `forceReleaseRepoLock()`: used by /cancel to immediately free the repo
+  - Lock released on ALL terminal paths: success, failure, stall abort, resume limit, stale task cleanup
+  - `orchestraRepo` field added to TaskRequest/TaskState for cross-resume lock persistence
+  - Handler integration: acquire before dispatch, reject with helpful message if locked
+  - Cancel integration: force-release any "started" task locks on /cancel
+
+### Files Changed
+- `src/concurrency/branch-lock.ts` (new) — Lock functions
+- `src/concurrency/branch-lock.test.ts` (new) — 21 tests
+- `src/durable-objects/task-processor.ts` — Lock release on all terminal paths + orchestraRepo in interfaces
+- `src/telegram/handler.ts` — Lock acquisition in executeOrchestra + release on /cancel
+
+### Tests
+- [x] Tests pass (2041/2041) — 21 new
+- [x] Typecheck passes (no new errors)
+
+### Notes for Next Session
+F.23 closes the last safety-critical item from AI reviewers. Remaining:
+- **F.21** (pendingChildren consumers) — medium priority, 2-4h
+- **F.24** (broader escalation policy) — low-medium priority, 2-4h
+- **F.1** (ai-hub data feeds) — still blocked
+
+---
+
 ## Session: 2026-03-22 | Architecture Review — F.17 + F.18 + Docs Sync (Session: session_01TR79yEcqjQJYt4VddLUx7W)
 
 **AI:** Claude Opus 4.6
