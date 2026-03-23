@@ -2250,7 +2250,7 @@ export class TelegramHandler {
             resolvedExecutionBrief = resolved.executionBrief;
             // Build centralized execution profile — drives sandbox, resume, and routing decisions
             executionProfile = buildExecutionProfile(resolved, modelAlias);
-            console.log(`[orchestra] executionProfile: ambiguity=${executionProfile.intent.ambiguity} sandbox=${executionProfile.bounds.requiresSandbox} maxResumes=${executionProfile.bounds.maxAutoResumes} tier=${executionProfile.routing.promptTier}`);
+            console.log(`[orchestra] executionProfile: ambiguity=${executionProfile.intent.ambiguity} sandbox=${executionProfile.bounds.requiresSandbox} maxResumes=${executionProfile.bounds.maxAutoResumes} tier=${executionProfile.routing.promptTier} children=${executionProfile.intent.pendingChildren}`);
           }
         }
 
@@ -2267,7 +2267,8 @@ export class TelegramHandler {
     }
 
     // Force-escalation: if profile detects heavy task on weak model, auto-upgrade
-    // to the top-ranked free orchestra model. User sees notification but task proceeds.
+    // to the top-ranked free orchestra model. If the best free model still doesn't
+    // meet the model floor, suggest a paid model (but don't auto-switch to paid).
     if (executionProfile?.routing.forceEscalation) {
       const recs = getOrchestraRecommendations();
       const upgrade = recs.free[0]; // Top-ranked free model
@@ -2284,11 +2285,25 @@ export class TelegramHandler {
             executionProfile = buildExecutionProfile(resolved, modelAlias);
           }
         }
-        await this.bot.sendMessage(
-          chatId,
-          `⚡ Auto-escalated: /${origAlias} → /${modelAlias} (heavy task requires stronger model)`,
-        );
-        console.log(`[orchestra] forceEscalation: ${origAlias} → ${modelAlias} for heavy task "${resolvedTask?.substring(0, 80)}"`);
+        // Check if upgraded model meets the model floor
+        const upgradedIQ = upgradedInfo?.intelligenceIndex ?? (upgradedInfo?.isFree ? 20 : 50);
+        const floor = executionProfile?.routing.modelFloor ?? 0;
+        if (floor > 0 && upgradedIQ < floor && recs.paid.length > 0) {
+          // Best free model is still below floor — suggest paid alternative
+          const paidSuggestion = recs.paid[0];
+          await this.bot.sendMessage(
+            chatId,
+            `⚡ Auto-escalated: /${origAlias} → /${modelAlias} (heavy task requires stronger model)\n` +
+            `⚠️ Best free model (IQ:${upgradedIQ}) is below the recommended floor (IQ:${floor}) for this task. ` +
+            `Consider /${paidSuggestion.alias} ${paidSuggestion.why} for better results.`,
+          );
+        } else {
+          await this.bot.sendMessage(
+            chatId,
+            `⚡ Auto-escalated: /${origAlias} → /${modelAlias} (heavy task requires stronger model)`,
+          );
+        }
+        console.log(`[orchestra] forceEscalation: ${origAlias} → ${modelAlias} (floor=${floor}, IQ=${upgradedIQ}) for heavy task "${resolvedTask?.substring(0, 80)}"`);
       }
     }
 
@@ -2476,6 +2491,7 @@ export class TelegramHandler {
         ? `\n📊 Profile: ${executionProfile.intent.ambiguity} ambiguity, ` +
           `${executionProfile.bounds.requiresSandbox ? 'sandbox' : 'no sandbox'}, ` +
           `${executionProfile.bounds.maxAutoResumes} resumes` +
+          (executionProfile.intent.pendingChildren > 0 ? `, ${executionProfile.intent.pendingChildren} sub-steps` : '') +
           (executionProfile.routing.forceEscalation ? '\n⚠️ Heavy task on weak model — consider upgrading' : '')
         : '';
       await this.bot.sendMessage(

@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-23 (F.26 smart resume truncation — 2054 tests)
+**Last Updated:** 2026-03-23 (F.21+F.24+taskForStorage — 2062 tests)
 
 ---
 
@@ -43,7 +43,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | F.26 COMPLETE — smart resume truncation (2054 tests) | `claude/review-ai-feedback-Zo8hq` | 2026-03-23 |
+| Claude | F.21+F.24+taskForStorage COMPLETE — review cleanup (2062 tests) | `claude/review-ai-feedback-Zo8hq` | 2026-03-23 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -64,10 +64,10 @@
 | ID | Task | Source | Priority |
 |----|------|--------|----------|
 | F.20 | Runtime/diff-based risk classification | GPT/Grok/Gemini | ✅ Complete (2006 tests) |
-| F.21 | `pendingChildren` downstream consumers | GPT | Medium |
+| F.21 | `pendingChildren` downstream consumers | GPT | ✅ Complete (2062 tests) |
 | F.22 | Tests for profile enforcement behavior | GPT | ✅ Complete (2020 tests) |
 | F.23 | Branch-level concurrency mutex | Gemini | ✅ Complete (2041 tests) |
-| F.24 | Broader escalation policy (model floor) | GPT | Low-Medium |
+| F.24 | Broader escalation policy (model floor) | GPT | ✅ Complete (2062 tests) |
 | F.25 | Byte counting fix + extraction escalation + context decoupling | Gemini/GPT | ✅ Complete (2044 tests) |
 | F.26 | Smart resume truncation | GPT | ✅ Complete (2054 tests) |
 

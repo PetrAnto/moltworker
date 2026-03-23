@@ -2577,6 +2577,45 @@ describe('taskForStorage', () => {
     const result = taskForStorage(task);
     expect(result.toolSignatures!.length).toBe(10); // No trimming
   });
+
+  it('clears arrays entirely when still over hard limit after aggressive trim', () => {
+    // Create a task with a huge result field that pushes past 128KB even after array trimming
+    const task = {
+      taskId: 'test', chatId: 1, userId: 'u', modelAlias: 'm',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      toolSignatures: Array.from({ length: 10 }, (_, i) => `tool_${i}`),
+      lastToolErrors: ['error1'],
+      // A result field so large it exceeds 128KB on its own
+      result: 'X'.repeat(140000),
+    };
+    const result = taskForStorage(task);
+    // Arrays should be cleared
+    expect(result.toolSignatures!.length).toBe(0);
+    expect(result.lastToolErrors!.length).toBe(0);
+    // Result should be truncated
+    expect(result.result!.length).toBeLessThan(140000);
+    expect(result.result).toContain('[... truncated for storage limit ...]');
+  });
+
+  it('final verification does not over-trim when aggressive trim is sufficient', () => {
+    // Use CJK data that triggers aggressive trim (same as existing test) — verify
+    // the new final verification pass does NOT clear arrays to 0 when aggressive trim worked
+    const task = {
+      taskId: 'test', chatId: 1, userId: 'u', modelAlias: 'm',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      toolSignatures: Array.from({ length: 200 }, (_, i) => '漢'.repeat(1000) + `_${i}`),
+      lastToolErrors: Array.from({ length: 10 }, (_, i) => '漢'.repeat(5000) + `_${i}`),
+    };
+    const result = taskForStorage(task);
+    // After aggressive trim to 5 sigs + 1 error, the result should be under 128KB
+    // so the final verification pass should NOT clear everything
+    expect(result.toolSignatures!.length).toBeLessThanOrEqual(5);
+    expect(result.toolSignatures!.length).toBeGreaterThan(0);
+    const bytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
+    expect(bytes).toBeLessThan(131072);
+  });
 });
 
 describe('truncateLargeToolResults', () => {

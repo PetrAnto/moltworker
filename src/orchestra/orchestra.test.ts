@@ -2777,6 +2777,66 @@ describe('buildExecutionProfile', () => {
     );
     expect(profile.intent.pendingChildren).toBe(2);
   });
+
+  // F.21: pendingChildren influences resume cap
+  it('grants extra resume when 3+ pending children', () => {
+    const children = [
+      { title: 'Sub-task 1', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 1 },
+      { title: 'Sub-task 2', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 2 },
+      { title: 'Sub-task 3', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 3 },
+    ];
+    const profile = buildExecutionProfile(
+      makeResolved({ pendingChildren: children }),
+      'flash', // mid-tier model, not heavy coding, not ambiguous
+    );
+    // Base is 6, with 3+ children should get 7
+    expect(profile.bounds.maxAutoResumes).toBe(7);
+  });
+
+  it('does not grant extra resume for fewer than 3 children', () => {
+    const children = [
+      { title: 'Sub-task 1', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 1 },
+    ];
+    const profile = buildExecutionProfile(
+      makeResolved({ pendingChildren: children }),
+      'flash',
+    );
+    expect(profile.bounds.maxAutoResumes).toBe(6);
+  });
+
+  // F.24: model floor
+  it('sets modelFloor=28 for heavy coding tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor multi-file architecture' }),
+      'claude',
+    );
+    expect(profile.routing.modelFloor).toBe(28);
+  });
+
+  it('sets modelFloor=35 for high-ambiguity tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Do something', ambiguity: 'high' }),
+      'claude',
+    );
+    expect(profile.routing.modelFloor).toBe(35);
+  });
+
+  it('sets modelFloor=0 for simple clear tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Update readme with new info', ambiguity: 'none' }),
+      'claude',
+    );
+    expect(profile.routing.modelFloor).toBe(0);
+  });
+
+  it('heavy coding modelFloor takes precedence over high ambiguity', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor complex multi-file system', ambiguity: 'high' }),
+      'claude',
+    );
+    // isHeavyCoding matches first in the ternary, so floor=28
+    expect(profile.routing.modelFloor).toBe(28);
+  });
 });
 
 // --- RuntimeRiskProfile (F.20) ---
