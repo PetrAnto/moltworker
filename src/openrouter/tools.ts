@@ -4516,6 +4516,53 @@ export async function fetchAiHubMarket(symbols?: string): Promise<string> {
     .join('\n');
 }
 
+interface AiHubAlertItem {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  priority: 'low' | 'medium' | 'high';
+  createdAt: string;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Fetch pending proactive alerts from ai-hub Situation Monitor.
+ * Returns structured alert items for the cron handler to dispatch as Telegram messages.
+ * When ack=true, marks returned alerts as acknowledged so they won't be returned again.
+ */
+export async function fetchAiHubAlerts(
+  userId: string,
+  options?: { since?: string; ack?: boolean }
+): Promise<AiHubAlertItem[]> {
+  const params = new URLSearchParams({ userId });
+  if (options?.since) params.set('since', options.since);
+  if (options?.ack) params.set('ack', 'true');
+  const url = `${AIHUB_BASE_URL}/api/situation/alerts?${params.toString()}`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'MoltworkerBot/1.0' },
+  });
+
+  if (!response.ok) throw new Error(`ai-hub Alerts HTTP ${response.status}`);
+
+  const data = await response.json() as AiHubResponse<AiHubAlertItem>;
+  if (data.status !== 'ok') throw new Error(data.error || 'ai-hub Alerts error');
+
+  return data.items || [];
+}
+
+/**
+ * Format an ai-hub alert item for Telegram display.
+ */
+export function formatAlertForTelegram(alert: AiHubAlertItem): string {
+  const priorityIcon = alert.priority === 'high' ? '🔴' : alert.priority === 'medium' ? '🟡' : '🔵';
+  let text = `${priorityIcon} ${alert.title}`;
+  if (alert.body) {
+    text += `\n${alert.body}`;
+  }
+  return text;
+}
+
 /**
  * Fetch today's public holidays for the user's location via Nager.Date API.
  * Steps: (1) Reverse geocode lat/lon → country code, (2) Fetch holidays for that country, (3) Filter for today.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, getToolsForPhase, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, fetchAiHubRss, fetchAiHubMarket, githubReadFile, applyFuzzyPatch, encodeGitHubPath, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
+import { AVAILABLE_TOOLS, TOOLS_WITHOUT_BROWSER, getToolsForPhase, executeTool, generateDailyBriefing, geocodeCity, clearBriefingCache, clearExchangeRateCache, clearCryptoCache, clearGeoCache, clearWebSearchCache, extractCodeIdentifiers, fetchBriefingHolidays, fetchBriefingQuote, fetchAiHubRss, fetchAiHubMarket, fetchAiHubAlerts, formatAlertForTelegram, githubReadFile, applyFuzzyPatch, encodeGitHubPath, type SandboxLike, type SandboxProcess, type WorkspaceFile, type ToolContext } from './tools';
 
 describe('url_metadata tool', () => {
   beforeEach(() => {
@@ -5766,5 +5766,114 @@ describe('generateDailyBriefing ai-hub integration', () => {
     expect(result).toContain('HN Story');
     // ai-hub sections should show as unavailable
     expect(result).toContain('Unavailable');
+  });
+});
+
+describe('fetchAiHubAlerts', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should return alert items', async () => {
+    const mockAlerts = {
+      status: 'ok',
+      items: [
+        { id: 'a1', type: 'price_alert', title: 'BTC dropped', body: 'Bitcoin at $64k', priority: 'high', createdAt: '2026-03-23T09:50:00Z' },
+        { id: 'a2', type: 'news', title: 'New release', body: 'v2.0 launched', priority: 'low', createdAt: '2026-03-23T09:55:00Z' },
+      ],
+      metadata: { pending: 2 },
+    };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockAlerts),
+    }));
+
+    const result = await fetchAiHubAlerts('12345');
+    expect(result).toHaveLength(2);
+    expect(result[0].id).toBe('a1');
+    expect(result[0].title).toBe('BTC dropped');
+    expect(result[1].priority).toBe('low');
+  });
+
+  it('should return empty array when no alerts', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok', items: [], metadata: { pending: 0 } }),
+    }));
+
+    const result = await fetchAiHubAlerts('12345');
+    expect(result).toHaveLength(0);
+  });
+
+  it('should throw on HTTP error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    await expect(fetchAiHubAlerts('12345')).rejects.toThrow('ai-hub Alerts HTTP 503');
+  });
+
+  it('should throw on error status in response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'error', error: 'Rate limited', items: [] }),
+    }));
+    await expect(fetchAiHubAlerts('12345')).rejects.toThrow('Rate limited');
+  });
+
+  it('should pass userId, since, and ack as query params', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok', items: [], metadata: {} }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await fetchAiHubAlerts('user42', { since: '2026-03-23T00:00:00Z', ack: true });
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('userId=user42');
+    expect(calledUrl).toContain('since=2026-03-23');
+    expect(calledUrl).toContain('ack=true');
+  });
+
+  it('should omit optional params when not provided', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok', items: [], metadata: {} }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await fetchAiHubAlerts('user42');
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('userId=user42');
+    expect(calledUrl).not.toContain('since');
+    expect(calledUrl).not.toContain('ack');
+  });
+});
+
+describe('formatAlertForTelegram', () => {
+  it('should format high priority alert with red circle', () => {
+    const result = formatAlertForTelegram({
+      id: 'a1', type: 'price_alert', title: 'BTC crashed', body: 'Down 10%', priority: 'high', createdAt: '2026-03-23T10:00:00Z',
+    });
+    expect(result).toBe('🔴 BTC crashed\nDown 10%');
+  });
+
+  it('should format medium priority alert with yellow circle', () => {
+    const result = formatAlertForTelegram({
+      id: 'a2', type: 'news', title: 'Market update', body: 'Sideways trading', priority: 'medium', createdAt: '2026-03-23T10:00:00Z',
+    });
+    expect(result).toBe('🟡 Market update\nSideways trading');
+  });
+
+  it('should format low priority alert with blue circle', () => {
+    const result = formatAlertForTelegram({
+      id: 'a3', type: 'info', title: 'New feature', body: '', priority: 'low', createdAt: '2026-03-23T10:00:00Z',
+    });
+    expect(result).toBe('🔵 New feature');
+  });
+
+  it('should handle alert without body', () => {
+    const result = formatAlertForTelegram({
+      id: 'a4', type: 'info', title: 'Just a title', body: '', priority: 'high', createdAt: '2026-03-23T10:00:00Z',
+    });
+    expect(result).toBe('🔴 Just a title');
   });
 });

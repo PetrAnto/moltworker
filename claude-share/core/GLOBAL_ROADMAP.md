@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-23 (F.1 ai-hub data feeds integration — 2073 tests)
+**Last Updated:** 2026-03-23 (F.1b ai-hub proactive alerts via cron — 2083 tests)
 
 ---
 
@@ -394,7 +394,7 @@
 
 | ID | Task | Status | Effort | Notes |
 |----|------|--------|--------|-------|
-| F.1 | ai-hub data feeds — RSS, market, proactive notifications | ✅ | 2h | RSS + market integrated into /brief via ai-hub `/api/situation/*`; alerts endpoint ready, cron wiring next. 11 new tests (2073 total) |
+| F.1 | ai-hub data feeds — RSS, market, proactive notifications | ✅ | 3h | RSS + market in /brief, proactive alerts via 5-min cron → Telegram. 21 tests total (2083) |
 | F.2 | Browser tool enhancement (CDP) — a11y tree, click/fill/scroll | ✅ | 4-6h | 4 new actions + session persistence, 14 tests |
 | F.3 | Code execution sandbox in Orchestra (Cloudflare Containers) | ✅ | 3h | sandbox_exec in DO via capability-aware filtering, plain-string parse fix, 15-call safety limit, /simulate/sandbox-test endpoint, orchestra prompts inject verification step (clone→test→fix→PR), 1865 tests |
 | F.4 | File management tools (R2 primary, Acontext fallback) | ✅ | 1h | R2-backed save/read/list/delete with per-user scoping (files/{userId}/), 10MB quota + 100 file limit, /files Telegram command (list/get/delete/clear), 25 new tests (1890 total) |
@@ -507,6 +507,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(cron): F.1b ai-hub proactive alerts — fetchAiHubAlerts + formatAlertForTelegram wired into 5-min cron, priority-tagged Telegram messages (🔴/🟡/🔵), ack=true marks as read. 10 new tests (2083 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts, src/index.ts
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(briefing): F.1 ai-hub Situation Monitor integration — fetchAiHubRss + fetchAiHubMarket consuming /api/situation/rss and /api/situation/market from ai.petranto.com, wired into generateDailyBriefing as Markets + News sections, graceful degradation when ai-hub unavailable. 11 new tests (2073 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(task-processor): F.26 smart resume truncation — tool-type-aware truncation (code 20+10, sandbox 8+8, web URL+preview), file read deduplication (keeps most recent), char-based fallback for long lines. 10 new tests (2054 total) | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | fix(task-processor): F.25 byte counting + extraction escalation + context decoupling — taskForStorage() uses TextEncoder byte length with re-check after trim, extraction failure escalates to reasoning model, extractionMeta persisted in TaskState for resume truncation resilience. 3 new tests (2044 total) | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
@@ -766,7 +767,7 @@ ai-hub /api/situation/* endpoints ✅
 | Task success rate | Tracked (CoVe verification) | >85% | >95% |
 | Context compression | Token-budgeted + summarized | Same | Adaptive |
 | Cross-session learning | Active (R2 learnings + sessions) | Pattern library | Autonomous improvement |
-| Tests | 2073 | 2000+ ✅ | 2500+ |
+| Tests | 2083 | 2000+ ✅ | 2500+ |
 
 ---
 

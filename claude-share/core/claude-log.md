@@ -2132,3 +2132,34 @@ Integrated ai-hub Situation Monitor endpoints (`/api/situation/rss` and `/api/si
 - `/api/situation/alerts` endpoint is live but not yet consumed — wire to cron trigger (F.1b)
 - All ai-hub endpoints use mock data for now; will switch to real feeds later
 - Market data: BTC, ETH, SOL default symbols; configurable via `symbols` param
+
+---
+
+## Session: 2026-03-23 — F.1b ai-hub Proactive Alerts
+
+**AI:** Claude Opus 4.6 (session_01TR79yEcqjQJYt4VddLUx7W)
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+
+### Summary
+Wired ai-hub `/api/situation/alerts` endpoint into the existing 5-minute cron trigger. Alerts are fetched, formatted with priority icons (🔴 high / 🟡 medium / 🔵 low), and sent as Telegram messages. Acknowledged with `ack=true` so they aren't re-sent.
+
+### Changes
+- Added `fetchAiHubAlerts(userId, options)` and `formatAlertForTelegram(alert)` in `src/openrouter/tools.ts`
+- Wired into `scheduled()` handler in `src/index.ts` alongside existing Discord check on `*/5 * * * *` cron
+- Uses `DISCORD_FORWARD_TO_TELEGRAM` chat ID as the notification target
+- Non-fatal: if ai-hub is down, logs error and continues
+- 10 new tests (6 for fetchAiHubAlerts, 4 for formatAlertForTelegram) — 2083 total
+
+### Files Modified
+- `src/openrouter/tools.ts` — AiHubAlertItem type, fetchAiHubAlerts, formatAlertForTelegram
+- `src/openrouter/tools.test.ts` — 10 new tests
+- `src/index.ts` — import + cron handler wiring
+- `claude-share/core/GLOBAL_ROADMAP.md` — F.1 updated, changelog, test count
+- `claude-share/core/WORK_STATUS.md` — F.1b complete, next priorities updated
+- `claude-share/core/next_prompt.md` — F.1b completed, removed from alternatives
+- `claude-share/core/claude-log.md` — this entry
+
+### Tests
+- Typecheck: ✅ clean
+- Tests: 2083/2083 passing

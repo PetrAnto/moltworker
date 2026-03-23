@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-23 (F.1 ai-hub data feeds — 2073 tests)
+**Last Updated:** 2026-03-23 (F.1b ai-hub proactive alerts — 2083 tests)
 
 ---
 
@@ -15,6 +15,7 @@
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-23 | F.1b — ai-hub proactive alerts | Claude Opus 4.6 | fetchAiHubAlerts + formatAlertForTelegram, wired into 5-min cron, priority-tagged Telegram messages. 10 new tests (2083 total) |
 | 2026-03-23 | F.1 — ai-hub data feeds integration | Claude Opus 4.6 | fetchAiHubRss + fetchAiHubMarket wired into /brief, graceful degradation, 11 new tests (2073 total) |
 | 2026-03-23 | F.21+F.24+taskForStorage — Review cleanup batch | Claude Opus 4.6 | pendingChildren consumers (resume caps + display), model floor with paid escalation suggestion, post-aggressive storage verification. 8 new tests (2062 total) |
 | 2026-03-23 | F.26 — Smart resume truncation | Claude Opus 4.6 | Tool-type-aware truncation, file read deduplication, structured summaries. 10 new tests (2054 total) |
@@ -42,7 +43,6 @@
 
 ## Alternative Next Tasks
 
-1. **F.1b** — ai-hub proactive alerts (wire `/api/situation/alerts` to cron trigger)
-4. **F.7** — Discord full integration (read-only → two-way)
+1. **F.7** — Discord full integration (read-only → two-way)
 5. **6.3** — Voice messages (Whisper + TTS)
 6. **Slack integration** — Two-way Slack bot support
