@@ -539,6 +539,17 @@ export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & {
       if (result.lastToolErrors && result.lastToolErrors.length > 1) {
         result.lastToolErrors = result.lastToolErrors.slice(-1);
       }
+      // Final verification: ensure we're actually under the hard limit after aggressive trim
+      const finalBytes = encoder.encode(JSON.stringify(result)).byteLength;
+      if (finalBytes > MAX_DO_VALUE_BYTES) {
+        console.log(`[TaskProcessor] CRITICAL: still over hard limit after aggressive trim (${finalBytes} bytes), clearing arrays`);
+        result.toolSignatures = [];
+        result.lastToolErrors = [];
+        // Truncate result text if it's the culprit
+        if (result.result && encoder.encode(result.result).byteLength > 8000) {
+          result.result = result.result.slice(0, 2000) + '\n\n[... truncated for storage limit ...]';
+        }
+      }
     }
   }
   return result;

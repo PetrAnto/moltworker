@@ -1133,6 +1133,8 @@ export interface OrchestraExecutionProfile {
     promptTier: 'minimal' | 'standard' | 'full';
     /** Force escalation if heavy task lands on a weak model */
     forceEscalation: boolean;
+    /** Minimum IQ floor for this task type (0 = no floor) */
+    modelFloor: number;
   };
 }
 
@@ -1164,15 +1166,26 @@ export function buildExecutionProfile(
   // Resume cap: tighter for ambiguous tasks to prevent thrashing
   const isFree = model?.isFree ?? true;
   const baseResumes = isFree ? 6 : 6; // Orchestra default is 6 for both
+  const childrenCount = resolved.pendingChildren.length;
   const maxAutoResumes =
     resolved.ambiguity === 'high' ? Math.min(baseResumes, 3) :
     resolved.ambiguity === 'low' ? Math.min(baseResumes, 4) :
     // Heavy coding with strong model gets full budget
     isHeavyCoding && intelligenceIndex >= 45 ? baseResumes + 2 :
+    // Parent tasks with many children get extra resumes to complete sub-steps
+    childrenCount >= 3 ? baseResumes + 1 :
     baseResumes;
 
   // Force escalation if heavy task on weak model
   const forceEscalation = isHeavyCoding && intelligenceIndex < 28;
+
+  // Model floor: minimum IQ for this task type
+  // Heavy coding requires at least IQ 28 (standard tier)
+  // High-ambiguity tasks benefit from stronger models (IQ 35)
+  const modelFloor =
+    isHeavyCoding ? 28 :
+    resolved.ambiguity === 'high' ? 35 :
+    0; // no floor for simple/clear tasks
 
   return {
     intent: {
@@ -1189,6 +1202,7 @@ export function buildExecutionProfile(
     routing: {
       promptTier,
       forceEscalation,
+      modelFloor,
     },
   };
 }

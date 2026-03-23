@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-23 (F.26 smart resume truncation — 2054 tests)
+**Last Updated:** 2026-03-23 (F.21+F.24+taskForStorage — 2062 tests)
 
 ---
 
@@ -15,6 +15,7 @@
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-23 | F.21+F.24+taskForStorage — Review cleanup batch | Claude Opus 4.6 | pendingChildren consumers (resume caps + display), model floor with paid escalation suggestion, post-aggressive storage verification. 8 new tests (2062 total) |
 | 2026-03-23 | F.26 — Smart resume truncation | Claude Opus 4.6 | Tool-type-aware truncation, file read deduplication, structured summaries. 10 new tests (2054 total) |
 | 2026-03-23 | F.25 — Byte counting + extraction escalation + context decoupling | Claude Opus 4.6 | taskForStorage() uses TextEncoder byte length, extraction failure escalates to reasoning model, extractionMeta persisted for resume resilience. 3 new tests (2044 total) |
 | 2026-03-23 | F.23 — Branch-level concurrency mutex | Claude Opus 4.6 | R2-based repo-level lock with 45-min TTL. Acquire before dispatch, release on all terminal paths. 21 new tests (2041 total) |
@@ -40,9 +41,7 @@
 
 ## Alternative Next Tasks
 
-1. **F.21** — pendingChildren downstream consumers (2-4h)
-2. **F.24** — Broader escalation policy / model floor (2-4h)
-3. **F.1** — ai-hub data feeds (blocked on ai-hub `/api/situation/*`)
+1. **F.1** — ai-hub data feeds (blocked on ai-hub `/api/situation/*`)
 4. **F.7** — Discord full integration (read-only → two-way)
 5. **6.3** — Voice messages (Whisper + TTS)
 6. **Slack integration** — Two-way Slack bot support

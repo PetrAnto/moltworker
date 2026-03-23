@@ -1121,21 +1121,22 @@ export class TelegramHandler {
             const result = await response.json() as { status: string };
             if (result.status === 'cancelled') {
               // Message already sent by DO
-              // F.23: Release any branch locks held by cancelled orchestra tasks
-              if (this.r2Bucket) {
-                try {
-                  const history = await loadOrchestraHistory(this.r2Bucket, userId);
-                  if (history) {
-                    for (const t of history.tasks) {
-                      if (t.status === 'started') {
-                        await forceReleaseRepoLock(this.r2Bucket, userId, t.repo);
-                      }
-                    }
-                  }
-                } catch { /* best-effort lock cleanup */ }
-              }
             } else {
               await this.bot.sendMessage(chatId, 'No task is currently running.');
+            }
+            // F.23: Always release branch locks on /cancel — even when "no task running".
+            // Handles stranded locks from DO eviction, completed tasks, or race conditions.
+            if (this.r2Bucket) {
+              try {
+                const history = await loadOrchestraHistory(this.r2Bucket, userId);
+                if (history) {
+                  for (const t of history.tasks) {
+                    if (t.status === 'started') {
+                      await forceReleaseRepoLock(this.r2Bucket, userId, t.repo);
+                    }
+                  }
+                }
+              } catch { /* best-effort lock cleanup */ }
             }
           } catch (error) {
             await this.bot.sendMessage(chatId, 'Failed to cancel task.');
@@ -2250,7 +2251,7 @@ export class TelegramHandler {
             resolvedExecutionBrief = resolved.executionBrief;
             // Build centralized execution profile — drives sandbox, resume, and routing decisions
             executionProfile = buildExecutionProfile(resolved, modelAlias);
-            console.log(`[orchestra] executionProfile: ambiguity=${executionProfile.intent.ambiguity} sandbox=${executionProfile.bounds.requiresSandbox} maxResumes=${executionProfile.bounds.maxAutoResumes} tier=${executionProfile.routing.promptTier}`);
+            console.log(`[orchestra] executionProfile: ambiguity=${executionProfile.intent.ambiguity} sandbox=${executionProfile.bounds.requiresSandbox} maxResumes=${executionProfile.bounds.maxAutoResumes} tier=${executionProfile.routing.promptTier} children=${executionProfile.intent.pendingChildren}`);
           }
         }
 
@@ -2267,7 +2268,8 @@ export class TelegramHandler {
     }
 
     // Force-escalation: if profile detects heavy task on weak model, auto-upgrade
-    // to the top-ranked free orchestra model. User sees notification but task proceeds.
+    // to the top-ranked free orchestra model. If the best free model still doesn't
+    // meet the model floor, suggest a paid model (but don't auto-switch to paid).
     if (executionProfile?.routing.forceEscalation) {
       const recs = getOrchestraRecommendations();
       const upgrade = recs.free[0]; // Top-ranked free model
@@ -2284,11 +2286,25 @@ export class TelegramHandler {
             executionProfile = buildExecutionProfile(resolved, modelAlias);
           }
         }
-        await this.bot.sendMessage(
-          chatId,
-          `⚡ Auto-escalated: /${origAlias} → /${modelAlias} (heavy task requires stronger model)`,
-        );
-        console.log(`[orchestra] forceEscalation: ${origAlias} → ${modelAlias} for heavy task "${resolvedTask?.substring(0, 80)}"`);
+        // Check if upgraded model meets the model floor
+        const upgradedIQ = upgradedInfo?.intelligenceIndex ?? (upgradedInfo?.isFree ? 20 : 50);
+        const floor = executionProfile?.routing.modelFloor ?? 0;
+        if (floor > 0 && upgradedIQ < floor && recs.paid.length > 0) {
+          // Best free model is still below floor — suggest paid alternative
+          const paidSuggestion = recs.paid[0];
+          await this.bot.sendMessage(
+            chatId,
+            `⚡ Auto-escalated: /${origAlias} → /${modelAlias} (heavy task requires stronger model)\n` +
+            `⚠️ Best free model (IQ:${upgradedIQ}) is below the recommended floor (IQ:${floor}) for this task. ` +
+            `Consider /${paidSuggestion.alias} ${paidSuggestion.why} for better results.`,
+          );
+        } else {
+          await this.bot.sendMessage(
+            chatId,
+            `⚡ Auto-escalated: /${origAlias} → /${modelAlias} (heavy task requires stronger model)`,
+          );
+        }
+        console.log(`[orchestra] forceEscalation: ${origAlias} → ${modelAlias} (floor=${floor}, IQ=${upgradedIQ}) for heavy task "${resolvedTask?.substring(0, 80)}"`);
       }
     }
 
@@ -2388,9 +2404,26 @@ export class TelegramHandler {
     // F.23: Acquire repo-level concurrency lock to prevent parallel tasks on same repo.
     // Must happen before storeOrchestraTask to avoid storing an entry we'll never execute.
     if (this.r2Bucket) {
-      const { acquired, existingLock } = await acquireRepoLock(
+      let { acquired, existingLock } = await acquireRepoLock(
         this.r2Bucket, userId, repo, orchestraTask.taskId, branchName
       );
+      // Stale lock recovery: if the lock's task already completed/failed in history,
+      // force-release and re-acquire. This handles DO eviction before lock release.
+      if (!acquired && existingLock) {
+        try {
+          const history = await loadOrchestraHistory(this.r2Bucket, userId);
+          const lockedTask = history?.tasks.find(t => t.taskId === existingLock!.taskId);
+          if (lockedTask && lockedTask.status !== 'started') {
+            console.log(`[orchestra] Stale lock detected: task ${existingLock.taskId} is ${lockedTask.status}, force-releasing`);
+            await forceReleaseRepoLock(this.r2Bucket, userId, repo);
+            const retry = await acquireRepoLock(
+              this.r2Bucket, userId, repo, orchestraTask.taskId, branchName
+            );
+            acquired = retry.acquired;
+            existingLock = retry.existingLock;
+          }
+        } catch { /* best-effort stale lock recovery */ }
+      }
       if (!acquired && existingLock) {
         const elapsed = Math.round((Date.now() - existingLock.acquiredAt) / 60000);
         await this.bot.sendMessage(chatId,
@@ -2476,6 +2509,7 @@ export class TelegramHandler {
         ? `\n📊 Profile: ${executionProfile.intent.ambiguity} ambiguity, ` +
           `${executionProfile.bounds.requiresSandbox ? 'sandbox' : 'no sandbox'}, ` +
           `${executionProfile.bounds.maxAutoResumes} resumes` +
+          (executionProfile.intent.pendingChildren > 0 ? `, ${executionProfile.intent.pendingChildren} sub-steps` : '') +
           (executionProfile.routing.forceEscalation ? '\n⚠️ Heavy task on weak model — consider upgrading' : '')
         : '';
       await this.bot.sendMessage(
