@@ -1121,21 +1121,22 @@ export class TelegramHandler {
             const result = await response.json() as { status: string };
             if (result.status === 'cancelled') {
               // Message already sent by DO
-              // F.23: Release any branch locks held by cancelled orchestra tasks
-              if (this.r2Bucket) {
-                try {
-                  const history = await loadOrchestraHistory(this.r2Bucket, userId);
-                  if (history) {
-                    for (const t of history.tasks) {
-                      if (t.status === 'started') {
-                        await forceReleaseRepoLock(this.r2Bucket, userId, t.repo);
-                      }
-                    }
-                  }
-                } catch { /* best-effort lock cleanup */ }
-              }
             } else {
               await this.bot.sendMessage(chatId, 'No task is currently running.');
+            }
+            // F.23: Always release branch locks on /cancel — even when "no task running".
+            // Handles stranded locks from DO eviction, completed tasks, or race conditions.
+            if (this.r2Bucket) {
+              try {
+                const history = await loadOrchestraHistory(this.r2Bucket, userId);
+                if (history) {
+                  for (const t of history.tasks) {
+                    if (t.status === 'started') {
+                      await forceReleaseRepoLock(this.r2Bucket, userId, t.repo);
+                    }
+                  }
+                }
+              } catch { /* best-effort lock cleanup */ }
             }
           } catch (error) {
             await this.bot.sendMessage(chatId, 'Failed to cancel task.');
@@ -2403,9 +2404,26 @@ export class TelegramHandler {
     // F.23: Acquire repo-level concurrency lock to prevent parallel tasks on same repo.
     // Must happen before storeOrchestraTask to avoid storing an entry we'll never execute.
     if (this.r2Bucket) {
-      const { acquired, existingLock } = await acquireRepoLock(
+      let { acquired, existingLock } = await acquireRepoLock(
         this.r2Bucket, userId, repo, orchestraTask.taskId, branchName
       );
+      // Stale lock recovery: if the lock's task already completed/failed in history,
+      // force-release and re-acquire. This handles DO eviction before lock release.
+      if (!acquired && existingLock) {
+        try {
+          const history = await loadOrchestraHistory(this.r2Bucket, userId);
+          const lockedTask = history?.tasks.find(t => t.taskId === existingLock!.taskId);
+          if (lockedTask && lockedTask.status !== 'started') {
+            console.log(`[orchestra] Stale lock detected: task ${existingLock.taskId} is ${lockedTask.status}, force-releasing`);
+            await forceReleaseRepoLock(this.r2Bucket, userId, repo);
+            const retry = await acquireRepoLock(
+              this.r2Bucket, userId, repo, orchestraTask.taskId, branchName
+            );
+            acquired = retry.acquired;
+            existingLock = retry.existingLock;
+          }
+        } catch { /* best-effort stale lock recovery */ }
+      }
       if (!acquired && existingLock) {
         const elapsed = Math.round((Date.now() - existingLock.acquiredAt) / 60000);
         await this.bot.sendMessage(chatId,
