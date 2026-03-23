@@ -4,6 +4,35 @@
 
 ---
 
+## Session: 2026-03-23 | F.25 Byte Counting + Extraction Escalation + Context Decoupling (Session: session_01TR79yEcqjQJYt4VddLUx7W)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+
+### Summary
+Addressed 3 findings from cross-AI architecture review (Gemini + GPT consensus):
+1. **taskForStorage() byte counting bug**: Replaced `string.length` with `TextEncoder().encode().byteLength` for accurate UTF-8 size checks against 128KB DO storage limit. Added re-check after trim with aggressive fallback.
+2. **Extraction model escalation**: When extraction verification fails and current model lacks reasoning capability, escalates to sonnet→o4mini→deepseek before retrying. Prevents token burn on spatial reasoning tasks.
+3. **Persisted extraction metadata**: `extractionMeta` field on TaskState stores repo/branch/files/identifiers on first detection. Falls back to persisted metadata when message-based detection fails after resume truncation.
+
+### Files Changed
+- `src/durable-objects/task-processor.ts` — All 3 fixes
+- `src/durable-objects/task-processor.test.ts` — 3 new tests (UTF-8 byte length, aggressive trim, ASCII baseline)
+
+### Tests
+- [x] Tests pass (2044/2044) — 3 new
+- [x] Typecheck passes (no new errors)
+
+### Notes for Next Session
+F.25 closes byte counting bug (unanimous urgency from GPT+Gemini) and extraction escalation gap.
+Remaining from AI reviews:
+- **F.21** (pendingChildren consumers) — medium priority
+- **F.24** (broader escalation policy / model floor) — low-medium priority
+- **Resume truncation quality** — GPT flagged as next performance/quality project (not a correctness bug)
+
+---
+
 ## Session: 2026-03-23 | F.23 Branch-Level Concurrency Mutex (Session: session_01TR79yEcqjQJYt4VddLUx7W)
 
 ### What was done

@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-22 (F.22 profile enforcement tests — 2020 tests)
+**Last Updated:** 2026-03-23 (F.25 byte counting fix + extraction escalation + context decoupling — 2044 tests)
 
 ---
 
@@ -18,6 +18,7 @@
 
 | Task ID | Description | Assignee | Status | Branch |
 |---------|-------------|----------|--------|--------|
+| F.25 | Byte counting fix + extraction escalation + context decoupling | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
 | F.18.1 | ExecutionProfile authoritative enforcement (reviewer feedback) | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
 | F.18 | OrchestraExecutionProfile — centralized task classification | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
 | F.17 | Sandbox stagnation detection + run health scoring | Claude Opus 4.6 | ✅ Complete | `claude/review-ai-feedback-Zo8hq` |
@@ -41,7 +42,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | F.22 COMPLETE — enforcement tests (2020 tests) | `claude/review-ai-feedback-Zo8hq` | 2026-03-22 |
+| Claude | F.25 COMPLETE — byte counting + extraction escalation + context decoupling (2044 tests) | `claude/review-ai-feedback-Zo8hq` | 2026-03-23 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -66,6 +67,7 @@
 | F.22 | Tests for profile enforcement behavior | GPT | ✅ Complete (2020 tests) |
 | F.23 | Branch-level concurrency mutex | Gemini | ✅ Complete (2041 tests) |
 | F.24 | Broader escalation policy (model floor) | GPT | Low-Medium |
+| F.25 | Byte counting fix + extraction escalation + context decoupling | Gemini/GPT | ✅ Complete (2044 tests) |
 
 ---
 
@@ -75,4 +77,4 @@
 |--------|-------------|----------------|-------|
 | Sprint 1 (Feb 6-13) | 8 | 64 | Phase 0-4, 5.1+5.2+5.5, Dream Machine, Model Sync, Phase 7 ALL, 12 bugs |
 | Sprint 2 (Feb 23-Mar 1) | — | 38 | Phase 8 operational hardening, /simulate endpoint, 1526 tests |
-| Sprint 3 (Mar 1-22) | — | 16 | F.2 Browser CDP, F.3 Sandbox in Orchestra, F.4 R2 File Management, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, F.13 MiniMax M2.7 + death loop fix, F.14 Fuzzy patch + bracket balance, F.15 EOL + path encoding, F.16 Orchestra branch retry, F.17 Sandbox stagnation, F.18 ExecutionProfile, 1982 tests |
+| Sprint 3 (Mar 1-23) | — | 19 | F.2 Browser CDP, F.3 Sandbox in Orchestra, F.4 R2 File Management, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, F.13 MiniMax M2.7 + death loop fix, F.14 Fuzzy patch + bracket balance, F.15 EOL + path encoding, F.16 Orchestra branch retry, F.17 Sandbox stagnation, F.18 ExecutionProfile, F.20 Runtime risk, F.22 Profile enforcement tests, F.23 Branch mutex, F.25 Byte counting + extraction escalation, 2044 tests |

@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-23 (F.23 branch-level concurrency mutex — 2041 tests)
+**Last Updated:** 2026-03-23 (F.25 byte counting fix + extraction escalation + context decoupling — 2044 tests)
 
 ---
 
@@ -15,6 +15,7 @@
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-23 | F.25 — Byte counting + extraction escalation + context decoupling | Claude Opus 4.6 | taskForStorage() uses TextEncoder byte length, extraction failure escalates to reasoning model, extractionMeta persisted for resume resilience. 3 new tests (2044 total) |
 | 2026-03-23 | F.23 — Branch-level concurrency mutex | Claude Opus 4.6 | R2-based repo-level lock with 45-min TTL. Acquire before dispatch, release on all terminal paths. 21 new tests (2041 total) |
 | 2026-03-22 | F.22 — Profile enforcement regression tests | Claude Opus 4.6 | 14 tests: promptTierOverride (4), sandbox tool-level gating (5), forceEscalation (5). 2020 total |
 | 2026-03-22 | F.20 — Runtime/diff-based risk classification | Claude Opus 4.6 | RuntimeRiskProfile: file tracking (16 config patterns), scope expansion, error accumulation, drift detection. Integrated into DO loop + RunHealth. 24 new tests (2006 total) |
