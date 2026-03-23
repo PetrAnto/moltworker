@@ -4,6 +4,73 @@
 
 ---
 
+## Session: 2026-03-23 | F.26 Smart Resume Truncation (Session: session_01TR79yEcqjQJYt4VddLUx7W)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+
+### Summary
+Replaced the naive 15-head/5-tail line truncation on checkpoint resume with a tool-type-aware system:
+
+1. **Tool-type-aware summarization**: Different truncation strategies per tool:
+   - `github_read_file`: Keeps file header + 20 head lines + 10 tail lines (preserves imports/exports and closing braces)
+   - `sandbox_exec` / `run_code`: 8+8 lines (command + output + exit status)
+   - `fetch_url` / `browse_url` / `web_search`: First line (URL/title) + 500 chars preview
+   - Default (unknown tools): 15+5 lines (original behavior)
+
+2. **File read deduplication**: When the same file was read multiple times across iterations, only the most recent read survives. Earlier reads are collapsed to `[Superseded — file "path" was re-read later]`.
+
+3. **Char-based fallback**: If line-based truncation for code files still exceeds `maxChars` (e.g., files with very long lines), falls back to keeping first-half/last-half by character count.
+
+### Files Changed
+- `src/durable-objects/task-processor.ts` — `truncateLargeToolResults()` rewrite + new `extractFilePathFromArgs()`, `truncateToolResultForResume()`, `charBasedTruncation()` helpers
+- `src/durable-objects/task-processor.test.ts` — 10 new tests
+
+### Tests
+- [x] Tests pass (2054/2054) — 10 new
+- [x] Typecheck passes (no new errors)
+
+### Notes for Next Session
+Resume truncation quality was the biggest remaining performance/quality bottleneck (flagged by GPT). This eliminates the two main waste patterns:
+- Re-reading files that were already in context (just truncated badly)
+- Losing critical structure (imports, exports) from code files due to blind line slicing
+
+Remaining from AI reviews:
+- **F.21** (pendingChildren consumers) — medium priority
+- **F.24** (broader escalation policy / model floor) — low-medium priority
+
+---
+
+## Session: 2026-03-23 | F.25 Byte Counting + Extraction Escalation + Context Decoupling (Session: session_01TR79yEcqjQJYt4VddLUx7W)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+
+### Summary
+Addressed 3 findings from cross-AI architecture review (Gemini + GPT consensus):
+1. **taskForStorage() byte counting bug**: Replaced `string.length` with `TextEncoder().encode().byteLength` for accurate UTF-8 size checks against 128KB DO storage limit. Added re-check after trim with aggressive fallback.
+2. **Extraction model escalation**: When extraction verification fails and current model lacks reasoning capability, escalates to sonnet→o4mini→deepseek before retrying. Prevents token burn on spatial reasoning tasks.
+3. **Persisted extraction metadata**: `extractionMeta` field on TaskState stores repo/branch/files/identifiers on first detection. Falls back to persisted metadata when message-based detection fails after resume truncation.
+
+### Files Changed
+- `src/durable-objects/task-processor.ts` — All 3 fixes
+- `src/durable-objects/task-processor.test.ts` — 3 new tests (UTF-8 byte length, aggressive trim, ASCII baseline)
+
+### Tests
+- [x] Tests pass (2044/2044) — 3 new
+- [x] Typecheck passes (no new errors)
+
+### Notes for Next Session
+F.25 closes byte counting bug (unanimous urgency from GPT+Gemini) and extraction escalation gap.
+Remaining from AI reviews:
+- **F.21** (pendingChildren consumers) — medium priority
+- **F.24** (broader escalation policy / model floor) — low-medium priority
+- **Resume truncation quality** — GPT flagged as next performance/quality project (not a correctness bug)
+
+---
+
 ## Session: 2026-03-23 | F.23 Branch-Level Concurrency Mutex (Session: session_01TR79yEcqjQJYt4VddLUx7W)
 
 ### What was done

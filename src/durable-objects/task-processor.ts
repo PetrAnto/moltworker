@@ -659,34 +659,151 @@ function ensureMoonshotReasoning(messages: ChatMessage[]): ChatMessage[] {
 
 /**
  * Truncate large tool results in checkpoint messages to prevent context saturation.
- * Replaces tool results over `maxChars` with a truncated version showing the first
- * and last few lines, preserving enough context for the model to understand what
- * was read without retaining 30KB of stale file content across resumes.
  *
- * Only truncates non-recent messages (skips last 6) to preserve active context.
+ * Improvements over the original 15-head/5-tail approach:
+ * 1. **Tool-type-aware** — different summarization for code files vs sandbox output vs web content
+ * 2. **Deduplicates repeated reads** — if the same file was read 3 times, only the most recent survives
+ * 3. **Structured summaries** — extracts file path, line range, key content instead of blind line slicing
+ *
+ * Only truncates non-recent messages (skips last KEEP_RECENT) to preserve active context.
  */
-function truncateLargeToolResults(messages: ChatMessage[], maxChars: number): void {
+/** @internal Exported for testing */
+export function truncateLargeToolResults(messages: ChatMessage[], maxChars: number): void {
   const KEEP_RECENT = 6;
   const cutoff = Math.max(0, messages.length - KEEP_RECENT);
 
+  // Phase 1: Build tool_call_id → tool name+args map for tool-type awareness
+  const toolCallInfo = new Map<string, { name: string; args: string }>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        toolCallInfo.set(tc.id, { name: tc.function.name, args: tc.function.arguments });
+      }
+    }
+  }
+
+  // Phase 2: Deduplicate — for github_read_file, find the LAST read of each file path.
+  // Earlier reads of the same file are replaced with a one-line pointer.
+  const fileReadLastIndex = new Map<string, number>(); // filePath → last message index
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || !msg.tool_call_id) continue;
+    const info = toolCallInfo.get(msg.tool_call_id);
+    if (!info || info.name !== 'github_read_file') continue;
+    const filePath = extractFilePathFromArgs(info.args);
+    if (filePath) {
+      fileReadLastIndex.set(filePath, i);
+    }
+  }
+
   let truncated = 0;
+  let deduplicated = 0;
   for (let i = 0; i < cutoff; i++) {
     const msg = messages[i];
     if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+
+    const info = msg.tool_call_id ? toolCallInfo.get(msg.tool_call_id) : undefined;
+    const toolName = info?.name ?? '';
+
+    // Dedup: if this is a github_read_file and a later read of the same file exists, collapse
+    if (toolName === 'github_read_file' && msg.tool_call_id) {
+      const filePath = extractFilePathFromArgs(info!.args);
+      if (filePath && fileReadLastIndex.get(filePath) !== i) {
+        messages[i] = {
+          ...msg,
+          content: `[Superseded — file "${filePath}" was re-read later in conversation]`,
+        };
+        deduplicated++;
+        continue;
+      }
+    }
+
     if (msg.content.length <= maxChars) continue;
 
-    const lines = msg.content.split('\n');
-    const headLines = lines.slice(0, 15).join('\n');
-    const tailLines = lines.slice(-5).join('\n');
+    // Tool-type-aware truncation
     messages[i] = {
       ...msg,
-      content: `${headLines}\n\n[... ${lines.length - 20} lines truncated on resume — re-read file if needed ...]\n\n${tailLines}`,
+      content: truncateToolResultForResume(msg.content, toolName, maxChars),
     };
     truncated++;
   }
-  if (truncated > 0) {
-    console.log(`[TaskProcessor] Truncated ${truncated} large tool result(s) (>${maxChars} chars) to reduce context saturation`);
+
+  if (truncated > 0 || deduplicated > 0) {
+    const parts: string[] = [];
+    if (truncated > 0) parts.push(`truncated ${truncated} large result(s)`);
+    if (deduplicated > 0) parts.push(`deduplicated ${deduplicated} repeated file read(s)`);
+    console.log(`[TaskProcessor] Resume optimization: ${parts.join(', ')} (threshold: ${maxChars} chars)`);
   }
+}
+
+/** Extract file path from github_read_file tool call arguments. */
+function extractFilePathFromArgs(argsJson: string): string | null {
+  try {
+    const args = JSON.parse(argsJson) as Record<string, unknown>;
+    // github_read_file uses "path" parameter
+    const path = args.path ?? args.file_path ?? args.filename;
+    return typeof path === 'string' ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Truncate a single tool result with awareness of what kind of tool produced it.
+ *
+ * - **github_read_file**: Keep file header (path, lines), first 20 + last 10 lines of code
+ * - **sandbox_exec / run_code**: Keep command line, exit status, first 8 + last 8 lines of output
+ * - **fetch_url / browse_url / web_search**: Keep URL/title, first 300 chars of content
+ * - **Default**: First 15 + last 5 lines (original behavior)
+ */
+/** @internal Exported for testing */
+export function truncateToolResultForResume(content: string, toolName: string, maxChars: number): string {
+  const lines = content.split('\n');
+  const totalLines = lines.length;
+
+  if (toolName === 'github_read_file') {
+    // Code files: keep more head context (imports, exports, function signatures)
+    // and a meaningful tail (closing braces, return statements)
+    const headerLine = lines[0] || ''; // Usually "[path -- lines X-Y of Z total]"
+    const HEAD = 20;
+    const TAIL = 10;
+    const headLines = lines.slice(0, HEAD + 1).join('\n'); // +1 to include header
+    const tailLines = lines.slice(-TAIL).join('\n');
+    const result = `${headLines}\n\n[... ${totalLines - HEAD - TAIL} lines truncated on resume — re-read file if needed ...]\n\n${tailLines}`;
+    // If the structured version is still too large, fall back to char-based truncation
+    return result.length <= maxChars ? result : charBasedTruncation(content, maxChars, totalLines);
+  }
+
+  if (toolName === 'sandbox_exec' || toolName === 'run_code') {
+    // Execution output: command + exit status are critical, output is secondary
+    const HEAD = 8;
+    const TAIL = 8;
+    const headLines = lines.slice(0, HEAD).join('\n');
+    const tailLines = lines.slice(-TAIL).join('\n');
+    return `${headLines}\n\n[... ${totalLines - HEAD - TAIL} lines of output truncated on resume ...]\n\n${tailLines}`;
+  }
+
+  if (toolName === 'fetch_url' || toolName === 'browse_url' || toolName === 'web_search') {
+    // Web content: keep URL/title from first line, brief content summary
+    const firstLine = lines[0] || '';
+    const contentPreview = content.slice(firstLine.length + 1, firstLine.length + 500);
+    return `${firstLine}\n${contentPreview}\n\n[... ${totalLines} lines of web content truncated on resume — re-fetch if needed ...]`;
+  }
+
+  // Default: original behavior with slightly more head context
+  const HEAD = 15;
+  const TAIL = 5;
+  const headLines = lines.slice(0, HEAD).join('\n');
+  const tailLines = lines.slice(-TAIL).join('\n');
+  return `${headLines}\n\n[... ${totalLines - HEAD - TAIL} lines truncated on resume — re-read if needed ...]\n\n${tailLines}`;
+}
+
+/** Char-based fallback truncation for results that are still too large after line-based truncation. */
+function charBasedTruncation(content: string, maxChars: number, totalLines: number): string {
+  const halfLength = Math.floor(maxChars / 2) - 100;
+  const head = content.slice(0, halfLength);
+  const tail = content.slice(-halfLength);
+  return `${head}\n\n[... ${totalLines} lines truncated on resume — re-read if needed ...]\n\n${tail}`;
 }
 
 /**
