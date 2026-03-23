@@ -4,6 +4,44 @@
 
 ---
 
+## Session: 2026-03-23 | F.26 Smart Resume Truncation (Session: session_01TR79yEcqjQJYt4VddLUx7W)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/review-ai-feedback-Zo8hq`
+**Status:** ✅ Complete
+
+### Summary
+Replaced the naive 15-head/5-tail line truncation on checkpoint resume with a tool-type-aware system:
+
+1. **Tool-type-aware summarization**: Different truncation strategies per tool:
+   - `github_read_file`: Keeps file header + 20 head lines + 10 tail lines (preserves imports/exports and closing braces)
+   - `sandbox_exec` / `run_code`: 8+8 lines (command + output + exit status)
+   - `fetch_url` / `browse_url` / `web_search`: First line (URL/title) + 500 chars preview
+   - Default (unknown tools): 15+5 lines (original behavior)
+
+2. **File read deduplication**: When the same file was read multiple times across iterations, only the most recent read survives. Earlier reads are collapsed to `[Superseded — file "path" was re-read later]`.
+
+3. **Char-based fallback**: If line-based truncation for code files still exceeds `maxChars` (e.g., files with very long lines), falls back to keeping first-half/last-half by character count.
+
+### Files Changed
+- `src/durable-objects/task-processor.ts` — `truncateLargeToolResults()` rewrite + new `extractFilePathFromArgs()`, `truncateToolResultForResume()`, `charBasedTruncation()` helpers
+- `src/durable-objects/task-processor.test.ts` — 10 new tests
+
+### Tests
+- [x] Tests pass (2054/2054) — 10 new
+- [x] Typecheck passes (no new errors)
+
+### Notes for Next Session
+Resume truncation quality was the biggest remaining performance/quality bottleneck (flagged by GPT). This eliminates the two main waste patterns:
+- Re-reading files that were already in context (just truncated badly)
+- Losing critical structure (imports, exports) from code files due to blind line slicing
+
+Remaining from AI reviews:
+- **F.21** (pendingChildren consumers) — medium priority
+- **F.24** (broader escalation policy / model floor) — low-medium priority
+
+---
+
 ## Session: 2026-03-23 | F.25 Byte Counting + Extraction Escalation + Context Decoupling (Session: session_01TR79yEcqjQJYt4VddLUx7W)
 
 **AI:** Claude Opus 4.6

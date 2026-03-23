@@ -2579,6 +2579,237 @@ describe('taskForStorage', () => {
   });
 });
 
+describe('truncateLargeToolResults', () => {
+  let truncateLargeToolResults: typeof import('./task-processor').truncateLargeToolResults;
+
+  beforeEach(async () => {
+    ({ truncateLargeToolResults } = await import('./task-processor'));
+  });
+
+  function makeToolCall(id: string, name: string, args: Record<string, unknown>) {
+    return { id, type: 'function' as const, function: { name, arguments: JSON.stringify(args) } };
+  }
+
+  it('should truncate large tool results in non-recent messages', () => {
+    const bigContent = 'line\n'.repeat(500); // ~2500 chars
+    const messages = [
+      { role: 'system' as const, content: 'system' },
+      { role: 'user' as const, content: 'task' },
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc1', 'github_read_file', { path: 'src/big.ts' })] },
+      { role: 'tool' as const, content: bigContent, tool_call_id: 'tc1' },
+      { role: 'assistant' as const, content: 'analysis' },
+      { role: 'user' as const, content: 'continue' },
+      // Recent messages (last 6) — should NOT be truncated
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc2', 'github_read_file', { path: 'src/recent.ts' })] },
+      { role: 'tool' as const, content: bigContent, tool_call_id: 'tc2' },
+      { role: 'assistant' as const, content: 'done' },
+      { role: 'user' as const, content: 'ok' },
+      { role: 'assistant' as const, content: 'result' },
+      { role: 'user' as const, content: 'thanks' },
+    ];
+    truncateLargeToolResults(messages, 1000);
+    // Old tool result (index 3) should be truncated
+    expect(messages[3].content).toContain('truncated on resume');
+    expect(messages[3].content.length).toBeLessThan(bigContent.length);
+    // Recent tool result (index 7) should be preserved
+    expect(messages[7].content).toBe(bigContent);
+  });
+
+  it('should deduplicate repeated reads of the same file', () => {
+    const content1 = 'first read content '.repeat(200);
+    const content2 = 'second read content '.repeat(200);
+    const messages = [
+      { role: 'system' as const, content: 'system' },
+      { role: 'user' as const, content: 'task' },
+      // First read of src/foo.ts
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc1', 'github_read_file', { path: 'src/foo.ts' })] },
+      { role: 'tool' as const, content: content1, tool_call_id: 'tc1' },
+      // Second read of src/foo.ts (supersedes first)
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc2', 'github_read_file', { path: 'src/foo.ts' })] },
+      { role: 'tool' as const, content: content2, tool_call_id: 'tc2' },
+      // padding to push both out of KEEP_RECENT
+      { role: 'assistant' as const, content: 'a' },
+      { role: 'user' as const, content: 'b' },
+      { role: 'assistant' as const, content: 'c' },
+      { role: 'user' as const, content: 'd' },
+      { role: 'assistant' as const, content: 'e' },
+      { role: 'user' as const, content: 'f' },
+    ];
+    truncateLargeToolResults(messages, 1000);
+    // First read should be collapsed to a dedup pointer
+    expect(messages[3].content).toContain('Superseded');
+    expect(messages[3].content).toContain('src/foo.ts');
+    // Second read should be truncated (too big) but NOT deduped
+    expect(messages[5].content).not.toContain('Superseded');
+  });
+
+  it('should apply tool-type-aware truncation for github_read_file', () => {
+    const codeLines = Array.from({ length: 200 }, (_, i) => `  const line${i} = ${i};`);
+    codeLines.unshift('[src/big.ts -- lines 1-200 of 200 total]');
+    const codeContent = codeLines.join('\n');
+    const messages = [
+      { role: 'system' as const, content: 'system' },
+      { role: 'user' as const, content: 'task' },
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc1', 'github_read_file', { path: 'src/big.ts' })] },
+      { role: 'tool' as const, content: codeContent, tool_call_id: 'tc1' },
+      // 6 recent messages
+      { role: 'assistant' as const, content: 'a' },
+      { role: 'user' as const, content: 'b' },
+      { role: 'assistant' as const, content: 'c' },
+      { role: 'user' as const, content: 'd' },
+      { role: 'assistant' as const, content: 'e' },
+      { role: 'user' as const, content: 'f' },
+    ];
+    truncateLargeToolResults(messages, 2000);
+    const result = messages[3].content as string;
+    // Should keep the header line
+    expect(result).toContain('[src/big.ts');
+    // Should keep first ~20 lines
+    expect(result).toContain('const line1 =');
+    expect(result).toContain('const line15 =');
+    // Should keep last ~10 lines
+    expect(result).toContain('const line199 =');
+    // Should have truncation marker
+    expect(result).toContain('truncated on resume');
+    // Middle lines should be gone
+    expect(result).not.toContain('const line100 =');
+  });
+
+  it('should apply tool-type-aware truncation for sandbox_exec', () => {
+    const outputLines = Array.from({ length: 100 }, (_, i) => `output line ${i}`);
+    const output = outputLines.join('\n');
+    const messages = [
+      { role: 'system' as const, content: 'system' },
+      { role: 'user' as const, content: 'task' },
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc1', 'sandbox_exec', { commands: ['npm test'] })] },
+      { role: 'tool' as const, content: output, tool_call_id: 'tc1' },
+      { role: 'assistant' as const, content: 'a' },
+      { role: 'user' as const, content: 'b' },
+      { role: 'assistant' as const, content: 'c' },
+      { role: 'user' as const, content: 'd' },
+      { role: 'assistant' as const, content: 'e' },
+      { role: 'user' as const, content: 'f' },
+    ];
+    truncateLargeToolResults(messages, 1000);
+    const result = messages[3].content as string;
+    // Should keep first 8 lines (command + early output)
+    expect(result).toContain('output line 0');
+    expect(result).toContain('output line 7');
+    // Should keep last 8 lines (exit status + final output)
+    expect(result).toContain('output line 99');
+    expect(result).toContain('output line 92');
+    // Middle should be gone
+    expect(result).not.toContain('output line 50');
+    expect(result).toContain('output truncated on resume');
+  });
+
+  it('should apply tool-type-aware truncation for web_search', () => {
+    const webContent = 'Search results for "test query"\n' + 'Result text here. '.repeat(500);
+    const messages = [
+      { role: 'system' as const, content: 'system' },
+      { role: 'user' as const, content: 'task' },
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc1', 'web_search', { query: 'test' })] },
+      { role: 'tool' as const, content: webContent, tool_call_id: 'tc1' },
+      { role: 'assistant' as const, content: 'a' },
+      { role: 'user' as const, content: 'b' },
+      { role: 'assistant' as const, content: 'c' },
+      { role: 'user' as const, content: 'd' },
+      { role: 'assistant' as const, content: 'e' },
+      { role: 'user' as const, content: 'f' },
+    ];
+    truncateLargeToolResults(messages, 500);
+    const result = messages[3].content as string;
+    // Should keep the first line (search query)
+    expect(result).toContain('Search results');
+    // Should have a content preview
+    expect(result).toContain('Result text');
+    // Should have web-specific truncation marker
+    expect(result).toContain('web content truncated on resume');
+    // Should be much smaller than original
+    expect(result.length).toBeLessThan(webContent.length);
+  });
+
+  it('should not truncate small tool results', () => {
+    const smallContent = 'small result';
+    const messages = [
+      { role: 'system' as const, content: 'system' },
+      { role: 'user' as const, content: 'task' },
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc1', 'github_read_file', { path: 'src/small.ts' })] },
+      { role: 'tool' as const, content: smallContent, tool_call_id: 'tc1' },
+      { role: 'assistant' as const, content: 'a' },
+      { role: 'user' as const, content: 'b' },
+      { role: 'assistant' as const, content: 'c' },
+      { role: 'user' as const, content: 'd' },
+      { role: 'assistant' as const, content: 'e' },
+      { role: 'user' as const, content: 'f' },
+    ];
+    truncateLargeToolResults(messages, 1000);
+    expect(messages[3].content).toBe(smallContent);
+  });
+
+  it('should not deduplicate reads of different files', () => {
+    const content = 'x\n'.repeat(200);
+    const messages = [
+      { role: 'system' as const, content: 'system' },
+      { role: 'user' as const, content: 'task' },
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc1', 'github_read_file', { path: 'src/a.ts' })] },
+      { role: 'tool' as const, content: content, tool_call_id: 'tc1' },
+      { role: 'assistant' as const, content: '', tool_calls: [makeToolCall('tc2', 'github_read_file', { path: 'src/b.ts' })] },
+      { role: 'tool' as const, content: content, tool_call_id: 'tc2' },
+      { role: 'assistant' as const, content: 'a' },
+      { role: 'user' as const, content: 'b' },
+      { role: 'assistant' as const, content: 'c' },
+      { role: 'user' as const, content: 'd' },
+      { role: 'assistant' as const, content: 'e' },
+      { role: 'user' as const, content: 'f' },
+    ];
+    truncateLargeToolResults(messages, 100);
+    // Neither should be marked as superseded
+    expect(messages[3].content).not.toContain('Superseded');
+    expect(messages[5].content).not.toContain('Superseded');
+    // Both should be truncated (too large)
+    expect(messages[3].content).toContain('truncated on resume');
+    expect(messages[5].content).toContain('truncated on resume');
+  });
+});
+
+describe('truncateToolResultForResume', () => {
+  let truncateToolResultForResume: typeof import('./task-processor').truncateToolResultForResume;
+
+  beforeEach(async () => {
+    ({ truncateToolResultForResume } = await import('./task-processor'));
+  });
+
+  it('should use char-based fallback when line-based result exceeds maxChars', () => {
+    // Create content with very long lines so line-based truncation exceeds maxChars
+    const longLine = 'x'.repeat(1000);
+    const content = Array.from({ length: 100 }, () => longLine).join('\n');
+    const result = truncateToolResultForResume(content, 'github_read_file', 2000);
+    // Should fall back to char-based truncation
+    expect(result.length).toBeLessThanOrEqual(2200); // maxChars + overhead
+    expect(result).toContain('truncated on resume');
+  });
+
+  it('should keep more context for code files than for web content', () => {
+    const lines = Array.from({ length: 200 }, (_, i) => `line ${i}: content here`);
+    const content = lines.join('\n');
+    const codeResult = truncateToolResultForResume(content, 'github_read_file', 50000);
+    const webResult = truncateToolResultForResume(content, 'fetch_url', 50000);
+    // Code result should be larger (keeps 20+10 lines vs web keeps ~500 chars)
+    expect(codeResult.length).toBeGreaterThan(webResult.length);
+  });
+
+  it('should handle unknown tool names with default truncation', () => {
+    const content = Array.from({ length: 200 }, (_, i) => `data ${i}`).join('\n');
+    const result = truncateToolResultForResume(content, 'unknown_tool', 500);
+    // Default: 15 head + 5 tail
+    expect(result).toContain('data 0');
+    expect(result).toContain('data 14');
+    expect(result).toContain('data 199');
+    expect(result).not.toContain('data 100');
+  });
+});
+
 describe('getWatchdogStuckThreshold', () => {
   let getWatchdogStuckThreshold: typeof import('./task-processor').getWatchdogStuckThreshold;
 

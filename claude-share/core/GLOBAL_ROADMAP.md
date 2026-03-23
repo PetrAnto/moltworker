@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-23 (F.25 byte counting fix + extraction escalation + context decoupling — 2044 tests)
+**Last Updated:** 2026-03-23 (F.26 smart resume truncation — 2054 tests)
 
 ---
 
@@ -424,6 +424,7 @@
 | F.23 | Branch-level concurrency mutex | ✅ | 1.5h | R2-based repo-level lock with 45-min TTL. Acquire before dispatch, release on all terminal paths (success/failure/stall/cancel). orchestraRepo persisted in TaskState for cross-resume lock release. forceRelease on /cancel. 21 new tests (2041 total). |
 | F.24 | Broader escalation policy (model floor) | 🔲 | 2-4h | Current auto-escalation picks `recs.free[0]`. GPT asks: what if best free model is still too weak? Consider paid escalation with user consent, or hard model floor per task heaviness tier. |
 | F.25 | Byte counting fix + extraction escalation + context decoupling | ✅ | 1h | taskForStorage() uses TextEncoder byte length (not char count), extraction failure escalates to reasoning model (sonnet→o4mini→deepseek), extractionMeta persisted in TaskState for resume truncation resilience. 3 new tests (2044 total). |
+| F.26 | Smart resume truncation | ✅ | 1.5h | Tool-type-aware truncation (code: 20+10 lines, sandbox: 8+8, web: URL+500 chars), deduplicates repeated file reads (keeps only most recent), structured summaries instead of blind 15+5 line slicing. 10 new tests (2054 total). |
 
 ### Future: Platform Evolution (M3 Gate)
 
@@ -506,6 +507,7 @@
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(task-processor): F.26 smart resume truncation — tool-type-aware truncation (code 20+10, sandbox 8+8, web URL+preview), file read deduplication (keeps most recent), char-based fallback for long lines. 10 new tests (2054 total) | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | fix(task-processor): F.25 byte counting + extraction escalation + context decoupling — taskForStorage() uses TextEncoder byte length with re-check after trim, extraction failure escalates to reasoning model, extractionMeta persisted in TaskState for resume truncation resilience. 3 new tests (2044 total) | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
 2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | test(orchestra): F.22 profile enforcement regression tests — 14 tests: promptTierOverride (4), sandbox tool-level gating (5), forceEscalation (5). 2020 total | src/orchestra/orchestra.test.ts
 2026-03-22 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(orchestra): F.20 runtime/diff-based risk classification — RuntimeRiskProfile tracks files modified (16 config patterns), scope expansion, error accumulation, scope drift. Score 0–100 → 4 risk levels. Actions at high (caution injection) + critical (Telegram warning). Integrated into computeRunHealth(). 24 new tests (2006 total) | src/orchestra/orchestra.ts, src/orchestra/orchestra.test.ts, src/durable-objects/task-processor.ts, src/guardrails/run-health.ts, src/guardrails/run-health.test.ts
