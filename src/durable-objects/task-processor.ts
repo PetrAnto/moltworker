@@ -4997,6 +4997,34 @@ If you already created the new file and just need to patch the original, call gi
           if (draftBlocks) {
             try {
               const storage = new UserStorage(this.r2);
+
+              // Fetch current HEAD SHA for freshness check on approve
+              let baseSha: string | undefined;
+              if (task.githubToken && task.orchestraRepo) {
+                try {
+                  const [owner, repoName] = task.orchestraRepo.split('/');
+                  const ghHeaders = {
+                    Authorization: `Bearer ${task.githubToken}`,
+                    Accept: 'application/vnd.github.v3+json',
+                    'User-Agent': 'moltworker-orchestra',
+                  };
+                  const repoResp = await fetch(`https://api.github.com/repos/${owner}/${repoName}`, { headers: ghHeaders });
+                  if (repoResp.ok) {
+                    const repoData = await repoResp.json() as { default_branch: string };
+                    const refResp = await fetch(
+                      `https://api.github.com/repos/${owner}/${repoName}/git/ref/heads/${repoData.default_branch}`,
+                      { headers: ghHeaders },
+                    );
+                    if (refResp.ok) {
+                      const refData = await refResp.json() as { object: { sha: string } };
+                      baseSha = refData.object.sha;
+                    }
+                  }
+                } catch (shaErr) {
+                  console.error('[TaskProcessor] Failed to fetch baseSha for draft:', shaErr);
+                }
+              }
+
               await storage.setOrchestraDraft(request.userId, request.chatId, {
                 repo: task.orchestraRepo || '',
                 chatId: request.chatId,
@@ -5007,6 +5035,7 @@ If you already created the new file and just need to patch the original, call gi
                 revisions: [],
                 revisionCount: 0,
                 status: 'draft',
+                baseSha,
               });
 
               const elapsed = Math.round((Date.now() - task.startTime) / 1000);
