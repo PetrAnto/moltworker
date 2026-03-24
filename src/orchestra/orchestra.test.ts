@@ -48,7 +48,9 @@ import {
   type OrchestraEvent,
   type OrchestraExecutionProfile,
   type ResolvedTask,
+  commitDraftRoadmap,
 } from './orchestra';
+import type { OrchestraDraft } from '../openrouter/storage';
 import { getToolsForPhase } from '../openrouter/tools';
 
 // --- generateTaskSlug ---
@@ -3357,5 +3359,158 @@ Some notes here.`;
   it('handles empty roadmap', () => {
     const preview = formatDraftPreview('');
     expect(preview).toContain('0 phases, 0 tasks');
+  });
+
+  it('enforces maxLength truncation on final output', () => {
+    // Build a roadmap with many phases to exceed the limit
+    const phases = Array.from({ length: 50 }, (_, i) =>
+      `### Phase ${i + 1}: Task Group ${i + 1}\n- [ ] Task ${i + 1}.1\n- [ ] Task ${i + 1}.2`
+    ).join('\n\n');
+    const roadmap = `# Roadmap\n\n## Overview\nBig project.\n\n## Phases\n\n${phases}`;
+    const preview = formatDraftPreview(roadmap, 200);
+    expect(preview.length).toBeLessThanOrEqual(200);
+    expect(preview).toContain('[Truncated]');
+  });
+});
+
+// --- parseDraftBlocks defensive parsing ---
+
+describe('parseDraftBlocks (defensive)', () => {
+  it('handles CRLF line endings', () => {
+    const output = '```DRAFT_ROADMAP\r\n# Roadmap\r\n- [ ] Task\r\n```\r\n```DRAFT_WORKLOG\r\n# Log\r\n```';
+    const result = parseDraftBlocks(output);
+    expect(result).not.toBeNull();
+    expect(result!.roadmap).toContain('Roadmap');
+  });
+
+  it('handles lowercase DRAFT_ROADMAP', () => {
+    const output = '```draft_roadmap\n# My Roadmap\n- [ ] A task\n```';
+    const result = parseDraftBlocks(output);
+    expect(result).not.toBeNull();
+    expect(result!.roadmap).toContain('My Roadmap');
+  });
+
+  it('handles spaces around fence label', () => {
+    const output = '```  DRAFT_ROADMAP  \n# Spaced Roadmap\n- [ ] Task\n```';
+    const result = parseDraftBlocks(output);
+    expect(result).not.toBeNull();
+    expect(result!.roadmap).toContain('Spaced Roadmap');
+  });
+
+  it('returns null for empty roadmap block', () => {
+    const output = '```DRAFT_ROADMAP\n   \n```';
+    const result = parseDraftBlocks(output);
+    expect(result).toBeNull();
+  });
+});
+
+// --- commitDraftRoadmap freshness check ---
+
+describe('commitDraftRoadmap', () => {
+  it('rejects approval when baseSha has drifted', async () => {
+    // Mock fetch to simulate repo with a different current SHA
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ default_branch: 'main' }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ object: { sha: 'current-sha-456' } }) } as Response);
+
+    const draft: OrchestraDraft = {
+      repo: 'owner/repo',
+      chatId: 123,
+      modelAlias: 'flash',
+      userPrompt: 'test',
+      roadmapContent: '# Roadmap',
+      workLogContent: '# Log',
+      revisions: [],
+      revisionCount: 0,
+      status: 'draft',
+      baseSha: 'stale-sha-123', // Different from current-sha-456
+    };
+
+    await expect(commitDraftRoadmap({
+      githubToken: 'test-token',
+      draft,
+      userId: '42',
+    })).rejects.toThrow('Repository has changed since this draft was generated');
+
+    globalThis.fetch = originalFetch;
+  });
+
+  it('proceeds when baseSha matches current HEAD', async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn()
+      // Repo info
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ default_branch: 'main' }) } as Response)
+      // Ref SHA
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ object: { sha: 'same-sha' } }) } as Response)
+      // Create branch
+      .mockResolvedValueOnce({ ok: true } as Response)
+      // Check ROADMAP.md exists
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      // Write ROADMAP.md
+      .mockResolvedValueOnce({ ok: true } as Response)
+      // Check WORK_LOG.md exists
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      // Write WORK_LOG.md
+      .mockResolvedValueOnce({ ok: true } as Response)
+      // Create PR
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/pr/1' }) } as Response);
+    globalThis.fetch = mockFetch;
+
+    const draft: OrchestraDraft = {
+      repo: 'owner/repo',
+      chatId: 123,
+      modelAlias: 'flash',
+      userPrompt: 'test',
+      roadmapContent: '# Roadmap\n- [ ] Task',
+      workLogContent: '# Log',
+      revisions: [],
+      revisionCount: 0,
+      status: 'draft',
+      baseSha: 'same-sha',
+    };
+
+    const prUrl = await commitDraftRoadmap({
+      githubToken: 'test-token',
+      draft,
+      userId: '42',
+    });
+    expect(prUrl).toBe('https://github.com/pr/1');
+
+    globalThis.fetch = originalFetch;
+  });
+
+  it('skips freshness check when baseSha is not set', async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ default_branch: 'main' }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ object: { sha: 'any-sha' } }) } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response) // create branch
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response) // check roadmap
+      .mockResolvedValueOnce({ ok: true } as Response) // write roadmap
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ html_url: 'https://github.com/pr/2' }) } as Response); // create PR
+    globalThis.fetch = mockFetch;
+
+    const draft: OrchestraDraft = {
+      repo: 'owner/repo',
+      chatId: 123,
+      modelAlias: 'flash',
+      userPrompt: 'test',
+      roadmapContent: '# Roadmap',
+      workLogContent: '', // no work log
+      revisions: [],
+      revisionCount: 0,
+      status: 'draft',
+      // No baseSha — should skip freshness check
+    };
+
+    const prUrl = await commitDraftRoadmap({
+      githubToken: 'test-token',
+      draft,
+      userId: '42',
+    });
+    expect(prUrl).toBe('https://github.com/pr/2');
+
+    globalThis.fetch = originalFetch;
   });
 });
