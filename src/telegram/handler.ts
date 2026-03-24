@@ -1981,7 +1981,7 @@ export class TelegramHandler {
         }
 
         // Store pending orchestra params so buttons work
-        await this.storage.setPendingOrchestra(userId, { mode: 'run', repo: lockedRepo, prompt: '', chatId });
+        await this.storage.setPendingOrchestra(userId, chatId, { mode: 'run', repo: lockedRepo, prompt: '', chatId });
 
         await this.bot.sendMessage(chatId, lines.join('\n'), {
           parseMode: 'Markdown',
@@ -2392,8 +2392,8 @@ export class TelegramHandler {
       const paidButtons = recs.paid.slice(0, 2).map(r => ({
         text: `/${r.alias} ${r.cost}`, callback_data: `orchgo:${r.alias}`,
       }));
-      // Store pending orchestra params for the callback
-      await this.storage.setPendingOrchestra(userId, { mode, repo, prompt, chatId });
+      // Store pending orchestra params for the callback (keyed by userId+chatId)
+      await this.storage.setPendingOrchestra(userId, chatId, { mode, repo, prompt, chatId });
       await this.bot.sendMessage(
         chatId,
         `❌ /${modelAlias} doesn't support tools — orchestra requires tool-calling.\n\nPick a model:`,
@@ -2420,8 +2420,8 @@ export class TelegramHandler {
         callback_data: `orchgo:${r.alias}`,
       }));
       buttons.push({ text: `Proceed with /${modelAlias}`, callback_data: 'orchgo:proceed' });
-      // Store pending orchestra params for the callback
-      await this.storage.setPendingOrchestra(userId, { mode, repo, prompt, chatId });
+      // Store pending orchestra params for the callback (keyed by userId+chatId)
+      await this.storage.setPendingOrchestra(userId, chatId, { mode, repo, prompt, chatId });
       const warnings: string[] = [];
       let isUnknown = false;
       if (!modelInfo.intelligenceIndex && !modelInfo.benchmarks?.coding) {
@@ -3622,9 +3622,14 @@ export class TelegramHandler {
         if (query.message) {
           await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
         }
-        const pending = await this.storage.getPendingOrchestra(userId);
+        const pending = await this.storage.getPendingOrchestra(userId, chatId);
         if (!pending) {
           await this.bot.sendMessage(chatId, '⏳ Orchestra request expired. Please run /orch again.');
+          break;
+        }
+        // Validate chat ownership
+        if (pending.chatId !== chatId) {
+          await this.bot.sendMessage(chatId, '⚠️ This orchestra request belongs to another chat. Run /orch again here.');
           break;
         }
         // Switch model unless "proceed" was chosen
@@ -3632,7 +3637,7 @@ export class TelegramHandler {
           await this.handleUseCommand(chatId, userId, query.from.username, [payload]);
         }
         // Clear pending and execute (skip model guard if user chose "proceed")
-        await this.storage.setPendingOrchestra(userId, null);
+        await this.storage.setPendingOrchestra(userId, chatId, null);
         const skipGuard = payload === 'proceed';
         await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt, skipGuard);
         break;
@@ -3655,7 +3660,7 @@ export class TelegramHandler {
         }
         switch (payload) {
           case 'approve': {
-            // Idempotency: reject if already approving/approved
+            // Idempotency: reject if status is already past 'draft'
             if (draft.status === 'approving') {
               await this.bot.sendMessage(chatId, '⏳ Approval already in progress...');
               break;
@@ -3664,7 +3669,14 @@ export class TelegramHandler {
               await this.bot.sendMessage(chatId, '✅ This draft was already approved.');
               break;
             }
-            // Set status to approving atomically before GitHub calls
+            // Acquire R2 lock to prevent concurrent double-approve from duplicate callbacks.
+            // Unlike status checks (which are read-then-write and can race),
+            // the lock uses a separate key checked close to write time.
+            const lockAcquired = await this.storage.tryAcquireApproveLock(userId, chatId);
+            if (!lockAcquired) {
+              await this.bot.sendMessage(chatId, '⏳ Approval already in progress...');
+              break;
+            }
             draft.status = 'approving';
             await this.storage.setOrchestraDraft(userId, chatId, draft);
             await this.bot.sendMessage(chatId, '✅ Creating PR with your approved roadmap...');
@@ -3672,15 +3684,17 @@ export class TelegramHandler {
               const prUrl = await this.commitDraftRoadmap(userId, chatId, draft);
               draft.status = 'approved';
               await this.storage.setOrchestraDraft(userId, chatId, null); // Clear draft
+              await this.storage.releaseApproveLock(userId, chatId);
               await this.bot.sendMessage(
                 chatId,
                 `✅ Roadmap PR created!\n\n🔗 ${prUrl}\n\n` +
                 `Use /orch next to start implementing the first task.`
               );
             } catch (err) {
-              // Reset to draft so user can retry
+              // Reset to draft so user can retry, release lock
               draft.status = 'draft';
               await this.storage.setOrchestraDraft(userId, chatId, draft);
+              await this.storage.releaseApproveLock(userId, chatId);
               await this.bot.sendMessage(chatId, `❌ Failed to create PR: ${err instanceof Error ? err.message : String(err)}`);
             }
             break;

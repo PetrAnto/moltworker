@@ -223,9 +223,10 @@ export class UserStorage {
   /**
    * Store pending orchestra request (for model-switch-then-proceed flow).
    * Short-lived: overwritten on each /orch invocation.
+   * Keyed by userId+chatId to prevent cross-chat leakage.
    */
-  async setPendingOrchestra(userId: string, params: PendingOrchestraParams | null): Promise<void> {
-    const key = `${this.prefix}/${userId}/pending-orch.json`;
+  async setPendingOrchestra(userId: string, chatId: number, params: PendingOrchestraParams | null): Promise<void> {
+    const key = `${this.prefix}/${userId}/pending-orch-${chatId}.json`;
     if (!params) {
       await this.bucket.delete(key);
       return;
@@ -234,16 +235,19 @@ export class UserStorage {
   }
 
   /**
-   * Get pending orchestra request. Returns null if expired (>10min) or missing.
+   * Get pending orchestra request for a specific chat. Returns null if expired (>10min) or missing.
    */
-  async getPendingOrchestra(userId: string): Promise<PendingOrchestraParams | null> {
-    const key = `${this.prefix}/${userId}/pending-orch.json`;
+  async getPendingOrchestra(userId: string, chatId: number): Promise<PendingOrchestraParams | null> {
+    const key = `${this.prefix}/${userId}/pending-orch-${chatId}.json`;
     try {
       const obj = await this.bucket.get(key);
       if (!obj) return null;
       const data = await obj.json() as PendingOrchestraParams & { storedAt: number };
       // Expire after 10 minutes
-      if (Date.now() - data.storedAt > 10 * 60 * 1000) return null;
+      if (Date.now() - data.storedAt > 10 * 60 * 1000) {
+        await this.bucket.delete(key);
+        return null;
+      }
       return data;
     } catch {
       return null;
@@ -325,8 +329,34 @@ export class UserStorage {
     await Promise.all([
       this.setOrchestraDraft(userId, chatId, null),
       this.setOrchestraPlan(userId, chatId, null),
-      this.setPendingOrchestra(userId, null),
+      this.setPendingOrchestra(userId, chatId, null),
     ]);
+  }
+
+  /**
+   * Try to acquire a short-lived approve lock for a draft.
+   * Returns true if lock was acquired, false if another approval is already in progress.
+   * Lock auto-expires after 2 minutes (caller should clean up on completion).
+   */
+  async tryAcquireApproveLock(userId: string, chatId: number): Promise<boolean> {
+    const key = `${this.prefix}/${userId}/approve-lock-${chatId}.json`;
+    const existing = await this.bucket.head(key);
+    if (existing) {
+      // Check if lock is stale (>2 min)
+      const age = Date.now() - (existing.uploaded?.getTime() ?? 0);
+      if (age < 2 * 60 * 1000) {
+        return false; // Lock is active, reject
+      }
+      // Stale lock — fall through and overwrite
+    }
+    await this.bucket.put(key, JSON.stringify({ lockedAt: Date.now() }));
+    return true;
+  }
+
+  /** Release the approve lock after PR creation completes or fails. */
+  async releaseApproveLock(userId: string, chatId: number): Promise<void> {
+    const key = `${this.prefix}/${userId}/approve-lock-${chatId}.json`;
+    await this.bucket.delete(key);
   }
 
   /**
