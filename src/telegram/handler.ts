@@ -5,7 +5,7 @@
 
 import { OpenRouterClient, createOpenRouterClient, extractTextResponse, type ChatMessage } from '../openrouter/client';
 import { UserStorage, createUserStorage, SkillStorage, createSkillStorage } from '../openrouter/storage';
-import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike, r2ListFiles, r2ReadFile, r2DeleteFile, validateSavedFileName, sanitizeSavedFileName } from '../openrouter/tools';
+import { modelSupportsTools, generateDailyBriefing, geocodeCity, type SandboxLike, r2ListFiles, r2ReadFile, r2DeleteFile, validateSavedFileName, sanitizeSavedFileName, githubMergePr } from '../openrouter/tools';
 import { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } from '../openrouter/costs';
 import { loadLearnings, getRelevantLearnings, formatLearningsForPrompt, formatLearningSummary, loadLastTaskSummary, formatLastTaskForPrompt, loadSessionHistory, getRelevantSessions, formatSessionsForPrompt } from '../openrouter/learnings';
 import { getMemoryContext, loadUserMemory, addManualFact, deleteMemoryFact, clearUserMemory, formatMemoryDisplay } from '../openrouter/memory';
@@ -1651,6 +1651,7 @@ export class TelegramHandler {
    *   /orch init [repo] <description> — Create roadmap (planning only, no code)
    *   /orch run [repo] [task]         — Execute specific task
    *   /orch next [task]               — Execute next task (uses locked repo)
+   *   /orch merge <PR#> [method]      — Merge a PR (squash/merge/rebase)
    *   /orch history                   — Show past tasks
    *   /orch roadmap [repo]            — Display roadmap status
    *   /orch                           — Show help
@@ -1983,6 +1984,43 @@ export class TelegramHandler {
       }
     }
 
+    // /orch merge <PR#> [squash|merge|rebase] — merge a PR
+    if (sub === 'merge') {
+      const prArg = args[1];
+      if (!prArg) {
+        await this.bot.sendMessage(chatId, '❌ Usage: /orch merge <PR#> [squash|merge|rebase]');
+        return;
+      }
+      const pullNumber = parseInt(prArg.replace('#', ''), 10);
+      if (isNaN(pullNumber) || pullNumber <= 0) {
+        await this.bot.sendMessage(chatId, `❌ Invalid PR number: ${prArg}`);
+        return;
+      }
+      const mergeMethod = (args[2]?.toLowerCase() || 'squash') as 'squash' | 'merge' | 'rebase';
+      if (!['squash', 'merge', 'rebase'].includes(mergeMethod)) {
+        await this.bot.sendMessage(chatId, `❌ Invalid merge method: ${args[2]}\nUse: squash (default), merge, or rebase`);
+        return;
+      }
+      const lockedRepo = await this.storage.getOrchestraRepo(userId);
+      if (!lockedRepo) {
+        await this.bot.sendMessage(chatId, '❌ No default repo set.\n\nFirst run: /orch set owner/repo');
+        return;
+      }
+      if (!this.githubToken) {
+        await this.bot.sendMessage(chatId, '❌ GitHub token not configured.');
+        return;
+      }
+      const [owner, repoName] = lockedRepo.split('/');
+      await this.bot.sendChatAction(chatId, 'typing');
+      try {
+        const result = await githubMergePr(owner, repoName, pullNumber, mergeMethod, undefined, undefined, this.githubToken);
+        await this.bot.sendMessage(chatId, result);
+      } catch (error) {
+        await this.bot.sendMessage(chatId, `❌ Merge failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
+
     // /orch next [specific task] — shorthand for run with locked repo
     if (sub === 'next') {
       const lockedRepo = await this.storage.getOrchestraRepo(userId);
@@ -2143,6 +2181,7 @@ export class TelegramHandler {
       '/orch history — View past tasks\n' +
       '/orch stats [model] — Event metrics (stalls, aborts)\n' +
       '/orch reset <task> — Uncheck for re-run\n' +
+      '/orch merge <PR#> [method] — Merge a PR (squash/merge/rebase)\n' +
       '/orch redo <task> — Re-implement a failed task\n\n' +
       modelRecs + '\n\n' +
       '━━━ Workflows ━━━\n' +
@@ -5534,9 +5573,11 @@ The bot calls these automatically when relevant:
 
 ━━━ Orchestra Mode ━━━
 /orch set owner/repo — Lock default repo
+/orch do <desc> — One-shot task (no roadmap)
 /orch init <desc> — Create ROADMAP.md + WORK_LOG.md
 /orch next — Execute next roadmap task
 /orch next <task> — Execute specific task
+/orch merge <PR#> [method] — Merge PR (squash/merge/rebase)
 /orch roadmap — View roadmap status
 /orch history — View past tasks
 /orch redo <task> — Re-implement a failed task

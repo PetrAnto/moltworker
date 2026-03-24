@@ -1020,8 +1020,8 @@ describe('Phase 2.5.8 — Geolocation Tool', () => {
 // ============================================================================
 
 describe('Test 18 — /help and /start message verification', () => {
-  it('should have exactly 25 tools in AVAILABLE_TOOLS', () => {
-    expect(AVAILABLE_TOOLS.length).toBe(25);
+  it('should have exactly 26 tools in AVAILABLE_TOOLS', () => {
+    expect(AVAILABLE_TOOLS.length).toBe(26);
   });
 
   it('should list all expected tools', () => {
