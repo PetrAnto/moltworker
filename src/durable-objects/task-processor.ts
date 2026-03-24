@@ -68,7 +68,7 @@ function isSimpleQuery(messages: ChatMessage[]): boolean {
 }
 const REVIEW_PHASE_PROMPT = 'Before delivering your final answer, briefly verify: (1) Did you answer the complete question? (2) Are all data points current and accurate? (3) Is anything missing?';
 const CODING_REVIEW_PROMPT = 'Before delivering your final answer, verify with evidence:\n(1) Did you answer the complete question? Cite specific tool outputs or file contents that support your answer.\n(2) If you made code changes, did you verify them with the relevant tool (github_read_file, web_fetch, etc.)? Do NOT claim changes were made unless a tool confirmed it.\n(3) If you ran commands or created PRs, check the tool result — did it actually succeed? If a tool returned an error, say so.\n(4) For any claim about repository state (files exist, code works, tests pass), you MUST have observed it from a tool output in this session. Do not assert repo state from memory.\n(5) If you could not fully complete the task, say what remains and why — do not claim completion.\nLabel your confidence: High (tool-verified), Medium (partially verified), or Low (inferred without tool confirmation).';
-const ORCHESTRA_REVIEW_PROMPT = 'CRITICAL REVIEW — verify before reporting:\n(1) Did github_create_pr SUCCEED? Check the tool result — if it returned an error (422, 403, etc.), you MUST fix the issue and retry — push a fix commit to the SAME branch first (new branches fork from main and lose your prior work). Do NOT claim success if the PR was not created.\n(2) Does your ORCHESTRA_RESULT block contain a REAL PR URL (https://github.com/...)? If not, the task is NOT complete.\n(3) Did you update ROADMAP.md and WORK_LOG.md in the same PR?\n(4) INCOMPLETE REFACTOR CHECK — the #1 bot failure mode:\n    - If you created new module files (extracted code into separate files), did you ALSO:\n      a) Add import statements to the SOURCE file?\n      b) DELETE the original definitions (functions, constants, components, data arrays) from the source file?\n    - Check: did the source file\'s line count DROP significantly? If it barely changed or grew, you only added imports but never deleted the original code — the new modules are dead code duplicates.\n    - The task says "extract" or "split" — that means CREATE + IMPORT + DELETE in one PR. Not just create.\n    - Check the github_create_pr tool result for "INCOMPLETE REFACTOR" or "INCOMPLETE SPLIT" warnings.\n    - If the source file didn\'t shrink, go back and use patch action to DELETE the extracted definitions NOW.\n(5) CODE QUALITY SELF-CHECK — review the code you wrote for common bugs:\n    - Event handlers: if you added onKeyDown/onKeyPress, did you call e.preventDefault() for keys with default browser behavior (Space scrolls the page, Enter submits forms)?\n    - Imports: did you import everything you use? Did you remove imports for things you deleted?\n    - Props: if you added a new prop, does the parent component need to pass it? Check both sides.\n    - State: if you added useState/useEffect, are cleanup functions needed? Are dependencies correct?\n    - Edge cases: does the code handle empty/null/undefined inputs gracefully?\n    If you find an issue, fix it NOW by pushing a patch to the same branch.\nIf any of these fail, fix the issue NOW before reporting.';
+const ORCHESTRA_REVIEW_PROMPT = 'CRITICAL REVIEW — verify before reporting:\n(1) Did github_create_pr SUCCEED? Check the tool result — if it returned an error (422, 403, etc.), you MUST fix the issue and retry — push a fix commit to the SAME branch first (new branches fork from main and lose your prior work). Do NOT claim success if the PR was not created.\n(2) Does your ORCHESTRA_RESULT block contain a REAL PR URL (https://github.com/...)? If not, the task is NOT complete.\n(3) Did you update ROADMAP.md and WORK_LOG.md in the same PR?\n(4) INCOMPLETE REFACTOR CHECK — the #1 bot failure mode:\n    - If you created new module files (extracted code into separate files), did you ALSO:\n      a) Add import statements to the SOURCE file?\n      b) DELETE the original definitions (functions, constants, components, data arrays) from the source file?\n    - Check: did the source file\'s line count DROP significantly? If it barely changed or grew, you only added imports but never deleted the original code — the new modules are dead code duplicates.\n    - The task says "extract" or "split" — that means CREATE + IMPORT + DELETE in one PR. Not just create.\n    - Check the github_create_pr tool result for "INCOMPLETE REFACTOR" or "INCOMPLETE SPLIT" warnings.\n    - If the source file didn\'t shrink, go back and use patch action to DELETE the extracted definitions NOW.\n(5) CODE QUALITY SELF-CHECK — review the code you wrote for common bugs:\n    - Event handlers: if you added onKeyDown/onKeyPress, did you call e.preventDefault() for keys with default browser behavior (Space scrolls the page, Enter submits forms)?\n    - Imports: did you import everything you use? Did you remove imports for things you deleted?\n    - Props: if you added a new prop, does the parent component need to pass it? Check both sides.\n    - State: if you added useState/useEffect, are cleanup functions needed? Are dependencies correct?\n    - Edge cases: does the code handle empty/null/undefined inputs gracefully?\n    If you find an issue, fix it NOW by pushing a patch to the same branch.\n(6) SURROGATE TESTING CHECK — the #2 bot failure mode:\n    - If you created a new utility/module file to make functions testable, did you ALSO:\n      a) Update the PRODUCTION code (e.g. App.jsx) to import and USE the extracted functions?\n      b) DELETE the original inline logic from the production file?\n    - If tests only import from the new module but the app still uses inline code, you have "surrogate tests" — they verify a copy, not the running code. This is NOT acceptable.\n    - Fix: wire the extracted module into the production code NOW.\n(7) TEST FIXTURE REALISM CHECK:\n    - Do test fixtures use the REAL data shapes from the codebase? If production uses {en: 0.6, fr: 0.4}, tests MUST NOT use {english: 0.9, french: 0.3}.\n    - Read the actual production data files (e.g. destinations.js, config.js) and compare key names, value ranges, and object shapes against your test fixtures.\n    - If fixtures use invented keys or shapes, fix them NOW to match production data.\n(8) DEPENDENCY HYGIENE:\n    - Only add dependencies that are strictly required for the task. Do NOT add UI packages (e.g. @vitest/ui) when only headless testing was requested.\n    - If you added a dependency, verify it is actually imported somewhere in the code.\nIf any of these fail, fix the issue NOW before reporting.';
 
 // Source-grounding guardrail — injected into coding/github tasks to prevent hallucination.
 // This is a strict instruction that the model MUST NOT fabricate claims about repo state.
@@ -264,6 +264,8 @@ interface TaskState {
   // Auto-resume settings
   autoResume?: boolean; // If true, automatically resume on timeout
   autoResumeCount?: number; // Number of auto-resumes so far
+  // Cumulative iteration count across all resumes (task.iterations resets per cycle)
+  totalIterations?: number;
   // Stall detection: track tool count at last resume to detect spinning
   toolCountAtLastResume?: number; // toolsUsed.length when last resume fired
   noProgressResumes?: number; // Consecutive resumes with no new tool calls
@@ -1283,6 +1285,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
         orchestraRepo: task.orchestraRepo,
+        // Preserve execution profile across CPU yield resumes
+        executionProfile: task.executionProfile,
       };
 
       this.doState.waitUntil(this.processTask(taskRequest).catch(async (error) => {
@@ -1526,6 +1530,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
         orchestraRepo: task.orchestraRepo,
+        // Preserve execution profile across resumes so resume cap stays consistent
+        executionProfile: task.executionProfile,
       };
 
       // Use waitUntil to trigger resume without blocking alarm
@@ -2301,6 +2307,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         truncateLargeToolResults(conversationMessages, 16384);
 
         task.toolsUsed = checkpoint.toolsUsed;
+        // Accumulate total iterations across all resumes before resetting
+        task.totalIterations = (task.totalIterations ?? 0) + (checkpoint.iterations ?? task.iterations);
         // Reset iteration counter to 0 — give a fresh budget of maxIterations.
         // The checkpoint preserves conversation state and tool results, so work
         // isn't lost. Without this reset, resumed tasks immediately re-hit the
@@ -3993,7 +4001,7 @@ If you already created the new file and just need to patch the original, call gi
             const elapsed = Math.round((Date.now() - task.startTime) / 1000);
             const modelInfo = `🤖 /${task.modelAlias}`;
             await this.sendLongMessage(request.telegramToken, request.chatId,
-              `${task.result}\n\n${modelInfo} | ⏱️ ${elapsed}s (${task.iterations} iter)`
+              `${task.result}\n\n${modelInfo} | ⏱️ ${elapsed}s (${(task.totalIterations ?? 0) + task.iterations} iter)`
             );
             // Save assistant response to conversation history
             if (this.r2 && task.result) {
@@ -4381,12 +4389,29 @@ If you already created the new file and just need to patch the original, call gi
               /source.*shrank|line count.*drop|deleted.*from.*source|EXTRACTION.*PASS/i.test(o)
             );
 
+            // Surrogate testing check: if test files were created alongside a new
+            // utility module, verify the production file was updated to import it.
+            // Pattern: model creates foo.js + foo.test.js but never patches App.jsx
+            // to import from foo.js — tests verify a copy, not the running code.
+            const allToolContent = conversationMessages
+              .map(m => typeof m.content === 'string' ? m.content : '')
+              .join('\n');
+            const createdTestFiles = /\.(test|spec)\.(js|ts|jsx|tsx)/.test(allToolContent);
+            const createdUtilModule = toolOutputs.some(o =>
+              /action.*create.*\.(js|ts)/.test(o) && !/\.(test|spec|config)\.(js|ts)/.test(o)
+            );
+            const productionFilePatched = toolOutputs.some(o =>
+              /action.*patch/.test(o) && /import.*from/.test(o)
+            );
+            const isSurrogateTesting = createdTestFiles && createdUtilModule && !productionFilePatched && !isExtraction;
+
             const missing: string[] = [];
             if (!hasPrCall) missing.push('github_create_pr was never called — no PR exists');
             else if (!prSucceeded) missing.push('github_create_pr was called but FAILED — check the error and retry');
             if (!roadmapUpdated) missing.push('ROADMAP.md was not updated (task must be marked as [x] done)');
             if (!workLogUpdated) missing.push('WORK_LOG.md was not updated (append a new row with your changes)');
             if (isExtraction && !sourceShrank) missing.push('Source file did NOT shrink — you created the new file but FORGOT to DELETE the extracted code from the original. Use patch action to DELETE now.');
+            if (isSurrogateTesting) missing.push('SURROGATE TESTING: You created a new utility module and tests for it, but the PRODUCTION code (e.g. App.jsx) still has the SAME logic inline. You MUST patch the production file to import from your new module and DELETE the inline duplicates. Tests that verify a detached copy while the app runs different code are worthless.');
 
             if (missing.length > 0) {
               // Turn 2+: Abort — model is incapable of completing deliverables
@@ -4916,7 +4941,8 @@ If you already created the new file and just need to patch the original, call gi
         const modelInfo = task.modelAlias !== request.modelAlias
           ? `🤖 /${task.modelAlias} (rotated from /${request.modelAlias})`
           : `🤖 /${task.modelAlias}`;
-        finalResponse += `\n\n${modelInfo} | ⏱️ ${elapsed}s (${task.iterations} iter)`;
+        const cumulativeIter = (task.totalIterations ?? 0) + task.iterations;
+        finalResponse += `\n\n${modelInfo} | ⏱️ ${elapsed}s (${cumulativeIter} iter)`;
         if (totalUsage.totalTokens > 0) {
           finalResponse += ` | ${formatCostFooter(totalUsage, task.modelAlias)}`;
         }
@@ -4982,7 +5008,7 @@ If you already created the new file and just need to patch the original, call gi
           request.telegramToken,
           request.chatId,
           `❌ Task failed: ${task.error}${failProgress}\n\n` +
-          `${task.toolsUsed.length} tools used across ${task.iterations} iterations.\n` +
+          `${task.toolsUsed.length} tools used across ${(task.totalIterations ?? 0) + task.iterations} iterations.\n` +
           formatHealthFooter(failRunHealth, failResumeCount),
         );
       } else {
@@ -5031,7 +5057,7 @@ If you already created the new file and just need to patch the original, call gi
         await this.sendTelegramMessageWithButtons(
           request.telegramToken,
           request.chatId,
-          `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${task.iterations} iterations.${limitProgress}\n${formatHealthFooter(limitRunHealth, limitResumeCount)}\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
+          `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${(task.totalIterations ?? 0) + task.iterations} iterations.${limitProgress}\n${formatHealthFooter(limitRunHealth, limitResumeCount)}\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
           [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
         );
       }
@@ -5185,7 +5211,7 @@ If you already created the new file and just need to patch the original, call gi
         await this.sendTelegramMessageWithButtons(
           request.telegramToken,
           request.chatId,
-          `❌ Task failed: ${task.error}${failProgress}\n\n💡 Progress saved (${task.iterations} iterations).`,
+          `❌ Task failed: ${task.error}${failProgress}\n\n💡 Progress saved (${(task.totalIterations ?? 0) + task.iterations} iterations).`,
           [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
         );
       } else {
