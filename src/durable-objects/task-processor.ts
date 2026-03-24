@@ -17,7 +17,7 @@ import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSumma
 import { loadUserMemory, storeMemoryFact, buildExtractionPrompt, parseExtractionResponse, MIN_EXTRACTION_LENGTH, EXTRACTION_DEBOUNCE_MS } from '../openrouter/memory';
 import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extractor';
 import { UserStorage } from '../openrouter/storage';
-import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile, type RuntimeRiskProfile, createRuntimeRiskProfile, updateRuntimeRisk, formatRuntimeRisk } from '../orchestra/orchestra';
+import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, parseDraftBlocks, formatDraftPreview, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile, type RuntimeRiskProfile, createRuntimeRiskProfile, updateRuntimeRisk, formatRuntimeRisk } from '../orchestra/orchestra';
 import { releaseRepoLock } from '../concurrency/branch-lock';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
@@ -316,6 +316,8 @@ interface TaskState {
   runtimeRisk?: RuntimeRiskProfile;
   // F.23: Repo for branch-lock release on completion/failure (set for orchestra tasks)
   orchestraRepo?: string;
+  // Draft init mode: DO stores roadmap draft in R2 + sends preview message with buttons
+  isDraftInit?: boolean;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
   // Run health signals — tracked across the task lifetime
@@ -324,8 +326,10 @@ interface TaskState {
   // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
   // The alarm handler resumes immediately without stall detection or auto-resume counting.
   yieldPending?: boolean;
-  // Set true after the first tier-scope advisory has been sent (prevents duplicate warnings)
+  // Set true after the first tier wall-clock advisory has been sent (prevents duplicate warnings)
   tierBudgetWarned?: boolean;
+  // Set true after the first tier resume-count advisory has been sent
+  tierResumeWarned?: boolean;
   // Set true when an API streaming response is in progress.
   // If watchdog finds isStreaming=true but isRunning=false, the DO was evicted mid-stream
   // — resume faster (90s) and don't count as a model stall.
@@ -364,6 +368,8 @@ export interface TaskRequest {
   executionProfile?: OrchestraExecutionProfile;
   // F.23: Repo for branch-lock release (set for orchestra tasks)
   orchestraRepo?: string;
+  // Draft init mode: model outputs roadmap in text, DO stores draft + sends preview
+  isDraftInit?: boolean;
 }
 
 // DO environment with R2 + Sandbox bindings
@@ -1521,12 +1527,22 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.lastUpdate = Date.now();
       await this.doState.storage.put('task', taskForStorage(task));
 
-      // Notify user about auto-resume with progress context
+      // Notify user about auto-resume with progress context.
+      // Include scope advisory when resumes exceed tier expectation (one-time warning).
       const resumeTools = newTools > 0 ? `, ${newTools} new tools` : '';
+      const expectedResumes = task.executionProfile?.bounds.expectedResumes;
+      const tier = task.executionProfile?.bounds.complexityTier;
+      const resumeAdvisory = (expectedResumes != null && tier && resumeCount + 1 > expectedResumes && !task.tierResumeWarned)
+        ? `\n⚠️ Exceeds "${tier}" scope expectation (${expectedResumes} resumes). Consider a stronger model next time.`
+        : '';
+      if (resumeAdvisory) {
+        task.tierResumeWarned = true;
+        await this.doState.storage.put('task', taskForStorage(task));
+      }
       await this.sendTelegramMessage(
         task.telegramToken,
         task.chatId,
-        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}`
+        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}${resumeAdvisory}`
       );
 
       // Reconstruct TaskRequest and trigger resume.
@@ -2480,8 +2496,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (!task.isOrchestraTask && conversationMessages.length > 0) {
       const sysMsg0 = conversationMessages[0];
       const sys0 = typeof sysMsg0?.content === 'string' ? sysMsg0.content : '';
-      if (sys0.includes('Orchestra RUN') || sys0.includes('Orchestra INIT') || sys0.includes('Orchestra REDO')) {
+      if (sys0.includes('Orchestra RUN') || sys0.includes('Orchestra INIT') || sys0.includes('Orchestra REDO') || sys0.includes('Orchestra DRAFT')) {
         task.isOrchestraTask = true;
+        if (sys0.includes('Orchestra DRAFT') || request.isDraftInit) {
+          task.isDraftInit = true;
+        }
         await this.doState.storage.put('task', taskForStorage(task));
       }
     }
@@ -4970,6 +4989,56 @@ If you already created the new file and just need to patch the original, call gi
         // Delete status message
         if (statusMessageId) {
           await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
+        }
+
+        // ─── Draft init mode: store draft + send preview with buttons ────────
+        if (task.isDraftInit && task.result && this.r2) {
+          const draftBlocks = parseDraftBlocks(task.result);
+          if (draftBlocks) {
+            try {
+              const storage = new UserStorage(this.r2);
+              await storage.setOrchestraDraft(request.userId, {
+                repo: task.orchestraRepo || '',
+                chatId: request.chatId,
+                modelAlias: task.modelAlias,
+                userPrompt: request.prompt || '',
+                roadmapContent: draftBlocks.roadmap,
+                workLogContent: draftBlocks.workLog,
+                branchName: '', // Will be generated on approve
+                revisions: [],
+                revisionCount: 0,
+              });
+
+              const elapsed = Math.round((Date.now() - task.startTime) / 1000);
+              const preview = formatDraftPreview(draftBlocks.roadmap);
+              await this.sendTelegramMessageWithButtons(
+                request.telegramToken,
+                request.chatId,
+                `📋 **Roadmap Draft** (${elapsed}s, /${task.modelAlias})\n\n${preview}`,
+                [
+                  [
+                    { text: '✅ Approve & Create PR', callback_data: 'orchdraft:approve' },
+                    { text: '✏️ Revise', callback_data: 'orchdraft:revise' },
+                  ],
+                  [
+                    { text: '📄 Full Preview', callback_data: 'orchdraft:full' },
+                    { text: '❌ Cancel', callback_data: 'orchdraft:cancel' },
+                  ],
+                ]
+              );
+              console.log(`[TaskProcessor] Draft init: stored roadmap draft (${draftBlocks.roadmap.length} chars) for user ${request.userId}`);
+            } catch (draftErr) {
+              console.error('[TaskProcessor] Failed to store draft:', draftErr);
+              // Fall through to normal response
+            }
+            // Clean up and return — skip normal final response
+            if (this.r2 && task.orchestraRepo) {
+              releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+            }
+            return;
+          }
+          // If draft blocks weren't found, fall through to normal response
+          console.log('[TaskProcessor] Draft init: DRAFT_ROADMAP block not found in response, falling back to normal flow');
         }
 
         // Build final response
