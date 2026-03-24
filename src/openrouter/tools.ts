@@ -636,6 +636,49 @@ export const AVAILABLE_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'github_merge_pr',
+      description: 'Merge a GitHub Pull Request. Authentication is handled automatically.\n\n' +
+        'Merge methods:\n' +
+        '• "squash" (default) — combines all commits into one clean commit\n' +
+        '• "merge" — creates a merge commit preserving all branch commits\n' +
+        '• "rebase" — replays branch commits on top of base branch\n\n' +
+        'The PR must be open and mergeable. After merging, the source branch is automatically deleted.',
+      parameters: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner (username or organization)',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          pull_number: {
+            type: 'number',
+            description: 'Pull request number to merge',
+          },
+          merge_method: {
+            type: 'string',
+            enum: ['squash', 'merge', 'rebase'],
+            description: 'Merge method (default: squash)',
+          },
+          commit_title: {
+            type: 'string',
+            description: 'Custom commit title (optional — GitHub generates one if omitted)',
+          },
+          commit_message: {
+            type: 'string',
+            description: 'Custom commit message body (optional)',
+          },
+        },
+        required: ['owner', 'repo', 'pull_number'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'workspace_write_file',
       description: 'Stage a file for creation or update in the local workspace. Does NOT call GitHub — the file is held in storage until you call workspace_commit.\n\n' +
         'Use this instead of github_push_files when creating or updating multiple files. ' +
@@ -993,6 +1036,17 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
           args.message,
           args.changes,
           args.base,
+          githubToken
+        );
+        break;
+      case 'github_merge_pr':
+        result = await githubMergePr(
+          args.owner,
+          args.repo,
+          Number(args.pull_number),
+          args.merge_method || 'squash',
+          args.commit_title,
+          args.commit_message,
           githubToken
         );
         break;
@@ -2762,6 +2816,95 @@ async function githubCreatePr(
   ];
 
   return summary.join('\n');
+}
+
+/**
+ * Merge a GitHub Pull Request.
+ *
+ * Uses the GitHub REST API to merge a PR with the specified merge method.
+ * After merging, automatically deletes the source branch.
+ */
+export async function githubMergePr(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  mergeMethod: 'squash' | 'merge' | 'rebase' = 'squash',
+  commitTitle?: string,
+  commitMessage?: string,
+  token?: string,
+): Promise<string> {
+  if (!token) throw new Error('GitHub token is required for merging PRs.');
+  if (!/^[a-zA-Z0-9_.-]+$/.test(owner)) throw new Error(`Invalid owner: ${owner}`);
+  if (!/^[a-zA-Z0-9_.-]+$/.test(repo)) throw new Error(`Invalid repo: ${repo}`);
+  if (!Number.isInteger(pullNumber) || pullNumber <= 0) throw new Error(`Invalid PR number: ${pullNumber}`);
+
+  const headers: Record<string, string> = {
+    'User-Agent': 'MoltworkerBot/1.0',
+    'Accept': 'application/vnd.github.v3+json',
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
+
+  // First, check PR status to give a clear error if not mergeable
+  const prUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`;
+  const prResponse = await fetch(prUrl, { headers });
+  if (!prResponse.ok) {
+    const errText = await prResponse.text();
+    throw new Error(`Failed to fetch PR #${pullNumber}: ${prResponse.status} — ${errText}`);
+  }
+  const prData = await prResponse.json() as {
+    state: string;
+    mergeable: boolean | null;
+    mergeable_state: string;
+    title: string;
+    head: { ref: string };
+    base: { ref: string };
+    merge_commit_sha: string | null;
+  };
+
+  if (prData.state !== 'open') {
+    throw new Error(`PR #${pullNumber} is ${prData.state}, not open. Cannot merge.`);
+  }
+  if (prData.mergeable === false) {
+    throw new Error(`PR #${pullNumber} has merge conflicts (state: ${prData.mergeable_state}). Resolve conflicts first.`);
+  }
+
+  // Merge the PR
+  const mergeUrl = `${prUrl}/merge`;
+  const mergeBody: Record<string, string> = {
+    merge_method: mergeMethod,
+  };
+  if (commitTitle) mergeBody.commit_title = commitTitle;
+  if (commitMessage) mergeBody.commit_message = commitMessage;
+
+  const mergeResponse = await fetch(mergeUrl, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(mergeBody),
+  });
+
+  if (!mergeResponse.ok) {
+    const errText = await mergeResponse.text();
+    throw new Error(`Failed to merge PR #${pullNumber}: ${mergeResponse.status} — ${errText}`);
+  }
+
+  const mergeData = await mergeResponse.json() as { sha: string; message: string };
+
+  // Delete the source branch (best-effort)
+  const branchRef = prData.head.ref;
+  try {
+    const delUrl = `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branchRef)}`;
+    await fetch(delUrl, { method: 'DELETE', headers });
+  } catch {
+    // Branch deletion is best-effort — repo settings may auto-delete
+  }
+
+  return `✅ PR #${pullNumber} merged successfully!\n\n` +
+    `Title: ${prData.title}\n` +
+    `Method: ${mergeMethod}\n` +
+    `Branch: ${branchRef} → ${prData.base.ref}\n` +
+    `Commit: ${mergeData.sha?.substring(0, 7) || 'unknown'}\n` +
+    `Branch ${branchRef} deleted.`;
 }
 
 /**
