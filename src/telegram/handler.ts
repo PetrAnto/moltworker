@@ -2329,7 +2329,7 @@ export class TelegramHandler {
             resolvedExecutionBrief = resolved.executionBrief;
             // Build centralized execution profile — drives sandbox, resume, and routing decisions
             executionProfile = buildExecutionProfile(resolved, modelAlias);
-            console.log(`[orchestra] executionProfile: ambiguity=${executionProfile.intent.ambiguity} sandbox=${executionProfile.bounds.requiresSandbox} maxResumes=${executionProfile.bounds.maxAutoResumes} tier=${executionProfile.routing.promptTier} children=${executionProfile.intent.pendingChildren}`);
+            console.log(`[orchestra] executionProfile: tier=${executionProfile.bounds.complexityTier} ambiguity=${executionProfile.intent.ambiguity} sandbox=${executionProfile.bounds.requiresSandbox} maxResumes=${executionProfile.bounds.maxAutoResumes} expectedTools=${executionProfile.bounds.expectedTools} expectedWallClock=${Math.round(executionProfile.bounds.expectedWallClockMs / 1000)}s promptTier=${executionProfile.routing.promptTier} children=${executionProfile.intent.pendingChildren}`);
           }
         }
 
@@ -2601,7 +2601,8 @@ export class TelegramHandler {
         : '📝 Task: next uncompleted from roadmap';
       // Build profile info line for the confirmation message
       const profileInfo = executionProfile
-        ? `\n📊 Profile: ${executionProfile.intent.ambiguity} ambiguity, ` +
+        ? `\n📊 Profile: ${executionProfile.bounds.complexityTier} scope, ` +
+          `${executionProfile.intent.ambiguity} ambiguity, ` +
           `${executionProfile.bounds.requiresSandbox ? 'sandbox' : 'no sandbox'}, ` +
           `${executionProfile.bounds.maxAutoResumes} resumes` +
           (executionProfile.intent.pendingChildren > 0 ? `, ${executionProfile.intent.pendingChildren} sub-steps` : '') +

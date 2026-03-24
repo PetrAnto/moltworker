@@ -324,6 +324,8 @@ interface TaskState {
   // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
   // The alarm handler resumes immediately without stall detection or auto-resume counting.
   yieldPending?: boolean;
+  // Set true after the first tier-scope advisory has been sent (prevents duplicate warnings)
+  tierBudgetWarned?: boolean;
   // Set true when an API streaming response is in progress.
   // If watchdog finds isStreaming=true but isRunning=false, the DO was evicted mid-stream
   // — resume faster (90s) and don't count as a model stall.
@@ -1256,6 +1258,34 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
       }
       return;
+    }
+
+    // ─── Tier scope advisory: suggest escalation when wall-clock exceeds expected budget ─
+    // This is NOT a hard kill — the task continues. It warns the user once that this
+    // task is taking longer than expected for its scope tier, suggesting model escalation.
+    if (task.executionProfile?.bounds.expectedWallClockMs && !task.tierBudgetWarned) {
+      const wallClockElapsed = Date.now() - task.startTime;
+      const expectedBudget = task.executionProfile.bounds.expectedWallClockMs;
+      if (wallClockElapsed > expectedBudget) {
+        const tier = task.executionProfile.bounds.complexityTier ?? 'unknown';
+        const expectedSec = Math.round(expectedBudget / 1000);
+        const actualSec = Math.round(wallClockElapsed / 1000);
+        task.tierBudgetWarned = true;
+        await this.doState.storage.put('task', taskForStorage(task));
+        console.log(`[TaskProcessor] Tier scope advisory: ${actualSec}s > ${expectedSec}s expected for "${tier}" tier`);
+        this.emitOrchestraEvent(task, 'tier_scope_exceeded', {
+          tier, expectedMs: expectedBudget, actualMs: wallClockElapsed,
+          tools: task.toolsUsed.length, resumes: task.autoResumeCount ?? 0,
+        });
+        if (task.telegramToken) {
+          await this.sendTelegramMessage(
+            task.telegramToken, task.chatId,
+            `⏱️ Task running longer than expected for "${tier}" scope (${actualSec}s > ${expectedSec}s expected).\n` +
+            `${task.toolsUsed.length} tools, ${task.autoResumeCount ?? 0} resumes so far.\n` +
+            `💡 Consider a more capable model next time: ${this.getStallModelRecs()}`
+          );
+        }
+      }
     }
 
     // CPU budget yield: processTask proactively yielded to get fresh CPU budget.
@@ -3962,13 +3992,25 @@ If you already created the new file and just need to patch the original, call gi
           // Accumulate active time for CPU budget tracking (excludes pacing sleeps)
           cumulativeActiveMs += iterActiveMs;
 
-          // Check total tool call limit — prevents excessive API usage on runaway tasks
+          // Check total tool call limit — prevents excessive API usage on runaway tasks.
+          // Hard limit from model tier (free/paid) always enforced.
           const maxTotalTools = (getModel(task.modelAlias)?.isFree === true) ? MAX_TOTAL_TOOLS_FREE : MAX_TOTAL_TOOLS_PAID;
           if (task.toolsUsed.length >= maxTotalTools) {
             console.log(`[TaskProcessor] Total tool call limit reached: ${task.toolsUsed.length} >= ${maxTotalTools}`);
             conversationMessages.push({
               role: 'user',
               content: `[SYSTEM] You have used ${task.toolsUsed.length} tool calls, which is the maximum allowed for this task. You MUST now provide your final answer using the information you have gathered so far. Do NOT call any more tools.`,
+            });
+          }
+          // Soft tier advisory: if expected tool count exceeded, nudge the model to wrap up.
+          // This doesn't block tools — it just encourages the model to be more focused.
+          const expectedTools = task.executionProfile?.bounds.expectedTools;
+          if (expectedTools && task.toolsUsed.length === expectedTools && task.toolsUsed.length < maxTotalTools) {
+            const tier = task.executionProfile?.bounds.complexityTier ?? 'unknown';
+            console.log(`[TaskProcessor] Tier tool advisory: reached ${expectedTools} expected tools for "${tier}" scope`);
+            conversationMessages.push({
+              role: 'user',
+              content: `[ADVISORY] You have used ${expectedTools} tool calls, which is the expected limit for a "${tier}" scope task. Try to wrap up soon — focus on completing the remaining work efficiently.`,
             });
           }
 

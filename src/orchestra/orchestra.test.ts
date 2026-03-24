@@ -31,6 +31,9 @@ import {
   LARGE_FILE_THRESHOLD_KB,
   LARGE_FILE_WARNING_LINES,
   buildExecutionProfile,
+  classifyComplexityTier,
+  TIER_BUDGETS,
+  type ComplexityTier,
   createRuntimeRiskProfile,
   updateRuntimeRisk,
   isHighRiskFile,
@@ -2836,6 +2839,119 @@ describe('buildExecutionProfile', () => {
     );
     // isHeavyCoding matches first in the ternary, so floor=28
     expect(profile.routing.modelFloor).toBe(28);
+  });
+  // --- Complexity tier in profile ---
+
+  it('sets trivial tier for simple + no-ambiguity tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Bump version in package.json', concreteScore: 8, ambiguity: 'none' }),
+      'claude',
+    );
+    expect(profile.bounds.complexityTier).toBe('trivial');
+    expect(profile.bounds.expectedTools).toBe(TIER_BUDGETS.trivial.expectedTools);
+    expect(profile.bounds.expectedWallClockMs).toBe(TIER_BUDGETS.trivial.expectedWallClockMs);
+  });
+
+  it('sets small tier for concrete non-heavy tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Implement user auth middleware', concreteScore: 5, ambiguity: 'none' }),
+      'claude',
+    );
+    expect(profile.bounds.complexityTier).toBe('small');
+  });
+
+  it('sets medium tier for high-ambiguity non-heavy tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Do something', concreteScore: 1, ambiguity: 'high' }),
+      'claude',
+    );
+    expect(profile.bounds.complexityTier).toBe('medium');
+  });
+
+  it('sets large tier for heavy coding tasks', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Refactor auth module into separate files', concreteScore: 7, ambiguity: 'none' }),
+      'claude',
+    );
+    expect(profile.bounds.complexityTier).toBe('large');
+  });
+
+  it('sets large tier for tasks with 3+ children', () => {
+    const children = [
+      { title: 'Sub-task 1', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 1 },
+      { title: 'Sub-task 2', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 2 },
+      { title: 'Sub-task 3', done: false, indent: 1, children: [], kind: 'checkbox' as const, lineIndex: 3 },
+    ];
+    const profile = buildExecutionProfile(
+      makeResolved({ pendingChildren: children }),
+      'flash',
+    );
+    expect(profile.bounds.complexityTier).toBe('large');
+  });
+
+  it('tier does not affect resume cap (decoupled)', () => {
+    // Trivial tier still gets full resume cap based on ambiguity, not tier
+    const profile = buildExecutionProfile(
+      makeResolved({ title: 'Update readme with badges', concreteScore: 6, ambiguity: 'none' }),
+      'claude',
+    );
+    expect(profile.bounds.complexityTier).toBe('trivial');
+    expect(profile.bounds.maxAutoResumes).toBe(6); // Base resumes, not tier expected
+  });
+});
+
+// --- classifyComplexityTier ---
+
+describe('classifyComplexityTier', () => {
+  it('returns trivial for simple + no ambiguity', () => {
+    expect(classifyComplexityTier('Update readme', true, false, 'none', 0)).toBe('trivial');
+  });
+
+  it('returns small for simple + some ambiguity', () => {
+    expect(classifyComplexityTier('Rename the function', true, false, 'low', 0)).toBe('small');
+  });
+
+  it('returns small for concrete non-heavy task', () => {
+    expect(classifyComplexityTier('Add user auth endpoint', false, false, 'none', 0)).toBe('small');
+  });
+
+  it('returns medium for low-ambiguity non-simple task', () => {
+    expect(classifyComplexityTier('Improve the error handling', false, false, 'low', 0)).toBe('medium');
+  });
+
+  it('returns medium for high-ambiguity non-heavy task', () => {
+    expect(classifyComplexityTier('Make it better', false, false, 'high', 0)).toBe('medium');
+  });
+
+  it('returns large for heavy coding', () => {
+    expect(classifyComplexityTier('Refactor the auth module', false, true, 'none', 0)).toBe('large');
+  });
+
+  it('returns large for 3+ pending children', () => {
+    expect(classifyComplexityTier('Build the feature', false, false, 'none', 3)).toBe('large');
+  });
+
+  it('trivial overrides heavy coding check (simple wins)', () => {
+    // If title matches both isSimple and isHeavyCoding, isSimple+none → trivial
+    // But in practice buildExecutionProfile checks both regexes independently
+    expect(classifyComplexityTier('Config refactor', true, true, 'none', 0)).toBe('trivial');
+  });
+});
+
+// --- TIER_BUDGETS ---
+
+describe('TIER_BUDGETS', () => {
+  it('trivial has fastest expected completion', () => {
+    expect(TIER_BUDGETS.trivial.expectedWallClockMs).toBeLessThanOrEqual(60_000);
+    expect(TIER_BUDGETS.trivial.expectedTools).toBeLessThanOrEqual(5);
+  });
+
+  it('budgets increase monotonically', () => {
+    const tiers: ComplexityTier[] = ['trivial', 'small', 'medium', 'large'];
+    for (let i = 1; i < tiers.length; i++) {
+      expect(TIER_BUDGETS[tiers[i]].expectedWallClockMs).toBeGreaterThan(TIER_BUDGETS[tiers[i - 1]].expectedWallClockMs);
+      expect(TIER_BUDGETS[tiers[i]].expectedTools).toBeGreaterThan(TIER_BUDGETS[tiers[i - 1]].expectedTools);
+    }
   });
 });
 
