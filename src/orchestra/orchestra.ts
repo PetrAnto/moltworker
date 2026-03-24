@@ -456,6 +456,11 @@ files: {comma-separated changed files}
 summary: {one sentence}
 \`\`\`
 
+## EXTRACTION + TEST QUALITY RULES
+- If you extract code into a new module for testability, you MUST also update the production file to import from the new module and DELETE the inline duplicates. Never leave two copies of the same logic.
+- Test fixtures MUST use real data shapes from the codebase. Read production data files and use actual key names (e.g. \`{en: 0.6}\` not \`{english: 0.9}\`).
+- Only add dependencies strictly required for the task. No UI/dev-only packages unless explicitly requested.
+
 **IMPORTANT: Do NOT output a plan, outline, or list of steps. CALL the tools directly. Your first action must be a github_read_file tool call.**
 
 Begin now. Read the roadmap first.`;
@@ -566,6 +571,12 @@ summary: {one sentence}
 
 The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FAILED\`.
 ${historyContext}
+
+## EXTRACTION + TEST QUALITY RULES
+- If you extract code into a new module for testability, you MUST also update the production file to import from the new module and DELETE the inline duplicates. Never leave two copies of the same logic.
+- Test fixtures MUST use real data shapes from the codebase. Read production data files first and use actual key names and value ranges (e.g. \`{en: 0.6}\` not \`{english: 0.9}\`).
+- Only add dependencies strictly required for the task. No UI/dev-only packages unless explicitly requested.
+- Commit hygiene: every commit must build/test. Do not create fixup commits — get it right the first time.
 
 **IMPORTANT: Do NOT output a plan or outline. CALL tools directly. Your first action must be a github_read_file tool call.**
 
@@ -713,6 +724,12 @@ summary: {1-2 sentence summary}
 - Use "${modelAlias}" in branch names and commit messages.
 - You MUST produce an ORCHESTRA_RESULT: block with a real PR URL — the task is NOT complete without it
 - **Do NOT output a plan, outline, or list of steps.** CALL tools directly. ${params.roadmapContent ? 'Your first action must be reading the code files needed for the task.' : 'Your first action must be a github_read_file tool call.'}
+
+## EXTRACTION + TEST QUALITY (mandatory)
+- **No surrogate testing:** If you extract code into a new module for testability, you MUST also update the production file to import from the new module and DELETE the original inline code. Tests that only verify a detached copy while the app runs different code are worthless.
+- **Fixture realism:** Test fixtures MUST use real data shapes from the codebase. Read production data files FIRST. Use actual key names and value ranges (e.g. \`{en: 0.6}\` not \`{english: 0.9}\`). Invented fixture shapes miss real bugs.
+- **Dependency hygiene:** Only add packages strictly required for the task. No UI/dev-only packages (e.g. @vitest/ui) unless explicitly requested. Every added dependency must be imported somewhere.
+- **Atomic commits:** Every commit must build and pass tests independently. Do not create fixup commits — include dependencies, configs, and code in the same commit.
 ${historyContext}`;
 }
 
