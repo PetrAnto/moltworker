@@ -16,6 +16,7 @@ export interface PendingOrchestraParams {
 /**
  * Draft roadmap stored during init preview flow.
  * Created after model generates roadmap, consumed when user approves.
+ * Keyed by userId+chatId to prevent cross-chat leakage.
  */
 export interface OrchestraDraft {
   repo: string;
@@ -27,14 +28,16 @@ export interface OrchestraDraft {
   roadmapContent: string;
   /** Generated WORK_LOG.md content (or append row) */
   workLogContent: string;
-  /** Branch name for the PR */
-  branchName: string;
   /** Revision history: previous user feedback that shaped this draft */
   revisions: string[];
   /** How many times this draft has been revised */
   revisionCount: number;
   /** Set true when user taps Revise — next message is treated as revision feedback */
   pendingRevision?: boolean;
+  /** Lifecycle: draft → approving → approved → cancelled */
+  status: 'draft' | 'approving' | 'approved' | 'cancelled';
+  /** SHA of the default branch at draft time — used for freshness check on approve */
+  baseSha?: string;
 }
 
 /**
@@ -248,10 +251,19 @@ export class UserStorage {
   }
 
   // --- Draft roadmap storage (init preview flow) ---
+  // Keyed by userId+chatId to prevent cross-chat state leakage.
+
+  private draftKey(userId: string, chatId: number): string {
+    return `${this.prefix}/${userId}/orch-draft-${chatId}.json`;
+  }
+
+  private planKey(userId: string, chatId: number): string {
+    return `${this.prefix}/${userId}/orch-plan-${chatId}.json`;
+  }
 
   /** Store a draft roadmap for user approval. Expires after 30 minutes. */
-  async setOrchestraDraft(userId: string, draft: OrchestraDraft | null): Promise<void> {
-    const key = `${this.prefix}/${userId}/orch-draft.json`;
+  async setOrchestraDraft(userId: string, chatId: number, draft: OrchestraDraft | null): Promise<void> {
+    const key = this.draftKey(userId, chatId);
     if (!draft) {
       await this.bucket.delete(key);
       return;
@@ -259,14 +271,18 @@ export class UserStorage {
     await this.bucket.put(key, JSON.stringify({ ...draft, storedAt: Date.now() }));
   }
 
-  /** Get draft roadmap. Returns null if expired (>30min) or missing. */
-  async getOrchestraDraft(userId: string): Promise<OrchestraDraft | null> {
-    const key = `${this.prefix}/${userId}/orch-draft.json`;
+  /** Get draft roadmap for a specific chat. Returns null if expired (>30min) or missing. Deletes expired objects. */
+  async getOrchestraDraft(userId: string, chatId: number): Promise<OrchestraDraft | null> {
+    const key = this.draftKey(userId, chatId);
     try {
       const obj = await this.bucket.get(key);
       if (!obj) return null;
       const data = await obj.json() as OrchestraDraft & { storedAt: number };
-      if (Date.now() - data.storedAt > 30 * 60 * 1000) return null;
+      if (Date.now() - data.storedAt > 30 * 60 * 1000) {
+        // Clean up expired object
+        await this.bucket.delete(key);
+        return null;
+      }
       return data;
     } catch {
       return null;
@@ -274,10 +290,11 @@ export class UserStorage {
   }
 
   // --- Conversational planning state ---
+  // Keyed by userId+chatId to prevent cross-chat state leakage.
 
   /** Store /orch plan state (accumulated requirements). Expires after 30 minutes. */
-  async setOrchestraPlan(userId: string, plan: OrchestraPlanState | null): Promise<void> {
-    const key = `${this.prefix}/${userId}/orch-plan.json`;
+  async setOrchestraPlan(userId: string, chatId: number, plan: OrchestraPlanState | null): Promise<void> {
+    const key = this.planKey(userId, chatId);
     if (!plan) {
       await this.bucket.delete(key);
       return;
@@ -285,18 +302,31 @@ export class UserStorage {
     await this.bucket.put(key, JSON.stringify({ ...plan, storedAt: Date.now() }));
   }
 
-  /** Get /orch plan state. Returns null if expired (>30min) or missing. */
-  async getOrchestraPlan(userId: string): Promise<OrchestraPlanState | null> {
-    const key = `${this.prefix}/${userId}/orch-plan.json`;
+  /** Get /orch plan state for a specific chat. Returns null if expired (>30min) or missing. Deletes expired objects. */
+  async getOrchestraPlan(userId: string, chatId: number): Promise<OrchestraPlanState | null> {
+    const key = this.planKey(userId, chatId);
     try {
       const obj = await this.bucket.get(key);
       if (!obj) return null;
       const data = await obj.json() as OrchestraPlanState & { storedAt: number };
-      if (Date.now() - data.storedAt > 30 * 60 * 1000) return null;
+      if (Date.now() - data.storedAt > 30 * 60 * 1000) {
+        // Clean up expired object
+        await this.bucket.delete(key);
+        return null;
+      }
       return data;
     } catch {
       return null;
     }
+  }
+
+  /** Clear all interactive orchestra state for a user+chat (draft, plan, pending). */
+  async clearAllOrchestraState(userId: string, chatId: number): Promise<void> {
+    await Promise.all([
+      this.setOrchestraDraft(userId, chatId, null),
+      this.setOrchestraPlan(userId, chatId, null),
+      this.setPendingOrchestra(userId, null),
+    ]);
   }
 
   /**

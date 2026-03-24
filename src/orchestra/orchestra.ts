@@ -16,6 +16,7 @@
  */
 
 import { getModel } from '../openrouter/models';
+import type { OrchestraDraft } from '../openrouter/storage';
 
 // Orchestra task entry stored in R2
 export interface OrchestraTask {
@@ -359,17 +360,25 @@ These will be shown to the user for review before committing.
 
 /**
  * Parse DRAFT_ROADMAP and DRAFT_WORKLOG blocks from model output.
- * Returns null if blocks are not found.
+ * Returns null if the roadmap block is not found.
+ *
+ * Tolerant of: CRLF line endings, optional spaces around fences,
+ * case variations (DRAFT_ROADMAP, draft_roadmap, Draft_Roadmap).
  */
 export function parseDraftBlocks(output: string): { roadmap: string; workLog: string } | null {
-  // Match ```DRAFT_ROADMAP ... ``` blocks (tolerant of whitespace)
-  const roadmapMatch = output.match(/```DRAFT_ROADMAP\s*\n([\s\S]*?)```/);
-  const workLogMatch = output.match(/```DRAFT_WORKLOG\s*\n([\s\S]*?)```/);
+  // Normalize CRLF to LF for consistent matching
+  const normalized = output.replace(/\r\n/g, '\n');
+  // Match ```DRAFT_ROADMAP ... ``` blocks — case-insensitive, tolerant of spaces
+  const roadmapMatch = normalized.match(/```\s*DRAFT_ROADMAP\s*\n([\s\S]*?)```/i);
+  const workLogMatch = normalized.match(/```\s*DRAFT_WORKLOG\s*\n([\s\S]*?)```/i);
 
   if (!roadmapMatch) return null;
 
+  const roadmap = roadmapMatch[1].trim();
+  if (!roadmap) return null; // Empty roadmap is invalid
+
   return {
-    roadmap: roadmapMatch[1].trim(),
+    roadmap,
     workLog: workLogMatch ? workLogMatch[1].trim() : '',
   };
 }
@@ -432,17 +441,17 @@ export function formatDraftPreview(roadmapContent: string, maxLength: number = 3
     parts.push(`💡 ${notes.slice(0, 3).join(' ')}`);
   }
 
-  let preview = parts.join('\n');
-  if (preview.length > maxLength) {
-    preview = preview.slice(0, maxLength - 20) + '\n\n[Truncated]';
-  }
-
-  // Count total tasks
+  // Count total tasks and append summary before truncation
   const totalTasks = (roadmapContent.match(/^\s*-\s*\[[ x]\]/gm) || []).length;
   parts.push('');
   parts.push(`📊 Total: ${phases.length} phases, ${totalTasks} tasks`);
 
-  return parts.join('\n');
+  let result = parts.join('\n');
+  if (result.length > maxLength) {
+    result = result.slice(0, maxLength - 20) + '\n\n[Truncated]';
+  }
+
+  return result;
 }
 
 // ============================================================
@@ -2893,4 +2902,145 @@ export async function cleanupExpiredOrchestraEvents(r2: R2Bucket): Promise<numbe
     console.error('[OrchestraEvents] Failed to cleanup expired events:', err);
     return 0;
   }
+}
+
+// ============================================================
+// DRAFT COMMIT — Centralized PR creation from approved draft
+// ============================================================
+
+/**
+ * Commit an approved draft roadmap — creates branch, writes files, opens PR.
+ * No model call needed — uses GitHub API directly.
+ *
+ * @param params.githubToken - GitHub API token
+ * @param params.draft - The approved draft to commit
+ * @param params.userId - User ID for history tracking
+ * @param params.r2 - Optional R2 bucket for storing orchestra history
+ * @returns PR URL
+ * @throws if baseSha has changed (stale draft) or GitHub API fails
+ */
+export async function commitDraftRoadmap(params: {
+  githubToken: string;
+  draft: OrchestraDraft;
+  userId: string;
+  r2?: R2Bucket;
+}): Promise<string> {
+  const { githubToken, draft, userId, r2 } = params;
+  const [owner, repoName] = draft.repo.split('/');
+  if (!owner || !repoName) throw new Error(`Invalid repo format: ${draft.repo}`);
+
+  const GITHUB_API = 'https://api.github.com';
+  const headers = {
+    Authorization: `Bearer ${githubToken}`,
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': 'moltworker-orchestra',
+    'Content-Type': 'application/json',
+  };
+
+  // Generate branch name
+  const suffix = Date.now().toString(36).slice(-4);
+  const branchName = `bot/roadmap-init-${draft.modelAlias}-${suffix}`;
+
+  // 1. Get default branch SHA
+  const repoResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}`, { headers });
+  if (!repoResp.ok) throw new Error(`Failed to get repo info: ${repoResp.status}`);
+  const repoData = await repoResp.json() as { default_branch: string };
+  const defaultBranch = repoData.default_branch;
+
+  const refResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/git/ref/heads/${defaultBranch}`, { headers });
+  if (!refResp.ok) throw new Error(`Failed to get default branch SHA: ${refResp.status}`);
+  const refData = await refResp.json() as { object: { sha: string } };
+  const currentSha = refData.object.sha;
+
+  // Freshness check: if draft stored a baseSha, verify repo hasn't changed
+  if (draft.baseSha && draft.baseSha !== currentSha) {
+    throw new Error(
+      'Repository has changed since this draft was generated. ' +
+      'Please regenerate the draft to avoid overwriting recent changes.'
+    );
+  }
+
+  // 2. Create branch
+  const createBranchResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/git/refs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: currentSha }),
+  });
+  if (!createBranchResp.ok && createBranchResp.status !== 422) {
+    throw new Error(`Failed to create branch: ${createBranchResp.status}`);
+  }
+
+  // 3. Write files via Contents API
+  const writeFile = async (path: string, content: string, message: string) => {
+    let existingSha: string | undefined;
+    const getResp = await fetch(
+      `${GITHUB_API}/repos/${owner}/${repoName}/contents/${path}?ref=${encodeURIComponent(branchName)}`,
+      { headers },
+    );
+    if (getResp.ok) {
+      const data = await getResp.json() as { sha: string };
+      existingSha = data.sha;
+    }
+
+    const body: Record<string, string> = {
+      message,
+      content: btoa(unescape(encodeURIComponent(content))),
+      branch: branchName,
+    };
+    if (existingSha) body.sha = existingSha;
+
+    const resp = await fetch(
+      `${GITHUB_API}/repos/${owner}/${repoName}/contents/${path}`,
+      { method: 'PUT', headers, body: JSON.stringify(body) },
+    );
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`Failed to write ${path}: ${resp.status} ${errText.slice(0, 200)}`);
+    }
+  };
+
+  await writeFile('ROADMAP.md', draft.roadmapContent, `feat: initialize project roadmap [${draft.modelAlias}]`);
+  if (draft.workLogContent) {
+    await writeFile('WORK_LOG.md', draft.workLogContent, `feat: initialize work log [${draft.modelAlias}]`);
+  }
+
+  // 4. Create PR
+  const prBody = `## Roadmap Preview\n\n${draft.roadmapContent.slice(0, 3000)}\n\n---\nGenerated by Orchestra Mode (/${draft.modelAlias})\nApproved by user before commit.`;
+  const prResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/pulls`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: `feat: initialize project roadmap [${draft.modelAlias}]`,
+      body: prBody,
+      head: branchName,
+      base: defaultBranch,
+    }),
+  });
+  if (!prResp.ok) {
+    const errText = await prResp.text();
+    throw new Error(`Failed to create PR: ${prResp.status} ${errText.slice(0, 200)}`);
+  }
+
+  const prData = await prResp.json() as { html_url: string };
+
+  // 5. Store in orchestra history
+  if (r2) {
+    const orchestraTask: OrchestraTask = {
+      taskId: `orch-${userId}-${Date.now()}`,
+      timestamp: Date.now(),
+      modelAlias: draft.modelAlias,
+      repo: draft.repo,
+      mode: 'init',
+      prompt: draft.userPrompt.substring(0, 200),
+      branchName,
+      prUrl: prData.html_url,
+      status: 'completed',
+      filesChanged: draft.workLogContent ? ['ROADMAP.md', 'WORK_LOG.md'] : ['ROADMAP.md'],
+      summary: 'Roadmap created via draft preview flow',
+      durationMs: 0,
+    };
+    await storeOrchestraTask(r2, userId, orchestraTask);
+  }
+
+  return prData.html_url;
 }

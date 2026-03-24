@@ -4997,16 +4997,16 @@ If you already created the new file and just need to patch the original, call gi
           if (draftBlocks) {
             try {
               const storage = new UserStorage(this.r2);
-              await storage.setOrchestraDraft(request.userId, {
+              await storage.setOrchestraDraft(request.userId, request.chatId, {
                 repo: task.orchestraRepo || '',
                 chatId: request.chatId,
                 modelAlias: task.modelAlias,
                 userPrompt: request.prompt || '',
                 roadmapContent: draftBlocks.roadmap,
                 workLogContent: draftBlocks.workLog,
-                branchName: '', // Will be generated on approve
                 revisions: [],
                 revisionCount: 0,
+                status: 'draft',
               });
 
               const elapsed = Math.round((Date.now() - task.startTime) / 1000);

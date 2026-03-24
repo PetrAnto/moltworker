@@ -38,6 +38,7 @@ import {
   getEventBasedModelScores,
   buildExecutionProfile,
   buildDraftInitPrompt,
+  commitDraftRoadmap,
   type OrchestraExecutionProfile,
 } from '../orchestra/orchestra';
 import type { OrchestraDraft, OrchestraPlanState } from '../openrouter/storage';
@@ -795,22 +796,24 @@ export class TelegramHandler {
     }
 
     // Draft revision mode: user's message is revision feedback for the current draft
-    const activeDraft = await this.storage.getOrchestraDraft(userId);
+    // Keyed by userId+chatId — only intercepts in the originating chat
+    const activeDraft = await this.storage.getOrchestraDraft(userId, chatId);
     if (activeDraft?.pendingRevision) {
       // Clear revision flag and re-run with feedback
       activeDraft.pendingRevision = false;
       activeDraft.revisions.push(text);
       activeDraft.revisionCount++;
-      await this.storage.setOrchestraDraft(userId, activeDraft);
+      await this.storage.setOrchestraDraft(userId, chatId, activeDraft);
       // Re-run draft generation with revision context
       return this.executeOrchestraDraftRevision(chatId, userId, activeDraft, text);
     }
 
     // /orch plan mode: capture messages as requirements
-    const activePlan = await this.storage.getOrchestraPlan(userId);
+    // Keyed by userId+chatId — only intercepts in the originating chat
+    const activePlan = await this.storage.getOrchestraPlan(userId, chatId);
     if (activePlan) {
       activePlan.requirements.push(text);
-      await this.storage.setOrchestraPlan(userId, activePlan);
+      await this.storage.setOrchestraPlan(userId, chatId, activePlan);
       const count = activePlan.requirements.length;
       await this.bot.sendMessage(chatId, `📝 Got it (${count} requirement${count > 1 ? 's' : ''} so far). Send more, or tap Generate Draft when ready.`, {
         reply_markup: {
@@ -1146,7 +1149,7 @@ export class TelegramHandler {
         break;
 
       case '/cancel':
-        // Cancel any running task
+        // Cancel any running task AND clear all interactive orchestra state
         if (this.taskProcessor) {
           try {
             const doId = this.taskProcessor.idFromName(userId);
@@ -1178,6 +1181,9 @@ export class TelegramHandler {
         } else {
           await this.bot.sendMessage(chatId, 'Task processor not available.');
         }
+        // Clear all interactive orchestra state (draft, plan, pending revision)
+        // so normal messages aren't accidentally captured after /cancel
+        await this.storage.clearAllOrchestraState(userId, chatId);
         break;
 
       case '/steer': {
@@ -2148,8 +2154,8 @@ export class TelegramHandler {
         }
         planRepo = lockedRepo;
       }
-      // Enter planning mode
-      await this.storage.setOrchestraPlan(userId, {
+      // Enter planning mode (keyed by userId+chatId)
+      await this.storage.setOrchestraPlan(userId, chatId, {
         repo: planRepo,
         chatId,
         requirements: [],
@@ -2177,13 +2183,13 @@ export class TelegramHandler {
 
     // /orch draft — trigger draft generation from planning mode
     if (sub === 'draft') {
-      const plan = await this.storage.getOrchestraPlan(userId);
+      const plan = await this.storage.getOrchestraPlan(userId, chatId);
       if (!plan || plan.requirements.length === 0) {
         await this.bot.sendMessage(chatId, '❌ No planning session active. Start with /orch plan owner/repo');
         return;
       }
       const combinedPrompt = plan.requirements.join('\n\n');
-      await this.storage.setOrchestraPlan(userId, null); // Clear planning state
+      await this.storage.setOrchestraPlan(userId, chatId, null); // Clear planning state
       return this.executeOrchestra(chatId, userId, 'draft', plan.repo, combinedPrompt);
     }
 
@@ -2315,121 +2321,16 @@ export class TelegramHandler {
   }
 
   /**
-   * Commit an approved draft roadmap — creates branch, writes files, opens PR.
-   * No model call needed — uses GitHub API directly.
+   * Commit an approved draft roadmap — delegates to centralized commitDraftRoadmap in orchestra.ts.
    */
-  private async commitDraftRoadmap(userId: string, draft: OrchestraDraft): Promise<string> {
+  private async commitDraftRoadmap(userId: string, chatId: number, draft: OrchestraDraft): Promise<string> {
     if (!this.githubToken) throw new Error('GitHub token not configured');
-    const [owner, repoName] = draft.repo.split('/');
-    if (!owner || !repoName) throw new Error(`Invalid repo format: ${draft.repo}`);
-
-    const GITHUB_API = 'https://api.github.com';
-    const headers = {
-      Authorization: `Bearer ${this.githubToken}`,
-      Accept: 'application/vnd.github.v3+json',
-      'User-Agent': 'moltworker-orchestra',
-      'Content-Type': 'application/json',
-    };
-
-    // Generate branch name
-    const suffix = Date.now().toString(36).slice(-4);
-    const branchName = `bot/roadmap-init-${draft.modelAlias}-${suffix}`;
-
-    // 1. Get default branch SHA
-    const repoResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}`, { headers });
-    if (!repoResp.ok) throw new Error(`Failed to get repo info: ${repoResp.status}`);
-    const repoData = await repoResp.json() as { default_branch: string };
-    const defaultBranch = repoData.default_branch;
-
-    const refResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/git/ref/heads/${defaultBranch}`, { headers });
-    if (!refResp.ok) throw new Error(`Failed to get default branch SHA: ${refResp.status}`);
-    const refData = await refResp.json() as { object: { sha: string } };
-    const baseSha = refData.object.sha;
-
-    // 2. Create branch
-    const createBranchResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/git/refs`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+    return commitDraftRoadmap({
+      githubToken: this.githubToken,
+      draft,
+      userId,
+      r2: this.r2Bucket,
     });
-    if (!createBranchResp.ok && createBranchResp.status !== 422) {
-      throw new Error(`Failed to create branch: ${createBranchResp.status}`);
-    }
-
-    // 3. Write ROADMAP.md
-    const writeFile = async (path: string, content: string, message: string) => {
-      // Check if file exists (to get SHA for update)
-      let existingSha: string | undefined;
-      const getResp = await fetch(
-        `${GITHUB_API}/repos/${owner}/${repoName}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(branchName)}`,
-        { headers },
-      );
-      if (getResp.ok) {
-        const data = await getResp.json() as { sha: string };
-        existingSha = data.sha;
-      }
-
-      const body: Record<string, string> = {
-        message,
-        content: btoa(unescape(encodeURIComponent(content))), // Handle UTF-8
-        branch: branchName,
-      };
-      if (existingSha) body.sha = existingSha;
-
-      const resp = await fetch(
-        `${GITHUB_API}/repos/${owner}/${repoName}/contents/${encodeURIComponent(path)}`,
-        { method: 'PUT', headers, body: JSON.stringify(body) },
-      );
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Failed to write ${path}: ${resp.status} ${text.slice(0, 200)}`);
-      }
-    };
-
-    await writeFile('ROADMAP.md', draft.roadmapContent, `feat: initialize project roadmap [${draft.modelAlias}]`);
-    if (draft.workLogContent) {
-      await writeFile('WORK_LOG.md', draft.workLogContent, `feat: initialize work log [${draft.modelAlias}]`);
-    }
-
-    // 4. Create PR
-    const prBody = `## Roadmap Preview\n\n${draft.roadmapContent.slice(0, 3000)}\n\n---\nGenerated by Orchestra Mode (/${draft.modelAlias})\nApproved by user before commit.`;
-    const prResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/pulls`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        title: `feat: initialize project roadmap [${draft.modelAlias}]`,
-        body: prBody,
-        head: branchName,
-        base: defaultBranch,
-      }),
-    });
-    if (!prResp.ok) {
-      const text = await prResp.text();
-      throw new Error(`Failed to create PR: ${prResp.status} ${text.slice(0, 200)}`);
-    }
-
-    const prData = await prResp.json() as { html_url: string };
-
-    // 5. Store in orchestra history
-    if (this.r2Bucket) {
-      const orchestraTask: OrchestraTask = {
-        taskId: `orch-${userId}-${Date.now()}`,
-        timestamp: Date.now(),
-        modelAlias: draft.modelAlias,
-        repo: draft.repo,
-        mode: 'init',
-        prompt: draft.userPrompt.substring(0, 200),
-        branchName,
-        prUrl: prData.html_url,
-        status: 'completed',
-        filesChanged: draft.workLogContent ? ['ROADMAP.md', 'WORK_LOG.md'] : ['ROADMAP.md'],
-        summary: 'Roadmap created via draft preview flow',
-        durationMs: 0,
-      };
-      await storeOrchestraTask(this.r2Bucket, userId, orchestraTask);
-    }
-
-    return prData.html_url;
   }
 
   /**
@@ -3742,24 +3643,44 @@ export class TelegramHandler {
         if (query.message) {
           await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
         }
-        const draft = await this.storage.getOrchestraDraft(userId);
+        const draft = await this.storage.getOrchestraDraft(userId, chatId);
         if (!draft) {
           await this.bot.sendMessage(chatId, '⏳ Draft expired. Please run /orch init again.');
           break;
         }
+        // Validate chat ownership — reject callbacks from wrong chat
+        if (draft.chatId !== chatId) {
+          await this.bot.sendMessage(chatId, '⚠️ This draft belongs to another chat. Use /orch init here to start a new one.');
+          break;
+        }
         switch (payload) {
           case 'approve': {
-            // Programmatically create PR with the stored draft content
+            // Idempotency: reject if already approving/approved
+            if (draft.status === 'approving') {
+              await this.bot.sendMessage(chatId, '⏳ Approval already in progress...');
+              break;
+            }
+            if (draft.status === 'approved') {
+              await this.bot.sendMessage(chatId, '✅ This draft was already approved.');
+              break;
+            }
+            // Set status to approving atomically before GitHub calls
+            draft.status = 'approving';
+            await this.storage.setOrchestraDraft(userId, chatId, draft);
             await this.bot.sendMessage(chatId, '✅ Creating PR with your approved roadmap...');
             try {
-              const prUrl = await this.commitDraftRoadmap(userId, draft);
-              await this.storage.setOrchestraDraft(userId, null); // Clear draft
+              const prUrl = await this.commitDraftRoadmap(userId, chatId, draft);
+              draft.status = 'approved';
+              await this.storage.setOrchestraDraft(userId, chatId, null); // Clear draft
               await this.bot.sendMessage(
                 chatId,
                 `✅ Roadmap PR created!\n\n🔗 ${prUrl}\n\n` +
                 `Use /orch next to start implementing the first task.`
               );
             } catch (err) {
+              // Reset to draft so user can retry
+              draft.status = 'draft';
+              await this.storage.setOrchestraDraft(userId, chatId, draft);
               await this.bot.sendMessage(chatId, `❌ Failed to create PR: ${err instanceof Error ? err.message : String(err)}`);
             }
             break;
@@ -3767,7 +3688,7 @@ export class TelegramHandler {
           case 'revise': {
             // Set pending revision flag — next user message will be treated as revision feedback
             draft.pendingRevision = true;
-            await this.storage.setOrchestraDraft(userId, draft);
+            await this.storage.setOrchestraDraft(userId, chatId, draft);
             await this.bot.sendMessage(
               chatId,
               '✏️ What should I change? Describe your revision and I\'ll regenerate the roadmap.'
@@ -3795,7 +3716,8 @@ export class TelegramHandler {
             break;
           }
           case 'cancel': {
-            await this.storage.setOrchestraDraft(userId, null);
+            draft.status = 'cancelled';
+            await this.storage.setOrchestraDraft(userId, chatId, null);
             await this.bot.sendMessage(chatId, '❌ Draft cancelled.');
             break;
           }
@@ -3808,17 +3730,22 @@ export class TelegramHandler {
         if (query.message) {
           await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
         }
+        // Validate chat ownership
         if (payload === 'generate') {
-          const plan = await this.storage.getOrchestraPlan(userId);
+          const plan = await this.storage.getOrchestraPlan(userId, chatId);
           if (!plan || plan.requirements.length === 0) {
             await this.bot.sendMessage(chatId, '❌ No requirements collected yet. Send some messages first.');
             break;
           }
+          if (plan.chatId !== chatId) {
+            await this.bot.sendMessage(chatId, '⚠️ This planning session belongs to another chat.');
+            break;
+          }
           const combinedPrompt = plan.requirements.join('\n\n');
-          await this.storage.setOrchestraPlan(userId, null);
+          await this.storage.setOrchestraPlan(userId, chatId, null);
           await this.executeOrchestra(chatId, userId, 'draft', plan.repo, combinedPrompt);
         } else if (payload === 'cancel') {
-          await this.storage.setOrchestraPlan(userId, null);
+          await this.storage.setOrchestraPlan(userId, chatId, null);
           await this.bot.sendMessage(chatId, '❌ Planning cancelled.');
         }
         break;
