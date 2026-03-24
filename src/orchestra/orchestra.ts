@@ -1212,6 +1212,53 @@ export interface ResolvedTask {
 export type TaskAmbiguity = 'none' | 'low' | 'high';
 
 /**
+ * Complexity tier — pre-execution scope classification.
+ * Determined once in buildExecutionProfile() from task title signals.
+ *
+ * This classifies the *scope* of the task, not model capability.
+ * Used for:
+ * - Setting expected budgets (tool counts, wall-clock) for observability
+ * - Triggering model escalation suggestions when actuals exceed expectations
+ * - Informing the model about expected scope via system prompt
+ *
+ * NOT used for hard-killing tasks — stall detection handles that.
+ *
+ * trivial: typo, version bump, add comment, rename
+ * small:   config change, simple bug fix, single-file edit
+ * medium:  new feature, add route, single-file refactor
+ * large:   multi-file refactor, migration, test suite
+ */
+export type ComplexityTier = 'trivial' | 'small' | 'medium' | 'large';
+
+/**
+ * Expected scope budgets per tier.
+ * These are *expectations*, not hard limits. When exceeded, the system
+ * suggests model escalation rather than aborting the task.
+ */
+export interface TierBudget {
+  /** Expected max auto-resumes for this scope */
+  expectedResumes: number;
+  /** Expected max tool calls for this scope */
+  expectedTools: number;
+  /** Expected max wall-clock time (ms) for this scope */
+  expectedWallClockMs: number;
+}
+
+/** Expected budgets by tier — used for escalation triggers, not hard kills.
+ * Calibrated to Claude Code-like UX expectations:
+ * - trivial should complete in under a minute (no resume needed)
+ * - small should feel snappy (1-2 min, maybe one resume)
+ * - medium is standard feature work (5-8 min, few resumes)
+ * - large is the only tier where longer runs are expected
+ */
+export const TIER_BUDGETS: Record<ComplexityTier, TierBudget> = {
+  trivial: { expectedResumes: 0, expectedTools: 5,  expectedWallClockMs: 60_000 },
+  small:   { expectedResumes: 1, expectedTools: 15, expectedWallClockMs: 120_000 },
+  medium:  { expectedResumes: 3, expectedTools: 40, expectedWallClockMs: 480_000 },
+  large:   { expectedResumes: 6, expectedTools: 80, expectedWallClockMs: 900_000 },
+};
+
+/**
  * Centralized classification object computed once after task resolution.
  * Bundles all task signals so sandbox gate, resume policy, model floor,
  * and prompt tier react to the exact same data.
@@ -1230,8 +1277,14 @@ export interface OrchestraExecutionProfile {
   bounds: {
     /** Whether to include sandbox verification in the prompt and expose the tool */
     requiresSandbox: boolean;
-    /** Max auto-resumes before giving up (tighter for ambiguous tasks) */
+    /** Max auto-resumes before giving up */
     maxAutoResumes: number;
+    /** Complexity tier — classifies task scope for observability and escalation */
+    complexityTier: ComplexityTier;
+    /** Expected tool count for this scope (soft limit — triggers escalation advice) */
+    expectedTools: number;
+    /** Expected wall-clock time for this scope (soft limit — triggers escalation advice) */
+    expectedWallClockMs: number;
   };
 
   /** Model routing directives */
@@ -1242,6 +1295,33 @@ export interface OrchestraExecutionProfile {
     /** Minimum IQ floor for this task type (0 = no floor) */
     modelFloor: number;
   };
+}
+
+/**
+ * Classify a task into a complexity tier based on title signals and structure.
+ * This is the single source of truth for runtime budget allocation.
+ */
+export function classifyComplexityTier(
+  title: string,
+  isSimple: boolean,
+  isHeavyCoding: boolean,
+  ambiguity: TaskAmbiguity,
+  pendingChildren: number,
+): ComplexityTier {
+  // Trivial: explicitly simple + highly concrete (no ambiguity)
+  if (isSimple && ambiguity === 'none') return 'trivial';
+
+  // Large: heavy coding, or high ambiguity, or parent with many children
+  if (isHeavyCoding) return 'large';
+  if (pendingChildren >= 3) return 'large';
+  if (ambiguity === 'high') return 'medium'; // high ambiguity but not heavy → medium (capped, not full budget)
+
+  // Small: simple tasks with some ambiguity, or concrete non-coding tasks
+  if (isSimple) return 'small';
+  if (ambiguity === 'none' && pendingChildren === 0) return 'small';
+
+  // Default: medium
+  return 'medium';
 }
 
 /**
@@ -1269,16 +1349,19 @@ export function buildExecutionProfile(
   // Sandbox bypass: only skip if explicitly simple AND highly concrete
   const requiresSandbox = !(isSimple && resolved.ambiguity === 'none');
 
-  // Resume cap: tighter for ambiguous tasks to prevent thrashing
-  const isFree = model?.isFree ?? true;
-  const baseResumes = isFree ? 6 : 6; // Orchestra default is 6 for both
+  // Complexity tier classifies task scope for observability and escalation.
+  // This is SEPARATE from the resume cap — tier is about scope, resumes are about model reliability.
   const childrenCount = resolved.pendingChildren.length;
+  const tier = classifyComplexityTier(title, isSimple, isHeavyCoding, resolved.ambiguity, childrenCount);
+  const tierBudget = TIER_BUDGETS[tier];
+
+  // Resume cap: based on ambiguity and task structure (not tier).
+  // This controls how many chances the model gets, which is about reliability.
+  const baseResumes = 6; // Orchestra default
   const maxAutoResumes =
     resolved.ambiguity === 'high' ? Math.min(baseResumes, 3) :
     resolved.ambiguity === 'low' ? Math.min(baseResumes, 4) :
-    // Heavy coding with strong model gets full budget
     isHeavyCoding && intelligenceIndex >= 45 ? baseResumes + 2 :
-    // Parent tasks with many children get extra resumes to complete sub-steps
     childrenCount >= 3 ? baseResumes + 1 :
     baseResumes;
 
@@ -1304,6 +1387,9 @@ export function buildExecutionProfile(
     bounds: {
       requiresSandbox,
       maxAutoResumes,
+      complexityTier: tier,
+      expectedTools: tierBudget.expectedTools,
+      expectedWallClockMs: tierBudget.expectedWallClockMs,
     },
     routing: {
       promptTier,
@@ -2328,7 +2414,7 @@ export interface OrchestraEvent {
   taskId: string;
   userId?: string;
   modelAlias: string;
-  eventType: 'stall_abort' | 'validation_fail' | 'task_abort' | 'task_complete' | 'deliverable_retry' | 'runtime_risk_escalation';
+  eventType: 'stall_abort' | 'validation_fail' | 'task_abort' | 'task_complete' | 'deliverable_retry' | 'runtime_risk_escalation' | 'tier_scope_exceeded';
   details: Record<string, unknown>;
 }
 
