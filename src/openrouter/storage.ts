@@ -7,7 +7,7 @@ import { DEFAULT_MODEL, type ModelInfo } from './models';
 
 /** Pending orchestra request stored when model gate triggers. */
 export interface PendingOrchestraParams {
-  mode: 'init' | 'run' | 'redo';
+  mode: 'init' | 'run' | 'redo' | 'do';
   repo: string;
   prompt: string;
   chatId: number;

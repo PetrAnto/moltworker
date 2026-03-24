@@ -14,6 +14,7 @@ import {
   buildInitPrompt,
   buildRunPrompt,
   buildRedoPrompt,
+  buildDoPrompt,
   parseOrchestraCommand,
   parseOrchestraResult,
   generateTaskSlug,
@@ -1646,7 +1647,8 @@ export class TelegramHandler {
    * Subcommands:
    *   /orch set owner/repo  — Lock default repo
    *   /orch unset           — Clear locked repo
-   *   /orch init [repo] <description> — Create roadmap
+   *   /orch do [repo] <description>   — One-shot task (no roadmap)
+   *   /orch init [repo] <description> — Create roadmap (planning only, no code)
    *   /orch run [repo] [task]         — Execute specific task
    *   /orch next [task]               — Execute next task (uses locked repo)
    *   /orch history                   — Show past tasks
@@ -1820,7 +1822,7 @@ export class TelegramHandler {
         return;
       }
       await this.storage.setOrchestraRepo(userId, repo);
-      await this.bot.sendMessage(chatId, `✅ Default orchestra repo set to: ${repo}\n\nNow you can use:\n  /orch next — execute next roadmap task\n  /orch init <description> — create roadmap`);
+      await this.bot.sendMessage(chatId, `✅ Default orchestra repo set to: ${repo}\n\nNow you can use:\n  /orch do <description> — one-shot task (no roadmap)\n  /orch init <description> — create roadmap\n  /orch next — execute next roadmap task`);
       return;
     }
 
@@ -1949,6 +1951,36 @@ export class TelegramHandler {
         await this.bot.sendMessage(chatId, `❌ ${error instanceof Error ? error.message : 'Failed to analyze roadmap'}`);
       }
       return;
+    }
+
+    // /orch do <description> — one-shot task execution without roadmap
+    if (sub === 'do') {
+      const maybeRepo = args[1];
+      const hasExplicitRepo = maybeRepo && /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(maybeRepo);
+      if (hasExplicitRepo) {
+        const prompt = args.slice(2).join(' ').trim();
+        if (!prompt) {
+          await this.bot.sendMessage(chatId, '❌ Usage: /orch do owner/repo <task description>');
+          return;
+        }
+        await this.storage.setOrchestraRepo(userId, maybeRepo);
+        return this.executeOrchestra(chatId, userId, 'do', maybeRepo, prompt);
+      } else {
+        const lockedRepo = await this.storage.getOrchestraRepo(userId);
+        if (!lockedRepo) {
+          await this.bot.sendMessage(
+            chatId,
+            '❌ No default repo set.\n\nEither: /orch do owner/repo <description>\nOr: /orch set owner/repo first'
+          );
+          return;
+        }
+        const prompt = args.slice(1).join(' ').trim();
+        if (!prompt) {
+          await this.bot.sendMessage(chatId, '❌ Usage: /orch do <task description>');
+          return;
+        }
+        return this.executeOrchestra(chatId, userId, 'do', lockedRepo, prompt);
+      }
     }
 
     // /orch next [specific task] — shorthand for run with locked repo
@@ -2099,9 +2131,12 @@ export class TelegramHandler {
       repoLine +
       '━━━ Quick Start ━━━\n' +
       '/orch set owner/repo — Lock your repo\n' +
+      '/orch do <description> — One-shot task (no roadmap)\n' +
       '/orch init <description> — Create roadmap + work log\n' +
       '/orch next — Execute next roadmap task\n\n' +
       '━━━ Commands ━━━\n' +
+      '/orch do <description> — Execute a task directly (no roadmap)\n' +
+      '/orch init <description> — Plan: create roadmap (no code)\n' +
       '/orch advise — Analyze next task & pick best model\n' +
       '/orch next [task] — Run next (or specific) task\n' +
       '/orch roadmap — View roadmap status\n' +
@@ -2110,7 +2145,11 @@ export class TelegramHandler {
       '/orch reset <task> — Uncheck for re-run\n' +
       '/orch redo <task> — Re-implement a failed task\n\n' +
       modelRecs + '\n\n' +
-      '━━━ Workflow ━━━\n' +
+      '━━━ Workflows ━━━\n' +
+      'Simple task (no roadmap):\n' +
+      '1. /orch set PetrAnto/myapp\n' +
+      '2. /orch do Add dark mode toggle\n\n' +
+      'Complex project (with roadmap):\n' +
       '1. /orch set PetrAnto/myapp\n' +
       '2. /orch init Build a user auth system\n' +
       '3. /orch advise → pick best model\n' +
@@ -2126,7 +2165,7 @@ export class TelegramHandler {
   private async executeOrchestra(
     chatId: number,
     userId: string,
-    mode: 'init' | 'run' | 'redo',
+    mode: 'init' | 'run' | 'redo' | 'do',
     repo: string,
     prompt: string,
     skipModelGuard: boolean = false,
@@ -2234,7 +2273,7 @@ export class TelegramHandler {
     let prefetchedRoadmap: string | undefined;
     let prefetchedRoadmapPath: string | undefined;
     let prefetchedWorkLog: string | undefined;
-    if (mode !== 'init' && this.githubToken) {
+    if (mode !== 'init' && mode !== 'do' && this.githubToken) {
       const [owner, repoName] = repo.split('/');
       try {
         const { content, path: roadmapPath } = await fetchRoadmapFromGitHub(owner, repoName, this.githubToken);
@@ -2312,6 +2351,8 @@ export class TelegramHandler {
     const branchSuffix = Date.now().toString(36).slice(-4); // 4-char unique suffix
     const taskSlug = mode === 'init'
       ? 'roadmap-init'
+      : mode === 'do'
+      ? `do-${generateTaskSlug(prompt)}`
       : mode === 'redo'
       ? `redo-${generateTaskSlug(prompt)}`
       : generateTaskSlug(resolvedTask || 'next-task');
@@ -2323,6 +2364,8 @@ export class TelegramHandler {
     const branchSlug = branchName.replace(/^bot\//, '');
     if (mode === 'init') {
       orchestraSystemPrompt = buildInitPrompt({ repo, modelAlias, branchSlug });
+    } else if (mode === 'do') {
+      orchestraSystemPrompt = buildDoPrompt({ repo, modelAlias, branchSlug, hasSandbox: !!this.sandbox });
     } else if (mode === 'redo') {
       orchestraSystemPrompt = buildRedoPrompt({
         repo,
@@ -2372,6 +2415,8 @@ export class TelegramHandler {
     // Build messages for the task
     // Build user message — use structured execution brief when available
     const userMessage = mode === 'init'
+      ? prompt
+      : mode === 'do'
       ? prompt
       : mode === 'redo'
       ? `Redo this task: ${prompt}`
@@ -2440,7 +2485,7 @@ export class TelegramHandler {
     // Dispatch to TaskProcessor DO
     const taskId = `${userId}-${Date.now()}`;
     const autoResume = await this.storage.getUserAutoResume(userId);
-    const modeLabel = mode === 'init' ? 'Init' : mode === 'redo' ? 'Redo' : 'Run';
+    const modeLabel = mode === 'init' ? 'Init' : mode === 'do' ? 'Do' : mode === 'redo' ? 'Redo' : 'Run';
     const taskRequest: TaskRequest = {
       taskId,
       chatId,
@@ -2482,6 +2527,17 @@ export class TelegramHandler {
         `🤖 Model: /${modelAlias}\n` +
         `🌿 Branch: ${branchName}\n\n` +
         `The bot will analyze the repo, create ROADMAP.md + WORK_LOG.md, and open a PR.\n` +
+        `Use /cancel to stop.`
+      );
+    } else if (mode === 'do') {
+      await this.bot.sendMessage(
+        chatId,
+        `🎼 Orchestra DO started!\n\n` +
+        `📦 Repo: ${repo}\n` +
+        `🤖 Model: /${modelAlias}\n` +
+        `🌿 Branch: ${branchName}\n` +
+        `📝 Task: ${prompt.substring(0, 150)}${prompt.length > 150 ? '...' : ''}\n\n` +
+        `One-shot execution — no roadmap needed. The bot will implement and open a PR.\n` +
         `Use /cancel to stop.`
       );
     } else if (mode === 'redo') {

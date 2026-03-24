@@ -23,7 +23,7 @@ export interface OrchestraTask {
   timestamp: number;
   modelAlias: string;
   repo: string;            // owner/repo
-  mode: 'init' | 'run' | 'redo';
+  mode: 'init' | 'run' | 'redo' | 'do';
   prompt: string;          // Original user prompt (truncated)
   branchName: string;      // Branch created
   durationMs?: number;     // Execution duration in milliseconds
@@ -82,7 +82,13 @@ export function buildInitPrompt(params: {
 
   return `# Orchestra INIT Mode — Project Roadmap Creation
 
-You are creating a structured project roadmap. Follow this workflow precisely.
+You are a PLANNER, not an implementer. Your ONLY job is to create ROADMAP.md and WORK_LOG.md.
+
+**CRITICAL — NO IMPLEMENTATION:**
+- Your PR must ONLY contain ROADMAP.md and WORK_LOG.md
+- DO NOT create, modify, or include any source code files (.ts, .tsx, .js, .jsx, .py, .vue, .css, .html, etc.)
+- DO NOT write any implementation code — only plan what needs to be done
+- If you create any file other than ROADMAP.md and WORK_LOG.md, the task is FAILED
 
 ## Target Repository
 - Owner: ${owner}
@@ -217,7 +223,90 @@ The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FA
 - If an existing roadmap exists, incorporate its content (don't discard previous work)
 - Keep phases realistic — avoid overplanning
 - Task descriptions should be actionable by a coding AI model in a single session
-- You MUST produce an ORCHESTRA_RESULT: block with a real PR URL — the task is NOT complete without it`;
+- You MUST produce an ORCHESTRA_RESULT: block with a real PR URL — the task is NOT complete without it
+- **ABSOLUTELY NO SOURCE CODE** — your PR contains ONLY ROADMAP.md and WORK_LOG.md. Zero implementation files.`;
+}
+
+// ============================================================
+// DO MODE — One-shot task execution without a roadmap
+// ============================================================
+
+/**
+ * Build the system prompt for /orchestra do.
+ * Executes a user-described task directly — no roadmap needed.
+ * Creates a PR with the implementation + optional WORK_LOG.md entry.
+ */
+export function buildDoPrompt(params: {
+  repo: string;
+  modelAlias: string;
+  branchSlug?: string;
+  hasSandbox?: boolean;
+}): string {
+  const { repo, modelAlias, branchSlug, hasSandbox } = params;
+  const [owner, repoName] = repo.split('/');
+  const branch = branchSlug || `do-${modelAlias}`;
+
+  return `# Orchestra DO Mode — Direct Task Execution
+
+You are executing a task directly from the user's description. There is NO roadmap — just do what the user asks.
+
+## Target Repository
+- Owner: ${owner}
+- Repo: ${repoName}
+- Full: ${repo}
+
+## Workflow
+
+### Step 1: UNDERSTAND THE REPO (max 5 file reads)
+- Use \`github_list_files\` to scan the root and main source directory
+- Use \`github_read_file\` to read key files relevant to the user's request
+- Do NOT read every file — be efficient
+
+### Step 2: IMPLEMENT THE TASK
+- Read the user's description carefully
+- Implement exactly what was asked — no more, no less
+- Use \`workspace_write_file\` + \`workspace_commit\` for creating/modifying files
+- For small changes (≤3 files, <100 lines each): ONE \`github_create_pr\` with all changes is OK
+
+### Creating files — USE WORKSPACE PATTERN (prevents timeout/streaming failures)
+1. \`workspace_write_file\` — stage file A (path, content)
+2. \`workspace_write_file\` — stage file B
+3. \`workspace_delete_file\` — stage file removal (if needed)
+4. \`workspace_commit\` — push all staged files to branch \`${branch}\` in one commit
+5. \`github_create_pr\` — open PR
+
+For "patch" action: \`{"path":"file.js","action":"patch","patches":[{"find":"exact text","replace":"new text"}]}\`
+For "create" action: \`{"path":"file.js","action":"create","content":"full content"}\`
+${hasSandbox ? `
+### Step 2.5: VERIFY (sandbox available)
+Before creating the PR, use \`sandbox_exec\` to test your changes:
+- Clone: \`["git clone https://github.com/${repo}.git repo && cd repo && git checkout ${branch}"]\`
+- Run tests: \`["cd repo && npm test"]\` or the project's test command
+- If tests fail, fix and retry.
+` : ''}
+### Step 3: CREATE PR
+- Branch: \`${branch}\` (bot/ prefix added automatically)
+- PR title should describe what was done, ending with [${modelAlias}]
+- All calls use branch \`${branch}\`
+- **After calling github_create_pr, CHECK THE RESULT.** If error, fix and retry.
+
+### Step 4: REPORT
+\`\`\`
+ORCHESTRA_RESULT:
+branch: {branch-name}
+pr: {pr-url from tool result}
+files: {comma-separated changed files}
+summary: {one sentence}
+\`\`\`
+
+## Rules
+- **DO NOT ask for user confirmation** — execute ALL steps immediately
+- **Be efficient** — read only what you need, implement, create PR
+- Do NOT create ROADMAP.md or WORK_LOG.md — this is a one-shot task
+- You MUST produce an ORCHESTRA_RESULT: block with a real PR URL — the task is NOT complete without it
+- **IMPORTANT: Do NOT output a plan or outline. CALL the tools directly. Start with github_list_files or github_read_file.**
+
+Begin now.`;
 }
 
 // ============================================================

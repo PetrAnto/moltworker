@@ -835,7 +835,7 @@ describe('storeOrchestraTask', () => {
     };
   });
 
-  const makeTask = (taskId: string, mode: 'init' | 'run' | 'redo' = 'run', status: 'started' | 'completed' | 'failed' = 'completed'): OrchestraTask => ({
+  const makeTask = (taskId: string, mode: 'init' | 'run' | 'redo' | 'do' = 'run', status: 'started' | 'completed' | 'failed' = 'completed'): OrchestraTask => ({
     taskId,
     timestamp: Date.now(),
     modelAlias: 'deep',

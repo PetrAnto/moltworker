@@ -1166,10 +1166,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Detect if this was an orchestra task from the messages
       const systemMsg = task.messages.find(m => m.role === 'system');
       const sysContent = typeof systemMsg?.content === 'string' ? systemMsg.content : '';
-      const isOrchestra = sysContent.includes('Orchestra INIT Mode') || sysContent.includes('Orchestra RUN Mode') || sysContent.includes('Orchestra REDO Mode');
+      const isOrchestra = sysContent.includes('Orchestra INIT Mode') || sysContent.includes('Orchestra RUN Mode') || sysContent.includes('Orchestra REDO Mode') || sysContent.includes('Orchestra DO Mode');
       if (!isOrchestra) return;
 
       const orchestraMode = sysContent.includes('Orchestra INIT Mode') ? 'init' as const
+        : sysContent.includes('Orchestra DO Mode') ? 'do' as const
         : sysContent.includes('Orchestra REDO Mode') ? 'redo' as const : 'run' as const;
       const repoMatch = sysContent.match(/Full:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/);
       const repo = repoMatch ? repoMatch[1] : 'unknown/unknown';
@@ -4032,7 +4033,7 @@ If you already created the new file and just need to patch the original, call gi
         if (hasContent && task.toolsUsed.length === 0 && consecutiveNoToolIterations <= 2) {
           const systemMsg0chk = request.messages.find(m => m.role === 'system');
           const sysTextChk = typeof systemMsg0chk?.content === 'string' ? systemMsg0chk.content : '';
-          const isOrchestraChk = sysTextChk.includes('Orchestra RUN Mode') || sysTextChk.includes('Orchestra INIT Mode') || sysTextChk.includes('Orchestra REDO Mode');
+          const isOrchestraChk = sysTextChk.includes('Orchestra RUN Mode') || sysTextChk.includes('Orchestra INIT Mode') || sysTextChk.includes('Orchestra REDO Mode') || sysTextChk.includes('Orchestra DO Mode');
           if (isOrchestraChk) {
             console.log(`[TaskProcessor] Orchestra zero-tool nudge (attempt ${consecutiveNoToolIterations}): model returned text without calling any tools — nudging`);
             conversationMessages.push({
@@ -4135,7 +4136,7 @@ If you already created the new file and just need to patch the original, call gi
         const contentText = choice.message.content || '';
         const systemMsg0 = request.messages.find(m => m.role === 'system');
         const sysText = typeof systemMsg0?.content === 'string' ? systemMsg0.content : '';
-        const isOrchestraRun = sysText.includes('Orchestra RUN Mode') || sysText.includes('Orchestra INIT Mode') || sysText.includes('Orchestra REDO Mode');
+        const isOrchestraRun = sysText.includes('Orchestra RUN Mode') || sysText.includes('Orchestra INIT Mode') || sysText.includes('Orchestra REDO Mode') || sysText.includes('Orchestra DO Mode');
         const looksIncomplete = /\b(unable to|could not|couldn't|not found|no .*(roadmap|file|task)|I (need|should) to .*(check|try|search|look|examine)|let me (try|check|search)|calling tools|please confirm|would you like|shall I|do you want me to|if you'?d like|awaiting.*confirm|let me know if|ready to (start|proceed|begin))\b/i.test(contentText);
         // For orchestra tasks, also check if the required ORCHESTRA_RESULT: block is missing.
         // Only applies when the model hasn't yet called github_create_pr — once the PR
@@ -4495,7 +4496,7 @@ If you already created the new file and just need to patch the original, call gi
             // Select review prompt: orchestra > coding > general
             const systemMsg = request.messages.find(m => m.role === 'system');
             const sysContent = typeof systemMsg?.content === 'string' ? systemMsg.content : '';
-            const isOrchestraTask = sysContent.includes('Orchestra INIT Mode') || sysContent.includes('Orchestra RUN Mode') || sysContent.includes('Orchestra REDO Mode');
+            const isOrchestraTask = sysContent.includes('Orchestra INIT Mode') || sysContent.includes('Orchestra RUN Mode') || sysContent.includes('Orchestra REDO Mode') || sysContent.includes('Orchestra DO Mode');
             const reviewPrompt = isOrchestraTask ? ORCHESTRA_REVIEW_PROMPT
               : taskCategory === 'coding' ? CODING_REVIEW_PROMPT
               : REVIEW_PHASE_PROMPT;
@@ -4766,10 +4767,11 @@ If you already created the new file and just need to patch the original, call gi
               // Find the orchestra task entry to update (or create a new completed entry)
               const systemMsg = request.messages.find(m => m.role === 'system');
               const systemContent = typeof systemMsg?.content === 'string' ? systemMsg.content : '';
-              const isOrchestra = systemContent.includes('Orchestra INIT Mode') || systemContent.includes('Orchestra RUN Mode') || systemContent.includes('Orchestra REDO Mode');
+              const isOrchestra = systemContent.includes('Orchestra INIT Mode') || systemContent.includes('Orchestra RUN Mode') || systemContent.includes('Orchestra REDO Mode') || systemContent.includes('Orchestra DO Mode');
               if (isOrchestra) {
-                // Detect init vs run vs redo from system prompt
+                // Detect init vs run vs redo vs do from system prompt
                 const orchestraMode = systemContent.includes('Orchestra INIT Mode') ? 'init' as const
+                  : systemContent.includes('Orchestra DO Mode') ? 'do' as const
                   : systemContent.includes('Orchestra REDO Mode') ? 'redo' as const : 'run' as const;
                 // Extract repo from system prompt
                 const repoMatch = systemContent.match(/Full:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/);
