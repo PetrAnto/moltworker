@@ -32,6 +32,7 @@ import {
   LARGE_FILE_WARNING_LINES,
   buildExecutionProfile,
   classifyComplexityTier,
+  countScopeAmplifiers,
   TIER_BUDGETS,
   type ComplexityTier,
   createRuntimeRiskProfile,
@@ -2844,7 +2845,7 @@ describe('buildExecutionProfile', () => {
 
   it('sets trivial tier for simple + no-ambiguity tasks', () => {
     const profile = buildExecutionProfile(
-      makeResolved({ title: 'Bump version in package.json', concreteScore: 8, ambiguity: 'none' }),
+      makeResolved({ title: 'Bump version to 2.0', concreteScore: 8, ambiguity: 'none' }),
       'claude',
     );
     expect(profile.bounds.complexityTier).toBe('trivial');
@@ -2904,37 +2905,37 @@ describe('buildExecutionProfile', () => {
 
 describe('classifyComplexityTier', () => {
   it('returns trivial for simple + no ambiguity', () => {
-    expect(classifyComplexityTier('Update readme', true, false, 'none', 0)).toBe('trivial');
+    expect(classifyComplexityTier(true, false, 'none', 0)).toBe('trivial');
   });
 
   it('returns small for simple + some ambiguity', () => {
-    expect(classifyComplexityTier('Rename the function', true, false, 'low', 0)).toBe('small');
+    expect(classifyComplexityTier(true, false, 'low', 0)).toBe('small');
   });
 
   it('returns small for concrete non-heavy task', () => {
-    expect(classifyComplexityTier('Add user auth endpoint', false, false, 'none', 0)).toBe('small');
+    expect(classifyComplexityTier(false, false, 'none', 0)).toBe('small');
   });
 
   it('returns medium for low-ambiguity non-simple task', () => {
-    expect(classifyComplexityTier('Improve the error handling', false, false, 'low', 0)).toBe('medium');
+    expect(classifyComplexityTier(false, false, 'low', 0)).toBe('medium');
   });
 
   it('returns medium for high-ambiguity non-heavy task', () => {
-    expect(classifyComplexityTier('Make it better', false, false, 'high', 0)).toBe('medium');
+    expect(classifyComplexityTier(false, false, 'high', 0)).toBe('medium');
   });
 
   it('returns large for heavy coding', () => {
-    expect(classifyComplexityTier('Refactor the auth module', false, true, 'none', 0)).toBe('large');
+    expect(classifyComplexityTier(false, true, 'none', 0)).toBe('large');
   });
 
   it('returns large for 3+ pending children', () => {
-    expect(classifyComplexityTier('Build the feature', false, false, 'none', 3)).toBe('large');
+    expect(classifyComplexityTier(false, false, 'none', 3)).toBe('large');
   });
 
   it('trivial overrides heavy coding check (simple wins)', () => {
-    // If title matches both isSimple and isHeavyCoding, isSimple+none → trivial
+    // If both isSimple and isHeavyCoding are true, isSimple+none → trivial
     // But in practice buildExecutionProfile checks both regexes independently
-    expect(classifyComplexityTier('Config refactor', true, true, 'none', 0)).toBe('trivial');
+    expect(classifyComplexityTier(true, true, 'none', 0)).toBe('trivial');
   });
 });
 
@@ -2952,6 +2953,110 @@ describe('TIER_BUDGETS', () => {
       expect(TIER_BUDGETS[tiers[i]].expectedWallClockMs).toBeGreaterThan(TIER_BUDGETS[tiers[i - 1]].expectedWallClockMs);
       expect(TIER_BUDGETS[tiers[i]].expectedTools).toBeGreaterThan(TIER_BUDGETS[tiers[i - 1]].expectedTools);
     }
+  });
+});
+
+// --- countScopeAmplifiers ---
+
+describe('countScopeAmplifiers', () => {
+  it('returns 0 for a plain title with no amplifiers', () => {
+    expect(countScopeAmplifiers('Fix the login button', '')).toBe(0);
+  });
+
+  it('detects testing signals', () => {
+    expect(countScopeAmplifiers('Add unit tests for auth module', '')).toBeGreaterThanOrEqual(1);
+  });
+
+  it('detects extraction signals', () => {
+    expect(countScopeAmplifiers('Extract utility functions into a new module', '')).toBeGreaterThanOrEqual(1);
+  });
+
+  it('detects package/infra signals in brief', () => {
+    // package.json → infra signal (count 1)
+    expect(countScopeAmplifiers('Setup project', 'Update package.json')).toBeGreaterThanOrEqual(1);
+  });
+
+  it('detects separate infra and testing signals', () => {
+    // vitest → infra, "add tests" → testing = 2 separate amplifiers
+    expect(countScopeAmplifiers('Add tests with vitest', '')).toBeGreaterThanOrEqual(2);
+  });
+
+  it('detects integration signals', () => {
+    expect(countScopeAmplifiers('Wire the new service into the router', '')).toBeGreaterThanOrEqual(1);
+  });
+
+  it('stacks multiple amplifiers', () => {
+    // testing + extraction + package = 3 amplifiers
+    const count = countScopeAmplifiers(
+      'Add unit tests for calculations',
+      'Extract calculations into its own module. Update package.json with test dependencies.',
+    );
+    expect(count).toBeGreaterThanOrEqual(3);
+  });
+
+  it('is case insensitive', () => {
+    expect(countScopeAmplifiers('Add UNIT TESTS', '')).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// --- Scope amplifier integration with buildExecutionProfile ---
+
+describe('scope amplifier tier bumping', () => {
+  it('bumps small to medium when 2+ amplifiers detected', () => {
+    // "Add unit tests for calculations" with extraction brief
+    // Base tier: small (concrete, non-heavy, no ambiguity)
+    // Amplifiers: testing + extraction = 2 → bump to medium
+    const profile = buildExecutionProfile(
+      makeResolved({
+        title: 'Add unit tests for financial calculations',
+        concreteScore: 6,
+        ambiguity: 'none',
+        executionBrief: 'Extract calculation logic into separate module. Wire into existing code.',
+      }),
+      'claude',
+    );
+    expect(profile.bounds.complexityTier).toBe('medium');
+  });
+
+  it('bumps trivial to small when 1 amplifier detected', () => {
+    // "Update readme" is trivial, but if brief mentions testing → bump to small
+    const profile = buildExecutionProfile(
+      makeResolved({
+        title: 'Update readme with test instructions',
+        concreteScore: 8,
+        ambiguity: 'none',
+        executionBrief: 'Add unit test documentation.',
+      }),
+      'claude',
+    );
+    expect(profile.bounds.complexityTier).toBe('small');
+  });
+
+  it('does not bump large tier (already at top)', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({
+        title: 'Refactor auth module with unit tests',
+        concreteScore: 7,
+        ambiguity: 'none',
+        executionBrief: 'Extract helpers. Add vitest setup. Wire integration tests.',
+      }),
+      'claude',
+    );
+    // Already large from isHeavyCoding — amplifiers don't change it
+    expect(profile.bounds.complexityTier).toBe('large');
+  });
+
+  it('does not bump when no amplifiers match', () => {
+    const profile = buildExecutionProfile(
+      makeResolved({
+        title: 'Fix the login button color',
+        concreteScore: 6,
+        ambiguity: 'none',
+        executionBrief: 'Change CSS color from blue to green.',
+      }),
+      'claude',
+    );
+    expect(profile.bounds.complexityTier).toBe('small');
   });
 });
 

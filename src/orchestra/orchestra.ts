@@ -1281,6 +1281,8 @@ export interface OrchestraExecutionProfile {
     maxAutoResumes: number;
     /** Complexity tier — classifies task scope for observability and escalation */
     complexityTier: ComplexityTier;
+    /** Expected resume count for this scope (soft limit — triggers escalation advice) */
+    expectedResumes: number;
     /** Expected tool count for this scope (soft limit — triggers escalation advice) */
     expectedTools: number;
     /** Expected wall-clock time for this scope (soft limit — triggers escalation advice) */
@@ -1298,11 +1300,16 @@ export interface OrchestraExecutionProfile {
 }
 
 /**
- * Classify a task into a complexity tier based on title signals and structure.
- * This is the single source of truth for runtime budget allocation.
+ * Classify a task into a complexity tier based on derived signals.
+ * This is the single source of truth for scope-based budget expectations.
+ *
+ * Classification rules:
+ * - trivial: simple + no ambiguity (typo, bump, rename, readme)
+ * - large:   heavy coding OR 3+ pending children
+ * - medium:  high ambiguity (non-heavy) OR low ambiguity (non-simple)
+ * - small:   simple with some ambiguity OR concrete non-heavy tasks
  */
 export function classifyComplexityTier(
-  title: string,
   isSimple: boolean,
   isHeavyCoding: boolean,
   ambiguity: TaskAmbiguity,
@@ -1311,17 +1318,56 @@ export function classifyComplexityTier(
   // Trivial: explicitly simple + highly concrete (no ambiguity)
   if (isSimple && ambiguity === 'none') return 'trivial';
 
-  // Large: heavy coding, or high ambiguity, or parent with many children
+  // Large: heavy coding or parent with many children
   if (isHeavyCoding) return 'large';
   if (pendingChildren >= 3) return 'large';
-  if (ambiguity === 'high') return 'medium'; // high ambiguity but not heavy → medium (capped, not full budget)
+
+  // Medium: high ambiguity (but not heavy) — unclear scope, not huge scope
+  if (ambiguity === 'high') return 'medium';
 
   // Small: simple tasks with some ambiguity, or concrete non-coding tasks
   if (isSimple) return 'small';
   if (ambiguity === 'none' && pendingChildren === 0) return 'small';
 
-  // Default: medium
+  // Default: medium (low ambiguity, non-simple, non-heavy)
   return 'medium';
+}
+
+/**
+ * Detect scope amplifiers — signals in the title and brief that predict
+ * the task will be larger than the base tier suggests.
+ *
+ * Each amplifier is a pattern that, when present, indicates the task
+ * likely involves more files/tools/time than a naive title-only
+ * classification would predict. Returns the number of amplifiers matched.
+ *
+ * Examples of under-classified tasks this catches:
+ * - "Add unit tests for financial calculations" → needs extraction + new module + vitest setup
+ * - "Implement API endpoint" → might need tests + validation + types + route registration
+ */
+export function countScopeAmplifiers(title: string, executionBrief: string): number {
+  const combined = `${title}\n${executionBrief}`.toLowerCase();
+  let count = 0;
+
+  // Testing signals: likely needs test infra, fixtures, possibly extraction
+  if (/\b(unit tests?|test suite|add tests|write tests|testing)\b/.test(combined)) count++;
+
+  // Extraction/splitting signals: moving code between files
+  if (/\b(extract|split|separate|move .* to|into (its own|a new|separate))\b/.test(combined)) count++;
+
+  // Multi-file signals: explicitly mentions multiple files or directories
+  if (/\b(multiple files|several files|across files|new files?|new modules?)\b/.test(combined)) count++;
+
+  // Infrastructure/tooling signals: package.json, config, CI changes
+  if (/\bpackage\.json\b|vitest|jest|eslint|prettier|ci\/cd|dockerfile|docker|pipeline/.test(combined)) count++;
+
+  // Integration signals: wiring up components, imports, exports
+  if (/\b(integrat|wire\b|connect|register|hook up|plumb)/.test(combined)) count++;
+
+  // Pending children in the brief suggest compound scope
+  if (/sub-tasks|pending children|child tasks/.test(combined)) count++;
+
+  return count;
 }
 
 /**
@@ -1352,7 +1398,18 @@ export function buildExecutionProfile(
   // Complexity tier classifies task scope for observability and escalation.
   // This is SEPARATE from the resume cap — tier is about scope, resumes are about model reliability.
   const childrenCount = resolved.pendingChildren.length;
-  const tier = classifyComplexityTier(title, isSimple, isHeavyCoding, resolved.ambiguity, childrenCount);
+  let tier = classifyComplexityTier(isSimple, isHeavyCoding, resolved.ambiguity, childrenCount);
+
+  // Scope amplifiers: if the title/brief contain signals of hidden complexity,
+  // bump the tier up. This catches tasks like "add tests for X" that look small
+  // but require extraction, new modules, tooling config, etc.
+  const amplifiers = countScopeAmplifiers(title, resolved.executionBrief);
+  if (amplifiers >= 2 && (tier === 'trivial' || tier === 'small')) {
+    tier = 'medium';
+  } else if (amplifiers >= 1 && tier === 'trivial') {
+    tier = 'small';
+  }
+
   const tierBudget = TIER_BUDGETS[tier];
 
   // Resume cap: based on ambiguity and task structure (not tier).
@@ -1388,6 +1445,7 @@ export function buildExecutionProfile(
       requiresSandbox,
       maxAutoResumes,
       complexityTier: tier,
+      expectedResumes: tierBudget.expectedResumes,
       expectedTools: tierBudget.expectedTools,
       expectedWallClockMs: tierBudget.expectedWallClockMs,
     },

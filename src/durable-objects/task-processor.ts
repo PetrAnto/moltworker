@@ -324,8 +324,10 @@ interface TaskState {
   // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
   // The alarm handler resumes immediately without stall detection or auto-resume counting.
   yieldPending?: boolean;
-  // Set true after the first tier-scope advisory has been sent (prevents duplicate warnings)
+  // Set true after the first tier wall-clock advisory has been sent (prevents duplicate warnings)
   tierBudgetWarned?: boolean;
+  // Set true after the first tier resume-count advisory has been sent
+  tierResumeWarned?: boolean;
   // Set true when an API streaming response is in progress.
   // If watchdog finds isStreaming=true but isRunning=false, the DO was evicted mid-stream
   // — resume faster (90s) and don't count as a model stall.
@@ -1521,12 +1523,22 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.lastUpdate = Date.now();
       await this.doState.storage.put('task', taskForStorage(task));
 
-      // Notify user about auto-resume with progress context
+      // Notify user about auto-resume with progress context.
+      // Include scope advisory when resumes exceed tier expectation (one-time warning).
       const resumeTools = newTools > 0 ? `, ${newTools} new tools` : '';
+      const expectedResumes = task.executionProfile?.bounds.expectedResumes;
+      const tier = task.executionProfile?.bounds.complexityTier;
+      const resumeAdvisory = (expectedResumes != null && tier && resumeCount + 1 > expectedResumes && !task.tierResumeWarned)
+        ? `\n⚠️ Exceeds "${tier}" scope expectation (${expectedResumes} resumes). Consider a stronger model next time.`
+        : '';
+      if (resumeAdvisory) {
+        task.tierResumeWarned = true;
+        await this.doState.storage.put('task', taskForStorage(task));
+      }
       await this.sendTelegramMessage(
         task.telegramToken,
         task.chatId,
-        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}`
+        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}${resumeAdvisory}`
       );
 
       // Reconstruct TaskRequest and trigger resume.
