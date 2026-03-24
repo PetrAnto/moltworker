@@ -37,8 +37,10 @@ import {
   aggregateOrchestraStats,
   getEventBasedModelScores,
   buildExecutionProfile,
+  buildDraftInitPrompt,
   type OrchestraExecutionProfile,
 } from '../orchestra/orchestra';
+import type { OrchestraDraft, OrchestraPlanState } from '../openrouter/storage';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
 import { acquireRepoLock, forceReleaseRepoLock } from '../concurrency/branch-lock';
@@ -789,6 +791,37 @@ export class TelegramHandler {
     // Without this, "continue" creates a brand-new task that immediately re-hits the limit.
     if (text.trim().toLowerCase() === 'continue' && this.taskProcessor) {
       await this.handleContinueResume(message);
+      return;
+    }
+
+    // Draft revision mode: user's message is revision feedback for the current draft
+    const activeDraft = await this.storage.getOrchestraDraft(userId);
+    if (activeDraft?.pendingRevision) {
+      // Clear revision flag and re-run with feedback
+      activeDraft.pendingRevision = false;
+      activeDraft.revisions.push(text);
+      activeDraft.revisionCount++;
+      await this.storage.setOrchestraDraft(userId, activeDraft);
+      // Re-run draft generation with revision context
+      return this.executeOrchestraDraftRevision(chatId, userId, activeDraft, text);
+    }
+
+    // /orch plan mode: capture messages as requirements
+    const activePlan = await this.storage.getOrchestraPlan(userId);
+    if (activePlan) {
+      activePlan.requirements.push(text);
+      await this.storage.setOrchestraPlan(userId, activePlan);
+      const count = activePlan.requirements.length;
+      await this.bot.sendMessage(chatId, `📝 Got it (${count} requirement${count > 1 ? 's' : ''} so far). Send more, or tap Generate Draft when ready.`, {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '📝 Generate Draft', callback_data: 'orchplan:generate' },
+              { text: '❌ Cancel', callback_data: 'orchplan:cancel' },
+            ],
+          ],
+        },
+      });
       return;
     }
 
@@ -2041,18 +2074,17 @@ export class TelegramHandler {
     if (sub === 'init') {
       const maybeRepo = args[1];
       const hasExplicitRepo = maybeRepo && /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(maybeRepo);
+      let repo: string;
+      let prompt: string;
       if (hasExplicitRepo) {
-        // /orch init owner/repo <description>
-        const prompt = args.slice(2).join(' ').trim();
+        repo = maybeRepo;
+        prompt = args.slice(2).join(' ').trim();
         if (!prompt) {
           await this.bot.sendMessage(chatId, '❌ Usage: /orch init owner/repo <project description>');
           return;
         }
-        // Auto-lock the repo on init
         await this.storage.setOrchestraRepo(userId, maybeRepo);
-        return this.executeOrchestra(chatId, userId, 'init', maybeRepo, prompt);
       } else {
-        // /orch init <description> — use locked repo
         const lockedRepo = await this.storage.getOrchestraRepo(userId);
         if (!lockedRepo) {
           await this.bot.sendMessage(
@@ -2061,13 +2093,98 @@ export class TelegramHandler {
           );
           return;
         }
-        const prompt = args.slice(1).join(' ').trim();
+        repo = lockedRepo;
+        prompt = args.slice(1).join(' ').trim();
         if (!prompt) {
           await this.bot.sendMessage(chatId, '❌ Usage: /orch init <project description>');
           return;
         }
-        return this.executeOrchestra(chatId, userId, 'init', lockedRepo, prompt);
       }
+      // Use draft mode: model generates roadmap for preview, user approves before PR
+      return this.executeOrchestra(chatId, userId, 'draft', repo, prompt);
+    }
+
+    // /orch modify — modify existing roadmap via draft preview flow
+    if (sub === 'modify') {
+      const maybeRepo = args[1];
+      const hasExplicitRepo = maybeRepo && /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(maybeRepo);
+      let modifyRepo: string;
+      let modifyPrompt: string;
+      if (hasExplicitRepo) {
+        modifyRepo = maybeRepo;
+        modifyPrompt = args.slice(2).join(' ').trim();
+        await this.storage.setOrchestraRepo(userId, maybeRepo);
+      } else {
+        const lockedRepo = await this.storage.getOrchestraRepo(userId);
+        if (!lockedRepo) {
+          await this.bot.sendMessage(chatId, '❌ No default repo set.\n\nUse: /orch modify owner/repo <changes>\nOr: /orch set owner/repo first');
+          return;
+        }
+        modifyRepo = lockedRepo;
+        modifyPrompt = args.slice(1).join(' ').trim();
+      }
+      if (!modifyPrompt) {
+        await this.bot.sendMessage(chatId, '❌ Usage: /orch modify [owner/repo] <description of changes>\n\nExample: /orch modify Add a phase for API documentation');
+        return;
+      }
+      // Use draft mode with a modify-specific prompt that reads the existing roadmap
+      const modifyFullPrompt = `MODIFY EXISTING ROADMAP: Read the current ROADMAP.md from the repo first, then apply these changes: ${modifyPrompt}`;
+      return this.executeOrchestra(chatId, userId, 'draft', modifyRepo, modifyFullPrompt);
+    }
+
+    // /orch plan — conversational requirements gathering
+    if (sub === 'plan') {
+      const maybeRepo = args[1];
+      const hasExplicitRepo = maybeRepo && /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(maybeRepo);
+      let planRepo: string;
+      if (hasExplicitRepo) {
+        planRepo = maybeRepo;
+        await this.storage.setOrchestraRepo(userId, maybeRepo);
+      } else {
+        const lockedRepo = await this.storage.getOrchestraRepo(userId);
+        if (!lockedRepo) {
+          await this.bot.sendMessage(chatId, '❌ No default repo set.\n\nUse: /orch plan owner/repo\nOr: /orch set owner/repo first');
+          return;
+        }
+        planRepo = lockedRepo;
+      }
+      // Enter planning mode
+      await this.storage.setOrchestraPlan(userId, {
+        repo: planRepo,
+        chatId,
+        requirements: [],
+      });
+      await this.bot.sendMessage(
+        chatId,
+        `📝 Planning mode for **${planRepo}**\n\n` +
+        `Send your requirements — describe what the roadmap should cover.\n` +
+        `You can send multiple messages. When done, tap Generate Draft.\n\n` +
+        `💡 Tip: be specific about features, phases, and priorities.`,
+      );
+      // Send generate button separately so it stays visible
+      await this.bot.sendMessage(chatId, 'Ready when you are.', {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '📝 Generate Draft', callback_data: 'orchplan:generate' },
+              { text: '❌ Cancel', callback_data: 'orchplan:cancel' },
+            ],
+          ],
+        },
+      });
+      return;
+    }
+
+    // /orch draft — trigger draft generation from planning mode
+    if (sub === 'draft') {
+      const plan = await this.storage.getOrchestraPlan(userId);
+      if (!plan || plan.requirements.length === 0) {
+        await this.bot.sendMessage(chatId, '❌ No planning session active. Start with /orch plan owner/repo');
+        return;
+      }
+      const combinedPrompt = plan.requirements.join('\n\n');
+      await this.storage.setOrchestraPlan(userId, null); // Clear planning state
+      return this.executeOrchestra(chatId, userId, 'draft', plan.repo, combinedPrompt);
     }
 
     if (sub === 'run') {
@@ -2198,16 +2315,154 @@ export class TelegramHandler {
   }
 
   /**
+   * Commit an approved draft roadmap — creates branch, writes files, opens PR.
+   * No model call needed — uses GitHub API directly.
+   */
+  private async commitDraftRoadmap(userId: string, draft: OrchestraDraft): Promise<string> {
+    if (!this.githubToken) throw new Error('GitHub token not configured');
+    const [owner, repoName] = draft.repo.split('/');
+    if (!owner || !repoName) throw new Error(`Invalid repo format: ${draft.repo}`);
+
+    const GITHUB_API = 'https://api.github.com';
+    const headers = {
+      Authorization: `Bearer ${this.githubToken}`,
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'moltworker-orchestra',
+      'Content-Type': 'application/json',
+    };
+
+    // Generate branch name
+    const suffix = Date.now().toString(36).slice(-4);
+    const branchName = `bot/roadmap-init-${draft.modelAlias}-${suffix}`;
+
+    // 1. Get default branch SHA
+    const repoResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}`, { headers });
+    if (!repoResp.ok) throw new Error(`Failed to get repo info: ${repoResp.status}`);
+    const repoData = await repoResp.json() as { default_branch: string };
+    const defaultBranch = repoData.default_branch;
+
+    const refResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/git/ref/heads/${defaultBranch}`, { headers });
+    if (!refResp.ok) throw new Error(`Failed to get default branch SHA: ${refResp.status}`);
+    const refData = await refResp.json() as { object: { sha: string } };
+    const baseSha = refData.object.sha;
+
+    // 2. Create branch
+    const createBranchResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/git/refs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+    });
+    if (!createBranchResp.ok && createBranchResp.status !== 422) {
+      throw new Error(`Failed to create branch: ${createBranchResp.status}`);
+    }
+
+    // 3. Write ROADMAP.md
+    const writeFile = async (path: string, content: string, message: string) => {
+      // Check if file exists (to get SHA for update)
+      let existingSha: string | undefined;
+      const getResp = await fetch(
+        `${GITHUB_API}/repos/${owner}/${repoName}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(branchName)}`,
+        { headers },
+      );
+      if (getResp.ok) {
+        const data = await getResp.json() as { sha: string };
+        existingSha = data.sha;
+      }
+
+      const body: Record<string, string> = {
+        message,
+        content: btoa(unescape(encodeURIComponent(content))), // Handle UTF-8
+        branch: branchName,
+      };
+      if (existingSha) body.sha = existingSha;
+
+      const resp = await fetch(
+        `${GITHUB_API}/repos/${owner}/${repoName}/contents/${encodeURIComponent(path)}`,
+        { method: 'PUT', headers, body: JSON.stringify(body) },
+      );
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`Failed to write ${path}: ${resp.status} ${text.slice(0, 200)}`);
+      }
+    };
+
+    await writeFile('ROADMAP.md', draft.roadmapContent, `feat: initialize project roadmap [${draft.modelAlias}]`);
+    if (draft.workLogContent) {
+      await writeFile('WORK_LOG.md', draft.workLogContent, `feat: initialize work log [${draft.modelAlias}]`);
+    }
+
+    // 4. Create PR
+    const prBody = `## Roadmap Preview\n\n${draft.roadmapContent.slice(0, 3000)}\n\n---\nGenerated by Orchestra Mode (/${draft.modelAlias})\nApproved by user before commit.`;
+    const prResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/pulls`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        title: `feat: initialize project roadmap [${draft.modelAlias}]`,
+        body: prBody,
+        head: branchName,
+        base: defaultBranch,
+      }),
+    });
+    if (!prResp.ok) {
+      const text = await prResp.text();
+      throw new Error(`Failed to create PR: ${prResp.status} ${text.slice(0, 200)}`);
+    }
+
+    const prData = await prResp.json() as { html_url: string };
+
+    // 5. Store in orchestra history
+    if (this.r2Bucket) {
+      const orchestraTask: OrchestraTask = {
+        taskId: `orch-${userId}-${Date.now()}`,
+        timestamp: Date.now(),
+        modelAlias: draft.modelAlias,
+        repo: draft.repo,
+        mode: 'init',
+        prompt: draft.userPrompt.substring(0, 200),
+        branchName,
+        prUrl: prData.html_url,
+        status: 'completed',
+        filesChanged: draft.workLogContent ? ['ROADMAP.md', 'WORK_LOG.md'] : ['ROADMAP.md'],
+        summary: 'Roadmap created via draft preview flow',
+        durationMs: 0,
+      };
+      await storeOrchestraTask(this.r2Bucket, userId, orchestraTask);
+    }
+
+    return prData.html_url;
+  }
+
+  /**
+   * Re-run draft generation with user revision feedback.
+   * Uses buildDraftInitPrompt with the previous draft + revision text.
+   */
+  private async executeOrchestraDraftRevision(
+    chatId: number,
+    userId: string,
+    draft: OrchestraDraft,
+    revisionText: string,
+  ): Promise<void> {
+    await this.bot.sendMessage(chatId, `✏️ Revising roadmap (revision #${draft.revisionCount})...`);
+    // Route through the normal draft flow but with revision context
+    // The buildDraftInitPrompt will include the previous draft and revision text
+    return this.executeOrchestra(chatId, userId, 'draft', draft.repo, draft.userPrompt, false, {
+      revision: revisionText,
+      previousDraft: draft.roadmapContent,
+    });
+  }
+
+  /**
    * Execute an orchestra init or run task.
    * Extracted from handleOrchestraCommand to share between subcommands.
    */
   private async executeOrchestra(
     chatId: number,
     userId: string,
-    mode: 'init' | 'run' | 'redo' | 'do',
+    mode: 'init' | 'run' | 'redo' | 'do' | 'draft',
     repo: string,
     prompt: string,
     skipModelGuard: boolean = false,
+    draftRevision?: { revision: string; previousDraft: string },
   ): Promise<void> {
     // Clean up stale orchestra tasks before starting new work
     if (this.r2Bucket) {
@@ -2388,7 +2643,7 @@ export class TelegramHandler {
 
     // Determine branch name — append short timestamp suffix to prevent branch collisions
     const branchSuffix = Date.now().toString(36).slice(-4); // 4-char unique suffix
-    const taskSlug = mode === 'init'
+    const taskSlug = mode === 'init' || mode === 'draft'
       ? 'roadmap-init'
       : mode === 'do'
       ? `do-${generateTaskSlug(prompt)}`
@@ -2401,7 +2656,13 @@ export class TelegramHandler {
     let orchestraSystemPrompt: string;
     // Strip bot/ prefix to get the slug the model should use in tool calls
     const branchSlug = branchName.replace(/^bot\//, '');
-    if (mode === 'init') {
+    if (mode === 'draft') {
+      orchestraSystemPrompt = buildDraftInitPrompt({
+        repo, modelAlias,
+        revision: draftRevision?.revision,
+        previousDraft: draftRevision?.previousDraft,
+      });
+    } else if (mode === 'init') {
       orchestraSystemPrompt = buildInitPrompt({ repo, modelAlias, branchSlug });
     } else if (mode === 'do') {
       orchestraSystemPrompt = buildDoPrompt({ repo, modelAlias, branchSlug, hasSandbox: !!this.sandbox });
@@ -2453,7 +2714,9 @@ export class TelegramHandler {
 
     // Build messages for the task
     // Build user message — use structured execution brief when available
-    const userMessage = mode === 'init'
+    const userMessage = mode === 'draft'
+      ? prompt
+      : mode === 'init'
       ? prompt
       : mode === 'do'
       ? prompt
@@ -2524,7 +2787,7 @@ export class TelegramHandler {
     // Dispatch to TaskProcessor DO
     const taskId = `${userId}-${Date.now()}`;
     const autoResume = await this.storage.getUserAutoResume(userId);
-    const modeLabel = mode === 'init' ? 'Init' : mode === 'do' ? 'Do' : mode === 'redo' ? 'Redo' : 'Run';
+    const modeLabel = mode === 'draft' ? 'Draft' : mode === 'init' ? 'Init' : mode === 'do' ? 'Do' : mode === 'redo' ? 'Redo' : 'Run';
     const taskRequest: TaskRequest = {
       taskId,
       chatId,
@@ -2546,6 +2809,7 @@ export class TelegramHandler {
       acontextBaseUrl: this.acontextBaseUrl,
       executionProfile,
       orchestraRepo: repo,
+      isDraftInit: mode === 'draft',
     };
 
     const doId = this.taskProcessor.idFromName(userId);
@@ -2558,7 +2822,16 @@ export class TelegramHandler {
     await this.storage.addMessage(userId, 'user', `[Orchestra ${modeLabel}: ${repo}] ${resolvedTask || prompt || 'next task'}`);
 
     // Mode-specific confirmation message
-    if (mode === 'init') {
+    if (mode === 'draft') {
+      await this.bot.sendMessage(
+        chatId,
+        `🎼 Generating roadmap draft...\n\n` +
+        `📦 Repo: ${repo}\n` +
+        `🤖 Model: /${modelAlias}\n\n` +
+        `The bot will analyze the repo and generate a roadmap preview for you to review.\n` +
+        `Use /cancel to stop.`
+      );
+    } else if (mode === 'init') {
       await this.bot.sendMessage(
         chatId,
         `🎼 Orchestra INIT started!\n\n` +
@@ -3461,6 +3734,93 @@ export class TelegramHandler {
         await this.storage.setPendingOrchestra(userId, null);
         const skipGuard = payload === 'proceed';
         await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt, skipGuard);
+        break;
+      }
+
+      case 'orchdraft': {
+        // Draft init buttons: approve/revise/cancel/full
+        if (query.message) {
+          await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+        }
+        const draft = await this.storage.getOrchestraDraft(userId);
+        if (!draft) {
+          await this.bot.sendMessage(chatId, '⏳ Draft expired. Please run /orch init again.');
+          break;
+        }
+        switch (payload) {
+          case 'approve': {
+            // Programmatically create PR with the stored draft content
+            await this.bot.sendMessage(chatId, '✅ Creating PR with your approved roadmap...');
+            try {
+              const prUrl = await this.commitDraftRoadmap(userId, draft);
+              await this.storage.setOrchestraDraft(userId, null); // Clear draft
+              await this.bot.sendMessage(
+                chatId,
+                `✅ Roadmap PR created!\n\n🔗 ${prUrl}\n\n` +
+                `Use /orch next to start implementing the first task.`
+              );
+            } catch (err) {
+              await this.bot.sendMessage(chatId, `❌ Failed to create PR: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            break;
+          }
+          case 'revise': {
+            // Set pending revision flag — next user message will be treated as revision feedback
+            draft.pendingRevision = true;
+            await this.storage.setOrchestraDraft(userId, draft);
+            await this.bot.sendMessage(
+              chatId,
+              '✏️ What should I change? Describe your revision and I\'ll regenerate the roadmap.'
+            );
+            break;
+          }
+          case 'full': {
+            // Send full roadmap preview
+            const fullPreview = draft.roadmapContent.length > 4000
+              ? draft.roadmapContent.slice(0, 4000) + '\n\n[Truncated — approve to see full content in PR]'
+              : draft.roadmapContent;
+            await this.bot.sendMessage(chatId, `📄 Full Draft:\n\n${fullPreview}`);
+            // Re-send action buttons
+            await this.bot.sendMessage(chatId, 'What would you like to do?', {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '✅ Approve & Create PR', callback_data: 'orchdraft:approve' },
+                    { text: '✏️ Revise', callback_data: 'orchdraft:revise' },
+                  ],
+                  [{ text: '❌ Cancel', callback_data: 'orchdraft:cancel' }],
+                ],
+              },
+            });
+            break;
+          }
+          case 'cancel': {
+            await this.storage.setOrchestraDraft(userId, null);
+            await this.bot.sendMessage(chatId, '❌ Draft cancelled.');
+            break;
+          }
+        }
+        break;
+      }
+
+      case 'orchplan': {
+        // Planning mode buttons: generate/cancel
+        if (query.message) {
+          await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+        }
+        if (payload === 'generate') {
+          const plan = await this.storage.getOrchestraPlan(userId);
+          if (!plan || plan.requirements.length === 0) {
+            await this.bot.sendMessage(chatId, '❌ No requirements collected yet. Send some messages first.');
+            break;
+          }
+          const combinedPrompt = plan.requirements.join('\n\n');
+          await this.storage.setOrchestraPlan(userId, null);
+          await this.executeOrchestra(chatId, userId, 'draft', plan.repo, combinedPrompt);
+        } else if (payload === 'cancel') {
+          await this.storage.setOrchestraPlan(userId, null);
+          await this.bot.sendMessage(chatId, '❌ Planning cancelled.');
+        }
         break;
       }
 

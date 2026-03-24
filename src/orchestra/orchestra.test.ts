@@ -31,6 +31,9 @@ import {
   LARGE_FILE_THRESHOLD_KB,
   LARGE_FILE_WARNING_LINES,
   buildExecutionProfile,
+  buildDraftInitPrompt,
+  parseDraftBlocks,
+  formatDraftPreview,
   classifyComplexityTier,
   countScopeAmplifiers,
   TIER_BUDGETS,
@@ -3245,5 +3248,114 @@ describe('formatRuntimeRisk', () => {
     updateRuntimeRisk(profile, [], ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts']);
     const formatted = formatRuntimeRisk(profile);
     expect(formatted).toContain('Drift');
+  });
+});
+
+// --- Draft Init Prompt ---
+
+describe('buildDraftInitPrompt', () => {
+  it('produces a draft prompt with DRAFT_ROADMAP output instructions', () => {
+    const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'claude' });
+    expect(prompt).toContain('Orchestra DRAFT Mode');
+    expect(prompt).toContain('DRAFT_ROADMAP');
+    expect(prompt).toContain('DRAFT_WORKLOG');
+    expect(prompt).toContain('DO NOT call github_create_pr');
+  });
+
+  it('includes revision context when provided', () => {
+    const prompt = buildDraftInitPrompt({
+      repo: 'Owner/Repo',
+      modelAlias: 'claude',
+      revision: 'Split phase 3 into two phases',
+      previousDraft: '# Old Roadmap\n## Phase 3: Testing',
+    });
+    expect(prompt).toContain('REVISION REQUEST');
+    expect(prompt).toContain('Split phase 3');
+    expect(prompt).toContain('Old Roadmap');
+  });
+
+  it('skips revision block when not revising', () => {
+    const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'flash' });
+    expect(prompt).not.toContain('REVISION REQUEST');
+  });
+});
+
+// --- parseDraftBlocks ---
+
+describe('parseDraftBlocks', () => {
+  it('extracts roadmap and worklog from model output', () => {
+    const output = `Here is the roadmap:
+
+\`\`\`DRAFT_ROADMAP
+# Project Roadmap
+
+## Phases
+
+### Phase 1: Setup
+- [ ] Task 1
+\`\`\`
+
+\`\`\`DRAFT_WORKLOG
+# Work Log
+
+| Date | Task |
+|------|------|
+| 2024-01-01 | Init |
+\`\`\`
+
+Done!`;
+    const result = parseDraftBlocks(output);
+    expect(result).not.toBeNull();
+    expect(result!.roadmap).toContain('Project Roadmap');
+    expect(result!.roadmap).toContain('Phase 1: Setup');
+    expect(result!.workLog).toContain('Work Log');
+  });
+
+  it('returns null when no DRAFT_ROADMAP block', () => {
+    const result = parseDraftBlocks('Just some text without draft blocks');
+    expect(result).toBeNull();
+  });
+
+  it('handles missing DRAFT_WORKLOG gracefully', () => {
+    const output = '```DRAFT_ROADMAP\n# Roadmap\n- [ ] Task\n```';
+    const result = parseDraftBlocks(output);
+    expect(result).not.toBeNull();
+    expect(result!.roadmap).toContain('Roadmap');
+    expect(result!.workLog).toBe('');
+  });
+});
+
+// --- formatDraftPreview ---
+
+describe('formatDraftPreview', () => {
+  it('extracts phases and task counts', () => {
+    const roadmap = `# Roadmap
+
+## Overview
+Build a user auth system.
+
+## Phases
+
+### Phase 1: Foundation
+- [ ] Task 1.1: Setup
+- [ ] Task 1.2: Config
+
+### Phase 2: Implementation
+- [ ] Task 2.1: Auth middleware
+- [ ] Task 2.2: JWT tokens
+- [ ] Task 2.3: Testing
+
+## Notes
+Some notes here.`;
+
+    const preview = formatDraftPreview(roadmap);
+    expect(preview).toContain('Phase 1: Foundation (2 tasks)');
+    expect(preview).toContain('Phase 2: Implementation (3 tasks)');
+    expect(preview).toContain('2 phases, 5 tasks');
+  });
+
+  it('handles empty roadmap', () => {
+    const preview = formatDraftPreview('');
+    expect(preview).toContain('0 phases, 0 tasks');
   });
 });
