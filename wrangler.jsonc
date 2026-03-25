@@ -74,6 +74,12 @@
       "bucket_name": "moltbot-data"
     }
   ],
+  "kv_namespaces": [
+    {
+      "binding": "NEXUS_KV",
+      "id": "nexus-cache"
+    }
+  ],
   "triggers": {
     "crons": ["*/5 * * * *", "0 */6 * * *"]
   },

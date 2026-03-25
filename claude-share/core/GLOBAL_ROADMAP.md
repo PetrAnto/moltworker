@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-25 (S2 Spark brainstorm skill complete)
+**Last Updated:** 2026-03-25 (S3 Nexus research skill complete — Sprint 4 skills done)
 
 ---
 
@@ -43,7 +43,7 @@
 | **M1 — "Smart"** | Compound learning, MCP tools, performance engine, verification | M0 | ✅ Achieved (Phase 3-5, 7) |
 | **M2 — "Connected"** | ai-hub integration, Dream Machine build stage | M1 + ai-hub M1 | 🔄 Partial (DM done, ai-hub feeds pending) |
 | **M3 — "Autonomous"** | Private fork (storia-agent), multi-transport, overnight builds | M2 | 🔲 Future |
-| **M4 — "Specialist"** | Gecko Skills runtime + Lyra/Spark/Nexus specialist personas | M1 | 🔄 S0+S1+S2 done, S3 Nexus pending |
+| **M4 — "Specialist"** | Gecko Skills runtime + Lyra/Spark/Nexus specialist personas | M1 | ✅ S0+S1+S2+S3 complete (ST smoke tests pending) |
 
 > **Source:** `MOLTWORKER_ROADMAP-claude_review.md` — strategic gate definitions
 > **Source:** `SKILLS_ROADMAP.md` — Gecko Skills implementation spec + gap analysis
@@ -481,16 +481,16 @@
 
 | ID | Task | Status | Owner | Notes |
 |----|------|--------|-------|-------|
-| S3.1 | Resolve KV binding | 🔲 | Claude | Add `NEXUS_KV: KVNamespace` to `wrangler.toml` + `MoltbotEnv`, OR R2 TTL wrapper |
-| S3.2 | Types + prompts (`src/skills/nexus/types.ts`, `prompts.ts`) | 🔲 | Claude | `EvidenceItem`, `NexusDossier` + guards, confidence/tier labeling |
-| S3.3 | Source packs (`src/skills/nexus/source-packs.ts`) | 🔲 | Claude | 10 fetchers: webSearch, wikipedia, hackerNews, reddit, gdelt, arxiv, coinGecko, yahoo, dexScreener, reliefWeb. HIGH EFFORT |
-| S3.4 | Cache (`src/skills/nexus/cache.ts`) | 🔲 | Claude | 4h TTL, normalized key |
-| S3.5 | Evidence model (`src/skills/nexus/evidence.ts`) | 🔲 | Claude | Evidence aggregation + confidence scoring |
-| S3.6 | Nexus handler (`src/skills/nexus/nexus.ts`) | 🔲 | Claude | Mode router: full (HITL gate + DO), quick (top 3 parallel), decision (pros/cons) |
-| S3.7 | DO extension (`src/durable-objects/task-processor.ts`) | 🔲 | Claude | Add `type: 'skill'` task support for full research in DO |
-| S3.8 | Storage (`src/storage/nexus.ts`) | 🔲 | Claude | Dossier cache helpers |
-| S3.9 | Register + render | 🔲 | Claude | Telegram renderer for `dossier`, `source_plan` kinds |
-| S3.10 | Tests | 🔲 | Claude | Query classification, cache hit/miss, HITL flow, partial fetch failures |
+| S3.1 | Resolve KV binding | ✅ | Claude | KV chosen. `NEXUS_KV: KVNamespace` added to `wrangler.jsonc` + `MoltbotEnv`. |
+| S3.2 | Types + prompts | ✅ | Claude | `NexusDossier`, `EvidenceItem`, `SynthesisResponse`, `QueryClassification` + guards + prompts |
+| S3.3 | Source packs | ✅ | Claude | 8 fetchers: webSearch, wikipedia, hackerNews, reddit, news, crypto, finance, fetchUrl. Parallel execution, graceful degradation. |
+| S3.4 | Cache | ✅ | Claude | KV-backed, 4h TTL, normalized keys. No-op when KV undefined. |
+| S3.5 | Evidence model | ✅ | Claude | Confidence scoring (weighted avg + diversity + count bonuses), formatting for LLM + display. |
+| S3.6 | Nexus handler | ✅ | Claude | classify → fetch → synthesize pipeline. Quick, decision (always fresh), full/dossier modes. |
+| S3.7 | DO extension | 🔲 | Claude | Deferred — requires surgical TaskProcessor changes. Full dossier currently runs as enhanced quick. |
+| S3.8 | Storage | ✅ | Claude | KV cache serves as storage (S3.4). No separate R2 storage needed. |
+| S3.9 | Register + render | ✅ | Claude | Registered in init.ts. Existing dossier renderer handles output with chunking. |
+| S3.10 | Tests | ✅ | Claude | 33 new tests: types (10), handler (8), cache (7), evidence (8). 85 files, 2569 total. |
 
 **Commands:** `/research <topic>`, `/research <topic> --quick`, `/research <topic> --decision`, `/dossier <entity>`
 
@@ -635,6 +635,7 @@ All skills done → ST.* (Smoke Tests)
 
 ```
 2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S1 Lyra content creator — /write (self-review if quality<3), /rewrite (R2 draft + flags), /headline (5 variants with commentary), /repurpose (URL fetch + platform adapt). Types + guards, prompts, handler, R2 storage. 30 new tests (2503 total). | src/skills/lyra/*, src/storage/lyra.ts, src/skills/init.ts
+2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S3 Nexus research — KV binding (NEXUS_KV), 8 source fetchers (parallel + graceful degradation), KV cache (4h TTL), evidence model (confidence scoring), handler (classify→fetch→synthesize), decision mode (pros/cons/risks). 33 new tests (2569 total). S3.7 DO extension deferred. | src/skills/nexus/*, src/types.ts, wrangler.jsonc, src/skills/init.ts
 2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S2 Spark brainstorm — /save (R2 inbox + URL metadata), /spark (quick reaction), /gauntlet (6-stage evaluation), /brainstorm (cluster + challenge), /ideas (list inbox). Types + guards, services, handler, R2 storage. 31 new tests (2534 total). | src/skills/spark/*, src/storage/spark.ts, src/skills/init.ts
 2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | fix(skills): S0 hardening — official SkillContext (hotPrompt), hardened subcommand parser, executeSkillTool with policy enforcement, 4 API integration tests, Telegram chunking, Lyra contract frozen. 9 new tests (2472 total). | src/skills/types.ts, src/skills/command-map.ts, src/skills/runtime.ts, src/skills/skill-tools.ts, src/skills/renderers/telegram.ts, src/routes/api.test.ts, SKILLS_ROADMAP.md
 2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S0 Gecko Skills shared runtime — types, validators, command-map (14 commands + flag parser), LLM helper (callSkillLLM/selectSkillModel), registry + runtime (runSkill with R2 hot-prompts), tool-policy (per-skill allowlists), renderers (telegram + web JSON), orchestra refactor (moved to src/skills/orchestra/ with barrel re-export), handler routing (COMMAND_SKILL_MAP early check), API route (POST /api/skills/execute with X-Storia-Secret auth). 16 new files, 3 modified. 74 test files, 2463 tests pass. | src/skills/*, src/orchestra/orchestra.ts, src/telegram/handler.ts, src/routes/api.ts
@@ -831,7 +832,7 @@ graph TD
     P8 --> S0[Sprint 4: S0 Skill Runtime ✅]
     S0 --> S1[S1 Lyra ✅]
     S0 --> S2[S2 Spark ✅]
-    S0 --> S3[S3 Nexus 🔲]
+    S0 --> S3[S3 Nexus ✅]
     S1 --> ST[Post-Sprint: Smoke Tests 🔲]
     S2 --> ST
     S3 --> ST
@@ -908,7 +909,7 @@ ai-hub /api/situation/* endpoints ✅
 | Task success rate | Tracked (CoVe verification) | >85% | >95% |
 | Context compression | Token-budgeted + summarized | Same | Adaptive |
 | Cross-session learning | Active (R2 learnings + sessions) | Pattern library | Autonomous improvement |
-| Tests | 2534 | 2000+ ✅ | 2500+ ✅ |
+| Tests | 2569 | 2000+ ✅ | 2500+ ✅ |
 
 ---
 

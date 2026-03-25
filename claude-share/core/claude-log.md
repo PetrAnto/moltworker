@@ -4,6 +4,108 @@
 
 ---
 
+## Session: 2026-03-25 | S3 Nexus Research Skill (Session: session_01JAkuvEtkau24ot6EH245kU)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QN3rA`
+**Status:** Completed
+
+### Summary
+Implemented S3 Nexus research skill with KV-backed cache, 8 source fetchers, evidence model, and 3 research modes (quick/decision/full).
+
+### Changes Made
+- Added NEXUS_KV binding to wrangler.jsonc + MoltbotEnv
+- Created types (NexusDossier, EvidenceItem, SynthesisResponse, QueryClassification + guards)
+- Created 8 source fetchers with parallel execution + graceful degradation
+- Created KV cache with 4h TTL and normalized keys
+- Created evidence model (confidence scoring + formatting)
+- Created handler with classify→fetch→synthesize pipeline
+- Registered Nexus in init.ts
+- S3.7 (DO extension) deferred — full dossier runs as enhanced quick mode
+
+### Files Modified
+- `src/skills/nexus/` (10 new files)
+- `src/types.ts` (NEXUS_KV binding)
+- `wrangler.jsonc` (KV namespace)
+- `src/skills/init.ts`
+
+### Tests
+- [x] 85 files, 2569 tests pass
+- [x] Typecheck clean
+
+### Notes for Next Session
+- All 4 skill phases (S0+S1+S2+S3) complete — M4 milestone achieved
+- Next: ST smoke tests or S3.7 DO extension
+- KV namespace needs `wrangler kv:namespace create nexus-cache` before deploy
+
+---
+
+## Session: 2026-03-25 | S2 Spark + PR Review Fixes (Session: session_01JAkuvEtkau24ot6EH245kU)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QN3rA`
+**Status:** Completed
+
+### Summary
+Implemented S2 Spark brainstorm skill (6 commands) and fixed 3 bugs from PR review.
+
+### Changes Made
+- Created Spark skill: types (SparkItem, SparkReaction, SparkGauntlet, BrainstormResult + guards), prompts, capture service (URL metadata fetch), gauntlet service (quick reaction + 6-stage evaluation), brainstorm service (cluster + challenge), handler, R2 storage
+- Registered Spark in init.ts
+- PR review fixes: /ideas→list routing, newest-first storage limit, gauntlet score clamping
+
+### Files Modified
+- `src/skills/spark/` (8 new files)
+- `src/storage/spark.ts` + test
+- `src/skills/init.ts`
+- `src/skills/command-map.ts` (/ideas→list fix)
+- `src/skills/spark/gauntlet.ts` (score clamp fix)
+- `src/storage/spark.ts` (newest-first fix)
+
+### Tests
+- [x] 81 files, 2534 tests pass
+- [x] Typecheck clean
+
+### Notes for Next Session
+- S0+S1+S2 complete. Next: S3 Nexus (research skill, highest effort)
+- KV vs R2 decision needed for Nexus cache (S3.1)
+
+---
+
+## Session: 2026-03-25 | S1 Lyra + S0 Hardening (Session: session_01JAkuvEtkau24ot6EH245kU)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QN3rA`
+**Status:** Completed
+
+### Summary
+Implemented S1 Lyra content creator skill (4 commands) and applied 6 pre-S1 hardening fixes from GPT reviewer feedback.
+
+### Changes Made
+- S0 hardening: official SkillContext (hotPrompt), hardened subcommand parser, executeSkillTool with policy enforcement, API integration tests, Telegram chunking, Lyra contract frozen
+- S1 Lyra: types (LyraArtifact, HeadlineResult + guards), prompts, handler (write/rewrite/headline/repurpose), R2 draft storage, registered in init.ts
+
+### Files Modified
+- `src/skills/lyra/` (5 new files)
+- `src/storage/lyra.ts` + test
+- `src/skills/types.ts` (SkillContext)
+- `src/skills/command-map.ts` (parser hardening)
+- `src/skills/runtime.ts` (official hotPrompt injection)
+- `src/skills/skill-tools.ts` (new — policy-enforced tool execution)
+- `src/skills/renderers/telegram.ts` (chunking)
+- `src/routes/api.test.ts` (integration tests)
+- `SKILLS_ROADMAP.md` (Lyra contract)
+
+### Tests
+- [x] 78 files, 2503 tests pass
+- [x] Typecheck clean
+
+### Notes for Next Session
+- Lyra is the first real skill proving the runtime end-to-end
+- GPT reviewer's 6 exigences all addressed before S1 implementation
+
+---
+
 ## Session: 2026-03-25 | S0 Gecko Skills Shared Runtime (Session: session_01JAkuvEtkau24ot6EH245kU)
 
 **AI:** Claude Opus 4.6

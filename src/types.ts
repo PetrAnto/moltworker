@@ -14,6 +14,7 @@ export interface MoltbotEnv {
   TASK_PROCESSOR?: DurableObjectNamespace<TaskProcessor>; // Optional: for long-running AI tasks
   ASSETS: Fetcher; // Assets binding for admin UI static files
   MOLTBOT_BUCKET: R2Bucket; // R2 bucket for persistent storage
+  NEXUS_KV?: KVNamespace; // KV namespace for Nexus research cache (4h TTL)
   // Cloudflare AI Gateway configuration (preferred)
   CF_AI_GATEWAY_ACCOUNT_ID?: string; // Cloudflare account ID for AI Gateway
   CF_AI_GATEWAY_GATEWAY_ID?: string; // AI Gateway ID
