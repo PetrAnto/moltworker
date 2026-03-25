@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-25 (Gecko Skills roadmap — Sprint 4 planning)
+**Last Updated:** 2026-03-25 (S0 Gecko Skills shared runtime — implemented)
 
 ---
 
@@ -43,7 +43,7 @@
 | **M1 — "Smart"** | Compound learning, MCP tools, performance engine, verification | M0 | ✅ Achieved (Phase 3-5, 7) |
 | **M2 — "Connected"** | ai-hub integration, Dream Machine build stage | M1 + ai-hub M1 | 🔄 Partial (DM done, ai-hub feeds pending) |
 | **M3 — "Autonomous"** | Private fork (storia-agent), multi-transport, overnight builds | M2 | 🔲 Future |
-| **M4 — "Specialist"** | Gecko Skills runtime + Lyra/Spark/Nexus specialist personas | M1 | 🔄 Planning (Sprint 4) |
+| **M4 — "Specialist"** | Gecko Skills runtime + Lyra/Spark/Nexus specialist personas | M1 | 🔄 S0 Runtime done, S1-S3 pending |
 
 > **Source:** `MOLTWORKER_ROADMAP-claude_review.md` — strategic gate definitions
 > **Source:** `SKILLS_ROADMAP.md` — Gecko Skills implementation spec + gap analysis
@@ -438,16 +438,16 @@
 
 | ID | Task | Status | Owner | Notes |
 |----|------|--------|-------|-------|
-| S0.1 | Core types + validators (`src/skills/types.ts`, `validators.ts`) | 🔲 | Claude | `SkillId`, `Transport`, `SkillRequest`, `SkillResult`, `SkillHandler` |
-| S0.2 | Command map + flag parser (`src/skills/command-map.ts`) | 🔲 | Claude | `COMMAND_SKILL_MAP` (14 commands), `parseFlags()` |
-| S0.3 | LLM helper for skills (`src/skills/llm.ts`) | 🔲 | Claude | `callSkillLLM()` + `selectSkillModel()` wrapping `OpenRouterClient` |
-| S0.4 | Registry + runtime (`src/skills/registry.ts`, `runtime.ts`) | 🔲 | Claude | `runSkill()` with R2 hot-prompt loading, per-skill retry, telemetry |
-| S0.5 | Tool policy (`src/skills/tool-policy.ts`) | 🔲 | Claude | Per-skill tool allowlists |
-| S0.6 | Renderers (`src/skills/renderers/telegram.ts`, `web.ts`) | 🔲 | Claude | Transport-neutral → Telegram markdown + JSON web formatting |
-| S0.7 | Orchestra refactor into `src/skills/orchestra/` | 🔲 | Claude | Split `orchestra.ts` → `orchestra/orchestra.ts`, `types.ts`, `prompts.ts`. Return `SkillResult`. HIGH RISK — tightly coupled to handler.ts |
-| S0.8 | Handler routing refactor (`src/telegram/handler.ts`) | 🔲 | Claude | Early `COMMAND_SKILL_MAP` check → `runSkill()` → `renderForTelegram()`. Surgical insert. |
-| S0.9 | API routes (`src/routes/api.ts`) | 🔲 | Claude | `POST /api/skills/execute` with `X-Storia-Secret` auth |
-| S0.10 | Tests + typecheck | 🔲 | Claude | Tests for command-map, runtime, validators. Full typecheck pass. |
+| S0.1 | Core types + validators (`src/skills/types.ts`, `validators.ts`) | ✅ | Claude | `SkillId`, `Transport`, `SkillRequest`, `SkillResult`, `SkillHandler` |
+| S0.2 | Command map + flag parser (`src/skills/command-map.ts`) | ✅ | Claude | `COMMAND_SKILL_MAP` (14 commands), `parseFlags()` |
+| S0.3 | LLM helper for skills (`src/skills/llm.ts`) | ✅ | Claude | `callSkillLLM()` + `selectSkillModel()` wrapping `OpenRouterClient` |
+| S0.4 | Registry + runtime (`src/skills/registry.ts`, `runtime.ts`) | ✅ | Claude | `runSkill()` with R2 hot-prompt loading, per-skill retry, telemetry |
+| S0.5 | Tool policy (`src/skills/tool-policy.ts`) | ✅ | Claude | Per-skill tool allowlists |
+| S0.6 | Renderers (`src/skills/renderers/telegram.ts`, `web.ts`) | ✅ | Claude | Transport-neutral → Telegram HTML + JSON web formatting |
+| S0.7 | Orchestra refactor into `src/skills/orchestra/` | ✅ | Claude | Moved to `src/skills/orchestra/orchestra.ts`, barrel re-export at old path, `handleOrchestra()` adapter. Deferred full split to reduce risk. |
+| S0.8 | Handler routing refactor (`src/telegram/handler.ts`) | ✅ | Claude | Early `COMMAND_SKILL_MAP` check → `runSkill()` → `renderForTelegram()`. Orchestra excluded (stays legacy for Phase 0). |
+| S0.9 | API routes (`src/routes/api.ts`) | ✅ | Claude | `POST /api/skills/execute` with `X-Storia-Secret` auth |
+| S0.10 | Tests + typecheck | ✅ | Claude | 74 files, 2463 tests pass. Typecheck clean. New tests for command-map, runtime, validators. |
 
 > 🧑 HUMAN CHECK S0.11: Delete R2 bucket contents before first deploy — `https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/moltbot-data`
 > 🧑 HUMAN CHECK S0.12: Upload initial R2 prompt packs (`prompts/*/system.md`) after deploy
@@ -634,6 +634,7 @@ All skills done → ST.* (Smoke Tests)
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S0 Gecko Skills shared runtime — types, validators, command-map (14 commands + flag parser), LLM helper (callSkillLLM/selectSkillModel), registry + runtime (runSkill with R2 hot-prompts), tool-policy (per-skill allowlists), renderers (telegram + web JSON), orchestra refactor (moved to src/skills/orchestra/ with barrel re-export), handler routing (COMMAND_SKILL_MAP early check), API route (POST /api/skills/execute with X-Storia-Secret auth). 16 new files, 3 modified. 74 test files, 2463 tests pass. | src/skills/*, src/orchestra/orchestra.ts, src/telegram/handler.ts, src/routes/api.ts
 2026-03-25 | Claude Opus 4.6 (Session: session_011QBkrxcFXDhXtxfwf4tZct) | docs(skills): Gecko Skills roadmap — Phase S0-S3 (runtime, Lyra, Spark, Nexus) + spec-vs-reality gap analysis, M4 milestone gate, dependency graph, smoke tests post-sprint task. Archived previous GLOBAL_ROADMAP.md + next_prompt.md | SKILLS_ROADMAP.md, claude-share/core/GLOBAL_ROADMAP.md, claude-share/core/WORK_STATUS.md, claude-share/core/next_prompt.md, claude-share/core/archive/*
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(cron): F.1b ai-hub proactive alerts — fetchAiHubAlerts + formatAlertForTelegram wired into 5-min cron, priority-tagged Telegram messages (🔴/🟡/🔵), ack=true marks as read. 10 new tests (2083 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts, src/index.ts
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(briefing): F.1 ai-hub Situation Monitor integration — fetchAiHubRss + fetchAiHubMarket consuming /api/situation/rss and /api/situation/market from ai.petranto.com, wired into generateDailyBriefing as Markets + News sections, graceful degradation when ai-hub unavailable. 11 new tests (2073 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts

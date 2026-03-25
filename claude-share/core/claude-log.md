@@ -4,6 +4,50 @@
 
 ---
 
+## Session: 2026-03-25 | S0 Gecko Skills Shared Runtime (Session: session_01JAkuvEtkau24ot6EH245kU)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QN3rA`
+**Status:** Completed
+
+### Summary
+Implemented the S0 Gecko Skills shared runtime — the foundation for specialist AI personas (Lyra, Spark, Nexus). All 10 sub-tasks (S0.1-S0.10) completed.
+
+### Changes Made
+- Created `src/skills/types.ts` — SkillId, SkillRequest, SkillResult, SkillHandler, SkillMeta
+- Created `src/skills/validators.ts` — assertValid, isNonEmptyString, isPlainObject, safeJsonParse
+- Created `src/skills/command-map.ts` — COMMAND_SKILL_MAP (14 commands), parseFlags, parseCommandMessage
+- Created `src/skills/llm.ts` — callSkillLLM + selectSkillModel wrapping OpenRouterClient
+- Created `src/skills/registry.ts` — registerSkill/getSkillHandler/listRegisteredSkills
+- Created `src/skills/runtime.ts` — runSkill with R2 hot-prompt loading + error wrapping
+- Created `src/skills/tool-policy.ts` — per-skill tool allowlists (orchestra/lyra/spark/nexus)
+- Created `src/skills/renderers/telegram.ts` — renderForTelegram per SkillResultKind
+- Created `src/skills/renderers/web.ts` — renderForWeb JSON envelope
+- Created `src/skills/orchestra/handler.ts` — handleOrchestra adapter + ORCHESTRA_META
+- Created `src/skills/init.ts` — initializeSkills registration entry point
+- Moved orchestra.ts to src/skills/orchestra/ with barrel re-export at old path
+- Added early COMMAND_SKILL_MAP routing in handler.ts (orchestra excluded for Phase 0)
+- Added POST /api/skills/execute in api.ts with X-Storia-Secret auth
+- Created 3 test files: command-map.test.ts, validators.test.ts, runtime.test.ts
+
+### Files Modified
+- `src/skills/` (16 new files)
+- `src/orchestra/orchestra.ts` (barrel re-export)
+- `src/telegram/handler.ts` (skill routing + imports)
+- `src/routes/api.ts` (skills API endpoint + imports)
+
+### Tests
+- [x] Tests pass (74 files, 2463 tests)
+- [x] Typecheck passes
+
+### Notes for Next Session
+- S0 is complete. Next task is S1 — Lyra (Crex Content Creator)
+- Orchestra stays on legacy handler path for Phase 0 (too tightly coupled to Telegram bot context)
+- The orchestra.ts split into types.ts/prompts.ts was deferred — barrel re-export approach is safer
+- Future skills (lyra, spark, nexus) will route through the new skill runtime automatically
+
+---
+
 ## Session: 2026-03-25 | Gecko Skills Roadmap Planning (Session: session_011QBkrxcFXDhXtxfwf4tZct)
 
 **AI:** Claude Opus 4.6
