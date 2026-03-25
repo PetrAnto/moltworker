@@ -9,6 +9,8 @@
  */
 
 import type { SkillRequest, SkillResult, SkillMeta } from '../types';
+import type { SkillTaskRequest } from '../../durable-objects/task-processor';
+import type { TaskProcessor } from '../../durable-objects/task-processor';
 import type { NexusDossier, SynthesisResponse, QueryClassification } from './types';
 import { isSynthesisResponse, isQueryClassification } from './types';
 import { callSkillLLM, selectSkillModel } from '../llm';
@@ -37,12 +39,71 @@ export async function handleNexus(request: SkillRequest): Promise<SkillResult> {
   const mode = isDecision ? 'decision' : 'quick';
 
   if (request.subcommand === 'dossier') {
-    // Full dossier — currently runs as enhanced quick mode
-    // HITL gate + DO dispatch deferred to S3.7
-    return executeResearch(request, 'full');
+    // Full dossier — dispatch to DO for async execution when possible
+    return dispatchOrInline(request);
   }
 
   return executeResearch(request, mode);
+}
+
+/**
+ * Dispatch full dossier to TaskProcessor DO for async execution.
+ * Falls back to inline if transport is not Telegram or TASK_PROCESSOR is unavailable.
+ */
+async function dispatchOrInline(request: SkillRequest): Promise<SkillResult> {
+  const taskProcessor = request.env.TASK_PROCESSOR as DurableObjectNamespace<TaskProcessor> | undefined;
+
+  // Fallback: run inline when DO is unavailable or transport is not Telegram
+  if (!taskProcessor || request.transport !== 'telegram') {
+    return executeResearch(request, 'full');
+  }
+
+  if (!request.text.trim()) {
+    return makeError(request, 'Please provide a topic. Usage: /dossier <topic>');
+  }
+
+  const taskId = crypto.randomUUID();
+  const doId = taskProcessor.idFromName(`nexus-${request.userId}-${taskId}`);
+  const stub = taskProcessor.get(doId);
+
+  const skillTaskRequest: SkillTaskRequest = {
+    kind: 'skill',
+    taskId,
+    chatId: request.chatId ?? 0,
+    userId: request.userId,
+    telegramToken: request.context?.telegramToken ?? '',
+    skillRequest: request,
+    openrouterKey: request.env.OPENROUTER_API_KEY,
+    githubToken: request.env.GITHUB_TOKEN,
+    braveSearchKey: request.env.BRAVE_SEARCH_KEY,
+    cloudflareApiToken: request.env.CLOUDFLARE_API_TOKEN,
+  };
+
+  try {
+    await stub.fetch('https://do/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(skillTaskRequest),
+    });
+  } catch (err) {
+    // DO dispatch failed — fall back to inline
+    console.error('[Nexus] DO dispatch failed, falling back to inline:', err instanceof Error ? err.message : err);
+    return executeResearch(request, 'full');
+  }
+
+  // Return immediately with "in progress" message
+  return {
+    skillId: 'nexus',
+    kind: 'text',
+    body: `🔬 Deep research started for "${request.text.trim()}"\n\nResults will arrive in this chat when complete.`,
+    data: { taskId, async: true },
+    telemetry: {
+      durationMs: 0,
+      model: request.modelAlias ?? NEXUS_META.defaultModel,
+      llmCalls: 0,
+      toolCalls: 0,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -189,3 +189,109 @@ describe('graceful degradation', () => {
     expect(result.body).toContain('Could not retrieve');
   });
 });
+
+describe('/dossier DO dispatch (S3.7)', () => {
+  it('dispatches to DO when Telegram + TASK_PROCESSOR available', async () => {
+    const mockStub = {
+      fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started', taskId: 'test-id' }))),
+    };
+    const mockTaskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(mockStub),
+    };
+
+    const result = await handleNexus(makeRequest({
+      subcommand: 'dossier',
+      text: 'OpenAI company',
+      transport: 'telegram',
+      chatId: 123,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        MOLTBOT_BUCKET: {} as R2Bucket,
+        OPENROUTER_API_KEY: 'test-key',
+        NEXUS_KV: {} as KVNamespace,
+        TASK_PROCESSOR: mockTaskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Should return "in progress" immediately
+    expect(result.kind).toBe('text');
+    expect(result.body).toContain('Deep research started');
+    expect(result.body).toContain('OpenAI company');
+    expect((result.data as Record<string, unknown>).async).toBe(true);
+
+    // Should have dispatched to the DO
+    expect(mockTaskProcessor.idFromName).toHaveBeenCalled();
+    expect(mockStub.fetch).toHaveBeenCalledWith(
+      'https://do/process',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('falls back to inline when TASK_PROCESSOR missing', async () => {
+    setupStandardMocks();
+
+    const result = await handleNexus(makeRequest({
+      subcommand: 'dossier',
+      text: 'OpenAI',
+      transport: 'telegram',
+      env: {
+        MOLTBOT_BUCKET: {} as R2Bucket,
+        OPENROUTER_API_KEY: 'test-key',
+        NEXUS_KV: {} as KVNamespace,
+        // No TASK_PROCESSOR
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Should run inline (not "in progress")
+    expect(result.kind).toBe('dossier');
+    expect(result.telemetry.llmCalls).toBe(2);
+  });
+
+  it('falls back to inline when transport is not telegram', async () => {
+    setupStandardMocks();
+
+    const result = await handleNexus(makeRequest({
+      subcommand: 'dossier',
+      text: 'OpenAI',
+      transport: 'api',
+      env: {
+        MOLTBOT_BUCKET: {} as R2Bucket,
+        OPENROUTER_API_KEY: 'test-key',
+        NEXUS_KV: {} as KVNamespace,
+        TASK_PROCESSOR: { idFromName: vi.fn(), get: vi.fn() },
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Should run inline
+    expect(result.kind).toBe('dossier');
+  });
+
+  it('falls back to inline when DO dispatch fails', async () => {
+    setupStandardMocks();
+
+    const mockStub = {
+      fetch: vi.fn().mockRejectedValue(new Error('DO unavailable')),
+    };
+
+    const result = await handleNexus(makeRequest({
+      subcommand: 'dossier',
+      text: 'OpenAI',
+      transport: 'telegram',
+      chatId: 123,
+      env: {
+        MOLTBOT_BUCKET: {} as R2Bucket,
+        OPENROUTER_API_KEY: 'test-key',
+        NEXUS_KV: {} as KVNamespace,
+        TASK_PROCESSOR: {
+          idFromName: vi.fn().mockReturnValue('do-id'),
+          get: vi.fn().mockReturnValue(mockStub),
+        },
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Should fall back to inline
+    expect(result.kind).toBe('dossier');
+    expect(result.telemetry.llmCalls).toBe(2);
+  });
+});
