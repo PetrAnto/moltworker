@@ -36,6 +36,9 @@ MOLTBOT_GATEWAY_TOKEN=dev-token-change-in-prod
 # TELEGRAM_BOT_TOKEN=optional
 # DISCORD_BOT_TOKEN=optional
 
+# NVIDIA NIM (free models via build.nvidia.com, bypasses Cloudchamber egress)
+# NVIDIA_NIM_API_KEY=nvapi-...    # Free key from build.nvidia.com
+
 # CDP (Chrome DevTools Protocol) configuration for browser automation
 # CDP_SECRET=shared-secret-for-cdp-auth
 # WORKER_URL=https://your-worker.example.com
