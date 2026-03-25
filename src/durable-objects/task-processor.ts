@@ -19,6 +19,10 @@ import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extra
 import { UserStorage } from '../openrouter/storage';
 import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, parseDraftBlocks, formatDraftPreview, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile, type RuntimeRiskProfile, createRuntimeRiskProfile, updateRuntimeRisk, formatRuntimeRisk } from '../orchestra/orchestra';
 import { releaseRepoLock } from '../concurrency/branch-lock';
+import { runSkill } from '../skills/runtime';
+import { initializeSkills } from '../skills/init';
+import { renderForTelegram } from '../skills/renderers/telegram';
+import type { SkillRequest, SkillResult } from '../skills/types';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
@@ -370,6 +374,38 @@ export interface TaskRequest {
   orchestraRepo?: string;
   // Draft init mode: model outputs roadmap in text, DO stores draft + sends preview
   isDraftInit?: boolean;
+}
+
+/**
+ * Skill task request — dispatches a skill to run asynchronously in the DO.
+ * Uses runSkill() from the Gecko Skills runtime.
+ */
+export interface SkillTaskRequest {
+  kind: 'skill';
+  taskId: string;
+  chatId: number;
+  userId: string;
+  telegramToken: string;
+  skillRequest: SkillRequest;
+  openrouterKey?: string;
+  githubToken?: string;
+  braveSearchKey?: string;
+  dashscopeKey?: string;
+  moonshotKey?: string;
+  deepseekKey?: string;
+  anthropicKey?: string;
+  cloudflareApiToken?: string;
+}
+
+/**
+ * Discriminated union for /process endpoint.
+ * Existing callers send TaskRequest (no `kind` field) — treated as chat/orchestra.
+ * New skill callers send SkillTaskRequest with `kind: 'skill'`.
+ */
+export type TaskProcessorPayload = TaskRequest | SkillTaskRequest;
+
+export function isSkillTaskRequest(payload: TaskProcessorPayload): payload is SkillTaskRequest {
+  return 'kind' in payload && (payload as SkillTaskRequest).kind === 'skill';
 }
 
 // DO environment with R2 + Sandbox bindings
@@ -1925,13 +1961,122 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   }
 
   /**
+   * Process a skill task asynchronously (S3.7).
+   *
+   * Isolated from the orchestra/chat processTask() loop.
+   * Calls runSkill() and sends the result to Telegram.
+   */
+  private async processSkillTask(request: SkillTaskRequest): Promise<void> {
+    const start = Date.now();
+    console.log(`[TaskProcessor] Starting skill task ${request.taskId} for skill ${request.skillRequest.skillId}`);
+
+    // Store minimal state for /status queries
+    const skillState: TaskState = {
+      taskId: request.taskId,
+      chatId: request.chatId,
+      userId: request.userId,
+      modelAlias: request.skillRequest.modelAlias ?? 'flash',
+      messages: [],
+      status: 'processing',
+      toolsUsed: [],
+      iterations: 0,
+      startTime: start,
+      lastUpdate: start,
+      telegramToken: request.telegramToken,
+      openrouterKey: request.openrouterKey ?? '',
+    };
+    await this.doState.storage.put('task', skillState);
+
+    try {
+      // Initialize skills registry
+      initializeSkills();
+
+      // Populate the skill request env with keys from the DO request
+      const enrichedRequest: SkillRequest = {
+        ...request.skillRequest,
+        env: {
+          ...request.skillRequest.env,
+          OPENROUTER_API_KEY: request.openrouterKey,
+          GITHUB_TOKEN: request.githubToken,
+          BRAVE_SEARCH_KEY: request.braveSearchKey,
+          CLOUDFLARE_API_TOKEN: request.cloudflareApiToken,
+        } as SkillRequest['env'],
+      };
+
+      // Run the skill
+      const result = await runSkill(enrichedRequest);
+
+      // Render and send to Telegram
+      const chunks = renderForTelegram(result);
+      for (const chunk of chunks) {
+        await this.sendTelegramMessage(request.telegramToken, request.chatId, chunk.text);
+      }
+
+      // Mark completed
+      skillState.status = 'completed';
+      skillState.result = result.body.slice(0, 5000);
+      skillState.lastUpdate = Date.now();
+      skillState.iterations = result.telemetry.llmCalls;
+      skillState.toolsUsed = Array.from({ length: result.telemetry.toolCalls }, (_, i) => `tool-${i + 1}`);
+      await this.doState.storage.put('task', skillState);
+
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`[TaskProcessor] Skill task ${request.taskId} completed in ${elapsed}s`);
+
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[TaskProcessor] Skill task ${request.taskId} failed:`, message);
+
+      // Notify user
+      await this.sendTelegramMessage(
+        request.telegramToken,
+        request.chatId,
+        `❌ Research failed: ${message}`,
+      );
+
+      // Mark failed
+      skillState.status = 'failed';
+      skillState.error = message;
+      skillState.lastUpdate = Date.now();
+      await this.doState.storage.put('task', skillState);
+    }
+  }
+
+  /**
    * Handle incoming requests to the Durable Object
    */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === '/process' && request.method === 'POST') {
-      const taskRequest = await request.json() as TaskRequest;
+      const payload = await request.json() as TaskProcessorPayload;
+
+      // --- Skill task path (S3.7) ---
+      if (isSkillTaskRequest(payload)) {
+        const skillPromise = this.processSkillTask(payload).catch(async (error) => {
+          console.error('[TaskProcessor] Uncaught error in processSkillTask:', error);
+          try {
+            await this.doState.storage.deleteAlarm();
+            await this.sendTelegramMessage(
+              payload.telegramToken,
+              payload.chatId,
+              `❌ Research failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            );
+          } catch (notifyError) {
+            console.error('[TaskProcessor] Failed to notify user of skill error:', notifyError);
+          }
+        });
+        this.doState.waitUntil(skillPromise);
+
+        return new Response(JSON.stringify({
+          status: 'started',
+          taskId: payload.taskId,
+          kind: 'skill',
+        }), { headers: { 'Content-Type': 'application/json' } });
+      }
+
+      // --- Existing chat/orchestra task path ---
+      const taskRequest = payload as TaskRequest;
 
       // Start processing in the background with global error catching.
       // waitUntil prevents DO eviction (without it, Cloudflare may GC the DO

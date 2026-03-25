@@ -861,6 +861,8 @@ export class TelegramHandler {
         OPENROUTER_API_KEY: this.openrouterKey,
         GITHUB_TOKEN: this.githubToken,
         BRAVE_SEARCH_KEY: this.braveSearchKey,
+        TASK_PROCESSOR: this.taskProcessor,
+        NEXUS_KV: (this as unknown as { nexusKv?: KVNamespace }).nexusKv,
       } as import('../types').MoltbotEnv;
       const skillRequest: SkillRequest = {
         skillId: skillParsed.mapping.skillId,
@@ -872,6 +874,7 @@ export class TelegramHandler {
         chatId,
         modelAlias: await this.storage.getUserModel(userId),
         env: skillEnv,
+        context: { telegramToken: this.telegramToken },
       };
       const result = await runSkill(skillRequest);
       const chunks = renderForTelegram(result);

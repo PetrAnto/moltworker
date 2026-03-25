@@ -49,6 +49,8 @@ export interface SkillRequest {
 export interface SkillContext {
   /** System prompt loaded from R2 (prompts/{skillId}/system.md), or undefined if not found. */
   hotPrompt?: string;
+  /** Telegram bot token — injected by handler for skills that may dispatch to DO. */
+  telegramToken?: string;
 }
 
 // ---------------------------------------------------------------------------
