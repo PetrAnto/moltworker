@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-25 (S0+S1+S2 complete, S3 Nexus next)
+**Last Updated:** 2026-03-25 (S0+S1+S2+S3 complete — Sprint 4 skills done)
 
 ---
 
@@ -23,7 +23,8 @@
 | S0 | Gecko Skills shared runtime (10 sub-tasks) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` / PR #415 |
 | S1 | Lyra — Crex Content Creator (5 sub-tasks) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` / PR #415 |
 | S2 | Spark — Tach Brainstorm (6 sub-tasks) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` |
-| S3 | Nexus — Omni Research (10 sub-tasks) | — | 🔲 Next | `claude/skill-nexus` |
+| S3 | Nexus — Omni Research (9/10 sub-tasks, S3.7 deferred) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` |
+| ST | E2E Coding Agent Smoke Tests (3 sub-tasks) | — | 🔲 Next | — |
 
 ### Recently Completed (Sprint 3, for reference)
 
@@ -60,7 +61,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | S0+S1+S2 complete (21 tasks, 2534 tests). PR review fixes applied. | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
+| Claude | S0+S1+S2+S3 complete (30 tasks, 2569 tests). Sprint 4 skills done. | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -73,7 +74,7 @@
 1. ~~**S0** — Gecko Skills shared runtime~~ — ✅ Complete
 2. ~~**S1** — Lyra (Crex Content Creator)~~ — ✅ Complete
 3. ~~**S2** — Spark (Tach Brainstorm)~~ — ✅ Complete
-4. **S3** — Nexus (Omni Research) — `/research`, `/dossier` with HITL gate — `claude/skill-nexus`
+4. ~~**S3** — Nexus (Omni Research)~~ — ✅ Complete (S3.7 DO extension deferred)
 5. **ST** — E2E Coding Agent Smoke Tests (see `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)
 6. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
 7. **F.7** — Discord full integration (read-only → two-way)
@@ -101,4 +102,4 @@
 | Sprint 1 (Feb 6-13) | 8 | 64 | Phase 0-4, 5.1+5.2+5.5, Dream Machine, Model Sync, Phase 7 ALL, 12 bugs |
 | Sprint 2 (Feb 23-Mar 1) | — | 38 | Phase 8 operational hardening, /simulate endpoint, 1526 tests |
 | Sprint 3 (Mar 1-23) | — | 22 | F.1 ai-hub data feeds + F.1b proactive alerts, F.2 Browser CDP, F.3 Sandbox in Orchestra, F.4 R2 File Management, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, F.13 MiniMax M2.7 + death loop fix, F.14 Fuzzy patch + bracket balance, F.15 EOL + path encoding, F.16 Orchestra branch retry, F.17 Sandbox stagnation, F.18 ExecutionProfile, F.20 Runtime risk, F.22 Profile enforcement tests, F.23 Branch mutex, F.25 Byte counting + extraction escalation, F.26 Smart resume truncation, 2073 tests |
-| Sprint 4 (Mar 25-) | 34 | 21 | S0 (10) + S1 Lyra (5) + S2 Spark (6) complete. Next: S3 Nexus (10), ST smoke tests (3). 2534 tests. |
+| Sprint 4 (Mar 25-) | 34 | 30 | S0 (10) + S1 Lyra (5) + S2 Spark (6) + S3 Nexus (9, S3.7 deferred) complete. Next: ST smoke tests (3), S3.7 DO extension (1). 2569 tests. |
