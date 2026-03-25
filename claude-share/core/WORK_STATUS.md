@@ -21,7 +21,8 @@
 | Task ID | Description | Assignee | Status | Branch |
 |---------|-------------|----------|--------|--------|
 | S0 | Gecko Skills shared runtime (10 sub-tasks) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` / PR #415 |
-| S1 | Lyra — Crex Content Creator (5 sub-tasks) | — | 🔲 Next | `claude/skill-lyra` |
+| S1 | Lyra — Crex Content Creator (5 sub-tasks) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` / PR #415 |
+| S2 | Spark — Tach Brainstorm (6 sub-tasks) | — | 🔲 Next | `claude/skill-spark` |
 
 ### Recently Completed (Sprint 3, for reference)
 
@@ -99,4 +100,4 @@
 | Sprint 1 (Feb 6-13) | 8 | 64 | Phase 0-4, 5.1+5.2+5.5, Dream Machine, Model Sync, Phase 7 ALL, 12 bugs |
 | Sprint 2 (Feb 23-Mar 1) | — | 38 | Phase 8 operational hardening, /simulate endpoint, 1526 tests |
 | Sprint 3 (Mar 1-23) | — | 22 | F.1 ai-hub data feeds + F.1b proactive alerts, F.2 Browser CDP, F.3 Sandbox in Orchestra, F.4 R2 File Management, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, F.13 MiniMax M2.7 + death loop fix, F.14 Fuzzy patch + bracket balance, F.15 EOL + path encoding, F.16 Orchestra branch retry, F.17 Sandbox stagnation, F.18 ExecutionProfile, F.20 Runtime risk, F.22 Profile enforcement tests, F.23 Branch mutex, F.25 Byte counting + extraction escalation, F.26 Smart resume truncation, 2073 tests |
-| Sprint 4 (Mar 25-) | 34 | 10 | S0 runtime complete (10/10). Next: S1 Lyra (5), S2 Spark (6), S3 Nexus (10), ST smoke tests (3). 16 new files, 3 modified. |
+| Sprint 4 (Mar 25-) | 34 | 15 | S0 runtime (10/10) + S1 Lyra (5/5) complete. Next: S2 Spark (6), S3 Nexus (10), ST smoke tests (3). 2503 tests. |

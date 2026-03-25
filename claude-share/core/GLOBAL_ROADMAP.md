@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-25 (S0 Gecko Skills shared runtime — implemented)
+**Last Updated:** 2026-03-25 (S1 Lyra content creator complete)
 
 ---
 
@@ -456,11 +456,11 @@
 
 | ID | Task | Status | Owner | Notes |
 |----|------|--------|-------|-------|
-| S1.1 | Types + prompts (`src/skills/lyra/types.ts`, `prompts.ts`) | 🔲 | Claude | `LyraArtifact` + `isLyraArtifact` guard, `LYRA_SYSTEM_PROMPT` |
-| S1.2 | Lyra handler (`src/skills/lyra/lyra.ts`) | 🔲 | Claude | 4 submodes: `executeWrite`, `executeRewrite`, `executeHeadline`, `executeRepurpose` |
-| S1.3 | Storage (`src/storage/lyra.ts`) | 🔲 | Claude | Draft persistence: `lyra/{userId}/last-draft.json` in R2 |
-| S1.4 | Register + render | 🔲 | Claude | Add to registry + telegram renderer for `draft` kind |
-| S1.5 | Tests | 🔲 | Claude | All 4 submodes with mocked LLM, guard validation, flag parsing |
+| S1.1 | Types + prompts (`src/skills/lyra/types.ts`, `prompts.ts`) | ✅ | Claude | `LyraArtifact` + `isLyraArtifact` guard, `HeadlineResult` + guard, `LYRA_SYSTEM_PROMPT` + per-submode prompts |
+| S1.2 | Lyra handler (`src/skills/lyra/lyra.ts`) | ✅ | Claude | 4 submodes: write (self-review if quality<3), rewrite (R2 draft + flags), headline (5 variants), repurpose (URL fetch + adapt) |
+| S1.3 | Storage (`src/storage/lyra.ts`) | ✅ | Claude | Draft persistence: `lyra/{userId}/last-draft.json` in R2 (save/load/delete) |
+| S1.4 | Register + render | ✅ | Claude | Registered in init.ts. Telegram renderer handles draft/headlines/repurpose kinds with chunking. |
+| S1.5 | Tests | ✅ | Claude | 30 new tests: types (11), handler (15), storage (4). 78 files, 2503 total. Typecheck clean. |
 
 **Commands:** `/write <topic>`, `/write <topic> --for twitter`, `/rewrite`, `/rewrite --shorter`, `/headline <topic>`, `/repurpose <url> --for twitter`
 
@@ -634,6 +634,8 @@ All skills done → ST.* (Smoke Tests)
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S1 Lyra content creator — /write (self-review if quality<3), /rewrite (R2 draft + flags), /headline (5 variants with commentary), /repurpose (URL fetch + platform adapt). Types + guards, prompts, handler, R2 storage. 30 new tests (2503 total). | src/skills/lyra/*, src/storage/lyra.ts, src/skills/init.ts
+2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | fix(skills): S0 hardening — official SkillContext (hotPrompt), hardened subcommand parser, executeSkillTool with policy enforcement, 4 API integration tests, Telegram chunking, Lyra contract frozen. 9 new tests (2472 total). | src/skills/types.ts, src/skills/command-map.ts, src/skills/runtime.ts, src/skills/skill-tools.ts, src/skills/renderers/telegram.ts, src/routes/api.test.ts, SKILLS_ROADMAP.md
 2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S0 Gecko Skills shared runtime — types, validators, command-map (14 commands + flag parser), LLM helper (callSkillLLM/selectSkillModel), registry + runtime (runSkill with R2 hot-prompts), tool-policy (per-skill allowlists), renderers (telegram + web JSON), orchestra refactor (moved to src/skills/orchestra/ with barrel re-export), handler routing (COMMAND_SKILL_MAP early check), API route (POST /api/skills/execute with X-Storia-Secret auth). 16 new files, 3 modified. 74 test files, 2463 tests pass. | src/skills/*, src/orchestra/orchestra.ts, src/telegram/handler.ts, src/routes/api.ts
 2026-03-25 | Claude Opus 4.6 (Session: session_011QBkrxcFXDhXtxfwf4tZct) | docs(skills): Gecko Skills roadmap — Phase S0-S3 (runtime, Lyra, Spark, Nexus) + spec-vs-reality gap analysis, M4 milestone gate, dependency graph, smoke tests post-sprint task. Archived previous GLOBAL_ROADMAP.md + next_prompt.md | SKILLS_ROADMAP.md, claude-share/core/GLOBAL_ROADMAP.md, claude-share/core/WORK_STATUS.md, claude-share/core/next_prompt.md, claude-share/core/archive/*
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(cron): F.1b ai-hub proactive alerts — fetchAiHubAlerts + formatAlertForTelegram wired into 5-min cron, priority-tagged Telegram messages (🔴/🟡/🔵), ack=true marks as read. 10 new tests (2083 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts, src/index.ts
@@ -826,7 +828,7 @@ graph TD
     F_ECO --> F_PLAT
 
     P8 --> S0[Sprint 4: S0 Skill Runtime ✅]
-    S0 --> S1[S1 Lyra 🔲]
+    S0 --> S1[S1 Lyra ✅]
     S0 --> S2[S2 Spark 🔲]
     S0 --> S3[S3 Nexus 🔲]
     S1 --> ST[Post-Sprint: Smoke Tests 🔲]
@@ -905,7 +907,7 @@ ai-hub /api/situation/* endpoints ✅
 | Task success rate | Tracked (CoVe verification) | >85% | >95% |
 | Context compression | Token-budgeted + summarized | Same | Adaptive |
 | Cross-session learning | Active (R2 learnings + sessions) | Pattern library | Autonomous improvement |
-| Tests | 2463 | 2000+ ✅ | 2500+ |
+| Tests | 2503 | 2000+ ✅ | 2500+ |
 
 ---
 
