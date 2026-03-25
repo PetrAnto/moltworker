@@ -411,6 +411,7 @@ export function isSkillTaskRequest(payload: TaskProcessorPayload): payload is Sk
 // DO environment with R2 + Sandbox bindings
 interface TaskProcessorEnv {
   MOLTBOT_BUCKET?: R2Bucket;
+  NEXUS_KV?: KVNamespace; // KV namespace for Nexus research cache
   Sandbox?: DurableObjectNamespace<SandboxClass>; // Sandbox container binding (for sandbox_exec in DO)
   SANDBOX_SLEEP_AFTER?: string; // Controls container keep-alive behavior
 }
@@ -903,6 +904,7 @@ function extractRepoAndBranch(messages: readonly ChatMessage[]): {
 
 export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   private doState: DurableObjectState;
+  private doEnv: TaskProcessorEnv;
   private r2?: R2Bucket;
   private toolResultCache = new Map<string, string>();
   private toolInFlightCache = new Map<string, Promise<{ tool_call_id: string; content: string }>>();
@@ -997,6 +999,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   constructor(state: DurableObjectState, env: TaskProcessorEnv) {
     super(state, env);
     this.doState = state;
+    this.doEnv = env;
     this.r2 = env.MOLTBOT_BUCKET;
   }
 
@@ -1991,16 +1994,21 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Initialize skills registry
       initializeSkills();
 
-      // Populate the skill request env with keys from the DO request
+      // Build a fresh env with secrets from the DO request + bindings from DO env.
+      // This avoids mutating the original request object.
+      const skillEnv: SkillRequest['env'] = {
+        ...request.skillRequest.env,
+        OPENROUTER_API_KEY: request.openrouterKey,
+        GITHUB_TOKEN: request.githubToken,
+        BRAVE_SEARCH_KEY: request.braveSearchKey,
+        CLOUDFLARE_API_TOKEN: request.cloudflareApiToken,
+        // DO-level bindings (available in the DO's own env)
+        MOLTBOT_BUCKET: this.doEnv.MOLTBOT_BUCKET,
+        NEXUS_KV: this.doEnv.NEXUS_KV,
+      } as SkillRequest['env'];
       const enrichedRequest: SkillRequest = {
         ...request.skillRequest,
-        env: {
-          ...request.skillRequest.env,
-          OPENROUTER_API_KEY: request.openrouterKey,
-          GITHUB_TOKEN: request.githubToken,
-          BRAVE_SEARCH_KEY: request.braveSearchKey,
-          CLOUDFLARE_API_TOKEN: request.cloudflareApiToken,
-        } as SkillRequest['env'],
+        env: skillEnv,
       };
 
       // Run the skill
