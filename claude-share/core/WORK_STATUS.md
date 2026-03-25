@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-25 (S0 Gecko Skills runtime complete)
+**Last Updated:** 2026-03-25 (S0+S1+S2 complete, S3 Nexus next)
 
 ---
 
@@ -60,7 +60,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | S0 Gecko Skills Runtime — ✅ Complete (16 new files, 2463 tests) | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
+| Claude | S0+S1+S2 complete (21 tasks, 2534 tests). PR review fixes applied. | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -71,8 +71,8 @@
 > Ordered by priority. Next AI session should pick the top item.
 
 1. ~~**S0** — Gecko Skills shared runtime~~ — ✅ Complete
-2. **S1** — Lyra (Crex Content Creator) — `/write`, `/rewrite`, `/headline`, `/repurpose` — `claude/skill-lyra`
-3. **S2** — Spark (Tach Brainstorm) — `/save`, `/spark`, `/gauntlet`, `/brainstorm` — `claude/skill-spark`
+2. ~~**S1** — Lyra (Crex Content Creator)~~ — ✅ Complete
+3. ~~**S2** — Spark (Tach Brainstorm)~~ — ✅ Complete
 4. **S3** — Nexus (Omni Research) — `/research`, `/dossier` with HITL gate — `claude/skill-nexus`
 5. **ST** — E2E Coding Agent Smoke Tests (see `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)
 6. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
