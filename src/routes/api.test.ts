@@ -230,7 +230,7 @@ describe('POST /api/skills/execute', () => {
         'Content-Type': 'application/json',
         'X-Storia-Secret': 'test-secret',
       },
-      body: JSON.stringify({ skillId: 'lyra', subcommand: 'write', text: 'test' }),
+      body: JSON.stringify({ skillId: 'nexus', subcommand: 'research', text: 'test' }),
     }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }));
 
     expect(response.status).toBe(500);
