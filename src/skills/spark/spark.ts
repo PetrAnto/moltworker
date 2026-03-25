@@ -27,9 +27,7 @@ export async function handleSpark(request: SkillRequest): Promise<SkillResult> {
     case 'gauntlet':
       return executeGauntlet(request);
     case 'brainstorm':
-      return request.text.trim()
-        ? executeListInbox(request) // /brainstorm with input → list
-        : executeBrainstorm(request); // /brainstorm alone → cluster
+      return executeBrainstorm(request);
     case 'list':
       return executeListInbox(request);
     default:
