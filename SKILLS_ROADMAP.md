@@ -102,6 +102,18 @@ These must be resolved during implementation. The spec makes assumptions that do
 **Depends on**: Phase 0 complete
 **Goal**: `/write`, `/rewrite`, `/headline`, `/repurpose` commands
 
+### S1 Contract (frozen before implementation)
+
+| Decision | Choice |
+|----------|--------|
+| Result kinds | `draft`, `headlines`, `repurpose`, `error` |
+| `/rewrite` storage | R2 mandatory — `lyra/{userId}/last-draft.json`. Returns error if no prior draft. |
+| Self-review | Inline: single LLM call returns `{ content, quality }`. If quality < 3, automatic second call with revision instructions. No external review loop. |
+| `/repurpose` URL fetch | Uses `executeSkillTool('lyra', ...)` with `fetch_url` tool. Policy-enforced via `skill-tools.ts`. |
+| hotPrompt | Handler reads `request.context?.hotPrompt` for system prompt override from R2. Falls back to bundled `LYRA_SYSTEM_PROMPT`. |
+| Subcommand parsing | Single-command skills (all Lyra commands) skip subcommand heuristic. `/write headline ideas` → text="headline ideas", NOT subcommand="headline". |
+| Structured output | `callSkillLLM()` with `response_format: { type: 'json_object' }`. LyraArtifact parsed + validated via `isLyraArtifact` guard. |
+
 ### T1.1 — Types + prompts
 - **Create** `src/skills/lyra/types.ts` — `LyraArtifact` interface + `isLyraArtifact` guard
 - **Create** `src/skills/lyra/prompts.ts` — `LYRA_SYSTEM_PROMPT` bundled fallback
@@ -112,8 +124,8 @@ These must be resolved during implementation. The spec makes assumptions that do
 - `executeWrite` — single LLM call → structured JSON → optional revision if quality < 3
 - `executeRewrite` — load last draft from R2 → revise with instruction
 - `executeHeadline` — 5 variants with commentary
-- `executeRepurpose` — fetch URL → adapt for target platform
-- Uses `callSkillLLM()` from T0.3
+- `executeRepurpose` — `executeSkillTool('lyra', fetch_url)` → adapt for target platform
+- Uses `callSkillLLM()` from S0.3 + `executeSkillTool()` from S0 hardening
 - **Complexity**: Medium — 4 submodes, JSON parsing, R2 read/write
 
 ### T1.3 — Storage
@@ -123,14 +135,15 @@ These must be resolved during implementation. The spec makes assumptions that do
 - **Complexity**: Low
 
 ### T1.4 — Register + render
-- **Update** `src/skills/registry.ts` — add `lyra: handleLyra`
-- **Update** `src/skills/renderers/telegram.ts` — add `renderLyraDraft()`
+- **Update** `src/skills/init.ts` — add `registerSkill(LYRA_META, handleLyra)`
+- Telegram renderer already handles `draft`/`headlines`/`repurpose` kinds with chunking
 - **Complexity**: Low
 
 ### T1.5 — Tests
 - Test all 4 submodes with mocked LLM responses
 - Test `isLyraArtifact` guard with valid/invalid inputs
 - Test flag parsing: `--for twitter`, `--audience devs`
+- Test `/write headline ideas` does NOT get parsed as subcommand=headline
 - Typecheck pass
 
 ---

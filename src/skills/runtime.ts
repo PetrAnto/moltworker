@@ -60,12 +60,11 @@ export async function runSkill(request: SkillRequest): Promise<SkillResult> {
 
   try {
     // Load hot-prompt from R2 (if bucket available).
-    // Skills can check request for an injected hot-prompt via data.
+    // Handlers read it from request.context.hotPrompt.
     if (request.env.MOLTBOT_BUCKET) {
       const hotPrompt = await loadHotPrompt(request.env.MOLTBOT_BUCKET, request.skillId);
       if (hotPrompt) {
-        // Attach hot-prompt as data so the handler can use it
-        (request as SkillRequest & { hotPrompt?: string }).hotPrompt = hotPrompt;
+        request.context = { ...request.context, hotPrompt };
       }
     }
 

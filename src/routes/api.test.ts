@@ -174,3 +174,88 @@ describe('admin analytics routes', () => {
     expect(json.repoStats['owner/repo']).toEqual({ total: 1, completed: 1, failed: 0 });
   });
 });
+
+describe('POST /api/skills/execute', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('returns 401 without valid X-Storia-Secret', async () => {
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request('http://localhost/api/skills/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skillId: 'orchestra', subcommand: 'status' }),
+    }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'real-secret' }));
+
+    expect(response.status).toBe(401);
+    const json = await response.json() as any;
+    expect(json.error).toBe('Unauthorized');
+  });
+
+  it('executes registered skill and returns result envelope', async () => {
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request('http://localhost/api/skills/execute', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Storia-Secret': 'test-secret',
+      },
+      body: JSON.stringify({ skillId: 'orchestra', subcommand: 'status', text: 'hello' }),
+    }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }));
+
+    expect(response.status).toBe(200);
+    const json = await response.json() as any;
+    expect(json.ok).toBe(true);
+    expect(json.skillId).toBe('orchestra');
+    expect(json.kind).toBe('orchestra');
+    expect(json.telemetry).toBeDefined();
+    expect(json.telemetry.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns 500 for unregistered skill', async () => {
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request('http://localhost/api/skills/execute', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Storia-Secret': 'test-secret',
+      },
+      body: JSON.stringify({ skillId: 'lyra', subcommand: 'write', text: 'test' }),
+    }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }));
+
+    expect(response.status).toBe(500);
+    const json = await response.json() as any;
+    expect(json.ok).toBe(false);
+    expect(json.kind).toBe('error');
+    expect(json.body).toContain('Unknown skill');
+  });
+
+  it('returns 400 for missing required fields', async () => {
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request('http://localhost/api/skills/execute', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Storia-Secret': 'test-secret',
+      },
+      body: JSON.stringify({ text: 'hello' }),
+    }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }));
+
+    expect(response.status).toBe(400);
+    const json = await response.json() as any;
+    expect(json.error).toContain('Missing required fields');
+  });
+});

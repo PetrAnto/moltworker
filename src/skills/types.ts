@@ -41,6 +41,14 @@ export interface SkillRequest {
   modelAlias?: string;
   /** Worker environment bindings. */
   env: MoltbotEnv;
+  /** Runtime-injected context (populated by runSkill, not by the caller). */
+  context?: SkillContext;
+}
+
+/** Runtime context injected by runSkill() before the handler executes. */
+export interface SkillContext {
+  /** System prompt loaded from R2 (prompts/{skillId}/system.md), or undefined if not found. */
+  hotPrompt?: string;
 }
 
 // ---------------------------------------------------------------------------

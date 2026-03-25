@@ -874,8 +874,10 @@ export class TelegramHandler {
         env: skillEnv,
       };
       const result = await runSkill(skillRequest);
-      const rendered = renderForTelegram(result);
-      await this.bot.sendMessage(chatId, rendered.text, rendered.parseMode ? { parseMode: rendered.parseMode } : undefined);
+      const chunks = renderForTelegram(result);
+      for (const chunk of chunks) {
+        await this.bot.sendMessage(chatId, chunk.text, chunk.parseMode ? { parseMode: chunk.parseMode } : undefined);
+      }
       return;
     }
     // --- End Gecko Skills routing ---
