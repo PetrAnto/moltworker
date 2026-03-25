@@ -48,6 +48,12 @@ import { acquireRepoLock, forceReleaseRepoLock } from '../concurrency/branch-loc
 import { runSmokeTests, formatTestResults, getTestNames } from './smoke-tests';
 import { classifyTaskComplexity } from '../utils/task-classifier';
 import { routeByComplexity } from '../openrouter/model-router';
+import { parseCommandMessage } from '../skills/command-map';
+import { runSkill } from '../skills/runtime';
+import { isSkillRegistered } from '../skills/registry';
+import { initializeSkills } from '../skills/init';
+import { renderForTelegram } from '../skills/renderers/telegram';
+import type { SkillRequest } from '../skills/types';
 import { markdownToTelegramHtml, escapeHtml } from '../utils/telegram-format';
 import {
   MODELS,
@@ -841,6 +847,38 @@ export class TelegramHandler {
     const chatId = message.chat.id;
     const userId = String(message.from?.id || chatId);
     const username = message.from?.username;
+
+    // --- Gecko Skills routing ---
+    // Check if this command is mapped to a skill handler.
+    // In Phase 0, orchestra is registered but still uses the legacy path below
+    // because it needs full Telegram bot context (DOs, callbacks, etc.).
+    // Future skills (lyra, spark, nexus) will be handled entirely here.
+    initializeSkills();
+    const skillParsed = parseCommandMessage(text);
+    if (skillParsed && skillParsed.mapping.skillId !== 'orchestra' && isSkillRegistered(skillParsed.mapping.skillId)) {
+      const skillEnv = {
+        MOLTBOT_BUCKET: this.r2Bucket,
+        OPENROUTER_API_KEY: this.openrouterKey,
+        GITHUB_TOKEN: this.githubToken,
+        BRAVE_SEARCH_KEY: this.braveSearchKey,
+      } as import('../types').MoltbotEnv;
+      const skillRequest: SkillRequest = {
+        skillId: skillParsed.mapping.skillId,
+        subcommand: skillParsed.subcommand,
+        text: skillParsed.text,
+        flags: skillParsed.flags,
+        transport: 'telegram',
+        userId,
+        chatId,
+        modelAlias: await this.storage.getUserModel(userId),
+        env: skillEnv,
+      };
+      const result = await runSkill(skillRequest);
+      const rendered = renderForTelegram(result);
+      await this.bot.sendMessage(chatId, rendered.text, rendered.parseMode ? { parseMode: rendered.parseMode } : undefined);
+      return;
+    }
+    // --- End Gecko Skills routing ---
 
     const [command, ...args] = text.split(/\s+/);
     const cmd = command.toLowerCase().replace(/@.*$/, ''); // Remove bot username if present

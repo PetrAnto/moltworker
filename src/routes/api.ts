@@ -5,6 +5,10 @@ import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2, waitForProc
 import { createAcontextClient } from '../acontext/client';
 import type { LearningHistory, TaskLearning } from '../openrouter/learnings';
 import type { OrchestraHistory, OrchestraTask } from '../orchestra/orchestra';
+import { runSkill } from '../skills/runtime';
+import { initializeSkills } from '../skills/init';
+import { renderForWeb } from '../skills/renderers/web';
+import type { SkillRequest, SkillId } from '../skills/types';
 
 // CLI commands can take 10-15 seconds to complete due to WebSocket connection overhead
 const CLI_TIMEOUT_MS = 20000;
@@ -629,6 +633,53 @@ adminApi.get('/analytics/orchestra', async (c) => {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ error: errorMessage }, 500);
+  }
+});
+
+// --- Gecko Skills API ---
+
+api.post('/skills/execute', async (c) => {
+  const env = c.env;
+
+  // Auth: X-Storia-Secret header
+  const secret = c.req.header('X-Storia-Secret');
+  if (!env.STORIA_MOLTWORKER_SECRET || secret !== env.STORIA_MOLTWORKER_SECRET) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  try {
+    const body = await c.req.json() as {
+      skillId?: string;
+      subcommand?: string;
+      text?: string;
+      flags?: Record<string, string>;
+      modelAlias?: string;
+      userId?: string;
+    };
+
+    if (!body.skillId || !body.subcommand) {
+      return c.json({ error: 'Missing required fields: skillId, subcommand' }, 400);
+    }
+
+    // Lazy-init skills
+    initializeSkills();
+
+    const request: SkillRequest = {
+      skillId: body.skillId as SkillId,
+      subcommand: body.subcommand,
+      text: body.text ?? '',
+      flags: body.flags ?? {},
+      transport: 'api',
+      userId: body.userId ?? 'api',
+      modelAlias: body.modelAlias,
+      env,
+    };
+
+    const result = await runSkill(request);
+    return c.json(renderForWeb(result), result.kind === 'error' ? 500 : 200);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: msg }, 500);
   }
 });
 
