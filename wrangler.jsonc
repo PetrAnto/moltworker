@@ -77,7 +77,7 @@
   "kv_namespaces": [
     {
       "binding": "NEXUS_KV",
-      "id": "nexus-cache"
+      "id": "09914b62b8694f1295d5501718e054ab"
     }
   ],
   "triggers": {
