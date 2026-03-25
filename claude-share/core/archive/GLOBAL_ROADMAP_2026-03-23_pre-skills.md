@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-25 (Gecko Skills roadmap — Sprint 4 planning)
+**Last Updated:** 2026-03-23 (F.1b ai-hub proactive alerts via cron — 2083 tests)
 
 ---
 
@@ -43,10 +43,8 @@
 | **M1 — "Smart"** | Compound learning, MCP tools, performance engine, verification | M0 | ✅ Achieved (Phase 3-5, 7) |
 | **M2 — "Connected"** | ai-hub integration, Dream Machine build stage | M1 + ai-hub M1 | 🔄 Partial (DM done, ai-hub feeds pending) |
 | **M3 — "Autonomous"** | Private fork (storia-agent), multi-transport, overnight builds | M2 | 🔲 Future |
-| **M4 — "Specialist"** | Gecko Skills runtime + Lyra/Spark/Nexus specialist personas | M1 | 🔄 Planning (Sprint 4) |
 
 > **Source:** `MOLTWORKER_ROADMAP-claude_review.md` — strategic gate definitions
-> **Source:** `SKILLS_ROADMAP.md` — Gecko Skills implementation spec + gap analysis
 
 ---
 
@@ -413,131 +411,6 @@
 | F.18 | OrchestraExecutionProfile — centralized task classification | ✅ | 1h | `buildExecutionProfile()` computed once after `resolveNextRoadmapTask()`, bundles intent signals (concreteScore, ambiguity, isHeavyCoding, isSimple, pendingChildren) → derives sandbox gate, resume cap (3/4/6/8 by ambiguity), force-escalation flag, prompt tier. Flows through TaskRequest → TaskState → getAutoResumeLimit(). Profile displayed in Telegram confirmation. 8 new tests (1982 total) |
 | F.18.1 | ExecutionProfile authoritative enforcement | ✅ | 30m | Three gaps from AI reviewer feedback: (1) promptTier now uses profile as single source of truth via `promptTierOverride` — no more recomputing in `buildRunPrompt()`. (2) `sandbox_exec` removed from tool set (not just prompt) when `requiresSandbox=false`. (3) `forceEscalation` auto-upgrades to top-ranked free model + recomputes profile. |
 
----
-
-### Sprint 4: Gecko Skills (M4 Gate — 2026-03-25)
-
-> **Goal:** Add specialist skill personas (Lyra, Spark, Nexus) with a shared runtime.
-> Each skill = R2 prompt pack (hot-reloadable persona) + TypeScript runtime (state, schemas, storage, routing).
-> Coexists with existing OpenClaw handler — matched commands route to skills, rest stays unchanged.
-> **Source:** `SKILLS_ROADMAP.md` — full spec, gap analysis, dependency graph.
-> **Spec constraint:** No new runtime deps. Native TS type guards only.
-
-#### Spec vs. Reality Gaps (resolved during implementation)
-
-| Gap | Resolution |
-|-----|-----------|
-| Spec uses `env.R2_BUCKET` | Use `env.MOLTBOT_BUCKET` (actual binding) |
-| Spec uses `env.KV` (Nexus cache) | Add KV namespace to `wrangler.toml`, or use R2 with TTL-check wrapper |
-| Spec calls `callLLM()` / `selectModel()` | Create `src/skills/llm.ts` wrapping `OpenRouterClient` |
-| Spec calls `fetchUrl()` directly | Export from `tools.ts` or create skill-level wrapper |
-| Spec imports `nanoid` | Use `crypto.randomUUID()` (no new deps) |
-| Orchestra assumed to be split into dir | Single file — split during S0.7 |
-
-#### Phase S0: Shared Skill Runtime (branch: `claude/skills-runtime`)
-
-| ID | Task | Status | Owner | Notes |
-|----|------|--------|-------|-------|
-| S0.1 | Core types + validators (`src/skills/types.ts`, `validators.ts`) | 🔲 | Claude | `SkillId`, `Transport`, `SkillRequest`, `SkillResult`, `SkillHandler` |
-| S0.2 | Command map + flag parser (`src/skills/command-map.ts`) | 🔲 | Claude | `COMMAND_SKILL_MAP` (14 commands), `parseFlags()` |
-| S0.3 | LLM helper for skills (`src/skills/llm.ts`) | 🔲 | Claude | `callSkillLLM()` + `selectSkillModel()` wrapping `OpenRouterClient` |
-| S0.4 | Registry + runtime (`src/skills/registry.ts`, `runtime.ts`) | 🔲 | Claude | `runSkill()` with R2 hot-prompt loading, per-skill retry, telemetry |
-| S0.5 | Tool policy (`src/skills/tool-policy.ts`) | 🔲 | Claude | Per-skill tool allowlists |
-| S0.6 | Renderers (`src/skills/renderers/telegram.ts`, `web.ts`) | 🔲 | Claude | Transport-neutral → Telegram markdown + JSON web formatting |
-| S0.7 | Orchestra refactor into `src/skills/orchestra/` | 🔲 | Claude | Split `orchestra.ts` → `orchestra/orchestra.ts`, `types.ts`, `prompts.ts`. Return `SkillResult`. HIGH RISK — tightly coupled to handler.ts |
-| S0.8 | Handler routing refactor (`src/telegram/handler.ts`) | 🔲 | Claude | Early `COMMAND_SKILL_MAP` check → `runSkill()` → `renderForTelegram()`. Surgical insert. |
-| S0.9 | API routes (`src/routes/api.ts`) | 🔲 | Claude | `POST /api/skills/execute` with `X-Storia-Secret` auth |
-| S0.10 | Tests + typecheck | 🔲 | Claude | Tests for command-map, runtime, validators. Full typecheck pass. |
-
-> 🧑 HUMAN CHECK S0.11: Delete R2 bucket contents before first deploy — `https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/moltbot-data`
-> 🧑 HUMAN CHECK S0.12: Upload initial R2 prompt packs (`prompts/*/system.md`) after deploy
-
-#### Phase S1: Lyra — Crex Content Creator (branch: `claude/skill-lyra`)
-
-| ID | Task | Status | Owner | Notes |
-|----|------|--------|-------|-------|
-| S1.1 | Types + prompts (`src/skills/lyra/types.ts`, `prompts.ts`) | 🔲 | Claude | `LyraArtifact` + `isLyraArtifact` guard, `LYRA_SYSTEM_PROMPT` |
-| S1.2 | Lyra handler (`src/skills/lyra/lyra.ts`) | 🔲 | Claude | 4 submodes: `executeWrite`, `executeRewrite`, `executeHeadline`, `executeRepurpose` |
-| S1.3 | Storage (`src/storage/lyra.ts`) | 🔲 | Claude | Draft persistence: `lyra/{userId}/last-draft.json` in R2 |
-| S1.4 | Register + render | 🔲 | Claude | Add to registry + telegram renderer for `draft` kind |
-| S1.5 | Tests | 🔲 | Claude | All 4 submodes with mocked LLM, guard validation, flag parsing |
-
-**Commands:** `/write <topic>`, `/write <topic> --for twitter`, `/rewrite`, `/rewrite --shorter`, `/headline <topic>`, `/repurpose <url> --for twitter`
-
-#### Phase S2: Spark — Tach Brainstorm + Ideas (branch: `claude/skill-spark`)
-
-| ID | Task | Status | Owner | Notes |
-|----|------|--------|-------|-------|
-| S2.1 | Types + prompts (`src/skills/spark/types.ts`, `prompts.ts`) | 🔲 | Claude | `SparkItem`, `SparkGauntlet` + guards |
-| S2.2 | Storage (`src/storage/spark.ts`) | 🔲 | Claude | Per-item R2 CRUD, `crypto.randomUUID()` for IDs |
-| S2.3 | Spark services (`capture.ts`, `gauntlet.ts`, `brainstorm.ts`) | 🔲 | Claude | URL summary on save, 6-stage gauntlet, cluster + challenge |
-| S2.4 | Spark handler (`src/skills/spark/spark.ts`) | 🔲 | Claude | Submode router: save/spark/gauntlet/brainstorm |
-| S2.5 | Register + render | 🔲 | Claude | Telegram renderer for `gauntlet`, `digest`, `capture_ack` kinds |
-| S2.6 | Tests | 🔲 | Claude | save → ideas → gauntlet → brainstorm cycle, empty inbox edge case |
-
-**Commands:** `/save <idea>`, `/bookmark`, `/spark <idea>`, `/gauntlet <idea>`, `/brainstorm`, `/ideas`
-
-#### Phase S3: Nexus — Omni Research (branch: `claude/skill-nexus`)
-
-| ID | Task | Status | Owner | Notes |
-|----|------|--------|-------|-------|
-| S3.1 | Resolve KV binding | 🔲 | Claude | Add `NEXUS_KV: KVNamespace` to `wrangler.toml` + `MoltbotEnv`, OR R2 TTL wrapper |
-| S3.2 | Types + prompts (`src/skills/nexus/types.ts`, `prompts.ts`) | 🔲 | Claude | `EvidenceItem`, `NexusDossier` + guards, confidence/tier labeling |
-| S3.3 | Source packs (`src/skills/nexus/source-packs.ts`) | 🔲 | Claude | 10 fetchers: webSearch, wikipedia, hackerNews, reddit, gdelt, arxiv, coinGecko, yahoo, dexScreener, reliefWeb. HIGH EFFORT |
-| S3.4 | Cache (`src/skills/nexus/cache.ts`) | 🔲 | Claude | 4h TTL, normalized key |
-| S3.5 | Evidence model (`src/skills/nexus/evidence.ts`) | 🔲 | Claude | Evidence aggregation + confidence scoring |
-| S3.6 | Nexus handler (`src/skills/nexus/nexus.ts`) | 🔲 | Claude | Mode router: full (HITL gate + DO), quick (top 3 parallel), decision (pros/cons) |
-| S3.7 | DO extension (`src/durable-objects/task-processor.ts`) | 🔲 | Claude | Add `type: 'skill'` task support for full research in DO |
-| S3.8 | Storage (`src/storage/nexus.ts`) | 🔲 | Claude | Dossier cache helpers |
-| S3.9 | Register + render | 🔲 | Claude | Telegram renderer for `dossier`, `source_plan` kinds |
-| S3.10 | Tests | 🔲 | Claude | Query classification, cache hit/miss, HITL flow, partial fetch failures |
-
-**Commands:** `/research <topic>`, `/research <topic> --quick`, `/research <topic> --decision`, `/dossier <entity>`
-
-> 🧑 HUMAN CHECK S3.11: Decide KV vs R2 for Nexus cache before Phase S3 begins
-
-#### Post-Sprint: E2E Bot Testing — Coding Agent Smoke Tests
-
-| ID | Task | Status | Owner | Notes |
-|----|------|--------|-------|-------|
-| ST.1 | Create `PetrAnto/moltbot-test-arena` test repo | 🔲 | Claude | Via `github_api` tool or manual |
-| ST.2 | Run 5-test battery (scaffold, bug fix, add feature, refactor, multi-file) | 🔲 | Claude | Via `/simulate/chat` or Telegram `/orch` |
-| ST.3 | Score results + recommendations | 🔲 | Claude | Pass rate, iterations, duration, model failures |
-
-> Full spec archived at `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`
-
-#### Gecko Skills Dependency Graph
-
-```
-S0.1 (types) ──┬── S0.2 (command-map)
-               ├── S0.3 (llm helper)
-               ├── S0.5 (tool-policy)
-               └── S0.6 (renderers)
-S0.3 (llm) ────┬── S0.4 (registry + runtime)
-               └── S0.7 (orchestra refactor)
-S0.4 ───────────── S0.8 (handler routing)
-S0.8 ───────────── S0.9 (API routes)
-S0.9 ───────────── S0.10 (tests)
-
-Phase S0 done ──┬── S1.* (Lyra)
-               ├── S2.* (Spark)
-               └── S3.* (Nexus — needs S3.1 KV decision first)
-
-All skills done → ST.* (Smoke Tests)
-```
-
-#### Estimated File Count
-
-| Phase | New Files | Modified Files |
-|-------|-----------|----------------|
-| S0 | ~12 | 3 (handler.ts, api.ts, index.ts) |
-| S1 | 5 | 2 (registry.ts, telegram renderer) |
-| S2 | 7 | 2 (registry.ts, telegram renderer) |
-| S3 | 8 | 3 (registry.ts, telegram renderer, task-processor.ts) |
-| **Total** | **~32** | **~10** |
-
----
-
 ### Future: Orchestra Evolution (Post-F.18 — AI Review Backlog)
 
 > **Source**: GPT/Grok/Gemini architecture reviews of commits ca00708 + 50611b8.
@@ -634,7 +507,6 @@ All skills done → ST.* (Smoke Tests)
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
-2026-03-25 | Claude Opus 4.6 (Session: session_011QBkrxcFXDhXtxfwf4tZct) | docs(skills): Gecko Skills roadmap — Phase S0-S3 (runtime, Lyra, Spark, Nexus) + spec-vs-reality gap analysis, M4 milestone gate, dependency graph, smoke tests post-sprint task. Archived previous GLOBAL_ROADMAP.md + next_prompt.md | SKILLS_ROADMAP.md, claude-share/core/GLOBAL_ROADMAP.md, claude-share/core/WORK_STATUS.md, claude-share/core/next_prompt.md, claude-share/core/archive/*
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(cron): F.1b ai-hub proactive alerts — fetchAiHubAlerts + formatAlertForTelegram wired into 5-min cron, priority-tagged Telegram messages (🔴/🟡/🔵), ack=true marks as read. 10 new tests (2083 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts, src/index.ts
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(briefing): F.1 ai-hub Situation Monitor integration — fetchAiHubRss + fetchAiHubMarket consuming /api/situation/rss and /api/situation/market from ai.petranto.com, wired into generateDailyBriefing as Markets + News sections, graceful degradation when ai-hub unavailable. 11 new tests (2073 total) | src/openrouter/tools.ts, src/openrouter/tools.test.ts
 2026-03-23 | Claude Opus 4.6 (Session: session_01TR79yEcqjQJYt4VddLUx7W) | feat(task-processor): F.26 smart resume truncation — tool-type-aware truncation (code 20+10, sandbox 8+8, web URL+preview), file read deduplication (keeps most recent), char-based fallback for long lines. 10 new tests (2054 total) | src/durable-objects/task-processor.ts, src/durable-objects/task-processor.test.ts
@@ -823,14 +695,6 @@ graph TD
     P8 --> F_PLAT[Future: Platform Evolution]
     DM --> F_ECO
     F_ECO --> F_PLAT
-
-    P8 --> S0[Sprint 4: S0 Skill Runtime 🔲]
-    S0 --> S1[S1 Lyra 🔲]
-    S0 --> S2[S2 Spark 🔲]
-    S0 --> S3[S3 Nexus 🔲]
-    S1 --> ST[Post-Sprint: Smoke Tests 🔲]
-    S2 --> ST
-    S3 --> ST
 ```
 
 ---
@@ -844,7 +708,6 @@ moltworker ───────────────────────
     │    ├── /api/situation/* data feeds         (F.1) ✅
     │    ├── /api/code/chat Code Mode            (5.2) ✅
     │    ├── Dream Machine Capture → Build       (DM)  ✅
-    │    ├── Skill API (`/api/skills/*`)          (S0.9) 🔲
     │    └── Agent Mode Phase B (HTTP/SSE)       (F.6) 🔲
     │
     ├──► byok-cloud (byok.cloud)
