@@ -62,6 +62,14 @@ async function dispatchOrInline(request: SkillRequest): Promise<SkillResult> {
     return makeError(request, 'Please provide a topic. Usage: /dossier <topic>');
   }
 
+  // Validate required wiring for async dispatch — fall back inline if missing
+  const telegramToken = request.context?.telegramToken;
+  const chatId = request.chatId;
+  if (!telegramToken || !chatId) {
+    console.error('[Nexus] Missing telegramToken or chatId for DO dispatch, falling back inline');
+    return executeResearch(request, 'full');
+  }
+
   const taskId = crypto.randomUUID();
   const doId = taskProcessor.idFromName(`nexus-${request.userId}-${taskId}`);
   const stub = taskProcessor.get(doId);
@@ -69,9 +77,9 @@ async function dispatchOrInline(request: SkillRequest): Promise<SkillResult> {
   const skillTaskRequest: SkillTaskRequest = {
     kind: 'skill',
     taskId,
-    chatId: request.chatId ?? 0,
+    chatId,
     userId: request.userId,
-    telegramToken: request.context?.telegramToken ?? '',
+    telegramToken,
     skillRequest: request,
     openrouterKey: request.env.OPENROUTER_API_KEY,
     githubToken: request.env.GITHUB_TOKEN,

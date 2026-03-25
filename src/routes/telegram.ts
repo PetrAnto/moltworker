@@ -75,6 +75,7 @@ telegram.post('/webhook/:token', async (c) => {
       env.ACONTEXT_BASE_URL, // Acontext API base URL
       env.CLOUDFLARE_API_TOKEN, // Cloudflare API token for Code Mode MCP
       env.ARTIFICIAL_ANALYSIS_KEY, // AA benchmark data
+      env.NEXUS_KV, // KV namespace for Nexus research cache
     );
 
     // Process update asynchronously

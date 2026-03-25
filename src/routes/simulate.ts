@@ -259,6 +259,7 @@ simulate.post('/command', async (c) => {
     env.ACONTEXT_BASE_URL,
     env.CLOUDFLARE_API_TOKEN,
     env.ARTIFICIAL_ANALYSIS_KEY,
+    env.NEXUS_KV,
   );
 
   // Inject CapturingBot

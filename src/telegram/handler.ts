@@ -539,6 +539,7 @@ export class TelegramHandler {
   private acontextBaseUrl?: string;
   private cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
   private aaKey?: string; // Artificial Analysis API key for benchmark data
+  private nexusKv?: KVNamespace; // KV namespace for Nexus research cache
   private dynamicModelsReady: Promise<void>; // Resolves when dynamic models are loaded from R2
   // (sync sessions now persisted in R2 via storage.saveSyncSession)
 
@@ -562,6 +563,7 @@ export class TelegramHandler {
     acontextBaseUrl?: string, // Acontext API base URL
     cloudflareApiToken?: string, // Cloudflare API token for Code Mode MCP
     aaKey?: string, // Artificial Analysis API key for benchmark data
+    nexusKv?: KVNamespace, // KV namespace for Nexus research cache
   ) {
     this.bot = new TelegramBot(telegramToken);
     this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
@@ -584,6 +586,7 @@ export class TelegramHandler {
     this.acontextBaseUrl = acontextBaseUrl;
     this.cloudflareApiToken = cloudflareApiToken;
     this.aaKey = aaKey;
+    this.nexusKv = nexusKv;
     if (allowedUserIds && allowedUserIds.length > 0) {
       this.allowedUsers = new Set(allowedUserIds);
     }
@@ -862,7 +865,7 @@ export class TelegramHandler {
         GITHUB_TOKEN: this.githubToken,
         BRAVE_SEARCH_KEY: this.braveSearchKey,
         TASK_PROCESSOR: this.taskProcessor,
-        NEXUS_KV: (this as unknown as { nexusKv?: KVNamespace }).nexusKv,
+        NEXUS_KV: this.nexusKv,
       } as import('../types').MoltbotEnv;
       const skillRequest: SkillRequest = {
         skillId: skillParsed.mapping.skillId,
@@ -5970,6 +5973,7 @@ export function createTelegramHandler(
   acontextBaseUrl?: string,
   cloudflareApiToken?: string,
   aaKey?: string,
+  nexusKv?: KVNamespace,
 ): TelegramHandler {
   return new TelegramHandler(
     telegramToken,
@@ -5991,5 +5995,6 @@ export function createTelegramHandler(
     acontextBaseUrl,
     cloudflareApiToken,
     aaKey,
+    nexusKv,
   );
 }
