@@ -23,7 +23,7 @@
 | S0 | Gecko Skills shared runtime (10 sub-tasks) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` / PR #415 |
 | S1 | Lyra — Crex Content Creator (5 sub-tasks) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` / PR #415 |
 | S2 | Spark — Tach Brainstorm (6 sub-tasks) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` |
-| S3 | Nexus — Omni Research (9/10 sub-tasks, S3.7 deferred) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` |
+| S3 | Nexus — Omni Research (10/10 sub-tasks, incl S3.7 DO) | Claude Opus 4.6 | ✅ Complete | `claude/execute-next-prompt-QN3rA` |
 | ST | E2E Coding Agent Smoke Tests (3 sub-tasks) | — | 🔲 Next | — |
 
 ### Recently Completed (Sprint 3, for reference)
@@ -61,7 +61,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | S0+S1+S2+S3 complete (30 tasks, 2569 tests). Sprint 4 skills done. | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
+| Claude | S0+S1+S2+S3+S3.7 complete (31 tasks, 2573 tests). PR review fixes applied. | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -74,7 +74,7 @@
 1. ~~**S0** — Gecko Skills shared runtime~~ — ✅ Complete
 2. ~~**S1** — Lyra (Crex Content Creator)~~ — ✅ Complete
 3. ~~**S2** — Spark (Tach Brainstorm)~~ — ✅ Complete
-4. ~~**S3** — Nexus (Omni Research)~~ — ✅ Complete (S3.7 DO extension deferred)
+4. ~~**S3** — Nexus (Omni Research)~~ — ✅ Complete (incl S3.7 DO extension)
 5. **ST** — E2E Coding Agent Smoke Tests (see `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)
 6. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
 7. **F.7** — Discord full integration (read-only → two-way)
