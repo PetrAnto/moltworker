@@ -118,6 +118,21 @@ describe('parseCommandMessage', () => {
     expect(result!.text).toBe('owner/repo');
   });
 
+  it('does NOT parse first word as subcommand for single-command skills', () => {
+    // "/write headline ideas for X" should keep subcommand='write', text='headline ideas for X'
+    const result = parseCommandMessage('/write headline ideas for my blog');
+    expect(result).not.toBeNull();
+    expect(result!.subcommand).toBe('write');
+    expect(result!.text).toBe('headline ideas for my blog');
+  });
+
+  it('DOES parse subcommand for multi-subcommand skills like orchestra', () => {
+    const result = parseCommandMessage('/orch status');
+    expect(result).not.toBeNull();
+    expect(result!.subcommand).toBe('status');
+    expect(result!.text).toBe('');
+  });
+
   it('returns null for non-skill commands', () => {
     expect(parseCommandMessage('/help')).toBeNull();
     expect(parseCommandMessage('/models')).toBeNull();

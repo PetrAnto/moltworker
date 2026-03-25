@@ -119,30 +119,26 @@ export function parseCommandMessage(message: string): {
   // Parse flags from the remaining text
   const { flags, rest } = parseFlags(afterCommand);
 
-  // Check if the first word of `rest` is a known subcommand
-  // (e.g. "/orch init my project" → subcommand = 'init', text = 'my project')
-  const firstWord = rest.split(/\s+/)[0]?.toLowerCase() ?? '';
   let subcommand = mapping.defaultSubcommand;
   let text = rest;
 
-  // Simple heuristic: if first word looks like a subcommand (short, no special chars)
-  // and the skill has multiple subcommands, treat it as one
-  if (firstWord && /^[a-z]+$/.test(firstWord) && firstWord.length <= 12) {
-    // For orchestra, known subcommands
-    const orchSubcmds = ['init', 'run', 'redo', 'do', 'draft', 'next', 'status', 'history', 'plan', 'lock', 'unlock', 'health', 'reset'];
-    const lyraSubcmds = ['write', 'rewrite', 'headline', 'repurpose'];
-    const sparkSubcmds = ['save', 'spark', 'gauntlet', 'brainstorm', 'list'];
-    const nexusSubcmds = ['research', 'dossier', 'quick', 'decision'];
+  // Subcommand detection: ONLY for skills that use a single entry command
+  // with multiple subcommands (e.g. "/orch init", "/orch run", "/orch status").
+  //
+  // For skills where each command maps 1:1 to a subcommand (e.g. /write → write,
+  // /headline → headline), we SKIP subcommand parsing to avoid misinterpreting
+  // user content as a subcommand. Example: "/write headline ideas for X" should
+  // NOT be parsed as subcommand="headline".
+  const MULTI_SUBCOMMAND_SKILLS: Record<string, string[]> = {
+    orchestra: ['init', 'run', 'redo', 'do', 'draft', 'next', 'status', 'history', 'plan', 'lock', 'unlock', 'health', 'reset'],
+    // nexus: only /research and /dossier have modes (quick/decision/full),
+    // but those are flags, not subcommands. Keep them as flags.
+  };
 
-    const knownSubs: Record<string, string[]> = {
-      orchestra: orchSubcmds,
-      lyra: lyraSubcmds,
-      spark: sparkSubcmds,
-      nexus: nexusSubcmds,
-    };
-
-    const subs = knownSubs[mapping.skillId] ?? [];
-    if (subs.includes(firstWord)) {
+  const subs = MULTI_SUBCOMMAND_SKILLS[mapping.skillId];
+  if (subs) {
+    const firstWord = rest.split(/\s+/)[0]?.toLowerCase() ?? '';
+    if (firstWord && subs.includes(firstWord)) {
       subcommand = firstWord;
       text = rest.slice(firstWord.length).trim();
     }
