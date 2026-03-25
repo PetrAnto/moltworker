@@ -3,58 +3,61 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-25 (S0 complete, S1 Lyra next)
+**Last Updated:** 2026-03-25 (S0+S1 complete, S2 Spark next)
 
 ---
 
-## Current Task: S1 — Lyra (Crex Content Creator)
+## Current Task: S2 — Spark (Tach Brainstorm)
 
 ### Context
 
-S0 Gecko Skills shared runtime is complete. The skill registry, command routing, LLM helper, renderers, and API endpoint are all in place. Phase S1 implements the first real skill — Lyra, a content creation persona with 4 commands.
+S0 Gecko Skills shared runtime and S1 Lyra are complete. The skill registry, command routing, LLM helper, tool execution, renderers, and API endpoint are all in place and proven by Lyra's end-to-end flow. Phase S2 implements Spark — a brainstorm and ideas capture persona.
 
 ### Branch
 
-`claude/skill-lyra`
+`claude/skill-spark`
 
 ### Key References
 
-- `SKILLS_ROADMAP.md` — Phase S1 spec (T1.1-T1.5)
-- `src/skills/types.ts` — `SkillId`, `SkillRequest`, `SkillResult`, `SkillHandler`
-- `src/skills/registry.ts` — `registerSkill()` — add Lyra here
+- `SKILLS_ROADMAP.md` — Phase S2 spec (T2.1-T2.6)
+- `src/skills/types.ts` — `SkillId`, `SkillRequest`, `SkillResult`
+- `src/skills/lyra/lyra.ts` — Reference implementation for a real skill handler
+- `src/skills/init.ts` — Register Spark here
 - `src/skills/llm.ts` — `callSkillLLM()` for LLM calls
-- `src/skills/renderers/telegram.ts` — Add `renderDraft()` etc.
-- `src/skills/init.ts` — Register Lyra handler here
+- `src/skills/skill-tools.ts` — `executeSkillTool()` for URL fetching
 
 ### Implementation Order
 
-1. **S1.1** — `src/skills/lyra/types.ts` + `src/skills/lyra/prompts.ts`
-2. **S1.2** — `src/skills/lyra/lyra.ts` (handler with 4 submodes)
-3. **S1.3** — `src/storage/lyra.ts` (draft persistence in R2)
-4. **S1.4** — Register in `src/skills/init.ts` + update renderers
-5. **S1.5** — Tests + typecheck
+1. **S2.1** — `src/skills/spark/types.ts` + `src/skills/spark/prompts.ts`
+2. **S2.2** — `src/storage/spark.ts` (per-item R2 CRUD, `crypto.randomUUID()` for IDs)
+3. **S2.3** — `src/skills/spark/capture.ts`, `gauntlet.ts`, `brainstorm.ts`
+4. **S2.4** — `src/skills/spark/spark.ts` (handler + submode router)
+5. **S2.5** — Register in `src/skills/init.ts`
+6. **S2.6** — Tests + typecheck
 
 ### Commands to Implement
 
-- `/write <topic>` — generate a draft (optional `--for twitter`, `--audience devs`)
-- `/rewrite` — revise last draft (optional `--shorter`, `--formal`)
-- `/headline <topic>` — generate 5 headline variants with commentary
-- `/repurpose <url> --for twitter` — fetch URL, adapt for target platform
+- `/save <idea>` or `/bookmark` — save an idea/link to inbox
+- `/spark <idea>` — quick reaction (short LLM analysis)
+- `/gauntlet <idea>` — 6-stage structured gauntlet evaluation
+- `/brainstorm` — cluster + challenge all inbox items
+- `/ideas` — list inbox items
 
 ### Key Design Notes
 
-- Each submode calls `callSkillLLM()` with JSON response_format
-- `/rewrite` loads last draft from R2 (`lyra/{userId}/last-draft.json`)
-- `/repurpose` uses `fetch_url` tool to get source content
-- Quality < 3 on self-assessment triggers optional revision pass
-- All results return `SkillResult` with appropriate `kind`
+- R2 key pattern: `spark/{userId}/items/{timestamp}-{id}.json`
+- ID generation: `crypto.randomUUID()` (no nanoid dep)
+- `/save` with URL: fetch URL metadata for a summary
+- `/brainstorm` with no input: cluster all inbox items
+- `/brainstorm` with input: list inbox (same as `/ideas`)
+- Gauntlet is a single structured LLM call returning 6 stages
 
 ### Validation
 
 1. `npm test` passes
 2. `npm run typecheck` passes
-3. `/write`, `/rewrite`, `/headline`, `/repurpose` commands all route through skill runtime
-4. Existing commands unaffected (regression check)
+3. All commands route through skill runtime
+4. Existing commands unaffected
 
 ---
 
@@ -62,15 +65,13 @@ S0 Gecko Skills shared runtime is complete. The skill registry, command routing,
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
-| 2026-03-25 | S0 Gecko Skills shared runtime | Claude Opus 4.6 | 16 new files, 2463 tests. Types, command-map, LLM helper, registry, runtime, tool-policy, renderers, orchestra refactor, handler routing, API route. |
-| 2026-03-25 | Gecko Skills roadmap planning | Claude Opus 4.6 | SKILLS_ROADMAP.md created, GLOBAL_ROADMAP.md updated with Sprint 4 (S0-S3 + smoke tests), docs synced |
-| 2026-03-23 | F.1b — ai-hub proactive alerts | Claude Opus 4.6 | fetchAiHubAlerts + formatAlertForTelegram, 5-min cron, 2083 tests |
-| 2026-03-23 | F.1 — ai-hub data feeds integration | Claude Opus 4.6 | RSS + market in /brief, graceful degradation, 2073 tests |
+| 2026-03-25 | S1 Lyra content creator | Claude Opus 4.6 | /write, /rewrite, /headline, /repurpose. Self-review, R2 drafts, URL fetch. 30 new tests (2503 total). |
+| 2026-03-25 | S0 Gecko Skills shared runtime | Claude Opus 4.6 | 16 new files, types/registry/runtime/renderers/API. 2463 tests. |
+| 2026-03-25 | S0 hardening (reviewer feedback) | Claude Opus 4.6 | SkillContext, parser fix, executeSkillTool, API tests, chunking. 2472 tests. |
 
 ---
 
-## After S1: Next Phases
+## After S2: Next Phases
 
-1. **S2** — Spark (Tach Brainstorm): `/save`, `/spark`, `/gauntlet`, `/brainstorm` — branch `claude/skill-spark`
-2. **S3** — Nexus (Omni Research): `/research`, `/dossier` — branch `claude/skill-nexus` (needs KV decision first)
-3. **ST** — E2E Coding Agent Smoke Tests (spec at `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)
+1. **S3** — Nexus (Omni Research): `/research`, `/dossier` — branch `claude/skill-nexus` (needs KV decision first)
+2. **ST** — E2E Coding Agent Smoke Tests (spec at `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)
