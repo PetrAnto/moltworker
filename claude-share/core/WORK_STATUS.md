@@ -2,15 +2,17 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-23 (F.1b ai-hub proactive alerts — 2083 tests)
+**Last Updated:** 2026-03-25 (Gecko Skills roadmap — Sprint 4 planning)
 
 ---
 
-## Current Sprint: Production Hardening & Quality
+## Current Sprint: Gecko Skills (Sprint 4)
 
-**Sprint Goal:** Harden orchestra mode, improve model reliability tracking, ensure API source parity.
+**Sprint Goal:** Implement specialist skill personas (Lyra, Spark, Nexus) with shared runtime, command routing, and transport-neutral rendering.
 
-**Sprint Duration:** 2026-03-01 → ongoing
+**Sprint Duration:** 2026-03-25 → ongoing
+
+**Previous Sprint:** Production Hardening & Quality (Sprint 3, 2026-03-01 → 2026-03-23, 22 tasks, 2083 tests)
 
 ---
 
@@ -44,7 +46,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | F.1+F.1b COMPLETE — ai-hub data feeds + proactive alerts (2083 tests) | `claude/review-ai-feedback-Zo8hq` | 2026-03-23 |
+| Claude | S0 Gecko Skills Runtime — Phase S0 (types, command-map, llm helper, registry, runtime, renderers, orchestra refactor, handler routing, API routes) | `claude/skills-runtime` | 2026-03-25 |
 | Codex | — | — | — |
 | Other | — | — | — |
 
@@ -54,10 +56,15 @@
 
 > Ordered by priority. Next AI session should pick the top item.
 
-1. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
-3. **F.7** — Discord full integration (read-only → two-way)
-4. **6.3** — Voice messages (Whisper + TTS)
-5. **6.4** — Calendar/reminder tools
+1. **S0** — Gecko Skills shared runtime (types, command-map, llm, registry, runtime, renderers, orchestra refactor, handler routing, API) — `claude/skills-runtime`
+2. **S1** — Lyra (Crex Content Creator) — `/write`, `/rewrite`, `/headline`, `/repurpose` — `claude/skill-lyra`
+3. **S2** — Spark (Tach Brainstorm) — `/save`, `/spark`, `/gauntlet`, `/brainstorm` — `claude/skill-spark`
+4. **S3** — Nexus (Omni Research) — `/research`, `/dossier` with HITL gate — `claude/skill-nexus`
+5. **ST** — E2E Coding Agent Smoke Tests (see `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)
+6. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
+7. **F.7** — Discord full integration (read-only → two-way)
+8. **6.3** — Voice messages (Whisper + TTS)
+9. **6.4** — Calendar/reminder tools
 
 ### Tracked from AI Architecture Reviews (F.20–F.24)
 
@@ -80,3 +87,4 @@
 | Sprint 1 (Feb 6-13) | 8 | 64 | Phase 0-4, 5.1+5.2+5.5, Dream Machine, Model Sync, Phase 7 ALL, 12 bugs |
 | Sprint 2 (Feb 23-Mar 1) | — | 38 | Phase 8 operational hardening, /simulate endpoint, 1526 tests |
 | Sprint 3 (Mar 1-23) | — | 22 | F.1 ai-hub data feeds + F.1b proactive alerts, F.2 Browser CDP, F.3 Sandbox in Orchestra, F.4 R2 File Management, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, F.13 MiniMax M2.7 + death loop fix, F.14 Fuzzy patch + bracket balance, F.15 EOL + path encoding, F.16 Orchestra branch retry, F.17 Sandbox stagnation, F.18 ExecutionProfile, F.20 Runtime risk, F.22 Profile enforcement tests, F.23 Branch mutex, F.25 Byte counting + extraction escalation, F.26 Smart resume truncation, 2073 tests |
+| Sprint 4 (Mar 25-) | 30 | 0 | Gecko Skills: S0 runtime (10), S1 Lyra (5), S2 Spark (6), S3 Nexus (10), ST smoke tests (3). ~32 new files, ~10 modified |

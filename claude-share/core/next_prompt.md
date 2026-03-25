@@ -3,80 +3,59 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-23 (F.1b ai-hub proactive alerts — 2083 tests)
+**Last Updated:** 2026-03-25 (Gecko Skills roadmap — Sprint 4 planning)
 
 ---
 
-## Current Task: E2E Bot Testing — Coding Agent Smoke Tests
+## Current Task: S0 — Gecko Skills Shared Runtime
 
 ### Context
 
-We just completed F.1 + F.1b (ai-hub data feeds + proactive alerts). Before moving to the next feature, we need to validate the bot's orchestra mode with real coding tasks — the kind users actually send.
+Sprint 4 begins the Gecko Skills system — specialist AI personas (Lyra/Spark/Nexus) with a shared runtime. Phase S0 creates the foundation that all skills depend on. The full spec is in `SKILLS_ROADMAP.md`. The implementation spec (user-provided) defines exact types, interfaces, and file structure.
 
-### Step 1: Create the test repo
+### Branch
 
-The bot can create repos via `github_api`. Send this to the bot (via Telegram or /simulate):
+`claude/skills-runtime`
 
-```
-Use the github_api tool to create a new public repository called "moltbot-test-arena" under the PetrAnto account with this description: "Test repo for moltbot orchestra coding tasks". Then push an initial commit with a README.md and a basic package.json for a TypeScript Node.js project (name: moltbot-test-arena, typescript + vitest as devDependencies).
-```
+### Key References
 
-If that fails (permissions), create the repo manually:
-```bash
-gh repo create PetrAnto/moltbot-test-arena --public --description "Test repo for moltbot orchestra coding tasks"
-# Then push a basic TS project scaffold
-```
+- `SKILLS_ROADMAP.md` — Full roadmap with spec-vs-reality gap analysis
+- `claude-share/core/GLOBAL_ROADMAP.md` — Sprint 4 section (Phase S0-S3)
+- `src/types.ts` — `MoltbotEnv` (binding is `MOLTBOT_BUCKET`, not `R2_BUCKET`)
+- `src/openrouter/client.ts` — `OpenRouterClient`, `ChatMessage`, `ChatCompletionRequest`
+- `src/openrouter/tools.ts` — Tool definitions, `executeTool()`, `ToolContext`
+- `src/openrouter/storage.ts` — `SkillStorage` (existing R2 skill loader)
+- `src/orchestra/orchestra.ts` — Current orchestra (single file, needs refactor into `src/skills/orchestra/`)
+- `src/telegram/handler.ts` — ~5900 lines, command dispatch logic
 
-### Step 2: Run the test battery
+### Implementation Order
 
-Use `/simulate/chat` or Telegram to send these tasks **one at a time via orchestra mode** (`/orch`). Each tests a different common coding pattern.
+1. **S0.1** — `src/skills/types.ts` + `src/skills/validators.ts` (pure types, no deps)
+2. **S0.2** — `src/skills/command-map.ts` (static map + regex flag parser)
+3. **S0.3** — `src/skills/llm.ts` (wrapper around `OpenRouterClient` — the spec's `callLLM()`/`selectModel()` don't exist)
+4. **S0.4** — `src/skills/registry.ts` + `src/skills/runtime.ts` (initially only `orchestra` handler)
+5. **S0.5** — `src/skills/tool-policy.ts` (per-skill tool allowlists)
+6. **S0.6** — `src/skills/renderers/telegram.ts` + `web.ts`
+7. **S0.7** — Orchestra refactor: move `src/orchestra/` → `src/skills/orchestra/`, split into `types.ts`, `prompts.ts`, `orchestra.ts`. **HIGH RISK** — update all imports in handler.ts + task-processor.ts
+8. **S0.8** — Handler routing: surgical insert in `src/telegram/handler.ts` — early `COMMAND_SKILL_MAP` check
+9. **S0.9** — API route: `POST /api/skills/execute` in `src/routes/api.ts`
+10. **S0.10** — Tests + typecheck: `npm test && npm run typecheck`
 
-**Test 1 — Scaffold + implement from scratch** (most common request)
-```
-/orch In PetrAnto/moltbot-test-arena, create a src/utils/string-helpers.ts file with these functions: capitalize(str), slugify(str), truncate(str, maxLen, suffix?), camelToKebab(str), escapeHtml(str). Add comprehensive tests in src/utils/string-helpers.test.ts. Use vitest. Make sure all tests pass.
-```
+### Critical Gap Reminders
 
-**Test 2 — Bug fix from issue description** (second most common)
-```
-/orch In PetrAnto/moltbot-test-arena, there's a bug in src/utils/string-helpers.ts: the slugify function doesn't handle consecutive hyphens or leading/trailing hyphens. For example slugify("--hello--world--") should return "hello-world", not "--hello--world--". Fix the bug and add regression tests.
-```
+- R2 bucket binding is `env.MOLTBOT_BUCKET` (NOT `env.R2_BUCKET`)
+- `callLLM()` / `selectModel()` don't exist — create `src/skills/llm.ts`
+- `fetchUrl()` is internal to tools.ts — export or wrap for skill use
+- `nanoid` is not a dep — use `crypto.randomUUID()`
+- Orchestra is a single file — split carefully, preserve all behavior
 
-**Test 3 — Add feature to existing code** (extending existing code)
-```
-/orch In PetrAnto/moltbot-test-arena, add a new file src/http/fetch-retry.ts that implements a fetchWithRetry(url, options?) function. It should retry on 429/500/502/503 with exponential backoff (default 3 retries, 1s/2s/4s delays). Add tests using vi.fn() to mock fetch — test success, retry on 503, give up after max retries, and respect Retry-After header.
-```
+### Validation
 
-**Test 4 — Refactor existing code** (restructuring without breaking)
-```
-/orch In PetrAnto/moltbot-test-arena, refactor src/utils/string-helpers.ts: split it into separate files under src/utils/strings/ (capitalize.ts, slugify.ts, truncate.ts, camel-to-kebab.ts, escape-html.ts) with an index.ts barrel export. Update all imports in test files. All existing tests must still pass.
-```
-
-**Test 5 — Multi-file feature with config** (complex, cross-file task)
-```
-/orch In PetrAnto/moltbot-test-arena, implement a simple key-value cache in src/cache/memory-cache.ts with: get(key), set(key, value, ttlMs?), delete(key), clear(), size(), has(key). TTL should auto-expire entries. Add a src/cache/cache.config.ts with defaults (maxSize: 1000, defaultTtlMs: 300000). Add comprehensive tests including TTL expiration (use vi.useFakeTimers). Create a PR with all changes.
-```
-
-### Step 3: Score each test
-
-For each test, record:
-
-| Test | ✅/❌ | PR link | Tools used | Iterations | Duration | Notes |
-|------|-------|---------|------------|------------|----------|-------|
-| T1 Scaffold | | | | | | |
-| T2 Bug fix | | | | | | |
-| T3 Add feature | | | | | | |
-| T4 Refactor | | | | | | |
-| T5 Multi-file | | | | | | |
-
-**Pass criteria:** PR created, tests pass, code is correct, no destructive rewrites.
-
-### Step 4: Report
-
-After all 5 tests, summarize:
-- Overall pass rate
-- Average iterations/duration
-- Any model failures or tool errors
-- Recommendations for prompt tuning or guardrail adjustments
+After completing S0, verify:
+1. `npm test` passes
+2. `npm run typecheck` passes
+3. Existing `/orch` commands still work through new routing
+4. `/simulate/command` with `/models` still returns expected output (regression check)
 
 ---
 
@@ -84,26 +63,15 @@ After all 5 tests, summarize:
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
-| 2026-03-23 | F.1b — ai-hub proactive alerts | Claude Opus 4.6 | fetchAiHubAlerts + formatAlertForTelegram, wired into 5-min cron, priority-tagged Telegram messages. 10 new tests (2083 total) |
-| 2026-03-23 | F.1 — ai-hub data feeds integration | Claude Opus 4.6 | fetchAiHubRss + fetchAiHubMarket wired into /brief, graceful degradation, 11 new tests (2073 total) |
-| 2026-03-23 | F.21+F.24+taskForStorage — Review cleanup batch | Claude Opus 4.6 | pendingChildren consumers (resume caps + display), model floor with paid escalation suggestion, post-aggressive storage verification. 8 new tests (2062 total) |
-| 2026-03-23 | F.26 — Smart resume truncation | Claude Opus 4.6 | Tool-type-aware truncation, file read deduplication, structured summaries. 10 new tests (2054 total) |
-| 2026-03-23 | F.25 — Byte counting + extraction escalation + context decoupling | Claude Opus 4.6 | taskForStorage() uses TextEncoder byte length, extraction failure escalates to reasoning model, extractionMeta persisted for resume resilience. 3 new tests (2044 total) |
-| 2026-03-23 | F.23 — Branch-level concurrency mutex | Claude Opus 4.6 | R2-based repo-level lock with 45-min TTL. Acquire before dispatch, release on all terminal paths. 21 new tests (2041 total) |
-| 2026-03-22 | F.22 — Profile enforcement regression tests | Claude Opus 4.6 | 14 tests: promptTierOverride (4), sandbox tool-level gating (5), forceEscalation (5). 2020 total |
-| 2026-03-22 | F.20 — Runtime/diff-based risk classification | Claude Opus 4.6 | RuntimeRiskProfile: file tracking (16 config patterns), scope expansion, error accumulation, drift detection. Integrated into DO loop + RunHealth. 24 new tests (2006 total) |
-| 2026-03-22 | F.18.1 — ExecutionProfile authoritative enforcement | Claude Opus 4.6 | promptTierOverride, sandbox tool-level gating, forceEscalation auto-upgrade. F.20–F.24 tracked from reviewer feedback |
-| 2026-03-22 | F.18 — OrchestraExecutionProfile | Claude Opus 4.6 | Centralized task classification: sandbox gate, resume cap modulation, force-escalation. 8 tests (1982 total) |
-| 2026-03-22 | F.17 — Sandbox stagnation detection + run health | Claude Opus 4.6 | detectSandboxStagnation(), sandboxStalled/prefetch404Count signals |
-| 2026-03-22 | Architecture review prompt | Claude Opus 4.6 | 5 architectural decisions documented for external AI review |
-| 2026-03-21 | F.16 — Orchestra branch retry fix | Claude Opus 4.6 | Root cause from PR #108: "retry with different branch" loses prior commits. Updated 5 prompt locations |
-| 2026-03-21 | F.15 — EOL normalization + GitHub path encoding | Claude Opus 4.6 | 1911 tests. applyFuzzyPatch dominant EOL detection, encodeGitHubPath on all 7 API URLs, 9 new tests |
-| 2026-03-21 | Docs sync — roadmap, future-integrations, claude-log | Claude Opus 4.6 | Marked 6 completed features in future-integrations.md, added brainstorming cross-refs to roadmap |
+| 2026-03-25 | Gecko Skills roadmap planning | Claude Opus 4.6 | SKILLS_ROADMAP.md created, GLOBAL_ROADMAP.md updated with Sprint 4 (S0-S3 + smoke tests), docs synced |
+| 2026-03-23 | F.1b — ai-hub proactive alerts | Claude Opus 4.6 | fetchAiHubAlerts + formatAlertForTelegram, 5-min cron, 2083 tests |
+| 2026-03-23 | F.1 — ai-hub data feeds integration | Claude Opus 4.6 | RSS + market in /brief, graceful degradation, 2073 tests |
 
 ---
 
-## Alternative Next Tasks (after testing)
+## After S0: Next Phases
 
-1. **F.7** — Discord full integration (read-only → two-way)
-2. **6.3** — Voice messages (Whisper + TTS)
-3. **Slack integration** — Two-way Slack bot support
+1. **S1** — Lyra (Crex Content Creator): `/write`, `/rewrite`, `/headline`, `/repurpose` — branch `claude/skill-lyra`
+2. **S2** — Spark (Tach Brainstorm): `/save`, `/spark`, `/gauntlet`, `/brainstorm` — branch `claude/skill-spark`
+3. **S3** — Nexus (Omni Research): `/research`, `/dossier` — branch `claude/skill-nexus` (needs KV decision first)
+4. **ST** — E2E Coding Agent Smoke Tests (spec at `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)

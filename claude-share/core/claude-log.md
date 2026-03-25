@@ -4,6 +4,42 @@
 
 ---
 
+## Session: 2026-03-25 | Gecko Skills Roadmap Planning (Session: session_011QBkrxcFXDhXtxfwf4tZct)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/plan-bot-skills-un53V`
+**Status:** Completed
+
+### Summary
+Created the full implementation roadmap for Gecko Skills (Sprint 4). Analyzed the user-provided spec against the actual codebase, identified 9 spec-vs-reality gaps, and mapped 34 tasks across 4 phases (S0 runtime, S1 Lyra, S2 Spark, S3 Nexus) plus post-sprint smoke tests.
+
+### Changes Made
+- Created `SKILLS_ROADMAP.md` — detailed implementation roadmap with gap analysis and dependency graph
+- Archived `claude-share/core/GLOBAL_ROADMAP.md` → `archive/GLOBAL_ROADMAP_2026-03-23_pre-skills.md`
+- Archived `claude-share/core/next_prompt.md` → `archive/Coding_Agent_Smoke_Tests.md`
+- Updated `GLOBAL_ROADMAP.md` — added M4 milestone gate, Sprint 4 section (S0-S3 + ST), changelog entry, dependency graph update
+- Updated `WORK_STATUS.md` — new sprint, priorities queue, velocity tracking
+- Updated `next_prompt.md` — points to S0 (Shared Skill Runtime) with implementation order and gap reminders
+- Updated `claude-log.md` — this entry
+
+### Files Modified
+- `SKILLS_ROADMAP.md` (new)
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+- `claude-share/core/archive/GLOBAL_ROADMAP_2026-03-23_pre-skills.md` (new)
+- `claude-share/core/archive/Coding_Agent_Smoke_Tests.md` (new)
+
+### Tests
+- [x] No code changes — documentation only
+- [x] No typecheck needed
+
+### Notes for Next Session
+Start with S0.1 (types + validators) on branch `claude/skills-runtime`. Follow implementation order in next_prompt.md. Critical: use `MOLTBOT_BUCKET` not `R2_BUCKET`, create `src/skills/llm.ts` for the missing `callLLM()` wrapper.
+
+---
+
 ## Session: 2026-03-23 | F.26 Smart Resume Truncation (Session: session_01TR79yEcqjQJYt4VddLUx7W)
 
 **AI:** Claude Opus 4.6
