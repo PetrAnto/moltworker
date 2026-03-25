@@ -39,7 +39,7 @@ export const COMMAND_SKILL_MAP: Record<string, CommandMapping> = {
   '/spark':     { skillId: 'spark', defaultSubcommand: 'spark' },
   '/gauntlet':  { skillId: 'spark', defaultSubcommand: 'gauntlet' },
   '/brainstorm': { skillId: 'spark', defaultSubcommand: 'brainstorm' },
-  '/ideas':     { skillId: 'spark', defaultSubcommand: 'brainstorm' },
+  '/ideas':     { skillId: 'spark', defaultSubcommand: 'list' },
 
   // Nexus — Research (Phase 3)
   '/research':  { skillId: 'nexus', defaultSubcommand: 'research' },

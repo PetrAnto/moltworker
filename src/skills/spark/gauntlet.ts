@@ -100,7 +100,8 @@ export function formatGauntlet(g: SparkGauntlet): string {
   lines.push(`Gauntlet: ${g.idea}\n`);
 
   for (const stage of g.stages) {
-    const bar = '█'.repeat(stage.score) + '░'.repeat(5 - stage.score);
+    const score = Math.max(0, Math.min(5, Math.round(stage.score)));
+    const bar = '█'.repeat(score) + '░'.repeat(5 - score);
     lines.push(`${bar} ${stage.name} (${stage.score}/5)`);
     lines.push(`  ${stage.assessment}`);
   }

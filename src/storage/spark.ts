@@ -36,12 +36,21 @@ export async function listSparkItems(
   limit = 50,
 ): Promise<SparkItem[]> {
   const prefix = itemsPrefix(userId);
-  const listed = await bucket.list({ prefix, limit });
+  // Fetch all keys (not limited) so we can reverse and take the newest.
+  // R2 lists alphabetically — timestamp prefix means chronological order.
+  // If we applied limit here, we'd get the oldest N instead of newest N.
+  const listed = await bucket.list({ prefix });
+
+  const keys = listed.objects.map(o => o.key);
+
+  // Take the last `limit` keys (newest by timestamp prefix), then reverse
+  // so the result is newest-first.
+  const newestKeys = keys.slice(-limit).reverse();
 
   const items: SparkItem[] = [];
-  for (const obj of listed.objects) {
+  for (const key of newestKeys) {
     try {
-      const data = await bucket.get(obj.key);
+      const data = await bucket.get(key);
       if (data) {
         items.push(await data.json() as SparkItem);
       }
@@ -50,9 +59,7 @@ export async function listSparkItems(
     }
   }
 
-  // R2 lists alphabetically — timestamp prefix means chronological.
-  // Reverse for newest first.
-  return items.reverse();
+  return items;
 }
 
 /** Get a specific spark item by ID. */

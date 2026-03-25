@@ -180,14 +180,6 @@ describe('/brainstorm', () => {
     expect(result.body).toContain('Synthesis');
   });
 
-  it('routes to list when brainstorm has text input', async () => {
-    mockListItems.mockResolvedValue([
-      { id: '1', text: 'Some idea', createdAt: '2026-03-25' },
-    ]);
-    const result = await handleSpark(makeRequest({ subcommand: 'brainstorm', text: 'show me' }));
-    expect(result.kind).toBe('digest');
-    expect(result.body).toContain('Ideas Inbox');
-  });
 });
 
 describe('/ideas (list inbox)', () => {

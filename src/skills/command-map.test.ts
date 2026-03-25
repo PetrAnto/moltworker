@@ -146,4 +146,11 @@ describe('parseCommandMessage', () => {
     expect(result!.subcommand).toBe('brainstorm');
     expect(result!.text).toBe('');
   });
+
+  it('maps /ideas to list subcommand, not brainstorm', () => {
+    const result = parseCommandMessage('/ideas');
+    expect(result).not.toBeNull();
+    expect(result!.mapping.skillId).toBe('spark');
+    expect(result!.subcommand).toBe('list');
+  });
 });
