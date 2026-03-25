@@ -1,0 +1,205 @@
+/**
+ * Nexus (Omni) — Research Skill Handler
+ *
+ * Modes:
+ *   /research <topic>           → quick mode (default)
+ *   /research <topic> --quick   → explicit quick mode
+ *   /research <topic> --decision → decision mode (pros/cons/risks)
+ *   /dossier <entity>           → full mode (currently same as quick, HITL gate deferred to DO extension)
+ */
+
+import type { SkillRequest, SkillResult, SkillMeta } from '../types';
+import type { NexusDossier, SynthesisResponse, QueryClassification } from './types';
+import { isSynthesisResponse, isQueryClassification } from './types';
+import { callSkillLLM, selectSkillModel } from '../llm';
+import { fetchSources } from './source-packs';
+import { getCachedDossier, cacheDossier } from './cache';
+import { computeConfidence, confidenceLabel, formatEvidenceForLLM, formatEvidenceSummary } from './evidence';
+import { safeJsonParse } from '../validators';
+import {
+  NEXUS_SYSTEM_PROMPT,
+  NEXUS_CLASSIFY_PROMPT,
+  NEXUS_SYNTHESIZE_PROMPT,
+  NEXUS_DECISION_PROMPT,
+} from './prompts';
+
+export const NEXUS_META: SkillMeta = {
+  id: 'nexus',
+  name: 'Nexus',
+  description: 'Research — multi-source evidence gathering, synthesis, and decision analysis',
+  defaultModel: 'flash',
+  subcommands: ['research', 'dossier'],
+};
+
+export async function handleNexus(request: SkillRequest): Promise<SkillResult> {
+  // Determine mode from flags
+  const isDecision = request.flags.decision === 'true' || request.subcommand === 'decision';
+  const mode = isDecision ? 'decision' : 'quick';
+
+  if (request.subcommand === 'dossier') {
+    // Full dossier — currently runs as enhanced quick mode
+    // HITL gate + DO dispatch deferred to S3.7
+    return executeResearch(request, 'full');
+  }
+
+  return executeResearch(request, mode);
+}
+
+// ---------------------------------------------------------------------------
+// Core research flow
+// ---------------------------------------------------------------------------
+
+async function executeResearch(
+  request: SkillRequest,
+  mode: 'quick' | 'full' | 'decision',
+): Promise<SkillResult> {
+  if (!request.text.trim()) {
+    return makeError(request, `Please provide a topic. Usage: /${request.subcommand} <topic>`);
+  }
+
+  const start = Date.now();
+  const model = selectSkillModel(request.modelAlias, NEXUS_META.defaultModel);
+  const systemPrompt = request.context?.hotPrompt ?? NEXUS_SYSTEM_PROMPT;
+  const query = request.text.trim();
+  let llmCalls = 0;
+
+  // 1. Check cache (skip for decision mode — always fresh)
+  if (mode !== 'decision') {
+    const cached = await getCachedDossier(request.env.NEXUS_KV, query, mode);
+    if (cached) {
+      return {
+        skillId: 'nexus',
+        kind: 'dossier',
+        body: formatDossier(cached),
+        data: cached,
+        telemetry: {
+          durationMs: Date.now() - start,
+          model,
+          llmCalls: 0,
+          toolCalls: 0,
+        },
+      };
+    }
+  }
+
+  // 2. Classify query → select sources
+  const classifyResult = await callSkillLLM({
+    systemPrompt: `${systemPrompt}\n\n${NEXUS_CLASSIFY_PROMPT}`,
+    userPrompt: `Query: ${query}`,
+    modelAlias: model,
+    responseFormat: { type: 'json_object' },
+    env: request.env,
+  });
+  llmCalls++;
+
+  const classification = safeJsonParse<QueryClassification>(classifyResult.text);
+  const sourceNames = classification && isQueryClassification(classification)
+    ? classification.sources
+    : ['webSearch', 'wikipedia']; // Fallback
+
+  // 3. Fetch sources in parallel
+  const { evidence, toolCalls } = await fetchSources(query, sourceNames, request.env, request.userId);
+
+  if (evidence.length === 0) {
+    return makeError(request, 'Could not retrieve any sources for this query. Try rephrasing.');
+  }
+
+  // 4. Synthesize
+  const synthesizePrompt = mode === 'decision' ? NEXUS_DECISION_PROMPT : NEXUS_SYNTHESIZE_PROMPT;
+  const evidenceText = formatEvidenceForLLM(evidence);
+
+  const synthesisResult = await callSkillLLM({
+    systemPrompt: `${systemPrompt}\n\n${synthesizePrompt}`,
+    userPrompt: `Research query: ${query}\n\nEvidence:\n${evidenceText}`,
+    modelAlias: model,
+    responseFormat: { type: 'json_object' },
+    env: request.env,
+  });
+  llmCalls++;
+
+  const synthesis = safeJsonParse<SynthesisResponse>(synthesisResult.text);
+  const synthesisText = synthesis && isSynthesisResponse(synthesis)
+    ? synthesis.synthesis
+    : synthesisResult.text;
+
+  // 5. Build dossier
+  const dossier: NexusDossier = {
+    query,
+    mode,
+    synthesis: synthesisText,
+    evidence,
+    decision: synthesis && isSynthesisResponse(synthesis) ? synthesis.decision : undefined,
+    createdAt: new Date().toISOString(),
+  };
+
+  // 6. Cache (async, non-blocking)
+  cacheDossier(request.env.NEXUS_KV, dossier).catch(() => {});
+
+  return {
+    skillId: 'nexus',
+    kind: 'dossier',
+    body: formatDossier(dossier),
+    data: dossier,
+    telemetry: {
+      durationMs: Date.now() - start,
+      model,
+      llmCalls,
+      toolCalls,
+      tokens: synthesisResult.tokens,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+
+function formatDossier(dossier: NexusDossier): string {
+  const lines: string[] = [];
+
+  const confidence = computeConfidence(dossier.evidence);
+  lines.push(`Research: ${dossier.query}`);
+  lines.push(`${confidenceLabel(confidence)} (${dossier.evidence.length} sources, ${dossier.mode} mode)\n`);
+
+  lines.push(dossier.synthesis);
+
+  if (dossier.decision) {
+    lines.push('\n--- Decision Analysis ---');
+    if (dossier.decision.pros.length > 0) {
+      lines.push('\nPros:');
+      dossier.decision.pros.forEach(p => lines.push(`  + ${p}`));
+    }
+    if (dossier.decision.cons.length > 0) {
+      lines.push('\nCons:');
+      dossier.decision.cons.forEach(c => lines.push(`  - ${c}`));
+    }
+    if (dossier.decision.risks.length > 0) {
+      lines.push('\nRisks:');
+      dossier.decision.risks.forEach(r => lines.push(`  ! ${r}`));
+    }
+    lines.push(`\nRecommendation: ${dossier.decision.recommendation}`);
+  }
+
+  lines.push('\nSources:');
+  lines.push(formatEvidenceSummary(dossier.evidence));
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeError(request: SkillRequest, message: string): SkillResult {
+  return {
+    skillId: 'nexus',
+    kind: 'error',
+    body: message,
+    telemetry: {
+      durationMs: 0,
+      model: request.modelAlias ?? NEXUS_META.defaultModel,
+      llmCalls: 0,
+      toolCalls: 0,
+    },
+  };
+}
