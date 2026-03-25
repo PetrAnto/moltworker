@@ -546,10 +546,10 @@ All skills done → ST.* (Smoke Tests)
 | ID | Task | Status | Effort | Notes |
 |----|------|--------|--------|-------|
 | F.20 | Runtime/diff-based risk classification | ✅ | 2h | `RuntimeRiskProfile` tracks files modified (16 config patterns), scope expansion, error accumulation, scope drift. Score 0–100 → low/medium/high/critical. Actions: caution injection at high, Telegram warning at critical. Integrated into `computeRunHealth()`. 24 new tests (2006 total). |
-| F.21 | `pendingChildren` downstream consumers | 🔲 | 2-4h | Profile captures `pendingChildren` count but nothing consumes it yet. Wire into: model floor (parent tasks get stronger models), validator strictness, review intensity. |
+| F.21 | `pendingChildren` downstream consumers | ✅ | 2-4h | Completed 2026-03-23: pendingChildren wired into resume caps + Telegram display. 8 new tests (2062 total). |
 | F.22 | Tests for profile enforcement behavior | ✅ | 30m | 14 tests: promptTierOverride (4), sandbox tool-level gating (5), forceEscalation (5). All three GPT-flagged gaps covered. 2020 tests total. |
 | F.23 | Branch-level concurrency mutex | ✅ | 1.5h | R2-based repo-level lock with 45-min TTL. Acquire before dispatch, release on all terminal paths (success/failure/stall/cancel). orchestraRepo persisted in TaskState for cross-resume lock release. forceRelease on /cancel. 21 new tests (2041 total). |
-| F.24 | Broader escalation policy (model floor) | 🔲 | 2-4h | Current auto-escalation picks `recs.free[0]`. GPT asks: what if best free model is still too weak? Consider paid escalation with user consent, or hard model floor per task heaviness tier. |
+| F.24 | Broader escalation policy (model floor) | ✅ | 2-4h | Completed 2026-03-23: model floor with paid escalation suggestion. Part of F.21+F.24 batch (2062 total). |
 | F.25 | Byte counting fix + extraction escalation + context decoupling | ✅ | 1h | taskForStorage() uses TextEncoder byte length (not char count), extraction failure escalates to reasoning model (sonnet→o4mini→deepseek), extractionMeta persisted in TaskState for resume truncation resilience. 3 new tests (2044 total). |
 | F.26 | Smart resume truncation | ✅ | 1.5h | Tool-type-aware truncation (code: 20+10 lines, sandbox: 8+8, web: URL+500 chars), deduplicates repeated file reads (keeps only most recent), structured summaries instead of blind 15+5 line slicing. 10 new tests (2054 total). |
 
@@ -825,7 +825,7 @@ graph TD
     DM --> F_ECO
     F_ECO --> F_PLAT
 
-    P8 --> S0[Sprint 4: S0 Skill Runtime 🔲]
+    P8 --> S0[Sprint 4: S0 Skill Runtime ✅]
     S0 --> S1[S1 Lyra 🔲]
     S0 --> S2[S2 Spark 🔲]
     S0 --> S3[S3 Nexus 🔲]
@@ -845,7 +845,7 @@ moltworker ───────────────────────
     │    ├── /api/situation/* data feeds         (F.1) ✅
     │    ├── /api/code/chat Code Mode            (5.2) ✅
     │    ├── Dream Machine Capture → Build       (DM)  ✅
-    │    ├── Skill API (`/api/skills/*`)          (S0.9) 🔲
+    │    ├── Skill API (`/api/skills/*`)          (S0.9) ✅
     │    └── Agent Mode Phase B (HTTP/SSE)       (F.6) 🔲
     │
     ├──► byok-cloud (byok.cloud)
@@ -905,7 +905,7 @@ ai-hub /api/situation/* endpoints ✅
 | Task success rate | Tracked (CoVe verification) | >85% | >95% |
 | Context compression | Token-budgeted + summarized | Same | Adaptive |
 | Cross-session learning | Active (R2 learnings + sessions) | Pattern library | Autonomous improvement |
-| Tests | 2083 | 2000+ ✅ | 2500+ |
+| Tests | 2463 | 2000+ ✅ | 2500+ |
 
 ---
 
