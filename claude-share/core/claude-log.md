@@ -4,6 +4,41 @@
 
 ---
 
+## Session: 2026-03-25 | S3.7 DO Extension for Nexus (Session: session_01JAkuvEtkau24ot6EH245kU)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/execute-next-prompt-QN3rA`
+**Status:** Completed
+
+### Summary
+Implemented S3.7 — async Durable Object execution for Nexus /dossier full mode. Discriminated union payload, processSkillTask() method, graceful fallbacks.
+
+### Changes Made
+- SkillTaskRequest type with `kind: 'skill'` discriminant
+- TaskProcessorPayload discriminated union (backward compatible with existing callers)
+- processSkillTask() in TaskProcessor: calls runSkill(), renders + sends to Telegram
+- /dossier dispatches to DO when Telegram + TASK_PROCESSOR available
+- Falls back to inline for non-Telegram, missing DO, or dispatch failure
+- SkillContext extended with telegramToken for DO dispatch
+- Handler injects TASK_PROCESSOR + telegramToken into skill env/context
+
+### Files Modified
+- `src/durable-objects/task-processor.ts` (types + processSkillTask + fetch router)
+- `src/skills/nexus/nexus.ts` (dispatchOrInline for full mode)
+- `src/skills/types.ts` (telegramToken in SkillContext)
+- `src/telegram/handler.ts` (inject TASK_PROCESSOR + telegramToken)
+- `src/skills/nexus/nexus.test.ts` (4 new tests)
+
+### Tests
+- [x] 85 files, 2573 tests pass
+- [x] Typecheck clean
+
+### Notes for Next Session
+- S3.7 is minimum viable: no HITL gate, no multi-pass. Just async dispatch + inline fallback.
+- Next: ST smoke tests
+
+---
+
 ## Session: 2026-03-25 | S3 Nexus Research Skill (Session: session_01JAkuvEtkau24ot6EH245kU)
 
 **AI:** Claude Opus 4.6
