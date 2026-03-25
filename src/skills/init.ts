@@ -8,6 +8,7 @@
 import { registerSkill } from './registry';
 import { handleOrchestra, ORCHESTRA_META } from './orchestra/handler';
 import { handleLyra, LYRA_META } from './lyra/lyra';
+import { handleSpark, SPARK_META } from './spark/spark';
 
 let initialized = false;
 
@@ -18,8 +19,8 @@ export function initializeSkills(): void {
 
   registerSkill(ORCHESTRA_META, handleOrchestra);
   registerSkill(LYRA_META, handleLyra);
+  registerSkill(SPARK_META, handleSpark);
 
   // Future phases will register here:
-  // registerSkill(SPARK_META, handleSpark);      // Phase 2
   // registerSkill(NEXUS_META, handleNexus);      // Phase 3
 }
