@@ -1,0 +1,104 @@
+# Prompt: LLM Model Ranking Algorithm Design
+
+Use this prompt with any capable AI to get perspectives on building a fair, useful ranking system for LLM models.
+
+---
+
+## Context
+
+I run a **multi-model AI gateway** that routes user requests to 60+ LLM models from different providers. I need a ranking system that helps users pick the right model for their task. The ranking is displayed in a Telegram chat bot.
+
+### Current Ranking System
+
+The current system computes a **"confidence score" (5-95%)** for each model's suitability for agentic/orchestra tasks. It uses these factors:
+
+| Factor | Max Points | Source |
+|--------|-----------|--------|
+| Artificial Analysis Intelligence Index | 30 | External API (when available) |
+| SWE-Bench score (from model description) | 25 | Self-reported in model metadata |
+| "Agentic" keyword in description | 12 | Text matching |
+| `orchestraReady` flag | 12 | Computed (has tools + coding≥40 + context≥64K) |
+| Parallel calls + structured output | 8 | Binary flags |
+| Direct API (vs OpenRouter proxy) | 8 | Provider type |
+| Context window size | 10 | Numeric (500K→10, 200K→7, etc.) |
+| Model size heuristic | ±15 | Dense→+10, <20B active→-15 |
+| "Unknown model" penalty | -20 | No benchmark data |
+
+Then normalized to 5-95% range.
+
+### Problems with Current Approach
+
+1. **Self-reported SWE-Bench scores are unreliable** — model providers inflate them
+2. **"pony" (an unknown model) gets 88% confidence** — the heuristics are too generous
+3. **No task differentiation** — ranking is the same whether user wants coding, creative writing, or research
+4. **No real-world feedback** — we track orchestra success/failure events but don't actually use them in displayed rankings
+5. **Binary capability flags miss nuance** — "supports tools" doesn't mean "good at tools"
+6. **Artificial Analysis data is optional** — many models lack benchmark data, so rankings fall back to heuristics
+7. **Cost is not factored into ranking** — a $20/M model ranked #1 isn't useful if a $0.50/M model is 90% as good
+8. **Confidence % implies precision we don't have** — 77% vs 79% is meaningless noise
+
+### Available Data Sources
+
+| Source | What it provides | Coverage |
+|--------|-----------------|----------|
+| Artificial Analysis API | Intelligence Index, Coding Index, Math Index, MMLU-Pro, GPQA, LiveCodeBench, Speed (TPS) | ~40% of models |
+| OpenRouter API | Pricing, context window, modality, tool support flag | 100% of OpenRouter models |
+| Self-reported descriptions | SWE-Bench %, architecture details | Curated models only |
+| Orchestra event history | Per-model success rate, avg iterations, tool usage | Only models users actually tried |
+| User preference signals | Which models users manually switch to/from | Available in storage |
+| NVIDIA NIM | Free models, tool support on some | 7 models |
+
+### Model Types
+
+Users pick models for different purposes:
+- **Chat** — general Q&A, creative writing, analysis
+- **Coding** — code generation, debugging, PR creation
+- **Orchestra** — multi-step agentic tasks (read repo → plan → code → PR)
+- **Research** — web search, evidence gathering, synthesis (Nexus skill)
+- **Content** — blog posts, headlines, rewrites (Lyra skill)
+- **Brainstorming** — idea evaluation and development (Spark skill)
+
+### Constraints
+- Rankings must be pre-computable (no per-request API calls)
+- Must work with incomplete data (many models lack benchmarks)
+- Must handle 60+ models without being a wall of numbers
+- Users are non-technical — "confidence %" doesn't mean anything to them
+- New models appear weekly — ranking must degrade gracefully for unknowns
+
+---
+
+## Questions for You
+
+### 1. Ranking Philosophy
+- Should there be ONE ranking or MULTIPLE task-specific rankings (coding, creative, agentic, fast)?
+- How do you handle models with no benchmark data? Should they be ranked at all, or shown in a separate "unranked" section?
+- Is "confidence %" the right framing? Or should we use tiers (S/A/B/C), stars (★★★★☆), or qualitative labels ("excellent", "good", "basic")?
+
+### 2. Scoring Formula
+- Design a better scoring formula that:
+  - Weights objective benchmarks higher than self-reported claims
+  - Incorporates real-world usage data when available
+  - Handles missing data gracefully (no wild guesses)
+  - Considers cost-effectiveness (value per dollar)
+  - Differentiates between task types
+- Show me the formula with example calculations for 3 models.
+
+### 3. Using Real-World Data
+- We have orchestra run history: `{ model, success, iterations, toolsUsed, duration }`. How should this feed into rankings?
+- What's the minimum sample size before trusting user data over benchmarks?
+- How do you handle survivorship bias (users only try popular models)?
+
+### 4. Presentation
+- What's the most useful way to present rankings to a non-technical user in a chat interface?
+- How many models should a "top" ranking show? (Currently: 12 paid + 8 free = 20 — too many?)
+- Should we show the underlying score/factors or just the final rank?
+
+### 5. Freshness & Decay
+- How should rankings handle model deprecation? (e.g., model removed from OpenRouter but still in our catalog)
+- Should rankings decay over time if not re-validated?
+- How often should the ranking be recomputed?
+
+Please provide a concrete, implementable design with:
+- A scoring formula (pseudocode is fine)
+- Example output showing how 5 models would be ranked
+- Clear recommendations on presentation format
