@@ -38,6 +38,107 @@ export const PROVIDERS: Record<Provider, ProviderConfig> = {
 
 export type ReasoningCapability = 'none' | 'fixed' | 'configurable' | 'mandatory';
 
+// ── Star Rating System (v2) ──
+export type StarRating = 3 | 2 | 1 | 0;
+export type EvidenceLevel = 'verified' | 'unverified';
+
+export interface ModelRating {
+  stars: StarRating;
+  evidence: EvidenceLevel;
+}
+
+/**
+ * Compute star rating + evidence level for a model.
+ *
+ * Stars (based on AA benchmarks when available):
+ *   ★★★ = AA Intelligence ≥ 70 OR AA Coding ≥ 60
+ *   ★★☆ = AA Intelligence ≥ 55 OR AA Coding ≥ 45
+ *   ★☆☆ = AA Intelligence ≥ 40 OR has tools + context ≥ 64K
+ *   ☆☆☆ = untested / no data
+ *
+ * Hard cap: models without AA data cannot exceed ★☆☆
+ *
+ * Evidence:
+ *   verified = has AA benchmark data
+ *   unverified = heuristic only
+ */
+export function computeRating(model: ModelInfo): ModelRating {
+  const hasAA = !!(model.intelligenceIndex || model.benchmarks?.coding);
+  const iq = model.intelligenceIndex || 0;
+  const coding = model.benchmarks?.coding || 0;
+
+  let stars: StarRating;
+  if (iq >= 70 || coding >= 60) {
+    stars = 3;
+  } else if (iq >= 55 || coding >= 45) {
+    stars = 2;
+  } else if (iq >= 40 || (model.supportsTools && (model.maxContext || 0) >= 64000)) {
+    stars = 1;
+  } else {
+    stars = 0;
+  }
+
+  // Hard cap: unverified models cannot exceed ★☆☆
+  if (!hasAA && stars > 1) {
+    stars = 1;
+  }
+
+  return {
+    stars,
+    evidence: hasAA ? 'verified' : 'unverified',
+  };
+}
+
+/** Format star rating as visual stars string */
+export function formatStars(stars: StarRating): string {
+  switch (stars) {
+    case 3: return '★★★';
+    case 2: return '★★☆';
+    case 1: return '★☆☆';
+    case 0: return '☆☆☆';
+  }
+}
+
+/** Format rating as "★★★ ✓" or "★☆☆ ?" */
+export function formatRating(rating: ModelRating): string {
+  return `${formatStars(rating.stars)} ${rating.evidence === 'verified' ? '✓' : '?'}`;
+}
+
+/**
+ * Get human-readable capability words for a model.
+ * Returns words like: coding, tools, vision, reasoning, structured, 128K
+ */
+export function getCapabilityWords(model: ModelInfo): string[] {
+  const words: string[] = [];
+
+  // Infer "coding" from specialty/score fields or benchmark data
+  const lower = (model.specialty + ' ' + model.score + ' ' + model.name).toLowerCase();
+  if (/cod(ing|er)|swe-bench|program/i.test(lower) || (model.benchmarks?.coding && model.benchmarks.coding >= 50)) {
+    words.push('coding');
+  }
+
+  if (model.supportsTools) words.push('tools');
+  if (model.supportsVision) words.push('vision');
+  if (model.reasoning && model.reasoning !== 'none') words.push('reasoning');
+  if (model.structuredOutput) words.push('structured');
+
+  // Context window
+  if (model.maxContext) {
+    if (model.maxContext >= 1048576) {
+      words.push(`${Math.round(model.maxContext / 1048576)}M`);
+    } else if (model.maxContext >= 32000) {
+      words.push(`${Math.round(model.maxContext / 1024)}K`);
+    }
+  }
+
+  return words;
+}
+
+/** Format capability words as "coding · tools · 160K" */
+export function formatCapabilities(model: ModelInfo): string {
+  return getCapabilityWords(model).join(' · ');
+}
+
 export interface ModelInfo {
   id: string;
   alias: string;
@@ -1220,126 +1321,153 @@ const VALUE_TIER_LABELS: Record<ValueTier, string> = {
   outdated: '⚠️',
 };
 
-/** Format a single model line — compact single-line for Telegram 4096 char limit */
-function formatModelLine(m: ModelInfo): string {
-  const features = [m.supportsVision && '👁️', m.supportsTools && '🔧'].filter(Boolean).join('');
-  const tier = getValueTier(m);
-  const tierIcon = VALUE_TIER_LABELS[tier];
-  if (m.isFree) {
-    return `  /${m.alias} ${features} — ${m.name}`;
-  }
-  return `  ${tierIcon} /${m.alias} ${features} ${m.cost}`;
+/** Format a compact two-line model entry for the new /models display */
+function formatModelEntry(m: ModelInfo): string {
+  const rating = computeRating(m);
+  const ratingStr = formatRating(rating);
+  const cost = m.isFree ? 'FREE' : m.cost;
+  const caps = formatCapabilities(m);
+  return `  /${m.alias} • ${m.name} • ${ratingStr}\n    ${caps} • ${cost}`;
 }
 
 /**
- * Format models list for /models command.
- * Groups paid models by value tier, free models by curated/synced.
+ * Pick top N models for a category, sorted by star rating then AA intelligence.
+ * Deduplicates by underlying model ID.
  */
-export function formatModelsList(): string {
-  const lines: string[] = ['📋 Model Catalog — sorted by value\n'];
+function pickTopModels(models: ModelInfo[], n: number): ModelInfo[] {
+  const seen = new Set<string>();
+  return models
+    .map(m => ({ m, rating: computeRating(m) }))
+    .sort((a, b) => {
+      // Sort by stars desc, then intelligence index desc, then coding desc
+      if (b.rating.stars !== a.rating.stars) return b.rating.stars - a.rating.stars;
+      const aIQ = a.m.intelligenceIndex || 0;
+      const bIQ = b.m.intelligenceIndex || 0;
+      if (bIQ !== aIQ) return bIQ - aIQ;
+      return (b.m.benchmarks?.coding || 0) - (a.m.benchmarks?.coding || 0);
+    })
+    .filter(x => {
+      const id = x.m.id.toLowerCase();
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .slice(0, n)
+    .map(x => x.m);
+}
 
-  const all = Object.values(getAllModels());
-  // Tier sections show curated + dynamic only (auto-synced get their own section below)
-  const curated = all.filter(m => isCuratedModel(m.alias));
-  const free = curated.filter(m => m.isFree && !m.isImageGen && !m.provider);
-  const imageGen = curated.filter(m => m.isImageGen);
-  const paid = curated.filter(m => !m.isFree && !m.isImageGen && !m.provider);
-  const direct = curated.filter(m => m.provider && m.provider !== 'openrouter');
+/**
+ * Format models list for /models command — v2 compact category view.
+ * Shows top 3-4 models per category with star ratings and capability words.
+ * Buttons for drilling into categories are added by the handler.
+ */
+export function formatModelsList(currentAlias?: string): string {
+  const lines: string[] = [];
+  const current = currentAlias ? getModel(currentAlias) : undefined;
 
-  // Dynamic (from /syncmodels) free models shown separately
-  const dynamicFree = all.filter(m => m.isFree && !m.isImageGen && !m.provider && !isCuratedModel(m.alias) && !isAutoSyncedModel(m.alias));
-  const freeCurated = free;
-  const freeSynced = dynamicFree;
+  if (current) {
+    const rating = computeRating(current);
+    lines.push(`🤖 Models — using /${current.alias} (${current.name}) ${formatRating(rating)}\n`);
+  } else {
+    lines.push('🤖 Models\n');
+  }
 
-  const sortByCost = (a: ModelInfo, b: ModelInfo) => parseCostForSort(a.cost) - parseCostForSort(b.cost);
-  paid.sort(sortByCost);
-  direct.sort(sortByCost);
+  const all = Object.values(getAllModels()).filter(m => !m.isImageGen);
 
-  // --- Paid models grouped by value tier ---
-  const paidAndDirect = [...direct, ...paid];
-  const exceptional = paidAndDirect.filter(m => getValueTier(m) === 'exceptional');
-  const great = paidAndDirect.filter(m => getValueTier(m) === 'great');
-  const good = paidAndDirect.filter(m => getValueTier(m) === 'good');
-  const premium = paidAndDirect.filter(m => getValueTier(m) === 'premium');
-  const outdated = paidAndDirect.filter(m => getValueTier(m) === 'outdated');
-
-  if (exceptional.length > 0) {
-    lines.push('🏆 EXCEPTIONAL VALUE (< $0.50/M output):');
-    for (const m of exceptional) lines.push(formatModelLine(m));
+  // Category: Top Free
+  const freeModels = all.filter(m => m.isFree && m.supportsTools);
+  const topFree = pickTopModels(freeModels, 4);
+  if (topFree.length > 0) {
+    lines.push('🆓 Top Free:');
+    for (const m of topFree) lines.push(formatModelEntry(m));
     lines.push('');
   }
 
-  if (great.length > 0) {
-    lines.push('⭐ GREAT VALUE ($0.50–$2/M output):');
-    for (const m of great) lines.push(formatModelLine(m));
+  // Category: Best for Coding
+  const codingCandidates = all.filter(m => {
+    const lower = (m.specialty + ' ' + m.score + ' ' + m.name).toLowerCase();
+    return m.supportsTools && (/cod(ing|er)|swe-bench|program/i.test(lower) || (m.benchmarks?.coding && m.benchmarks.coding >= 40));
+  });
+  const topCoding = pickTopModels(codingCandidates, 3);
+  if (topCoding.length > 0) {
+    lines.push('💻 Best for Coding:');
+    for (const m of topCoding) lines.push(formatModelEntry(m));
     lines.push('');
   }
 
-  if (good.length > 0) {
-    lines.push('✅ GOOD VALUE ($2–$5/M output):');
-    for (const m of good) lines.push(formatModelLine(m));
+  // Category: Best for Orchestra
+  const orchestraCandidates = all.filter(m => m.orchestraReady);
+  const topOrchestra = pickTopModels(orchestraCandidates, 3);
+  if (topOrchestra.length > 0) {
+    lines.push('🎼 Best for Orchestra:');
+    for (const m of topOrchestra) lines.push(formatModelEntry(m));
     lines.push('');
   }
 
-  if (premium.length > 0) {
-    lines.push('💎 PREMIUM — highest quality ($5+/M output):');
-    for (const m of premium) lines.push(formatModelLine(m));
+  // Category: Fastest
+  const fastCandidates = all.filter(m => m.supportsTools && m.benchmarks?.speedTps);
+  const topFast = [...fastCandidates]
+    .sort((a, b) => (b.benchmarks?.speedTps || 0) - (a.benchmarks?.speedTps || 0))
+    .slice(0, 3);
+  if (topFast.length > 0) {
+    lines.push('⚡ Fastest:');
+    for (const m of topFast) lines.push(formatModelEntry(m));
     lines.push('');
   }
 
-  if (outdated.length > 0) {
-    lines.push('⚠️ OUTDATED — cheaper alternatives exist:');
-    for (const m of outdated) lines.push(formatModelLine(m));
+  // Category: Premium (highest quality)
+  const premiumCandidates = all.filter(m => !m.isFree && (m.intelligenceIndex || 0) >= 60);
+  const topPremium = pickTopModels(premiumCandidates, 3);
+  if (topPremium.length > 0) {
+    lines.push('💎 Premium (highest quality):');
+    for (const m of topPremium) lines.push(formatModelEntry(m));
     lines.push('');
   }
 
-  // --- Image gen ---
+  // Summary
+  const totalCount = Object.values(getAllModels()).length;
+  const autoSyncedCount = getAutoSyncedModelCount();
+  lines.push(`${totalCount} models available${autoSyncedCount > 0 ? ` (${autoSyncedCount} auto-synced)` : ''}`);
+  lines.push('/pick <task> for recommendations · /model <alias> for details');
+  lines.push('★=quality · ✓=AA benchmarked · ?=unverified');
+
+  return lines.join('\n');
+}
+
+// Keep old formatModelsList available as formatModelsListLegacy for /model list
+export function formatModelsListLegacy(): string {
+  const lines: string[] = ['📋 Full Model Catalog\n'];
+  const all = Object.values(getAllModels()).filter(m => !m.isImageGen);
+  const sortByRating = (a: ModelInfo, b: ModelInfo) => {
+    const ra = computeRating(a);
+    const rb = computeRating(b);
+    if (rb.stars !== ra.stars) return rb.stars - ra.stars;
+    return (b.intelligenceIndex || 0) - (a.intelligenceIndex || 0);
+  };
+
+  const paid = all.filter(m => !m.isFree).sort(sortByRating);
+  const free = all.filter(m => m.isFree).sort(sortByRating);
+
+  if (paid.length > 0) {
+    lines.push('💰 PAID:');
+    for (const m of paid) lines.push(formatModelEntry(m));
+    lines.push('');
+  }
+
+  if (free.length > 0) {
+    lines.push('🆓 FREE:');
+    for (const m of free) lines.push(formatModelEntry(m));
+    lines.push('');
+  }
+
+  // Image gen
+  const imageGen = Object.values(getAllModels()).filter(m => m.isImageGen);
   if (imageGen.length > 0) {
     lines.push('🎨 IMAGE GEN:');
-    for (const m of imageGen) {
-      lines.push(`  /${m.alias} ${m.cost}`);
-    }
-    lines.push('');
+    for (const m of imageGen) lines.push(`  /${m.alias} ${m.cost}`);
   }
 
-  // --- Free models ---
-  lines.push('🆓 FREE (curated):');
-  for (const m of freeCurated) lines.push(formatModelLine(m));
-
-  if (freeSynced.length > 0) {
-    lines.push('\n🔄 FREE (synced):');
-    for (const m of freeSynced) {
-      const features = [m.supportsVision && '👁️', m.supportsTools && '🔧'].filter(Boolean).join('');
-      lines.push(`  /${m.alias} ${features}`);
-    }
-  }
-
-  // Auto-synced models — just show count
-  const autoSyncedCount = getAutoSyncedModelCount();
-  if (autoSyncedCount > 0) {
-    lines.push(`\n🌐 +${autoSyncedCount} auto-synced — /use <alias>`);
-  }
-
-  // --- Orchestra-capable models ---
-  const orchRecs = getOrchestraRecommendations();
-  lines.push('\n🎼 ORCHESTRA-READY (tool-calling + agentic):');
-  if (orchRecs.free.length > 0) {
-    lines.push('  Free: ' + orchRecs.free.map(r => `/${r.alias}`).join('  '));
-  }
-  if (orchRecs.paid.length > 0) {
-    lines.push('  Paid: ' + orchRecs.paid.map(r => `/${r.alias}`).join('  '));
-  }
-  if (orchRecs.avoid.length > 0) {
-    lines.push('  Avoid: ' + orchRecs.avoid.map(a => `/${a}`).join('  '));
-  }
-  lines.push('  Use /orch with these for best results');
-
-  lines.push('\n━━━ Legend ━━━');
-  lines.push('🏆=best $/perf  ⭐=strong value  ✅=solid  💎=flagship  ⚠️=outdated');
-  lines.push('👁️=vision  🔧=tools  🎼=orchestra  Cost: $input/$output per M tokens');
-  lines.push('🧠=AA Intelligence Index  Use /model info <alias> for details');
-  lines.push('Usage: /model use <alias> or /<alias>');
-
+  lines.push('\n★=quality · ✓=AA benchmarked · ?=unverified');
   return lines.join('\n');
 }
 
@@ -1447,15 +1575,13 @@ export function getTopModelPicks(): {
 
 /**
  * Format capability ranking — models sorted by unified orchestra score.
- * Uses the same scorer as /orch advise for consistent ordering everywhere.
+ * v2: Uses star ratings + evidence instead of confidence %.
  */
 export function formatModelRanking(): string {
   const lines: string[] = [];
   lines.push('🏅 Model Ranking — Orchestra & Capability\n');
 
   const ranked = getRankedOrchestraModels();
-
-  // Resolve ModelInfo for each ranked entry
   const withInfo = ranked
     .map(r => ({ r, m: getModel(r.alias)! }))
     .filter(x => x.m);
@@ -1463,55 +1589,32 @@ export function formatModelRanking(): string {
   const paidRanked = withInfo.filter(x => !x.r.isFree);
   const freeRanked = withInfo.filter(x => x.r.isFree);
 
-  // Assign tier medals based on overall rank
-  const tierMedal = (globalIdx: number): string => {
-    if (globalIdx < 5) return '🥇';
-    if (globalIdx < 10) return '🥈';
-    if (globalIdx < 18) return '🥉';
-    return '  ';
-  };
-
-  const formatRankLine = (x: { r: RankedOrchestraModel; m: ModelInfo }, idx: number, globalIdx: number): string => {
-    const caps = [
-      x.m.parallelCalls && '⚡',
-      x.m.structuredOutput && '📋',
-      x.m.supportsVision && '👁️',
-      x.m.reasoning && '🧠',
-    ].filter(Boolean).join('');
-    const route = x.r.isDirectApi ? '🔌' : '🌐';
-    const ctx = x.m.maxContext
-      ? x.m.maxContext >= 1048576
-        ? `${(x.m.maxContext / 1048576).toFixed(0)}M`
-        : `${Math.round(x.m.maxContext / 1024)}K`
-      : '?';
-    const conf = `${x.r.confidence}%`;
-    const aa = x.m.intelligenceIndex ? `AA:${x.m.intelligenceIndex.toFixed(0)}` : '';
-    return `${tierMedal(globalIdx)} ${idx}. /${x.r.alias} ${route}${caps} ${ctx} ${aa} ${conf} ${x.m.cost}`.replace(/  +/g, ' ');
+  const formatRankLine = (x: { r: RankedOrchestraModel; m: ModelInfo }, idx: number): string => {
+    const rating = computeRating(x.m);
+    const ratingStr = formatRating(rating);
+    const caps = formatCapabilities(x.m);
+    const cost = x.m.isFree ? 'FREE' : x.m.cost;
+    return ` ${idx}. /${x.r.alias} • ${ratingStr} • ${cost}\n    ${x.m.name} · ${caps}`;
   };
 
   if (paidRanked.length > 0) {
     lines.push('💎 PAID (best for orchestra/complex tasks):');
-    paidRanked.slice(0, 12).forEach((x, i) => {
-      lines.push(formatRankLine(x, i + 1, i));
+    paidRanked.slice(0, 8).forEach((x, i) => {
+      lines.push(formatRankLine(x, i + 1));
     });
     lines.push('');
   }
 
   if (freeRanked.length > 0) {
     lines.push('🆓 FREE (best free options):');
-    freeRanked.slice(0, 8).forEach((x, i) => {
-      lines.push(formatRankLine(x, i + 1, paidRanked.length + i));
+    freeRanked.slice(0, 5).forEach((x, i) => {
+      lines.push(formatRankLine(x, i + 1));
     });
     lines.push('');
   }
 
-  lines.push('━━━ Legend ━━━');
-  lines.push('🔌=direct API  🌐=OpenRouter');
-  lines.push('⚡=parallel  📋=structured  👁️=vision  🧠=reasoning');
-  lines.push('AA = Artificial Analysis index · % = confidence');
-  lines.push('🥇=top 5  🥈=top 10  🥉=top 18');
-  lines.push('\nUse /model <alias> for full details');
-  lines.push('Use /model enrich to update benchmark data');
+  lines.push('★=quality · ✓=AA benchmarked · ?=unverified');
+  lines.push('/model <alias> for details · /pick <task> for recs');
 
   return lines.join('\n');
 }
@@ -1526,10 +1629,11 @@ export function formatModelInfoCard(alias: string): string | null {
 
   const lines: string[] = [];
 
-  // Header
-  const tier = model.isFree ? '🆓' : VALUE_TIER_LABELS[getValueTier(model)] || '✅';
-  lines.push(`${tier} ${model.name} (/${model.alias})`);
-  lines.push(`${model.specialty}\n`);
+  // Header with star rating
+  const rating = computeRating(model);
+  lines.push(`${formatRating(rating)} ${model.name} (/${model.alias})`);
+  lines.push(`${model.specialty}`);
+  lines.push(`${formatCapabilities(model)}\n`);
 
   // Identity
   lines.push('━━━ Identity ━━━');
@@ -2292,4 +2396,124 @@ export function resolveTaskModel(
     rationale: `Using current model: /${userModel}`,
     escalated: false,
   };
+}
+
+// ── /pick intent-based recommendations ──
+
+export type PickIntent = 'free' | 'coding' | 'fast' | 'orchestra' | 'creative' | 'cheap' | 'best' | 'vision' | 'reasoning';
+
+const PICK_INTENTS: PickIntent[] = ['free', 'coding', 'fast', 'orchestra', 'creative', 'cheap', 'best', 'vision', 'reasoning'];
+
+export function isValidPickIntent(s: string): s is PickIntent {
+  return PICK_INTENTS.includes(s as PickIntent);
+}
+
+export function getPickIntentList(): string {
+  return PICK_INTENTS.join(', ');
+}
+
+/** Category labels and emoji for each intent */
+const PICK_LABELS: Record<PickIntent, { emoji: string; title: string }> = {
+  free: { emoji: '🆓', title: 'Best Free Models' },
+  coding: { emoji: '💻', title: 'Best for Coding' },
+  fast: { emoji: '⚡', title: 'Fastest Models' },
+  orchestra: { emoji: '🎼', title: 'Best for Orchestra' },
+  creative: { emoji: '✨', title: 'Best for Creative Writing' },
+  cheap: { emoji: '💰', title: 'Best Value (cheapest quality)' },
+  best: { emoji: '🏆', title: 'Highest Quality' },
+  vision: { emoji: '👁️', title: 'Best with Vision' },
+  reasoning: { emoji: '🧠', title: 'Best for Reasoning' },
+};
+
+/**
+ * Get recommended models for a given intent.
+ * Returns 3 models (2 paid + 1 free for paid intents, or 3 free for free intent).
+ */
+export function getPickRecommendations(intent: PickIntent): ModelInfo[] {
+  const all = Object.values(getAllModels()).filter(m => !m.isImageGen);
+
+  let candidates: ModelInfo[];
+  switch (intent) {
+    case 'free':
+      candidates = all.filter(m => m.isFree && m.supportsTools);
+      return pickTopModels(candidates, 4);
+
+    case 'coding': {
+      const codingModels = all.filter(m => {
+        const lower = (m.specialty + ' ' + m.score + ' ' + m.name).toLowerCase();
+        return m.supportsTools && (/cod(ing|er)|swe-bench|program/i.test(lower) || (m.benchmarks?.coding && m.benchmarks.coding >= 40));
+      });
+      return pickTopModels(codingModels, 3);
+    }
+
+    case 'fast': {
+      const fastModels = all.filter(m => m.supportsTools && m.benchmarks?.speedTps);
+      return [...fastModels]
+        .sort((a, b) => (b.benchmarks?.speedTps || 0) - (a.benchmarks?.speedTps || 0))
+        .slice(0, 3);
+    }
+
+    case 'orchestra':
+      candidates = all.filter(m => m.orchestraReady);
+      return pickTopModels(candidates, 3);
+
+    case 'creative':
+      // Creative = high intelligence, not necessarily coding-focused
+      candidates = all.filter(m => m.supportsTools && (m.intelligenceIndex || 0) >= 45);
+      return pickTopModels(candidates, 3);
+
+    case 'cheap': {
+      // Cheapest paid models with decent quality (★☆☆ or higher with tools)
+      const cheapModels = all.filter(m => !m.isFree && m.supportsTools);
+      return [...cheapModels]
+        .sort((a, b) => parseCostForSort(a.cost) - parseCostForSort(b.cost))
+        .slice(0, 3);
+    }
+
+    case 'best':
+      candidates = all.filter(m => (m.intelligenceIndex || 0) >= 55);
+      return pickTopModels(candidates, 3);
+
+    case 'vision':
+      candidates = all.filter(m => m.supportsVision && m.supportsTools);
+      return pickTopModels(candidates, 3);
+
+    case 'reasoning':
+      candidates = all.filter(m => m.reasoning && m.reasoning !== 'none' && m.supportsTools);
+      return pickTopModels(candidates, 3);
+
+    default:
+      return pickTopModels(all.filter(m => m.supportsTools), 3);
+  }
+}
+
+/**
+ * Format a /pick recommendation for Telegram display.
+ * Returns text + list of aliases for buttons.
+ */
+export function formatPickRecommendation(intent: PickIntent): { text: string; aliases: string[] } {
+  const label = PICK_LABELS[intent];
+  const models = getPickRecommendations(intent);
+  const lines: string[] = [];
+  const aliases: string[] = [];
+
+  lines.push(`${label.emoji} ${label.title}\n`);
+
+  for (const m of models) {
+    const rating = computeRating(m);
+    const ratingStr = formatRating(rating);
+    const caps = formatCapabilities(m);
+    const cost = m.isFree ? 'FREE' : m.cost;
+
+    lines.push(`${ratingStr}  /${m.alias} — ${m.name}`);
+    lines.push(`  ${caps}`);
+    lines.push(`  ${cost}\n`);
+    aliases.push(m.alias);
+  }
+
+  if (models.length === 0) {
+    lines.push('No models found for this category.');
+  }
+
+  return { text: lines.join('\n'), aliases };
 }
