@@ -46,7 +46,7 @@ RUN mkdir -p /root/.openclaw \
     && mkdir -p /root/clawd \
     && mkdir -p /root/clawd/skills
 
-# Build cache bust: 2026-02-27-openclaw-2026.2.26
+# Build cache bust: 2026-03-25-v1-nvidia
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 

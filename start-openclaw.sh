@@ -328,6 +328,39 @@ if (!process.env.CF_AI_GATEWAY_MODEL && !process.env.AI_GATEWAY_BASE_URL && !pro
     }
 }
 
+// NVIDIA NIM provider (free models via build.nvidia.com)
+// OpenAI-compatible API — bypasses Cloudchamber egress restrictions
+if (process.env.NVIDIA_NIM_API_KEY) {
+    console.log('Configuring NVIDIA NIM provider with free models...');
+    config.models = config.models || {};
+    config.models.providers = config.models.providers || {};
+    config.models.providers.nvidia = {
+        baseUrl: 'https://integrate.api.nvidia.com/v1',
+        apiKey: process.env.NVIDIA_NIM_API_KEY,
+        api: 'openai-completions',
+        models: [
+            { id: 'nvidia/llama-3.1-nemotron-ultra-253b-v1', name: 'Nemotron Ultra 253B', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'nvidia/llama-3.3-nemotron-super-49b-v1', name: 'Nemotron Super 49B', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'nvidia/nemotron-3-super-120b-a12b', name: 'Nemotron 3 Super 120B', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'deepseek-ai/deepseek-v3.2', name: 'DeepSeek V3.2 (NIM)', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'qwen/qwen3.5-122b-a10b', name: 'Qwen 3.5 122B', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'z-ai/glm4_7', name: 'GLM-4.7', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'mistralai/devstral-2-123b-instruct-2512', name: 'Devstral 2 123B', contextWindow: 131072, maxTokens: 8192 },
+        ],
+    };
+
+    config.agents.defaults.models = config.agents.defaults.models || {};
+    config.agents.defaults.models['nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1'] = { alias: 'nemotron' };
+    config.agents.defaults.models['nvidia/nvidia/llama-3.3-nemotron-super-49b-v1'] = { alias: 'super49' };
+    config.agents.defaults.models['nvidia/nvidia/nemotron-3-super-120b-a12b'] = { alias: 'nemo3' };
+    config.agents.defaults.models['nvidia/deepseek-ai/deepseek-v3.2'] = { alias: 'dsnv' };
+    config.agents.defaults.models['nvidia/qwen/qwen3.5-122b-a10b'] = { alias: 'qwennv' };
+    config.agents.defaults.models['nvidia/z-ai/glm4_7'] = { alias: 'glm' };
+    config.agents.defaults.models['nvidia/mistralai/devstral-2-123b-instruct-2512'] = { alias: 'devnv' };
+
+    console.log('NVIDIA NIM: 7 free models registered (nemotron, super49, nemo3, dsnv, qwennv, glm, devnv)');
+}
+
 // Write updated config
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
