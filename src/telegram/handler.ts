@@ -925,6 +925,26 @@ export class TelegramHandler {
         break;
       }
 
+      case '/pingmodels':
+      case '/ping-models': {
+        await this.bot.sendMessage(chatId, '🏓 Pinging models... this may take up to 15s');
+        try {
+          const { pingAllModels, formatHealthReport } = await import('../openrouter/health');
+          const envVars: Record<string, string | undefined> = {
+            OPENROUTER_API_KEY: this.openrouterKey,
+            DEEPSEEK_API_KEY: this.deepseekKey,
+            ANTHROPIC_API_KEY: this.anthropicKey,
+            DASHSCOPE_API_KEY: this.dashscopeKey,
+            MOONSHOT_API_KEY: this.moonshotKey,
+          };
+          const report = await pingAllModels(this.openrouterKey, envVars);
+          await this.bot.sendMessage(chatId, formatHealthReport(report));
+        } catch (error) {
+          await this.bot.sendMessage(chatId, `❌ Health check failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        break;
+      }
+
       case '/pick': {
         const intent = args[0]?.toLowerCase() || '';
         if (!intent || !isValidPickIntent(intent)) {
@@ -6159,6 +6179,7 @@ Each /orch next picks up where the last one left off.`;
 /model check        — Check for updates
 /model enrich       — Fetch benchmarks (Artificial Analysis)
 /model update       — Patch model without deploy
+/ping-models        — Health check all models (latency + failures)
 Quick switch: /deep /grok /sonnet /flash /opus etc.
 
 ━━━ Costs & Credits ━━━
