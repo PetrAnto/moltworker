@@ -3993,15 +3993,17 @@ export class TelegramHandler {
       return;
     }
 
+    // Hint buttons: show usage instructions for commands that need arguments
+    if (feature === 'hint') {
+      const hint = parts.slice(2).join(':');
+      await this.sendStartHint(chatId, hint);
+      return;
+    }
+
     // Feature info pages (coding, research, images, etc.)
     const text = this.getStartFeatureText(feature);
     if (text) {
-      const buttons: InlineKeyboardButton[][] = [
-        [
-          { text: '⬅️ Back to Menu', callback_data: 'start:menu' },
-          { text: '🤖 Pick Model', callback_data: 'start:pick' },
-        ],
-      ];
+      const buttons = this.getStartFeatureButtons(feature);
       await this.bot.sendMessageWithButtons(chatId, text, buttons);
     }
   }
@@ -4303,6 +4305,60 @@ export class TelegramHandler {
       case 'skill':
         await this.handleSkillCommand(chatId, []);
         break;
+
+      // === Skill shortcuts (no-argument commands) ===
+      case 'ideas':
+      case 'spark':
+      case 'gauntlet':
+      case 'brainstorm':
+        await this.dispatchSkillFromButton(chatId, userId, `/${cmd}`);
+        break;
+      case 'orchnext':
+        await this.dispatchSkillFromButton(chatId, userId, '/orch next');
+        break;
+      case 'orchroadmap':
+        await this.dispatchSkillFromButton(chatId, userId, '/orch roadmap');
+        break;
+      case 'orchhistory':
+        await this.dispatchSkillFromButton(chatId, userId, '/orch history');
+        break;
+    }
+  }
+
+  /**
+   * Dispatch a skill command from a button tap (no TelegramMessage needed)
+   */
+  private async dispatchSkillFromButton(chatId: number, userId: string, commandText: string): Promise<void> {
+    initializeSkills();
+    const skillParsed = parseCommandMessage(commandText);
+    if (skillParsed && isSkillRegistered(skillParsed.mapping.skillId)) {
+      const skillEnv = {
+        MOLTBOT_BUCKET: this.r2Bucket,
+        OPENROUTER_API_KEY: this.openrouterKey,
+        GITHUB_TOKEN: this.githubToken,
+        BRAVE_SEARCH_KEY: this.braveSearchKey,
+        TASK_PROCESSOR: this.taskProcessor,
+        NEXUS_KV: this.nexusKv,
+      } as import('../types').MoltbotEnv;
+      const skillRequest: SkillRequest = {
+        skillId: skillParsed.mapping.skillId,
+        subcommand: skillParsed.subcommand,
+        text: skillParsed.text,
+        flags: skillParsed.flags,
+        transport: 'telegram',
+        userId,
+        chatId,
+        modelAlias: await this.storage.getUserModel(userId),
+        env: skillEnv,
+        context: { telegramToken: this.telegramToken },
+      };
+      const result = await runSkill(skillRequest);
+      const chunks = renderForTelegram(result);
+      for (const chunk of chunks) {
+        await this.bot.sendMessage(chatId, chunk.text, chunk.parseMode ? { parseMode: chunk.parseMode } : undefined);
+      }
+    } else {
+      await this.bot.sendMessage(chatId, `Command not available: ${commandText}`);
     }
   }
 
@@ -5612,7 +5668,7 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
   private async sendStartMenu(chatId: number): Promise<void> {
     const welcome = `🤖 Welcome to Moltworker!
 
-Your multi-model AI assistant with 15 real-time tools and 30+ AI models.
+Your multi-model AI assistant with 15 real-time tools, 4 skills, and 30+ AI models.
 
 Just type a message to chat, or tap a button below to explore:`;
 
@@ -5899,6 +5955,121 @@ Each /orch next picks up where the last one left off.`;
 
       default:
         return '';
+    }
+  }
+
+  /**
+   * Send a usage hint for commands that require arguments
+   */
+  private async sendStartHint(chatId: number, hint: string): Promise<void> {
+    const hints: Record<string, string> = {
+      write: '✍️ Usage: /write <topic or instructions>\n\nExamples:\n/write a blog post about serverless AI\n/write --for linkedin My startup just hit 10K users',
+      rewrite: '🔄 Usage: /rewrite <text to improve>\n\nExamples:\n/rewrite Make this clearer: The system processes data efficiently\n/rewrite --tone formal Hey check out this cool thing',
+      headline: '📰 Usage: /headline <content to title>\n\nExamples:\n/headline New open-source framework beats GPT-4 at reasoning\n/headline Our Q4 revenue grew 300% year over year',
+      repurpose: '🔀 Usage: /repurpose <text to adapt>\n\nExamples:\n/repurpose --platform twitter My latest blog post about AI agents\n/repurpose --platform linkedin We just shipped a major update',
+      save: '💾 Usage: /save <idea or URL>\n\nExamples:\n/save Build a CLI that converts Figma to code\n/save https://interesting-article.com',
+      research: '🔍 Usage: /research <query>\n\nExamples:\n/research What is the current state of WebGPU?\n/research --mode decision Should I use Rust or Go for my CLI?',
+      dossier: '📑 Usage: /dossier <topic>\n\nExamples:\n/dossier Compare Cloudflare Workers vs AWS Lambda\n/dossier State of AI coding assistants in 2026',
+      orchset: '🔒 Usage: /orch set <owner/repo>\n\nExample:\n/orch set PetrAnto/myapp',
+      orchinit: '📋 Usage: /orch init <project description>\n\nExample:\n/orch init Build a user auth system with JWT and OAuth',
+      img: '🎨 Usage: /img <prompt>\n\nExamples:\n/img a cat astronaut floating in space\n/img fluxmax a photorealistic mountain landscape at sunset',
+      cfsearch: '🔍 Usage: /cf search <query>\n\nExamples:\n/cf search workers\n/cf search dns records',
+    };
+    const text = hints[hint] || `Type the command with your input to get started.`;
+    await this.bot.sendMessage(chatId, text);
+  }
+
+  /**
+   * Get per-feature action buttons for /start feature pages
+   */
+  private getStartFeatureButtons(feature: string): InlineKeyboardButton[][] {
+    const back: InlineKeyboardButton[] = [
+      { text: '⬅️ Back to Menu', callback_data: 'start:menu' },
+      { text: '🤖 Pick Model', callback_data: 'start:pick' },
+    ];
+
+    switch (feature) {
+      case 'lyra':
+        return [
+          [
+            { text: '✍️ /write', callback_data: 'start:hint:write' },
+            { text: '🔄 /rewrite', callback_data: 'start:hint:rewrite' },
+          ],
+          [
+            { text: '📰 /headline', callback_data: 'start:hint:headline' },
+            { text: '🔀 /repurpose', callback_data: 'start:hint:repurpose' },
+          ],
+          back,
+        ];
+      case 'spark':
+        return [
+          [
+            { text: '💾 /save', callback_data: 'start:hint:save' },
+            { text: '📋 /ideas', callback_data: 'start:cmd:ideas' },
+          ],
+          [
+            { text: '⚡ /spark', callback_data: 'start:cmd:spark' },
+            { text: '🏟️ /gauntlet', callback_data: 'start:cmd:gauntlet' },
+          ],
+          [
+            { text: '🧠 /brainstorm', callback_data: 'start:cmd:brainstorm' },
+          ],
+          back,
+        ];
+      case 'nexus':
+        return [
+          [
+            { text: '🔍 /research', callback_data: 'start:hint:research' },
+            { text: '📑 /dossier', callback_data: 'start:hint:dossier' },
+          ],
+          back,
+        ];
+      case 'orchestra':
+        return [
+          [
+            { text: '🔒 /orch set', callback_data: 'start:hint:orchset' },
+            { text: '📋 /orch init', callback_data: 'start:hint:orchinit' },
+          ],
+          [
+            { text: '▶️ /orch next', callback_data: 'start:cmd:orchnext' },
+            { text: '📊 /orch roadmap', callback_data: 'start:cmd:orchroadmap' },
+          ],
+          [
+            { text: '📜 /orch history', callback_data: 'start:cmd:orchhistory' },
+          ],
+          back,
+        ];
+      case 'images':
+        return [
+          [
+            { text: '🎨 /img', callback_data: 'start:hint:img' },
+          ],
+          back,
+        ];
+      case 'tools':
+        return [
+          [
+            { text: '📰 /briefing', callback_data: 'start:cmd:briefing' },
+          ],
+          back,
+        ];
+      case 'coding':
+        return [
+          [
+            { text: '🎼 Orchestra', callback_data: 'start:orchestra' },
+            { text: '🆓 Free Models', callback_data: 'start:cmd:syncmodels' },
+          ],
+          back,
+        ];
+      case 'cloudflare':
+        return [
+          [
+            { text: '🔍 /cf search', callback_data: 'start:hint:cfsearch' },
+          ],
+          back,
+        ];
+      default:
+        return [back];
     }
   }
 
