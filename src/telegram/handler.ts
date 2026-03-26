@@ -5628,7 +5628,13 @@ Just type a message to chat, or tap a button below to explore:`;
         { text: '👁️ Vision', callback_data: 'start:vision' },
         { text: '🧠 Reasoning', callback_data: 'start:reasoning' },
       ],
-      // Row 3: Workflows
+      // Row 3: Skills
+      [
+        { text: '✍️ Lyra', callback_data: 'start:lyra' },
+        { text: '💡 Spark', callback_data: 'start:spark' },
+        { text: '🔬 Nexus', callback_data: 'start:nexus' },
+      ],
+      // Row 4: Workflows
       [
         { text: '🎼 Orchestra', callback_data: 'start:orchestra' },
         { text: '☁️ Cloudflare', callback_data: 'start:cloudflare' },
@@ -5769,6 +5775,66 @@ Best reasoning models:
 /deep — Great value, configurable thinking
 /flash — Strong reasoning + 1M context
 /opus — Maximum quality`;
+
+      case 'lyra':
+        return `✍️ Lyra — Content Creator
+
+Draft, rewrite, headline, and repurpose content with AI self-review.
+
+━━━ Commands ━━━
+/write <topic> — Draft new content
+/rewrite <text> — Improve existing text
+/headline <text> — Generate headline options
+/repurpose <text> — Adapt content for different platforms
+
+━━━ Examples ━━━
+/write a blog post about serverless AI
+/rewrite Make this paragraph more concise: ...
+/headline New open-source framework beats GPT-4
+/repurpose --platform twitter My latest blog post about...
+
+Lyra auto-reviews its output and revises if quality is low.
+Uses: flash model (fast + cheap)`;
+
+      case 'spark':
+        return `💡 Spark — Brainstorm & Ideas
+
+Capture ideas, evaluate them through a rigorous gauntlet, and brainstorm new connections.
+
+━━━ Commands ━━━
+/save <idea or URL> — Capture an idea to your inbox
+/spark — Quick reaction to a random saved idea
+/gauntlet — 6-stage deep evaluation of an idea
+/brainstorm — Cluster and cross-pollinate your saved ideas
+/ideas — List your saved ideas
+
+━━━ Examples ━━━
+/save Build a CLI tool that converts Figma to code
+/save https://interesting-article.com
+/spark
+/gauntlet
+/brainstorm
+
+Uses: flash model (fast + cheap)`;
+
+      case 'nexus':
+        return `🔬 Nexus — Multi-Source Research
+
+Deep research with evidence gathering from 10+ sources, confidence scoring, and decision analysis.
+
+━━━ Commands ━━━
+/research <query> — Quick research with source synthesis
+/dossier <query> — Full dossier with structured evidence
+
+━━━ Sources ━━━
+Web search, Wikipedia, HackerNews, Reddit, arXiv, GDELT news, CoinGecko, Yahoo Finance, DEX Screener, ReliefWeb
+
+━━━ Examples ━━━
+/research What is the current state of WebGPU?
+/dossier Compare Cloudflare Workers vs AWS Lambda for AI workloads
+/research --mode decision Should I use Rust or Go for my CLI tool?
+
+Results are cached for 4 hours. Uses: flash model (fast + cheap)`;
 
       case 'cloudflare':
         return `☁️ Cloudflare API Integration
@@ -5918,6 +5984,23 @@ The bot calls these automatically when relevant:
  • github_create_pr — Create PR with file changes
  • sandbox_exec — Run commands in sandbox container
  • cloudflare_api — Full Cloudflare API via Code Mode MCP
+
+━━━ Lyra — Content Creator ━━━
+/write <topic> — Draft new content
+/rewrite <text> — Improve existing text
+/headline <text> — Generate headline options
+/repurpose <text> — Adapt for other platforms
+
+━━━ Spark — Brainstorm & Ideas ━━━
+/save <idea or URL> — Capture to inbox
+/spark — Quick reaction to a random idea
+/gauntlet — 6-stage deep evaluation
+/brainstorm — Cluster and cross-pollinate ideas
+/ideas — List saved ideas
+
+━━━ Nexus — Research ━━━
+/research <query> — Quick multi-source research
+/dossier <query> — Full dossier with evidence
 
 ━━━ Orchestra Mode ━━━
 /orch set owner/repo — Lock default repo
