@@ -677,14 +677,13 @@ describe('formatModelRanking', () => {
 
   it('shows legend', () => {
     const rank = formatModelRanking();
-    expect(rank).toContain('parallel');
-    expect(rank).toContain('structured');
-    expect(rank).toContain('vision');
-    expect(rank).toContain('reasoning');
+    expect(rank).toContain('★=quality');
+    expect(rank).toContain('✓=AA benchmarked');
+    expect(rank).toContain('?=unverified');
   });
 
-  it('includes tier medals', () => {
+  it('includes star ratings', () => {
     const rank = formatModelRanking();
-    expect(rank).toMatch(/🥇|🥈|🥉/);
+    expect(rank).toMatch(/★★★|★★☆|★☆☆|☆☆☆/);
   });
 });
