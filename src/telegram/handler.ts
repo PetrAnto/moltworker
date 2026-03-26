@@ -5684,15 +5684,15 @@ Just type a message to chat, or tap a button below to explore:`;
         { text: '👁️ Vision', callback_data: 'start:vision' },
         { text: '🧠 Reasoning', callback_data: 'start:reasoning' },
       ],
-      // Row 3: Skills
+      // Row 3-4: Skills
       [
         { text: '✍️ Lyra', callback_data: 'start:lyra' },
         { text: '💡 Spark', callback_data: 'start:spark' },
         { text: '🔬 Nexus', callback_data: 'start:nexus' },
-      ],
-      // Row 4: Workflows
-      [
         { text: '🎼 Orchestra', callback_data: 'start:orchestra' },
+      ],
+      // Row 5: Workflows
+      [
         { text: '☁️ Cloudflare', callback_data: 'start:cloudflare' },
       ],
       // Row 4-5: Action sub-menus
