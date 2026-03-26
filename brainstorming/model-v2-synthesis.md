@@ -20,26 +20,32 @@
 **Automate:** `/model sync`, `/model enrich` → cron job (6h), no user action needed
 **Keep as admin:** `/model update`, `/model check`
 
-### Ranking: Tiers + Evidence, NOT single %
-- **Quality tiers:** S (≥90) / A (75-89) / B (60-74) / C (<60) — or Best/Strong/Budget/Experimental
-- **Evidence tiers:** AA-verified / Tested (real orchestra data) / Partial / Heuristic-only
-- **Task-specific scores:** coding, agentic, creative, fast, general
+### Ranking: Stars + Evidence, NOT single %
+- **Star ratings:** ★★★ (top) / ★★☆ (strong) / ★☆☆ (basic) / ☆☆☆ (untested) — universally readable
+- **Evidence:** `✓` (AA benchmarks verified) or `?` (heuristic guess) — shown right after stars
+- **Task-specific** capabilities shown as readable words: `coding · tools · reasoning · 160K`
 - **No single confidence %** — it conflates too many signals with different reliability
-- **Unknown models hard-capped at B tier** — can't rank higher than verified models
+- **Unknown models hard-capped at ★☆☆** — can't rate higher than verified models
 - **Real orchestra data overrides benchmarks** after 10-20 samples
 
 ### Display: Compact, scannable, no emoji soup
-- **Text tags** instead of emoji chains: `[tools][vision][128k]`
+- **Capability words** instead of emoji chains: `coding · tools · vision · 160K`
 - **Max 8-15 models per view**, buttons for "show more"
-- **Line format:** `/alias • Name • $cost • tags • Tier • Evidence`
+- **Line format:** `/alias • Name • ★★★ ✓` + capability line below
 - **Detail card:** best-for, capabilities, context, evidence, tradeoffs + action buttons
+
+### Health: Manual `/ping-models` + auto-consequences
+- Manual command pings all active models in parallel (~5 tokens each)
+- Reports healthy / slow / failed with latency
+- Auto-marks failures: degraded (timeout), rate-limited (429), unhealthy (3x consecutive)
+- Warns users whose default model is down — never auto-switches
 
 ### Lifecycle: Unified R2 registry + auto-cron
 - **Single source of truth:** R2 `models.json` (all providers merged)
 - **Code catalog = seed/overrides only** — runtime reads from R2
-- **6h cron:** fetch pricing, AA benchmarks, recompute tiers, atomic write
+- **6h cron:** fetch pricing, AA benchmarks, recompute star ratings, atomic write
 - **Model states:** candidate → verified (≥20 runs) → recommended → superseded → deprecated → removed
-- **Health:** passive (orchestra logs) + circuit-break on 3x errors → auto-fallback
+- **Periodic auto-discovery:** TODO — detect and surface new high-quality models for approval
 
 ---
 
@@ -50,9 +56,9 @@
 | Default entry command | Gemini/Grok: `/models`; ChatGPT: `/model home` with recs | `/models` — simpler, familiar |
 | Categories | Gemini: 5; Grok: 6; ChatGPT: 8 | Start with 5: Free, Coding, Agentic, Fast, Premium |
 | Cron frequency | Gemini: 12h; Grok/ChatGPT: 6h | 6h — prices change fast, AA is free tier |
-| Tier system | Grok: S/A/B/C; ChatGPT: 2D (quality + evidence) | 2D — evidence tier is critical for trust |
+| Rating system | Grok: S/A/B/C; ChatGPT: 2D (quality + evidence) | **Stars (★★★/★★☆/★☆☆/☆☆☆) + ✓/?** — universally readable, 2D (quality + evidence) |
 | Formula weights | Vary by source | Start with Grok's, iterate with real data |
-| Health monitoring | Gemini: circuit-break; Grok: active ping; ChatGPT: anomaly | Passive first (orchestra logs), add circuit-break |
+| Health monitoring | Gemini: circuit-break; Grok: active ping; ChatGPT: anomaly | **Manual `/ping-models`** with auto-consequences; passive circuit-break later |
 
 ---
 
@@ -60,13 +66,14 @@
 
 ### Phase 1: Foundation (highest impact, lowest risk)
 1. Auto-enrich on 6h cron (already have the code, just wire to cron)
-2. Tier computation (S/A/B/C + evidence tier) — replace confidence %
-3. New `/models` display (compact format, category buttons)
+2. Star ratings (★★★/★★☆/★☆☆/☆☆☆ + ✓/?) — replace confidence %
+3. New `/models` display (compact format, category buttons, capability words)
 4. New `/pick <intent>` command with inline buttons
+5. `/ping-models` manual health check with auto-consequences
 
 ### Phase 2: Quality (medium effort)
-5. Unified R2 model registry (merge curated + dynamic + auto-synced)
-6. Model state machine (candidate → verified → recommended → deprecated)
+6. Unified R2 model registry (merge curated + dynamic + auto-synced)
+7. Model state machine (candidate → verified → recommended → deprecated)
 7. New `/compare` command
 8. Kill redundant commands (/model list, /model hub)
 
