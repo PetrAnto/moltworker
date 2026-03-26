@@ -23,7 +23,7 @@ The system runs on **Cloudflare Workers** with R2 storage for persistence and **
 
 **Discovery**: Manual (curated catalog in code) + semi-automatic (user-triggered sync from OpenRouter API)
 **Registration**: Three tiers — curated (code), dynamic (user-picked), auto-synced (background)
-**Enrichment**: Manual (`/model enrich` — fetches Artificial Analysis benchmarks)
+**Enrichment**: Semi-automatic — Artificial Analysis API provides independent benchmarks (Intelligence Index, Coding, Math, LiveCodeBench) for ~40% of models. Cron can auto-run but currently requires manual `/model enrich` trigger. 24h cache in R2 with stale fallback.
 **Ranking**: Pre-computed multi-factor score, stored in memory
 **Display**: Multiple overlapping text-based views
 **Selection**: User types `/alias` or taps inline button → stored in R2 per user
