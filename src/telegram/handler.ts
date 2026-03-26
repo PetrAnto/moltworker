@@ -93,6 +93,10 @@ import {
   resolveTaskModel,
   isDirectApi,
   getProvider,
+  formatPickRecommendation,
+  isValidPickIntent,
+  getPickIntentList,
+  formatModelsListLegacy,
   type ModelInfo,
   type ReasoningLevel,
   type RouterCheckpointMeta,
@@ -899,10 +903,66 @@ export class TelegramHandler {
         await this.bot.sendMessage(chatId, this.getHelpMessage());
         break;
 
-      case '/models':
-        // Legacy alias — now redirects to /model rank (ranked + buttons)
-        await this.sendModelRanking(chatId);
+      case '/models': {
+        const modelsUserModel = await this.storage.getUserModel(userId);
+        const modelsButtons: InlineKeyboardButton[][] = [
+          [
+            { text: '🆓 Free', callback_data: 'pick:free' },
+            { text: '💻 Coding', callback_data: 'pick:coding' },
+            { text: '🎼 Orchestra', callback_data: 'pick:orchestra' },
+          ],
+          [
+            { text: '⚡ Fast', callback_data: 'pick:fast' },
+            { text: '💎 Best', callback_data: 'pick:best' },
+            { text: '👁️ Vision', callback_data: 'pick:vision' },
+          ],
+          [
+            { text: '📋 Full List', callback_data: 'modelnav:list' },
+            { text: '🏅 Ranking', callback_data: 'modelnav:rank' },
+          ],
+        ];
+        await this.bot.sendMessageWithButtons(chatId, formatModelsList(modelsUserModel), modelsButtons);
         break;
+      }
+
+      case '/pingmodels':
+      case '/ping-models': {
+        await this.bot.sendMessage(chatId, '🏓 Pinging models... this may take up to 15s');
+        try {
+          const { pingAllModels, formatHealthReport } = await import('../openrouter/health');
+          const envVars: Record<string, string | undefined> = {
+            OPENROUTER_API_KEY: this.openrouterKey,
+            DEEPSEEK_API_KEY: this.deepseekKey,
+            ANTHROPIC_API_KEY: this.anthropicKey,
+            DASHSCOPE_API_KEY: this.dashscopeKey,
+            MOONSHOT_API_KEY: this.moonshotKey,
+          };
+          const report = await pingAllModels(this.openrouterKey, envVars);
+          await this.bot.sendMessage(chatId, formatHealthReport(report));
+        } catch (error) {
+          await this.bot.sendMessage(chatId, `❌ Health check failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        break;
+      }
+
+      case '/pick': {
+        const intent = args[0]?.toLowerCase() || '';
+        if (!intent || !isValidPickIntent(intent)) {
+          await this.bot.sendMessage(chatId, `Usage: /pick <intent>\n\nAvailable: ${getPickIntentList()}\n\nExample: /pick coding`);
+          break;
+        }
+        const pick = formatPickRecommendation(intent);
+        const pickButtons: InlineKeyboardButton[][] = [];
+        if (pick.aliases.length > 0) {
+          pickButtons.push(pick.aliases.map(a => ({ text: `Use /${a}`, callback_data: `model:${a}` })));
+        }
+        if (pickButtons.length > 0) {
+          await this.bot.sendMessageWithButtons(chatId, pick.text, pickButtons);
+        } else {
+          await this.bot.sendMessage(chatId, pick.text);
+        }
+        break;
+      }
 
       case '/use':
         // Legacy alias — same as /model use
@@ -3654,14 +3714,32 @@ export class TelegramHandler {
         }
         break;
 
-      case 'modelnav':
+      case 'modelnav': {
         // Hub navigation buttons: modelnav:list or modelnav:rank
         if (payload === 'list') {
-          await this.bot.sendMessage(chatId, formatModelsList());
+          await this.bot.sendMessage(chatId, formatModelsListLegacy());
         } else if (payload === 'rank') {
           await this.sendModelRanking(chatId);
         }
         break;
+      }
+
+      case 'pick': {
+        // Intent-based model recommendation: pick:coding, pick:free, etc.
+        if (isValidPickIntent(payload)) {
+          const pickResult = formatPickRecommendation(payload);
+          const pickBtns: InlineKeyboardButton[][] = [];
+          if (pickResult.aliases.length > 0) {
+            pickBtns.push(pickResult.aliases.map(a => ({ text: `Use /${a}`, callback_data: `model:${a}` })));
+          }
+          if (pickBtns.length > 0) {
+            await this.bot.sendMessageWithButtons(chatId, pickResult.text, pickBtns);
+          } else {
+            await this.bot.sendMessage(chatId, pickResult.text);
+          }
+        }
+        break;
+      }
 
       case 'orchgo': {
         // Orchestra model gate: switch model (or proceed) then resume pending orchestra
@@ -4130,9 +4208,11 @@ export class TelegramHandler {
   private async handleStartCommandAction(chatId: number, userId: string, cmd: string): Promise<void> {
     switch (cmd) {
       // === Models group ===
-      case 'models':
-        await this.bot.sendMessage(chatId, formatModelsList());
+      case 'models': {
+        const startCmdModel = await this.storage.getUserModel(userId);
+        await this.bot.sendMessage(chatId, formatModelsList(startCmdModel));
         break;
+      }
       case 'model': {
         const currentModel = await this.storage.getUserModel(userId);
         const modelInfo = getModel(currentModel);
@@ -4966,9 +5046,11 @@ export class TelegramHandler {
     }
 
     switch (sub) {
-      case 'list':
-        await this.bot.sendMessage(chatId, formatModelsList());
+      case 'list': {
+        const listModel = await this.storage.getUserModel(userId);
+        await this.bot.sendMessage(chatId, formatModelsList(listModel));
         break;
+      }
 
       case 'pick':
         // Legacy — redirect to rank (which now includes buttons)
@@ -6084,6 +6166,8 @@ Each /orch next picks up where the last one left off.`;
 /ping — Latency check
 
 ━━━ Models ━━━
+/models             — Smart overview with categories
+/pick <intent>      — Recommend models (coding/free/fast/orchestra/best/vision)
 /model              — Hub with recommended models
 /model list         — Full catalog with prices
 /model rank         — Capability/orchestra ranking
@@ -6095,6 +6179,7 @@ Each /orch next picks up where the last one left off.`;
 /model check        — Check for updates
 /model enrich       — Fetch benchmarks (Artificial Analysis)
 /model update       — Patch model without deploy
+/ping-models        — Health check all models (latency + failures)
 Quick switch: /deep /grok /sonnet /flash /opus etc.
 
 ━━━ Costs & Credits ━━━
