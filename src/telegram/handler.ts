@@ -1768,11 +1768,16 @@ export class TelegramHandler {
     // This ensures exact-match lookups on subsequent requests.
     const canonicalAlias = model.alias;
     await this.storage.setUserModel(userId, canonicalAlias, username);
+    const rating = computeRating(model);
+    const route = model.provider && model.provider !== 'openrouter' ? `${model.provider} (direct)` : 'OpenRouter';
+    const caps = formatCapabilities(model);
     await this.bot.sendMessage(
       chatId,
-      `Model set to: ${model.name}\n` +
+      `Model set to: ${model.name} ${formatRating(rating)}\n` +
       `Alias: /${canonicalAlias}\n` +
-      `${model.specialty}\n` +
+      `ID: ${model.id}\n` +
+      `Route: ${route}\n` +
+      `${caps}\n` +
       `Cost: ${model.cost}`
     );
   }
