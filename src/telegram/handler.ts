@@ -97,6 +97,9 @@ import {
   isValidPickIntent,
   getPickIntentList,
   formatModelsListLegacy,
+  computeRating,
+  formatRating,
+  formatCapabilities,
   type ModelInfo,
   type ReasoningLevel,
   type RouterCheckpointMeta,
@@ -941,6 +944,108 @@ export class TelegramHandler {
           await this.bot.sendMessage(chatId, formatHealthReport(report));
         } catch (error) {
           await this.bot.sendMessage(chatId, `❌ Health check failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        break;
+      }
+
+      case '/curate': {
+        // /curate <model-id> <alias> — Add model to curated catalog from OpenRouter
+        const modelId = args[0];
+        const curateAlias = args[1]?.toLowerCase();
+        if (!modelId || !curateAlias) {
+          await this.bot.sendMessage(chatId,
+            'Usage: /curate <model-id> <alias>\n\n' +
+            'Fetches model metadata from OpenRouter and registers it with a clean alias.\n\n' +
+            'Examples:\n' +
+            '  /curate qwen/qwen3.5-397b-a17b qwen35\n' +
+            '  /curate google/gemini-3.1-flash-lite-preview flashlite\n' +
+            '  /curate nvidia/nemotron-3-super-120b-a12b:free nemo3free\n\n' +
+            'The model ID is the OpenRouter model ID (e.g. provider/model-name).\n' +
+            'The alias is the short name users will type (e.g. /qwen35).'
+          );
+          break;
+        }
+
+        // Check if alias already exists
+        const existingModel = getModel(curateAlias);
+        if (existingModel) {
+          await this.bot.sendMessage(chatId,
+            `⚠️ Alias /${curateAlias} already exists (${existingModel.name}).\n` +
+            'Choose a different alias or use /model update to modify existing.'
+          );
+          break;
+        }
+
+        await this.bot.sendMessage(chatId, `🔍 Fetching ${modelId} from OpenRouter...`);
+
+        try {
+          // Fetch model info from OpenRouter API
+          const resp = await fetch(`https://openrouter.ai/api/v1/models/${encodeURIComponent(modelId)}`, {
+            headers: { 'Authorization': `Bearer ${this.openrouterKey}` },
+          });
+
+          if (!resp.ok) {
+            await this.bot.sendMessage(chatId, `❌ Model not found on OpenRouter: ${modelId}\n\nCheck the ID at openrouter.ai/models`);
+            break;
+          }
+
+          const data = await resp.json() as {
+            id: string;
+            name: string;
+            description?: string;
+            context_length?: number;
+            pricing?: { prompt?: string; completion?: string };
+            architecture?: { modality?: string; input_modalities?: string[]; output_modalities?: string[] };
+            top_provider?: { is_moderated?: boolean };
+          };
+
+          // Build cost string
+          const promptCost = data.pricing?.prompt ? parseFloat(data.pricing.prompt) * 1000000 : 0;
+          const completionCost = data.pricing?.completion ? parseFloat(data.pricing.completion) * 1000000 : 0;
+          const isFree = promptCost === 0 && completionCost === 0;
+          const costStr = isFree ? 'FREE' : `$${promptCost.toFixed(2)}/$${completionCost.toFixed(2)}`;
+
+          // Detect capabilities from description + architecture
+          const desc = (data.description || '').toLowerCase();
+          const supportsVision = data.architecture?.input_modalities?.includes('image') || /vision|multimodal|image/i.test(desc);
+          const supportsTools = /tool|function.call|agent/i.test(desc);
+
+          // Create ModelInfo
+          const newModel: ModelInfo = {
+            id: data.id,
+            alias: curateAlias,
+            name: data.name || modelId,
+            specialty: `Curated from OpenRouter`,
+            score: data.description?.substring(0, 80) || '',
+            cost: costStr,
+            supportsTools,
+            supportsVision,
+            isFree,
+            maxContext: data.context_length || 128000,
+            structuredOutput: /structured|json/i.test(desc),
+            reasoning: /reason|think/i.test(desc) ? 'configurable' : 'none',
+          };
+
+          // Register as dynamic model (highest priority)
+          const existing = await this.storage.loadDynamicModels();
+          const models = existing?.models || {};
+          const blocked = existing?.blocked || [];
+          models[curateAlias] = newModel;
+          registerDynamicModels(models);
+          await this.storage.saveDynamicModels(models, blocked);
+
+          const rating = computeRating(newModel);
+          const caps = formatCapabilities(newModel);
+
+          await this.bot.sendMessage(chatId,
+            `✅ Model curated!\n\n` +
+            `/${curateAlias} • ${newModel.name} • ${formatRating(rating)}\n` +
+            `  ${caps} • ${costStr}\n\n` +
+            `Switch to it: /${curateAlias}\n` +
+            `Run /model enrich to fetch AA benchmarks for better rating.`
+          );
+        } catch (err) {
+          await this.bot.sendMessage(chatId, `❌ Failed to fetch model: ${err instanceof Error ? err.message : String(err)}`);
         }
         break;
       }
@@ -4100,11 +4205,22 @@ export class TelegramHandler {
         text = `🤖 Models\n\nCurrent: ${model?.name || current} (/${current})\n\nQuick switch or browse the full catalog:`;
         buttons = [
           [
-            { text: '🤖 Pick a Model', callback_data: 'start:pick' },
-            { text: '📋 Full Catalog', callback_data: 'start:cmd:models' },
+            { text: '🆓 Free', callback_data: 'pick:free' },
+            { text: '💻 Coding', callback_data: 'pick:coding' },
+            { text: '🎼 Orchestra', callback_data: 'pick:orchestra' },
           ],
           [
-            { text: '📊 Current Model', callback_data: 'start:cmd:model' },
+            { text: '⚡ Fast', callback_data: 'pick:fast' },
+            { text: '💎 Best', callback_data: 'pick:best' },
+            { text: '👁️ Vision', callback_data: 'pick:vision' },
+          ],
+          [
+            { text: '📋 Full Catalog', callback_data: 'modelnav:list' },
+            { text: '🏅 Ranking', callback_data: 'modelnav:rank' },
+          ],
+          [
+            { text: '🏓 Ping Models', callback_data: 'start:cmd:pingmodels' },
+            { text: '📊 Current', callback_data: 'start:cmd:model' },
           ],
           [
             { text: '⬅️ Back to Menu', callback_data: 'start:menu' },
@@ -4385,6 +4501,24 @@ export class TelegramHandler {
       case 'skill':
         await this.handleSkillCommand(chatId, []);
         break;
+      case 'pingmodels': {
+        await this.bot.sendMessage(chatId, '🏓 Pinging models... this may take up to 15s');
+        try {
+          const { pingAllModels, formatHealthReport } = await import('../openrouter/health');
+          const envVars: Record<string, string | undefined> = {
+            OPENROUTER_API_KEY: this.openrouterKey,
+            DEEPSEEK_API_KEY: this.deepseekKey,
+            ANTHROPIC_API_KEY: this.anthropicKey,
+            DASHSCOPE_API_KEY: this.dashscopeKey,
+            MOONSHOT_API_KEY: this.moonshotKey,
+          };
+          const report = await pingAllModels(this.openrouterKey, envVars);
+          await this.bot.sendMessage(chatId, formatHealthReport(report));
+        } catch (error) {
+          await this.bot.sendMessage(chatId, `❌ Health check failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        break;
+      }
 
       // === Skill shortcuts (no-argument commands) ===
       case 'ideas':
@@ -6056,6 +6190,7 @@ Each /orch next picks up where the last one left off.`;
       orchinit: '📋 Usage: /orch init <project description>\n\nExample:\n/orch init Build a user auth system with JWT and OAuth',
       img: '🎨 Usage: /img <prompt>\n\nExamples:\n/img a cat astronaut floating in space\n/img fluxmax a photorealistic mountain landscape at sunset',
       cfsearch: '🔍 Usage: /cf search <query>\n\nExamples:\n/cf search workers\n/cf search dns records',
+      curate: '📦 Usage: /curate <model-id> <alias>\n\nFetch model from OpenRouter and register with clean alias.\n\nExamples:\n/curate qwen/qwen3.5-397b-a17b qwen35\n/curate google/gemini-3.1-flash-lite-preview flashlite',
     };
     const text = hints[hint] || `Type the command with your input to get started.`;
     await this.bot.sendMessage(chatId, text);
@@ -6166,20 +6301,11 @@ Each /orch next picks up where the last one left off.`;
 /ping — Latency check
 
 ━━━ Models ━━━
-/models             — Smart overview with categories
-/pick <intent>      — Recommend models (coding/free/fast/orchestra/best/vision)
-/model              — Hub with recommended models
-/model list         — Full catalog with prices
-/model rank         — Capability/orchestra ranking
-/model <alias>      — Model details (e.g. /model sonnet)
-/model use <alias>  — Switch model
-/model search <q>   — Search all models (e.g. /model search nvidia)
-/model sync         — Fetch latest free models
-/model syncall      — Full catalog sync
-/model check        — Check for updates
-/model enrich       — Fetch benchmarks (Artificial Analysis)
-/model update       — Patch model without deploy
-/ping-models        — Health check all models (latency + failures)
+/models — Smart overview with category buttons
+/pick coding — Recommend best models (coding/free/fast/orchestra/best/vision)
+/curate <id> <alias> — Add model from OpenRouter with clean alias
+/pingmodels — Health check all models (latency + failures)
+/model — Hub · /model sonnet — Details · /model use deep — Switch
 Quick switch: /deep /grok /sonnet /flash /opus etc.
 
 ━━━ Costs & Credits ━━━
