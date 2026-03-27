@@ -1440,10 +1440,12 @@ export function formatModelsList(currentAlias?: string): string {
   return lines.join('\n');
 }
 
-// Keep old formatModelsList available as formatModelsListLegacy for /model list
+// Full catalog view — curated + dynamic only (no auto-synced flood)
 export function formatModelsListLegacy(): string {
   const lines: string[] = ['📋 Full Model Catalog\n'];
-  const all = Object.values(getAllModels()).filter(m => !m.isImageGen);
+  const all = Object.values(getAllModels()).filter(m =>
+    !m.isImageGen && (isCuratedModel(m.alias) || !isAutoSyncedModel(m.alias))
+  );
   const sortByRating = (a: ModelInfo, b: ModelInfo) => {
     const ra = computeRating(a);
     const rb = computeRating(b);
@@ -1471,6 +1473,11 @@ export function formatModelsListLegacy(): string {
   if (imageGen.length > 0) {
     lines.push('🎨 IMAGE GEN:');
     for (const m of imageGen) lines.push(`  /${m.alias} ${m.cost}`);
+  }
+
+  const autoSyncedCount = getAutoSyncedModelCount();
+  if (autoSyncedCount > 0) {
+    lines.push(`\n+${autoSyncedCount} auto-synced models — /model search <query> to find them`);
   }
 
   lines.push('\n★=quality · ✓=AA benchmarked · ?=unverified');
