@@ -40,7 +40,7 @@ export type ReasoningCapability = 'none' | 'fixed' | 'configurable' | 'mandatory
 
 // ── Star Rating System (v2) ──
 export type StarRating = 3 | 2 | 1 | 0;
-export type EvidenceLevel = 'verified' | 'unverified';
+export type EvidenceLevel = 'verified' | 'curated' | 'unverified';
 
 export interface ModelRating {
   stars: StarRating;
@@ -66,6 +66,7 @@ export function computeRating(model: ModelInfo): ModelRating {
   const hasAA = !!(model.intelligenceIndex || model.benchmarks?.coding);
   const iq = model.intelligenceIndex || 0;
   const coding = model.benchmarks?.coding || 0;
+  const isCurated = model.alias in MODELS;
 
   let stars: StarRating;
   if (iq >= 70 || coding >= 60) {
@@ -78,15 +79,36 @@ export function computeRating(model: ModelInfo): ModelRating {
     stars = 0;
   }
 
-  // Hard cap: unverified models cannot exceed ★☆☆
-  if (!hasAA && stars > 1) {
+  // For curated models without AA data, use SWE-Bench + capability signals
+  // to give a more informed rating than ★☆☆ for every single model.
+  if (!hasAA && isCurated) {
+    const sweMatch = (model.score || '').match(/(\d+(?:\.\d+)?)%\s*SWE/i);
+    const sweScore = sweMatch ? parseFloat(sweMatch[1]) : 0;
+    const hasStrongCaps = model.supportsTools && model.parallelCalls && model.structuredOutput;
+    const hasLargeContext = (model.maxContext || 0) >= 200000;
+
+    if (sweScore >= 70 || (hasStrongCaps && hasLargeContext && sweScore >= 50)) {
+      stars = Math.max(stars, 2) as StarRating; // ★★☆ for proven curated models
+    } else if (sweScore >= 40 || (hasStrongCaps && (model.maxContext || 0) >= 128000)) {
+      stars = Math.max(stars, 1) as StarRating; // ★☆☆ for decent curated models
+    }
+  }
+
+  // Hard cap: auto-synced models without AA data cannot exceed ★☆☆
+  if (!hasAA && !isCurated && stars > 1) {
     stars = 1;
   }
 
-  return {
-    stars,
-    evidence: hasAA ? 'verified' : 'unverified',
-  };
+  let evidence: EvidenceLevel;
+  if (hasAA) {
+    evidence = 'verified';
+  } else if (isCurated) {
+    evidence = 'curated';
+  } else {
+    evidence = 'unverified';
+  }
+
+  return { stars, evidence };
 }
 
 /** Format star rating as visual stars string */
@@ -99,9 +121,12 @@ export function formatStars(stars: StarRating): string {
   }
 }
 
-/** Format rating as "★★★ ✓" or "★☆☆ ?" */
+/** Format rating as "★★★ ✓" or "★★☆ ⚙" or "★☆☆ ?" */
 export function formatRating(rating: ModelRating): string {
-  return `${formatStars(rating.stars)} ${rating.evidence === 'verified' ? '✓' : '?'}`;
+  const badge = rating.evidence === 'verified' ? '✓'
+    : rating.evidence === 'curated' ? '⚙'
+    : '?';
+  return `${formatStars(rating.stars)} ${badge}`;
 }
 
 /**
@@ -490,9 +515,9 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     maxContext: 196608,
   },
-  'm2.5': {
+  m25: {
     id: 'minimax/minimax-m2.5',
-    alias: 'm2.5',
+    alias: 'm25',
     name: 'MiniMax M2.5',
     specialty: 'Paid Agentic/Office/Coding (Legacy)',
     score: '80.2% SWE-Bench, 1M context, cross-env agents',
@@ -1542,8 +1567,18 @@ function pickTopModels(models: ModelInfo[], n: number): ModelInfo[] {
   return models
     .map(m => ({ m, rating: computeRating(m) }))
     .sort((a, b) => {
-      // Sort by stars desc, then intelligence index desc, then coding desc
+      // 1. Curated/dynamic models always before auto-synced
+      const aCurated = isCuratedModel(a.m.alias) || !isAutoSyncedModel(a.m.alias);
+      const bCurated = isCuratedModel(b.m.alias) || !isAutoSyncedModel(b.m.alias);
+      if (aCurated !== bCurated) return aCurated ? -1 : 1;
+      // 2. Sort by stars desc
       if (b.rating.stars !== a.rating.stars) return b.rating.stars - a.rating.stars;
+      // 3. Evidence: verified > curated > unverified
+      const evidenceOrder = { verified: 0, curated: 1, unverified: 2 };
+      const aEv = evidenceOrder[a.rating.evidence];
+      const bEv = evidenceOrder[b.rating.evidence];
+      if (aEv !== bEv) return aEv - bEv;
+      // 4. Intelligence index desc, then coding desc
       const aIQ = a.m.intelligenceIndex || 0;
       const bIQ = b.m.intelligenceIndex || 0;
       if (bIQ !== aIQ) return bIQ - aIQ;
@@ -1638,7 +1673,7 @@ export function formatModelsList(currentAlias?: string): string {
   const autoSyncedCount = getAutoSyncedModelCount();
   lines.push(`${totalCount} models available${autoSyncedCount > 0 ? ` (${autoSyncedCount} auto-synced)` : ''}`);
   lines.push('/pick <task> for recs · /model <alias> for details');
-  lines.push('★=quality · ✓=AA benchmarked · ?=unverified');
+  lines.push('★=quality · ✓=AA verified · ⚙=curated · ?=auto-synced');
 
   return lines.join('\n');
 }
@@ -1683,7 +1718,7 @@ export function formatModelsListLegacy(): string {
     lines.push(`\n+${autoSyncedCount} auto-synced models — /model search <query> to find them`);
   }
 
-  lines.push('\n★=quality · ✓=AA benchmarked · ?=unverified');
+  lines.push('\n★=quality · ✓=AA verified · ⚙=curated · ?=auto-synced');
   return lines.join('\n');
 }
 
@@ -1829,7 +1864,7 @@ export function formatModelRanking(): string {
     lines.push('');
   }
 
-  lines.push('★=quality · ✓=AA benchmarked · ?=unverified');
+  lines.push('★=quality · ✓=AA verified · ⚙=curated · ?=auto-synced');
   lines.push('/model <alias> for details · /pick <task> for recs');
 
   return lines.join('\n');
