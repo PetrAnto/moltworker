@@ -1358,7 +1358,8 @@ function pickTopModels(models: ModelInfo[], n: number): ModelInfo[] {
 
 /**
  * Format models list for /models command — v2 compact category view.
- * Shows top 3-4 models per category with star ratings and capability words.
+ * Shows top models per category with star ratings and capability words.
+ * Deduplicates across categories so the same model doesn't appear twice.
  * Buttons for drilling into categories are added by the handler.
  */
 export function formatModelsList(currentAlias?: string): string {
@@ -1372,63 +1373,68 @@ export function formatModelsList(currentAlias?: string): string {
     lines.push('🤖 Models\n');
   }
 
-  const all = Object.values(getAllModels()).filter(m => !m.isImageGen);
+  const all = Object.values(getAllModels()).filter(m => !m.isImageGen && m.alias !== 'auto');
 
-  // Category: Top Free
-  const freeModels = all.filter(m => m.isFree && m.supportsTools);
-  const topFree = pickTopModels(freeModels, 4);
-  if (topFree.length > 0) {
-    lines.push('🆓 Top Free:');
-    for (const m of topFree) lines.push(formatModelEntry(m));
+  // Track shown model IDs to avoid repeats across categories
+  const shown = new Set<string>();
+  const addCategory = (title: string, models: ModelInfo[], max: number) => {
+    const fresh = models.filter(m => !shown.has(m.id.toLowerCase()));
+    if (fresh.length === 0) return;
+    const display = fresh.slice(0, max);
+    lines.push(title);
+    for (const m of display) {
+      lines.push(formatModelEntry(m));
+      shown.add(m.id.toLowerCase());
+    }
     lines.push('');
-  }
+  };
 
-  // Category: Best for Coding
+  // Category: Top Free (with tools)
+  const freeModels = pickTopModels(all.filter(m => m.isFree && m.supportsTools), 5);
+  addCategory('🆓 Top Free:', freeModels, 5);
+
+  // Category: Best Value — paid models under $2/M output, sorted by quality then cost
+  const valueCandidates = all.filter(m => !m.isFree && m.supportsTools && parseCostForSort(m.cost) > 0);
+  const bestValue = [...valueCandidates]
+    .sort((a, b) => {
+      // Sort by stars desc, then by cost asc (best value = high quality + low cost)
+      const ra = computeRating(a);
+      const rb = computeRating(b);
+      if (rb.stars !== ra.stars) return rb.stars - ra.stars;
+      return parseCostForSort(a.cost) - parseCostForSort(b.cost);
+    })
+    .slice(0, 8);
+  addCategory('💰 Best Value:', bestValue, 5);
+
+  // Category: Best for Coding — models with coding capability
   const codingCandidates = all.filter(m => {
     const lower = (m.specialty + ' ' + m.score + ' ' + m.name).toLowerCase();
-    return m.supportsTools && (/cod(ing|er)|swe-bench|program/i.test(lower) || (m.benchmarks?.coding && m.benchmarks.coding >= 40));
+    return m.supportsTools && !m.isFree && (
+      /cod(ing|er)|swe-bench|program|agentic/i.test(lower) ||
+      (m.benchmarks?.coding && m.benchmarks.coding >= 40) ||
+      m.orchestraReady
+    );
   });
-  const topCoding = pickTopModels(codingCandidates, 3);
-  if (topCoding.length > 0) {
-    lines.push('💻 Best for Coding:');
-    for (const m of topCoding) lines.push(formatModelEntry(m));
-    lines.push('');
-  }
+  const topCoding = pickTopModels(codingCandidates, 5);
+  addCategory('💻 Best for Coding:', topCoding, 4);
 
-  // Category: Best for Orchestra
-  const orchestraCandidates = all.filter(m => m.orchestraReady);
-  const topOrchestra = pickTopModels(orchestraCandidates, 3);
-  if (topOrchestra.length > 0) {
-    lines.push('🎼 Best for Orchestra:');
-    for (const m of topOrchestra) lines.push(formatModelEntry(m));
-    lines.push('');
-  }
+  // Category: Best for Orchestra — agentic multi-step tasks
+  const orchestraCandidates = all.filter(m => m.orchestraReady && !m.isFree);
+  const topOrchestra = pickTopModels(orchestraCandidates, 5);
+  addCategory('🎼 Best for Orchestra:', topOrchestra, 3);
 
-  // Category: Fastest
+  // Category: Fast — models with speed data or known to be fast
   const fastCandidates = all.filter(m => m.supportsTools && m.benchmarks?.speedTps);
   const topFast = [...fastCandidates]
     .sort((a, b) => (b.benchmarks?.speedTps || 0) - (a.benchmarks?.speedTps || 0))
-    .slice(0, 3);
-  if (topFast.length > 0) {
-    lines.push('⚡ Fastest:');
-    for (const m of topFast) lines.push(formatModelEntry(m));
-    lines.push('');
-  }
-
-  // Category: Premium (highest quality)
-  const premiumCandidates = all.filter(m => !m.isFree && (m.intelligenceIndex || 0) >= 60);
-  const topPremium = pickTopModels(premiumCandidates, 3);
-  if (topPremium.length > 0) {
-    lines.push('💎 Premium (highest quality):');
-    for (const m of topPremium) lines.push(formatModelEntry(m));
-    lines.push('');
-  }
+    .slice(0, 5);
+  addCategory('⚡ Fastest:', topFast, 3);
 
   // Summary
   const totalCount = Object.values(getAllModels()).length;
   const autoSyncedCount = getAutoSyncedModelCount();
   lines.push(`${totalCount} models available${autoSyncedCount > 0 ? ` (${autoSyncedCount} auto-synced)` : ''}`);
-  lines.push('/pick <task> for recommendations · /model <alias> for details');
+  lines.push('/pick <task> for recs · /model <alias> for details');
   lines.push('★=quality · ✓=AA benchmarked · ?=unverified');
 
   return lines.join('\n');
@@ -2439,28 +2445,34 @@ export function getPickRecommendations(intent: PickIntent): ModelInfo[] {
       return pickTopModels(candidates, 4);
 
     case 'coding': {
+      // Broad: any model with tools that's good for coding
+      // Include models with coding keywords, high coding benchmarks, orchestraReady, or structured output
       const codingModels = all.filter(m => {
+        if (!m.supportsTools) return false;
         const lower = (m.specialty + ' ' + m.score + ' ' + m.name).toLowerCase();
-        return m.supportsTools && (/cod(ing|er)|swe-bench|program/i.test(lower) || (m.benchmarks?.coding && m.benchmarks.coding >= 40));
+        return /cod(ing|er)|swe-bench|program|agentic|multi-file/i.test(lower)
+          || (m.benchmarks?.coding && m.benchmarks.coding >= 30)
+          || m.orchestraReady
+          || (m.structuredOutput && m.parallelCalls);
       });
-      return pickTopModels(codingModels, 3);
+      return pickTopModels(codingModels, 4);
     }
 
     case 'fast': {
       const fastModels = all.filter(m => m.supportsTools && m.benchmarks?.speedTps);
       return [...fastModels]
         .sort((a, b) => (b.benchmarks?.speedTps || 0) - (a.benchmarks?.speedTps || 0))
-        .slice(0, 3);
+        .slice(0, 4);
     }
 
     case 'orchestra':
       candidates = all.filter(m => m.orchestraReady);
-      return pickTopModels(candidates, 3);
+      return pickTopModels(candidates, 4);
 
     case 'creative':
       // Creative = high intelligence, not necessarily coding-focused
-      candidates = all.filter(m => m.supportsTools && (m.intelligenceIndex || 0) >= 45);
-      return pickTopModels(candidates, 3);
+      candidates = all.filter(m => m.supportsTools && ((m.intelligenceIndex || 0) >= 45 || m.structuredOutput));
+      return pickTopModels(candidates, 4);
 
     case 'cheap': {
       // Cheapest paid models with decent quality (★☆☆ or higher with tools)
