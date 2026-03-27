@@ -267,10 +267,10 @@ describe('getModel fuzzy matching', () => {
     expect(model!.id).toBe('anthropic/claude-sonnet-4.6');
   });
 
-  it('fuzzy: suffix match (sonnet46 → claude-sonnet-46)', () => {
+  it('fuzzy: suffix match (sonnet46 → claude-sonnet-4-6)', () => {
     const model = getModel('sonnet46');
     expect(model).toBeDefined();
-    expect(model!.id).toBe('anthropic/claude-sonnet-4.6');
+    expect(model!.id).toBe('anthropic/claude-sonnet-4-6');
   });
 
   it('fuzzy: prefix match (claudesonnet → claude-sonnet-46)', () => {
@@ -312,7 +312,7 @@ describe('getModel fuzzy matching', () => {
   it('case insensitive fuzzy matching', () => {
     const model = getModel('Sonnet46');
     expect(model).toBeDefined();
-    expect(model!.id).toBe('anthropic/claude-sonnet-4.6');
+    expect(model!.id).toBe('anthropic/claude-sonnet-4-6');
   });
 
   afterAll(() => {
@@ -678,8 +678,8 @@ describe('formatModelRanking', () => {
   it('shows legend', () => {
     const rank = formatModelRanking();
     expect(rank).toContain('★=quality');
-    expect(rank).toContain('✓=AA benchmarked');
-    expect(rank).toContain('?=unverified');
+    expect(rank).toContain('✓=AA verified');
+    expect(rank).toContain('?=auto-synced');
   });
 
   it('includes star ratings', () => {
