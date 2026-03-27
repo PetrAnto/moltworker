@@ -397,25 +397,35 @@ if (process.env.NVIDIA_NIM_API_KEY) {
         api: 'openai-completions',
         models: [
             { id: 'nvidia/llama-3.1-nemotron-ultra-253b-v1', name: 'Nemotron Ultra 253B', contextWindow: 131072, maxTokens: 8192 },
-            { id: 'nvidia/llama-3.3-nemotron-super-49b-v1', name: 'Nemotron Super 49B', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', name: 'Nemotron Super 49B v1.5', contextWindow: 131072, maxTokens: 8192 },
             { id: 'nvidia/nemotron-3-super-120b-a12b', name: 'Nemotron 3 Super 120B', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'nvidia/nemotron-3-nano-30b-a3b', name: 'Nemotron 3 Nano 30B', contextWindow: 1048576, maxTokens: 8192 },
+            { id: 'nvidia/nvidia-nemotron-nano-9b-v2', name: 'Nemotron Nano 9B v2', contextWindow: 131072, maxTokens: 8192 },
             { id: 'deepseek-ai/deepseek-v3.2', name: 'DeepSeek V3.2 (NIM)', contextWindow: 131072, maxTokens: 8192 },
             { id: 'qwen/qwen3.5-122b-a10b', name: 'Qwen 3.5 122B', contextWindow: 131072, maxTokens: 8192 },
-            { id: 'z-ai/glm4_7', name: 'GLM-4.7', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'qwen/qwen3-coder-480b-a35b-instruct', name: 'Qwen3 Coder 480B', contextWindow: 262144, maxTokens: 8192 },
+            { id: 'qwen/qwen3.5-397b-a17b', name: 'Qwen 3.5 397B', contextWindow: 262144, maxTokens: 8192 },
+            { id: 'z-ai/glm5', name: 'GLM-5', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'moonshotai/kimi-k2-instruct', name: 'Kimi K2 Instruct', contextWindow: 262144, maxTokens: 8192 },
             { id: 'mistralai/devstral-2-123b-instruct-2512', name: 'Devstral 2 123B', contextWindow: 131072, maxTokens: 8192 },
         ],
     };
 
     config.agents.defaults.models = config.agents.defaults.models || {};
     config.agents.defaults.models['nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1'] = { alias: 'nemotron' };
-    config.agents.defaults.models['nvidia/nvidia/llama-3.3-nemotron-super-49b-v1'] = { alias: 'super49' };
+    config.agents.defaults.models['nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5'] = { alias: 'super49' };
     config.agents.defaults.models['nvidia/nvidia/nemotron-3-super-120b-a12b'] = { alias: 'nemo3' };
+    config.agents.defaults.models['nvidia/nvidia/nemotron-3-nano-30b-a3b'] = { alias: 'nemonano' };
+    config.agents.defaults.models['nvidia/nvidia/nvidia-nemotron-nano-9b-v2'] = { alias: 'nemo9b' };
     config.agents.defaults.models['nvidia/deepseek-ai/deepseek-v3.2'] = { alias: 'dsnv' };
     config.agents.defaults.models['nvidia/qwen/qwen3.5-122b-a10b'] = { alias: 'qwennv' };
-    config.agents.defaults.models['nvidia/z-ai/glm4_7'] = { alias: 'glm' };
+    config.agents.defaults.models['nvidia/qwen/qwen3-coder-480b-a35b-instruct'] = { alias: 'qwencodernv' };
+    config.agents.defaults.models['nvidia/qwen/qwen3.5-397b-a17b'] = { alias: 'qwen35nv' };
+    config.agents.defaults.models['nvidia/z-ai/glm5'] = { alias: 'glm5nv' };
+    config.agents.defaults.models['nvidia/moonshotai/kimi-k2-instruct'] = { alias: 'kiminv' };
     config.agents.defaults.models['nvidia/mistralai/devstral-2-123b-instruct-2512'] = { alias: 'devnv' };
 
-    console.log('NVIDIA NIM: 7 free models registered (nemotron, super49, nemo3, dsnv, qwennv, glm, devnv)');
+    console.log('NVIDIA NIM: 12 free models registered (nemotron, super49, nemo3, nemonano, nemo9b, dsnv, qwennv, qwencodernv, qwen35nv, glm5nv, kiminv, devnv)');
 }
 
 // Write updated config
