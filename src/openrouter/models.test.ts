@@ -267,10 +267,11 @@ describe('getModel fuzzy matching', () => {
     expect(model!.id).toBe('anthropic/claude-sonnet-4.6');
   });
 
-  it('fuzzy: suffix match (sonnet46 → claude-sonnet-4-6)', () => {
+  it('fuzzy: suffix match (sonnet46 → claude-sonnet-46 auto-synced)', () => {
     const model = getModel('sonnet46');
     expect(model).toBeDefined();
-    expect(model!.id).toBe('anthropic/claude-sonnet-4-6');
+    // Matches auto-synced 'claude-sonnet-46' via normalized suffix match
+    expect(model!.id).toBe('anthropic/claude-sonnet-4.6');
   });
 
   it('fuzzy: prefix match (claudesonnet → claude-sonnet-46)', () => {
@@ -312,7 +313,7 @@ describe('getModel fuzzy matching', () => {
   it('case insensitive fuzzy matching', () => {
     const model = getModel('Sonnet46');
     expect(model).toBeDefined();
-    expect(model!.id).toBe('anthropic/claude-sonnet-4-6');
+    expect(model!.id).toBe('anthropic/claude-sonnet-4.6');
   });
 
   afterAll(() => {

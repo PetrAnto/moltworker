@@ -79,18 +79,34 @@ export function computeRating(model: ModelInfo): ModelRating {
     stars = 0;
   }
 
-  // For curated models without AA data, use SWE-Bench + capability signals
-  // to give a more informed rating than ★☆☆ for every single model.
+  // For curated models without AA data, use multiple signals to assign
+  // a more useful rating than ★☆☆ for every model.
   if (!hasAA && isCurated) {
     const sweMatch = (model.score || '').match(/(\d+(?:\.\d+)?)%\s*SWE/i);
     const sweScore = sweMatch ? parseFloat(sweMatch[1]) : 0;
-    const hasStrongCaps = model.supportsTools && model.parallelCalls && model.structuredOutput;
-    const hasLargeContext = (model.maxContext || 0) >= 200000;
+    const lower = (model.name + ' ' + model.id + ' ' + model.specialty).toLowerCase();
+    const ctx = model.maxContext || 0;
+    const cost = parseCostForSort(model.cost);
 
-    if (sweScore >= 70 || (hasStrongCaps && hasLargeContext && sweScore >= 50)) {
-      stars = Math.max(stars, 2) as StarRating; // ★★☆ for proven curated models
-    } else if (sweScore >= 40 || (hasStrongCaps && (model.maxContext || 0) >= 128000)) {
-      stars = Math.max(stars, 1) as StarRating; // ★☆☆ for decent curated models
+    // ★★★ for curated: known flagship models with premium pricing + strong capabilities
+    const isFlagship = /opus|gpt-?5\.4(?!.*nano|.*mini)|gemini.*3\.1.*pro|grok.*4\.20/i.test(lower);
+    if (isFlagship && model.supportsTools && cost >= 2) {
+      stars = Math.max(stars, 3) as StarRating;
+    }
+
+    // ★★☆ for curated: strong models identified by multiple signals
+    const isStrong =
+      sweScore >= 60 ||
+      /sonnet.*4\.6|claude.*sonnet|gpt-?5\.4|gemini.*flash|grok.*4|qwen.*3\.5.*(?:397|plus)|kimi.*k2\.5/i.test(lower) ||
+      (model.supportsTools && model.structuredOutput && ctx >= 200000) ||
+      (sweScore >= 40 && model.supportsTools);
+    if (isStrong) {
+      stars = Math.max(stars, 2) as StarRating;
+    }
+
+    // ★☆☆ minimum for curated models with tools + decent context
+    if (model.supportsTools && ctx >= 64000) {
+      stars = Math.max(stars, 1) as StarRating;
     }
   }
 
@@ -507,7 +523,7 @@ export const MODELS: Record<string, ModelInfo> = {
     alias: 'minimax',
     name: 'MiniMax M2.7',
     specialty: 'Paid Agentic/Office/Coding',
-    score: 'Latest MiniMax flagship, 1M context',
+    score: 'Latest MiniMax flagship, 1M context, successor to M2.5 (80.2% SWE)',
     cost: '$0.20/$1.10',
     supportsTools: true,
     parallelCalls: true,
@@ -515,19 +531,7 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     maxContext: 196608,
   },
-  m25: {
-    id: 'minimax/minimax-m2.5',
-    alias: 'm25',
-    name: 'MiniMax M2.5',
-    specialty: 'Paid Agentic/Office/Coding (Legacy)',
-    score: '80.2% SWE-Bench, 1M context, cross-env agents',
-    cost: '$0.20/$1.10',
-    supportsTools: true,
-    parallelCalls: true,
-    reasoning: 'fixed',
-    structuredOutput: true,
-    maxContext: 196608,
-  },
+  // m25 (MiniMax M2.5) removed — superseded by minimax (M2.7) at same price
   grok: {
     id: 'x-ai/grok-4.1-fast',
     alias: 'grok',
@@ -727,21 +731,7 @@ export const MODELS: Record<string, ModelInfo> = {
     reasoning: 'configurable',
     maxContext: 1000000,
   },
-  // gemini31pro alias → redirects to geminipro (both point to Gemini 3.1 Pro)
-  gemini31pro: {
-    id: 'google/gemini-3.1-pro-preview',
-    alias: 'gemini31pro',
-    name: 'Gemini 3.1 Pro',
-    specialty: 'Paid Frontier Reasoning/Agentic',
-    score: 'AA Index (57), top reasoning + SWE, 1M context',
-    cost: '$2/$12',
-    supportsVision: true,
-    supportsTools: true,
-    parallelCalls: true,
-    structuredOutput: true,
-    reasoning: 'configurable',
-    maxContext: 1048576,
-  },
+  // gemini31pro removed — duplicate of geminipro (same model ID)
   deepspeciale: {
     id: 'deepseek/deepseek-v3.2-speciale',
     alias: 'deepspeciale',
@@ -955,21 +945,7 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 1048576,
   },
 
-  // --- OpenRouter: Claude Sonnet 4.6 (distinct from direct sonnet) ---
-  sonnet46: {
-    id: 'anthropic/claude-sonnet-4-6',
-    alias: 'sonnet46',
-    name: 'Claude Sonnet 4.6',
-    specialty: 'Latest Claude — adaptive thinking, 1M context',
-    score: 'Sonnet 4.6 release, advanced reasoning + tool use',
-    cost: '$3/$15',
-    supportsTools: true,
-    supportsVision: true,
-    reasoning: 'configurable',
-    structuredOutput: true,
-    parallelCalls: true,
-    maxContext: 1000000,
-  },
+  // sonnet46 removed — duplicate of sonnetrouter (same model ID)
 
   // --- DashScope Direct: Qwen 3.5 ---
   q35plus: {
