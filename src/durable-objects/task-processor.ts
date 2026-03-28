@@ -56,18 +56,39 @@ function isSimpleQuery(messages: ChatMessage[]): boolean {
   // Skip plan-phase injection messages
   if (text.includes('[PLANNING PHASE]')) return false;
 
-  // Short messages (under 150 chars) that are conversational/lookup are simple
   const trimmed = text.trim();
+
+  // Check for multi-step coding indicators
+  const complexPatterns = /\b(implement|refactor|create .+ (app|project|service)|build .+ (system|feature)|write .+ (test|code)|debug|fix .+ (bug|issue)|review .+ (code|pr)|analyze .+ (codebase|repo))\b/i;
+  // Repo-analysis queries require reading multiple files — must go through planning phase
+  // to pre-declare which files to read instead of reactive discovery loops
+  const repoAnalysisPatterns = /\b(top \d+ .*(files?|modules?|components?)|most important .*(files?|parts?)|summarize .*(repo|codebase|project)|overview .*(repo|codebase|project)|architecture|codebase structure|key files?)\b/i;
+
+  // Short messages (under 150 chars) that are conversational/lookup are simple
   if (trimmed.length < 150) {
-    // Check for multi-step coding indicators
-    const complexPatterns = /\b(implement|refactor|create .+ (app|project|service)|build .+ (system|feature)|write .+ (test|code)|debug|fix .+ (bug|issue)|review .+ (code|pr)|analyze .+ (codebase|repo))\b/i;
-    // Repo-analysis queries require reading multiple files — must go through planning phase
-    // to pre-declare which files to read instead of reactive discovery loops
-    const repoAnalysisPatterns = /\b(top \d+ .*(files?|modules?|components?)|most important .*(files?|parts?)|summarize .*(repo|codebase|project)|overview .*(repo|codebase|project)|architecture|codebase structure|key files?)\b/i;
     if (!complexPatterns.test(trimmed) && !repoAnalysisPatterns.test(trimmed)) {
       return true;
     }
   }
+
+  // Long messages without coding task indicators are conversational — skip planning.
+  // Planning mode only helps when the model needs to read/edit files in a repo.
+  // If the message doesn't reference coding actions, file paths, or repo work,
+  // it's a discussion/analysis message that should get a direct response.
+  if (trimmed.length >= 150) {
+    const hasCodingTask = complexPatterns.test(trimmed) || repoAnalysisPatterns.test(trimmed);
+    // Check for explicit file/repo references that indicate code work
+    const hasFileReferences = /\b(src\/|\.tsx?|\.jsx?|\.py|\.rs|\.go|\.vue|\.svelte|package\.json|tsconfig|\.config\.|README|CHANGELOG)\b/.test(trimmed);
+    const hasRepoActions = /\b(commit|push|pull request|PR|merge|branch|deploy|migration|endpoint|API route|database|schema)\b/i.test(trimmed);
+    const hasCodeBlocks = /```[\s\S]*```/.test(trimmed);
+    // Explicit repo context (e.g. "in the repo", "in the codebase", "in this project")
+    const hasRepoContext = /\b(in (the|this|my|our) (repo|codebase|project)|github\.com\/)\b/i.test(trimmed);
+
+    if (!hasCodingTask && !hasFileReferences && !hasRepoActions && !hasCodeBlocks && !hasRepoContext) {
+      return true;
+    }
+  }
+
   return false;
 }
 const REVIEW_PHASE_PROMPT = 'Before delivering your final answer, briefly verify: (1) Did you answer the complete question? (2) Are all data points current and accurate? (3) Is anything missing?';
