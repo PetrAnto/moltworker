@@ -9,17 +9,30 @@
 
 | Sprint | Repo | Effort | Depends On | Status | Branch Pattern | Owner |
 |---|---|---:|---|---|---|---|
-| W7-S1 Pricing Rewrite | ai-hub | 13h | -- | TODO | `claude/w7-s1-pricing-rewrite-<id>` | Claude Code |
-| W7-S2 Feature Gates | ai-hub | 4h | S1 | TODO | `claude/w7-s2-feature-gates-<id>` | Claude Code |
-| W7-S3 Flywheel Schema | ai-hub | 5h | -- | TODO | `claude/w7-s3-flywheel-schema-<id>` | Claude Code |
-| W7-S4 Flywheel Logic | ai-hub | 8h | S3 | TODO | `claude/w7-s4-flywheel-logic-<id>` | Claude Code |
-| W7-S5 Project Backend | ai-hub | 12h | S2 (for limits) | TODO | `claude/w7-s5-project-backend-<id>` | Claude Code |
-| W7-S6 Chat Project UI | ai-hub | 6h | S5 | TODO | `claude/w7-s6-chat-project-ui-<id>` | Claude Code |
+| W7-S1 Pricing Rewrite | ai-hub | 13h | -- | SHIPPED | merged | Claude Code |
+| W7-S2 Feature Gates | ai-hub | 4h | S1 | SHIPPED | merged | Claude Code |
+| W7-S3 Flywheel Schema | ai-hub | 5h | -- | SHIPPED | merged | Claude Code |
+| W7-S4 Flywheel Logic | ai-hub | 8h | S3 | SHIPPED (with post-merge fixes #672,#680) | merged | Claude Code |
+| W7-S5 Project Backend | ai-hub | 12h | S2 (for limits) | SHIPPED (with post-merge fixes #672,#683) | merged | Claude Code |
+| W7-S6 Chat Project UI | ai-hub | 6h | S5 | SHIPPED (with post-merge fixes #683,#685) | merged | Claude Code |
+| **W7-S5-CAPA** | **ai-hub** | **~13-16h** | **S1-S6** | **TODO — BLOCKING** | `claude/w7-capa-<id>` | **Claude Code** |
 | W7-M1 Lyra Media | moltworker | 11h | -- | TODO | `claude/w7-m1-lyra-media-<id>` | Claude Code |
 | W7-M2 Integration Tests | moltworker | 3h | M1 | TODO | `claude/w7-m2-integration-tests-<id>` | Claude Code |
 | W7-M3 Deploy Prep | moltworker | 3h | M1+M2 | TODO | `claude/w7-m3-deploy-prep-<id>` | Claude Code |
 
-**Total estimated effort**: ~65h across 9 sprints.
+### Real Status (Updated 2026-03-29 post-audit)
+
+```
+Wave 7 ai-hub core:  SHIPPED (S1-S4 + S6 with post-merge fixes)
+Sprint 5 collective:  SCAFFOLDED — engine missing, consent broken
+CAPA sprint:          TODO — 6 corrective actions blocking "complete"
+Moltworker M1-M3:    TODO — not started
+```
+
+**WARNING**: PR #686 claimed "WAVE 7 COMPLETE" but this is premature.
+See [`W7_CAPA_SPRINT.md`](./W7_CAPA_SPRINT.md) for detailed corrective actions.
+
+**Remaining effort**: ~27-30h (CAPA ~13-16h + M1-M3 ~17h).
 
 ---
 
