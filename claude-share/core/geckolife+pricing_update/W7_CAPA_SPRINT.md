@@ -44,17 +44,22 @@ Moltworker (M1-M3): TODO — not started
 ## CAPA-2: Dedicated Collective Consent Storage
 
 **Severity**: Critical (privacy)
-**Problem**: Route `/api/coaching/collective/opt-in` stores consent by reusing `morning_brief_prefs.include_sitmon` as a proxy. This creates a collision between content preference and privacy consent when SitMon is wired to morning brief.
+**Problem**: Route `/api/coaching/collective/opt-in` (at `src/app/api/coaching/collective/opt-in/route.ts`) stores consent by reusing `morning_brief_prefs.include_sitmon` as a proxy. The `morning_brief_prefs` table (migration `0017_knowledge_flywheel.sql`) has `includeSitmon` which is semantically a content preference, not a privacy consent flag.
+
+**Confirmed ai-hub state**:
+- Table `morning_brief_prefs` exists (migration 0017)
+- Route `src/app/api/coaching/collective/opt-in/` exists with GET/PUT
+- `includeSitmon` field is the proxy — confirmed in `MorningBrief` component
+- No dedicated consent table or column exists
 
 **Required deliverables**:
-1. D1 migration: add dedicated consent storage
-   - Option A: new column `collective_opt_in BOOLEAN DEFAULT FALSE` + `collective_opt_in_at DATETIME` on user prefs table
-   - Option B: new table `collective_consent` (`user_id`, `opted_in`, `consented_at`, `revoked_at`)
-   - Option B preferred for audit trail
-2. Update `/api/coaching/collective/opt-in` route to use new storage
-3. Remove `includeSitmon` proxy usage for consent
-4. Default value: `false` (opt-in, not opt-out)
-5. Store consent timestamp and revocation timestamp
+1. D1 migration `0020_collective_consent.sql`: new table `collective_consent` (`user_id TEXT PRIMARY KEY`, `opted_in INTEGER DEFAULT 0`, `consented_at TEXT`, `revoked_at TEXT`)
+   - Option B (dedicated table) preferred over column for audit trail
+2. Add Drizzle schema + Zod validator in `src/lib/schema.ts` (currently ~40 sqliteTable definitions)
+3. Update `src/app/api/coaching/collective/opt-in/route.ts` to use new table
+4. Remove `includeSitmon` proxy usage for consent
+5. Default value: `false` (opt-in, not opt-out)
+6. Store consent timestamp and revocation timestamp
 
 **Tests required**:
 - opt-in creates consent record with timestamp
@@ -75,24 +80,40 @@ Moltworker (M1-M3): TODO — not started
 **Severity**: High (functional completeness)
 **Problem**: Sprint 5 delivered only scaffolding (`analytics-types.ts`, opt-in route, `VECTORIZE_SHARED` binding, 6 client instrumentation points). The actual engine is missing.
 
+**Confirmed ai-hub state**:
+- `src/lib/analytics-types.ts` exists (typed EventMap + `trackCoachingEvent()`)
+- `src/app/api/coaching/collective/opt-in/` exists (GET/PUT) — but uses `includeSitmon` proxy
+- `VECTORIZE_SHARED` binding declared in `wrangler.jsonc` — but index `storia-collective` **NOT created** in Cloudflare
+- `src/lib/providers/embedding.ts` exists (bge-m3) — can be reused for shared writes
+- `src/lib/coaching/` has: proposal-engine.ts, morning-brief.ts, embed-on-save.ts, auto-extract.ts, knowledge-context.ts, tag-extraction.ts
+- `src/lib/coaching/collective-intelligence.ts` does **NOT exist**
+- No Sprint 5 test files were added in PR #686
+
 **Missing deliverables** (from spec `12-ANALYTICS-COLLECTIVE.md`):
 
 1. **`src/lib/coaching/collective-intelligence.ts`** — the core engine:
    - Write anonymized embeddings to `VECTORIZE_SHARED` index on knowledge save (if Pro + opted-in)
+   - Reuse existing `src/lib/providers/embedding.ts` (bge-m3) for vectorization
+   - Hook into existing `src/lib/coaching/embed-on-save.ts` flow (currently writes to `VECTORIZE` only)
    - Metadata must be strictly anonymized: allowlist only (`tags`, `knowledgeType`, reuse aggregates)
    - NO `userId`, `title`, `content` in shared metadata
    - Delete user's shared vectors on opt-out (real deletion, not soft)
-   - Community pattern detector: query shared index for similar patterns
-   - Proposal injection: surface community patterns as coaching proposals
+   - Community pattern detector: query `VECTORIZE_SHARED` for similar patterns
+   - Proposal injection: surface community patterns via existing `src/lib/coaching/proposal-engine.ts` (currently 3 types; add `community_pattern` as 4th)
 
 2. **PostHog instrumentation alignment**:
    - Spec defined: `morning_brief_viewed` with `task_matches` + `sitmon_connections`
    - Implementation delivered: `task_count` + `capture_count` via `analytics-types.ts`
    - Action: reconcile — either update code to match spec or version the spec with rationale
+   - Existing PostHog SDK: `posthog 1.352.0` already in dependencies
 
 3. **Neuron event journaling**:
-   - `neurons.*` events emitted at all required touchpoints
-   - Daily neuron rollups available
+   - `src/lib/providers/neuron-estimator.ts` exists (10K/day budget)
+   - `workers_ai_neuron_log` table exists (migration 0019)
+   - `neurons.*` events need to be emitted at all required touchpoints
+   - Daily neuron rollups need an aggregation endpoint
+
+4. **HUMAN BLOCKER**: `storia-collective` Vectorize index must be created by PetrAnto before CAPA-3 can be tested
 
 **Tests required**:
 - Anonymized write to shared index: assert NO PII in metadata payload
@@ -114,6 +135,7 @@ Moltworker (M1-M3): TODO — not started
 ## CAPA-4: Fix LifePanel Proposal Accept/Dismiss Bug
 
 **Severity**: High (data integrity + UX)
+**Confirmed location**: Component likely in `src/components/coaching/` (LifePanel or proposal-related component). API endpoint at `src/app/api/coaching/proposals/` (PATCH). Coaching store at `src/store/coaching-store.ts`.
 **Problem**: In `LifePanel`, proposal accept/dismiss action:
 1. Sends PATCH request
 2. Does NOT check `resp.ok`

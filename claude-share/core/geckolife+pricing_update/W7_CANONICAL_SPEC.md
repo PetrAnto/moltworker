@@ -55,15 +55,17 @@ If both are unclear, log decision in sprint PR under **"Spec Decision Notes"** w
 
 Wave 7 is split into 9 sprint units across 2 repos:
 
-### ai-hub track (S1-S6)
-- S1: Pricing rewrite (2-tier Free/Pro)
-- S2: Feature gates (module/gecko/vault/project limits)
-- S3: Flywheel schema (D1 tables + Drizzle/Zod)
-- S4: Flywheel logic (quality gate + GeScore v2 + proposals)
-- S5: Project backend (CRUD + transfer + limits)
-- S6: Chat-only project UI (selector + context + save)
+### ai-hub track (S1-S6) — CONFIRMED STATE (2026-03-29)
+- S1: Pricing rewrite — **COMPLETE** (`Tier = 'free' | 'pro'`, key-based LLM routing, no deep mode)
+- S2: Feature gates — **COMPLETE** (`feature-gates.ts`, `useFeatureGate.ts`, 403 enforcement)
+- S3: Flywheel schema — **COMPLETE** (20 migrations, all tables, Drizzle/Zod parity)
+- S4: Flywheel logic — **SHIPPED** (3/6 proposal types, GeScore v2, quality gate, post-fix #680)
+- S5: Project backend — **SHIPPED** (hub-projects 10 endpoints, Zustand store, post-fix #672)
+- S6: Chat Project UI — **SHIPPED** (ProjectSelector, SaveToProject, ContextCards, post-fix #683/#685)
+- Sprint 5 Collective — **SCAFFOLDED** (analytics-types + opt-in route only; engine missing)
+- **CAPA Sprint** — **TODO** (6 corrective actions, ~13-16h; see [`W7_CAPA_SPRINT.md`](./W7_CAPA_SPRINT.md))
 
-### moltworker track (M1-M3)
+### moltworker track (M1-M3) — NOT STARTED
 - M1: Lyra media extension (image_brief + video_brief)
 - M2: Integration/smoke tests (/simulate coverage)
 - M3: Deploy prep + sync docs
