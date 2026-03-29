@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-25 (S0+S1+S2+S3+S3.7 complete, ST smoke tests next)
+**Last Updated:** 2026-03-29 (ST smoke tests still next; geckolife/pricing spec pack added for future parallel stream)
 
 ---
 
@@ -30,6 +30,7 @@ All Gecko Skills phases are complete (S0 runtime, S1 Lyra, S2 Spark, S3 Nexus + 
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-29 | geckolife+pricing deep spec pack | Codex (GPT-5.3-Codex) | Reviewed all files in `claude-share/core/geckolife+pricing_update/`; created `CLAUDE_CODE_MASTER_SPEC.md`, `CLAUDE_CODE_EXECUTION_ROADMAP.md`, `CLAUDE_CODE_FOLLOWUP_FILES.md`. |
 | 2026-03-25 | S3.7 DO extension | Claude Opus 4.6 | Async /dossier dispatch to TaskProcessor DO. 4 new tests (2573 total). |
 | 2026-03-25 | S3 Nexus research | Claude Opus 4.6 | /research, /dossier. KV cache, 8 source fetchers, evidence model. 33 new tests (2569 total). |
 | 2026-03-25 | S2 Spark brainstorm | Claude Opus 4.6 | /save, /spark, /gauntlet, /brainstorm, /ideas. 31 new tests (2534 total). |

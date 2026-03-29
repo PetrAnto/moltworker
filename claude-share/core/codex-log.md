@@ -5,6 +5,40 @@
 ---
 
 
+
+## Session: 2026-03-29 | Deep review geckolife+pricing_update specs (Session: codex-geckolife-spec-pack-001)
+
+**AI:** Codex (GPT-5.3-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Completed a deep review of every file in `claude-share/core/geckolife+pricing_update/` and produced a consolidated Claude Code delivery spec pack (master spec, execution roadmap, and follow-up templates).
+
+### Changes Made
+- Added one canonical master spec with conflict-resolution and hard implementation rules
+- Added an execution roadmap with explicit dependency ordering and parallelization lanes
+- Added follow-up file pack templates for PR evidence, manual actions, and post-sprint governance
+
+### Files Modified
+- `claude-share/core/geckolife+pricing_update/CLAUDE_CODE_MASTER_SPEC.md`
+- `claude-share/core/geckolife+pricing_update/CLAUDE_CODE_EXECUTION_ROADMAP.md`
+- `claude-share/core/geckolife+pricing_update/CLAUDE_CODE_FOLLOWUP_FILES.md`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] `npm test`
+- [x] `npm run typecheck`
+
+### Notes for Next Session
+Use `CLAUDE_CODE_MASTER_SPEC.md` as source-of-truth override when sprint prompt details conflict with architecture v1.1 docs.
+
+---
+
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

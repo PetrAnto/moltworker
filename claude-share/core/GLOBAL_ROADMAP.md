@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-25 (S3 Nexus research skill complete — Sprint 4 skills done)
+**Last Updated:** 2026-03-29 (Codex deep-reviewed geckolife+pricing_update and shipped Claude Code spec pack)
 
 ---
 
@@ -34,6 +34,11 @@
 | 🧪 | Needs Testing |
 
 ---
+
+## Changelog (Newest First)
+
+- 2026-03-29 | Codex (Session: codex-geckolife-spec-pack-001) | Deep review of every file in `claude-share/core/geckolife+pricing_update/`; added master execution spec pack for Claude Code delivery. | claude-share/core/geckolife+pricing_update/CLAUDE_CODE_MASTER_SPEC.md, claude-share/core/geckolife+pricing_update/CLAUDE_CODE_EXECUTION_ROADMAP.md, claude-share/core/geckolife+pricing_update/CLAUDE_CODE_FOLLOWUP_FILES.md
+
 
 ## Milestone Gates
 

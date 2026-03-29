@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-25 (S0+S1+S2+S3 complete — Sprint 4 skills done)
+**Last Updated:** 2026-03-29 (Codex delivered geckolife+pricing_update master spec pack)
 
 ---
 
@@ -62,7 +62,7 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | S0+S1+S2+S3+S3.7 complete (31 tasks, 2573 tests). PR review fixes applied. | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
-| Codex | — | — | — |
+| Codex | Deep review + spec synthesis for geckolife/pricing update docs | `work` | 2026-03-29 |
 | Other | — | — | — |
 
 ---
