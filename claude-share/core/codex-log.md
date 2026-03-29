@@ -107,3 +107,31 @@ Implement Phase 1 first: add centralized task router policy and resume model esc
 
 ---
 
+
+## Session: 2026-03-29 | Wave 7 geckolife+pricing deep review + canonical specs (Session: codex-wave7-specs-001)
+
+**AI:** Codex (GPT-5.3-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Performed a full-file review of all documents in `claude-share/core/geckolife+pricing_update` and produced canonical execution specs, roadmap, and follow-up file contract for Claude Code.
+
+### Changes Made
+- Added a canonical consolidated implementation spec linking all Wave 7 source docs and dependency gates.
+- Added an operational roadmap with milestone critical path and risk register.
+- Added explicit follow-up file requirements and PR schema for deterministic handoffs.
+- Updated folder index with direct links to the new canonical docs and noted the empty `i` anomaly.
+
+### Files Modified
+- `claude-share/core/geckolife+pricing_update/WAVE7_MASTER_SPEC_FOR_CLAUDE_CODE.md`
+- `claude-share/core/geckolife+pricing_update/WAVE7_COMPREHENSIVE_EXECUTION_ROADMAP.md`
+- `claude-share/core/geckolife+pricing_update/WAVE7_FOLLOWUP_FILES_SPEC.md`
+- `claude-share/core/geckolife+pricing_update/INDEX.md`
+
+### Tests
+- [x] Tests pass (`npm test`)
+- [x] Typecheck passes (`npm run typecheck`)
+
+### Notes for Next Session
+Use `WAVE7_MASTER_SPEC_FOR_CLAUDE_CODE.md` as the canonical starting point before executing any W7 sprint prompt.

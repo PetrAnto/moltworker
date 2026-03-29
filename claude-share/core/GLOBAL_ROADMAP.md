@@ -940,3 +940,9 @@ https://dash.cloudflare.com/5200b896d3dfdb6de35f986ef2d7dc6b/r2/default/buckets/
 | **README.md** | project root | User-facing documentation |
 | **AGENTS.md** | project root | Developer/AI agent instructions |
 | **CLAUDE.md** | project root | Claude Code project instructions |
+
+---
+
+### Changelog Addendum
+
+2026-03-29 | Codex (Session: codex-wave7-specs-001) | Deep-reviewed all files in `claude-share/core/geckolife+pricing_update` and added canonical Wave 7 execution docs (`WAVE7_MASTER_SPEC_FOR_CLAUDE_CODE.md`, `WAVE7_COMPREHENSIVE_EXECUTION_ROADMAP.md`, `WAVE7_FOLLOWUP_FILES_SPEC.md`) plus updated folder `INDEX.md` links.

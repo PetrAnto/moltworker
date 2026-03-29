@@ -5,6 +5,8 @@
 
 **Last Updated:** 2026-03-25 (S0+S1+S2+S3+S3.7 complete, ST smoke tests next)
 
+> Note (2026-03-29): For Wave 7 planning/execution context, see `claude-share/core/geckolife+pricing_update/WAVE7_MASTER_SPEC_FOR_CLAUDE_CODE.md`.
+
 ---
 
 ## Current Task: ST — E2E Coding Agent Smoke Tests

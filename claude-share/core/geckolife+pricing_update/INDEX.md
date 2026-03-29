@@ -46,4 +46,16 @@ claude-share/
 | 4 | Flywheel spec §6 (Gecko Roles), §10 (Morning Brief) |
 | 5 | `posthog-event-schema.md` (full EventMap + privacy) |
 
+## Canonical Execution Additions (2026-03-29)
+
+Use these three files as the execution baseline for future Claude Code sessions:
+
+1. [WAVE7_MASTER_SPEC_FOR_CLAUDE_CODE.md](./WAVE7_MASTER_SPEC_FOR_CLAUDE_CODE.md) — unified exact implementation spec across all Wave 7 docs.
+2. [WAVE7_COMPREHENSIVE_EXECUTION_ROADMAP.md](./WAVE7_COMPREHENSIVE_EXECUTION_ROADMAP.md) — sprint/milestone roadmap with risk register and critical path.
+3. [WAVE7_FOLLOWUP_FILES_SPEC.md](./WAVE7_FOLLOWUP_FILES_SPEC.md) — required follow-up files, PR schema, and link contract.
+
+## Repository Hygiene Note
+
+- File `./i` is currently empty and should be either removed or populated with an explicit purpose.
+
 ## Total Effort: ~100.5h across 6 sprints

@@ -103,3 +103,13 @@
 | Sprint 2 (Feb 23-Mar 1) | — | 38 | Phase 8 operational hardening, /simulate endpoint, 1526 tests |
 | Sprint 3 (Mar 1-23) | — | 22 | F.1 ai-hub data feeds + F.1b proactive alerts, F.2 Browser CDP, F.3 Sandbox in Orchestra, F.4 R2 File Management, F.5 Analytics, F.8 Memory, F.9 Orchestra hardening, F.10 Kimidirect reasoning, F.11 Orchestra observability, F.12 Event-based scoring, F.13 MiniMax M2.7 + death loop fix, F.14 Fuzzy patch + bracket balance, F.15 EOL + path encoding, F.16 Orchestra branch retry, F.17 Sandbox stagnation, F.18 ExecutionProfile, F.20 Runtime risk, F.22 Profile enforcement tests, F.23 Branch mutex, F.25 Byte counting + extraction escalation, F.26 Smart resume truncation, 2073 tests |
 | Sprint 4 (Mar 25-) | 34 | 31 | S0 (10) + S1 Lyra (5) + S2 Spark (6) + S3 Nexus (10, incl S3.7 DO) complete. Next: ST smoke tests (3). 2573 tests. |
+
+---
+
+### Notes for Other Agents (2026-03-29)
+
+- Wave 7 planning docs in `claude-share/core/geckolife+pricing_update/` now have a canonical entrypoint:
+  - `WAVE7_MASTER_SPEC_FOR_CLAUDE_CODE.md`
+  - `WAVE7_COMPREHENSIVE_EXECUTION_ROADMAP.md`
+  - `WAVE7_FOLLOWUP_FILES_SPEC.md`
+- Before starting any W7 coding sprint, use these as top-level context to avoid prompt drift.
