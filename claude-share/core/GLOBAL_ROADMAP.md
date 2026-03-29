@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-25 (S3 Nexus research skill complete — Sprint 4 skills done)
+**Last Updated:** 2026-03-29 (Wave 7 geckolife+pricing_update canonical execution specs added)
 
 ---
 
@@ -630,6 +630,8 @@ All skills done → ST.* (Smoke Tests)
 ---
 
 ## Changelog
+
+2026-03-29 | Codex (Session: codex-wave7-specs-20260329) | Wave 7 planning hardening: deep-reviewed geckolife+pricing_update corpus; added canonical execution spec + roadmap v2 + follow-up template | claude-share/core/geckolife+pricing_update/WAVE7_MASTER_EXECUTION_SPEC.md, claude-share/core/geckolife+pricing_update/WAVE7_EXECUTION_ROADMAP_V2.md, claude-share/core/geckolife+pricing_update/WAVE7_FOLLOWUP_TEMPLATE.md, claude-share/core/geckolife+pricing_update/INDEX.md
 
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 

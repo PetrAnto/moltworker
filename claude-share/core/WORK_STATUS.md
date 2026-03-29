@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-25 (S0+S1+S2+S3 complete — Sprint 4 skills done)
+**Last Updated:** 2026-03-29 (Wave 7 planning docs consolidated for Claude Code execution)
 
 ---
 
@@ -66,6 +66,12 @@
 | Other | — | — | — |
 
 ---
+
+
+### Notes for Other Agents
+
+- Wave 7 planning canon now lives in `claude-share/core/geckolife+pricing_update/WAVE7_MASTER_EXECUTION_SPEC.md` with companion roadmap `WAVE7_EXECUTION_ROADMAP_V2.md`.
+- Use `WAVE7_FOLLOWUP_TEMPLATE.md` when closing each Wave 7 sprint PR to keep sync artifacts consistent.
 
 ### Next Priorities Queue
 

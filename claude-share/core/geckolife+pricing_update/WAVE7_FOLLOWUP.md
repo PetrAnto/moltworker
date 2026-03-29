@@ -6,6 +6,12 @@
 
 ---
 
+## Planning Baseline (2026-03-29)
+
+- Canonical spec: `WAVE7_MASTER_EXECUTION_SPEC.md`
+- Canonical roadmap: `WAVE7_EXECUTION_ROADMAP_V2.md`
+- Follow-up closure template: `WAVE7_FOLLOWUP_TEMPLATE.md`
+
 ## PetrAnto Manual Actions
 
 ### Before W7-S1 starts

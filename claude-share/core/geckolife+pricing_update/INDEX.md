@@ -47,3 +47,9 @@ claude-share/
 | 5 | `posthog-event-schema.md` (full EventMap + privacy) |
 
 ## Total Effort: ~100.5h across 6 sprints
+
+
+## New Canonical Planning Files (2026-03-29)
+
+- [`WAVE7_MASTER_EXECUTION_SPEC.md`](./WAVE7_MASTER_EXECUTION_SPEC.md) — normalized spec with dependencies, DoD, and connection graph
+- [`WAVE7_EXECUTION_ROADMAP_V2.md`](./WAVE7_EXECUTION_ROADMAP_V2.md) — execution board, sprint gates, and follow-up update contract

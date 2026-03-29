@@ -107,3 +107,37 @@ Implement Phase 1 first: add centralized task router policy and resume model esc
 
 ---
 
+
+---
+
+## Session: 2026-03-29 | Wave 7 geckolife+pricing_update deep review + consolidated execution specs (Session: codex-wave7-specs-20260329)
+
+**AI:** Codex (GPT-5.3-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Completed a full-file review of every document in `claude-share/core/geckolife+pricing_update/` and produced canonical, implementation-ready Wave 7 execution artifacts with dependency links, DoD gates, and standardized follow-up templates for Claude Code handoff quality.
+
+### Changes Made
+- Added consolidated canonical spec with normalized sequencing, dependency clarifications, DoD, and connection graph.
+- Added execution roadmap v2 with milestone board, gate checks, branch/prompt routing, risk dashboard, and follow-up contract.
+- Added standardized follow-up template for per-sprint closure quality.
+- Updated folder index to include the new canonical planning files.
+
+### Files Modified
+- `claude-share/core/geckolife+pricing_update/WAVE7_MASTER_EXECUTION_SPEC.md`
+- `claude-share/core/geckolife+pricing_update/WAVE7_EXECUTION_ROADMAP_V2.md`
+- `claude-share/core/geckolife+pricing_update/WAVE7_FOLLOWUP_TEMPLATE.md`
+- `claude-share/core/geckolife+pricing_update/INDEX.md`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] Tests pass
+- [x] Typecheck passes
+
+### Notes for Next Session
+Use `WAVE7_MASTER_EXECUTION_SPEC.md` as canonical source for Wave 7 execution sequencing and handoff expectations; keep `WAVE7_FOLLOWUP.md` synchronized per sprint PR.
