@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-25 (S0+S1+S2+S3 complete — Sprint 4 skills done)
+**Last Updated:** 2026-03-29 (Wave 7 canonical execution specs added)
 
 ---
 
@@ -62,10 +62,16 @@
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
 | Claude | S0+S1+S2+S3+S3.7 complete (31 tasks, 2573 tests). PR review fixes applied. | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
-| Codex | — | — | — |
+| Codex | Wave 7 deep-review + 4 PR proposals (#443-#446) — cherry-picked by Claude | `work` (PRs open) | 2026-03-29 |
 | Other | — | — | — |
 
 ---
+
+### Notes for Other Agents
+
+- Wave 7 planning canon now lives in `claude-share/core/geckolife+pricing_update/W7_CANONICAL_SPEC.md` with companion roadmap, connection links, and governance files.
+- Use `W7_FOLLOWUP_AND_GOVERNANCE.md` when closing each Wave 7 sprint PR to keep sync artifacts consistent.
+- Before starting any W7 coding sprint, read `W7_CANONICAL_SPEC.md` as top-level context to avoid prompt drift.
 
 ### Next Priorities Queue
 
