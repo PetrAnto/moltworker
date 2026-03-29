@@ -4,6 +4,44 @@
 
 ---
 
+## Session: 2026-03-29 | Wave 7 Canonical Spec Pack (Session: session_01WEWeSwrgX5CsSGdeVescZf)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/pricing-update-specs-68YJ4`
+**Status:** Completed
+
+### Summary
+Deep-reviewed all 16 files in `claude-share/core/geckolife+pricing_update/` and assessed 4 Codex PR proposals (#443, #444, #445, #446). Cherry-picked the best solutions from each PR into a consolidated canonical execution spec pack for Wave 7 implementation.
+
+### Cherry-Pick Strategy
+- **PR #446**: Best canonical spec structure (non-goals, parallel ordering, preflight/postflight), best connection links (actual `src/` file paths per sprint)
+- **PR #444**: Best milestone board (effort hours, branch routing, gate checks)
+- **PR #445**: Best sprint artifact pattern (implementation report/decisions/open-issues per sprint), best cross-link rules, gentle next_prompt approach
+- **PR #443**: Best conflict resolution hierarchy, manual action matrix consolidation
+
+### Files Created
+- `claude-share/core/geckolife+pricing_update/W7_CANONICAL_SPEC.md`
+- `claude-share/core/geckolife+pricing_update/W7_CONNECTION_LINKS.md`
+- `claude-share/core/geckolife+pricing_update/W7_EXECUTION_ROADMAP.md`
+- `claude-share/core/geckolife+pricing_update/W7_FOLLOWUP_AND_GOVERNANCE.md`
+
+### Files Modified
+- `claude-share/core/geckolife+pricing_update/INDEX.md`
+- `claude-share/core/geckolife+pricing_update/WAVE7_FOLLOWUP.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+- `claude-share/core/claude-log.md`
+
+### Tests
+- [x] `npm test`
+- [x] `npm run typecheck`
+
+### Notes for Next Session
+Use `W7_CANONICAL_SPEC.md` as the implementation baseline. The 4 Codex PRs (#443-#446) can be closed without merging — their best content has been consolidated here.
+
+---
+
 ## Session: 2026-03-25 | S3.7 DO Extension for Nexus (Session: session_01JAkuvEtkau24ot6EH245kU)
 
 **AI:** Claude Opus 4.6
