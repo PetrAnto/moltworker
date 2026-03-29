@@ -5,6 +5,42 @@
 ---
 
 
+
+## Session: 2026-03-29 | Wave 7 geckolife+pricing deep-review + canonical specs (Session: codex-w7-spec-consolidation-001)
+
+**AI:** Codex (GPT-5.3-Codex)
+**Branch:** work
+**Status:** Completed
+
+### Summary
+Performed deep review of every file in `claude-share/core/geckolife+pricing_update` and produced canonical implementation specs, connection mapping, and comprehensive roadmap/follow-up artifacts for Claude Code execution.
+
+### Changes Made
+- Added a canonical Wave 7 delivery spec that resolves cross-file ambiguity and locks dependency-safe execution rules.
+- Added a spec→code→validation connection matrix for sprint-by-sprint implementation routing.
+- Added a comprehensive roadmap + follow-up templates (program board, manual ops checklist, QA sign-off, release sequencing).
+- Rewrote the folder index to prioritize new canonical files and preserve legacy references.
+
+### Files Modified
+- `claude-share/core/geckolife+pricing_update/INDEX.md`
+- `claude-share/core/geckolife+pricing_update/W7_CANONICAL_SPEC.md`
+- `claude-share/core/geckolife+pricing_update/W7_CONNECTION_LINKS.md`
+- `claude-share/core/geckolife+pricing_update/W7_COMPREHENSIVE_ROADMAP_AND_FOLLOWUP.md`
+- `claude-share/core/codex-log.md`
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] `npm test` passes (2573 tests)
+- [x] `npm run typecheck` passes
+
+### Notes for Next Session
+Use `W7_CANONICAL_SPEC.md` as the implementation baseline; keep legacy prompts as secondary reference only.
+
+---
+
+
 ## Session: 2026-02-20 | Phase 5.5 web_search tool (Session: codex-phase-5-5-web-search-001)
 
 **AI:** Codex (GPT-5.2-Codex)

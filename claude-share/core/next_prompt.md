@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-25 (S0+S1+S2+S3+S3.7 complete, ST smoke tests next)
+**Last Updated:** 2026-03-29 (ST smoke tests still next; Wave 7 canonical spec docs added)
 
 ---
 
@@ -17,6 +17,9 @@ All Gecko Skills phases are complete (S0 runtime, S1 Lyra, S2 Spark, S3 Nexus + 
 
 - `claude-share/core/archive/Coding_Agent_Smoke_Tests.md` — Full spec
 - `SKILLS_ROADMAP.md` — Post-Sprint section (ST.1-ST.3)
+- `claude-share/core/geckolife+pricing_update/W7_CANONICAL_SPEC.md` — Canonical Wave 7 execution baseline
+- `claude-share/core/geckolife+pricing_update/W7_CONNECTION_LINKS.md` — Spec→code mapping
+- `claude-share/core/geckolife+pricing_update/W7_COMPREHENSIVE_ROADMAP_AND_FOLLOWUP.md` — Program board + follow-ups
 
 ### Implementation Order
 
