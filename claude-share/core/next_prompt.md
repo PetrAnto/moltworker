@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-25 (S0+S1+S2+S3+S3.7 complete, ST smoke tests next)
+**Last Updated:** 2026-03-30 (Security audit complete. ST smoke tests + upstream P1 items next)
 
 ---
 
@@ -30,6 +30,7 @@ All Gecko Skills phases are complete (S0 runtime, S1 Lyra, S2 Spark, S3 Nexus + 
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-30 | Security audit + upstream triage | Claude Opus 4.6 | React2Shell clean. 8 npm vulns fixed (hono 4.12.9). Upstream: 2 P1 items (api_error failover, tool-call abort). |
 | 2026-03-25 | S3.7 DO extension | Claude Opus 4.6 | Async /dossier dispatch to TaskProcessor DO. 4 new tests (2573 total). |
 | 2026-03-25 | S3 Nexus research | Claude Opus 4.6 | /research, /dossier. KV cache, 8 source fetchers, evidence model. 33 new tests (2569 total). |
 | 2026-03-25 | S2 Spark brainstorm | Claude Opus 4.6 | /save, /spark, /gauntlet, /brainstorm, /ideas. 31 new tests (2534 total). |

@@ -4,6 +4,52 @@
 
 ---
 
+## Session: 2026-03-30 | Security Audit + Upstream Triage (Session: session_01WEWeSwrgX5CsSGdeVescZf)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/security-audit-react2shell-upstream-sync`
+**Status:** Completed
+
+### Summary
+Performed React2Shell (CVE-2025-55182) security audit, upstream OpenClaw issue triage (Q1 2026), and Cloudflare platform update assessment. Resolved all 8 npm audit vulnerabilities.
+
+### Task A: React2Shell Audit
+- **VERDICT: NOT VULNERABLE** — no RSC surface, React 19.2.4 installed (above patched 19.2.1)
+- No Next.js, no `react-server-dom-*` packages, no server-side rendering
+- Admin dashboard is a pure Vite SPA served as static assets
+
+### Task B: Upstream OpenClaw Triage
+- **P1**: `api_error` transient vs permanent classification + auto-rotation (~4-6h)
+- **P1**: Tool call abort checkpoint pattern (~3-4h)
+- **P2**: Telegram done-reaction UX (~1-2h)
+- IGNORE: Slack (N/A), Discord listener (REST polling), web UI commands (admin-only), Telegram long-polling (webhooks)
+- ALREADY IMPLEMENTED: Browser CDP reuse
+- ACKNOWLEDGED: Phishing campaign targeting OpenClaw devs
+
+### npm audit fix
+- Resolved 8 vulnerabilities (7 HIGH, 1 CRITICAL) → 0 remaining
+- Key updates: Hono 4.12.9, basic-ftp 5.2.0, picomatch, rollup, undici
+
+### Files Created
+- `claude-share/security/react2shell-audit-moltworker.md`
+- `claude-share/upstream-sync/openclaw-triage-2026-Q1.md`
+
+### Files Modified
+- `package-lock.json` (npm audit fix)
+- `claude-share/core/GLOBAL_ROADMAP.md`
+- `claude-share/core/WORK_STATUS.md`
+- `claude-share/core/claude-log.md`
+- `claude-share/core/next_prompt.md`
+
+### Tests
+- [x] `npm test` — 85 files, 2573 tests pass (zero regressions)
+- [x] `npm audit` — 0 vulnerabilities
+
+### Notes for Next Session
+Two P1 items from upstream triage should be prioritized: transient error classifier for model failover, and tool-call abort checkpoint pattern. Both directly improve Orchestra reliability.
+
+---
+
 ## Session: 2026-03-25 | S3.7 DO Extension for Nexus (Session: session_01JAkuvEtkau24ot6EH245kU)
 
 **AI:** Claude Opus 4.6

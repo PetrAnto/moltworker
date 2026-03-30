@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-25 (S3 Nexus research skill complete — Sprint 4 skills done)
+**Last Updated:** 2026-03-30 (Security audit + upstream OpenClaw triage + npm audit fix)
 
 ---
 
@@ -634,6 +634,8 @@ All skills done → ST.* (Smoke Tests)
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-30 | Claude Opus 4.6 (Session: session_01WEWeSwrgX5CsSGdeVescZf) | fix(deps): npm audit fix — resolved 8 vulnerabilities (hono 4.12.9, basic-ftp 5.2.0, picomatch, rollup, undici). 0 remaining. | package-lock.json
+2026-03-30 | Claude Opus 4.6 (Session: session_01WEWeSwrgX5CsSGdeVescZf) | docs(security): React2Shell CVE-2025-55182 audit (NOT VULNERABLE — no RSC surface, React 19.2.4 patched) + upstream OpenClaw triage Q1 2026 (2 P1 items: api_error failover, tool-call abort) + CF platform update assessment | claude-share/security/react2shell-audit-moltworker.md, claude-share/upstream-sync/openclaw-triage-2026-Q1.md
 2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S1 Lyra content creator — /write (self-review if quality<3), /rewrite (R2 draft + flags), /headline (5 variants with commentary), /repurpose (URL fetch + platform adapt). Types + guards, prompts, handler, R2 storage. 30 new tests (2503 total). | src/skills/lyra/*, src/storage/lyra.ts, src/skills/init.ts
 2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | feat(skills): S3 Nexus research — KV binding (NEXUS_KV), 8 source fetchers (parallel + graceful degradation), KV cache (4h TTL), evidence model (confidence scoring), handler (classify→fetch→synthesize), decision mode (pros/cons/risks). 33 new tests (2569 total). S3.7 DO extension deferred. | src/skills/nexus/*, src/types.ts, wrangler.jsonc, src/skills/init.ts
 2026-03-25 | Claude Opus 4.6 (Session: session_01JAkuvEtkau24ot6EH245kU) | fix(nexus): S3.7 wiring fixes from GPT reviewer — NEXUS_KV properly injected via real TelegramHandler property (was broken cast), DO env enrichment uses doEnv for R2+KV bindings, chatId+telegramToken validated before dispatch with inline fallback | src/telegram/handler.ts, src/routes/telegram.ts, src/routes/simulate.ts, src/durable-objects/task-processor.ts, src/skills/nexus/nexus.ts
