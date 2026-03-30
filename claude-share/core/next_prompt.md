@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-29 (ST smoke tests still next; Wave 7 canonical spec pack added for future parallel stream)
+**Last Updated:** 2026-03-30 (Security audit + W7 spec pack complete. ST smoke tests + upstream P1 items next)
 
 ---
 
@@ -33,6 +33,7 @@ All Gecko Skills phases are complete (S0 runtime, S1 Lyra, S2 Spark, S3 Nexus + 
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-30 | Security audit + upstream triage | Claude Opus 4.6 | React2Shell clean. 8 npm vulns fixed (hono 4.12.9). Upstream: 2 P1 items (api_error failover, tool-call abort). |
 | 2026-03-29 | Wave 7 canonical spec pack | Claude Opus 4.6 | Cherry-picked best from Codex PRs #443-#446. Created `W7_CANONICAL_SPEC.md`, `W7_CONNECTION_LINKS.md`, `W7_EXECUTION_ROADMAP.md`, `W7_FOLLOWUP_AND_GOVERNANCE.md`. |
 | 2026-03-25 | S3.7 DO extension | Claude Opus 4.6 | Async /dossier dispatch to TaskProcessor DO. 4 new tests (2573 total). |
 | 2026-03-25 | S3 Nexus research | Claude Opus 4.6 | /research, /dossier. KV cache, 8 source fetchers, evidence model. 33 new tests (2569 total). |

@@ -55,15 +55,17 @@ If both are unclear, log decision in sprint PR under **"Spec Decision Notes"** w
 
 Wave 7 is split into 9 sprint units across 2 repos:
 
-### ai-hub track (S1-S6)
-- S1: Pricing rewrite (2-tier Free/Pro)
-- S2: Feature gates (module/gecko/vault/project limits)
-- S3: Flywheel schema (D1 tables + Drizzle/Zod)
-- S4: Flywheel logic (quality gate + GeScore v2 + proposals)
-- S5: Project backend (CRUD + transfer + limits)
-- S6: Chat-only project UI (selector + context + save)
+### ai-hub track (S1-S6) — CONFIRMED STATE (2026-03-29)
+- S1: Pricing rewrite — **COMPLETE** (`Tier = 'free' | 'pro'`, key-based LLM routing, no deep mode)
+- S2: Feature gates — **COMPLETE** (`feature-gates.ts`, `useFeatureGate.ts`, 403 enforcement)
+- S3: Flywheel schema — **COMPLETE** (20 migrations, all tables, Drizzle/Zod parity)
+- S4: Flywheel logic — **SHIPPED** (3/6 proposal types, GeScore v2, quality gate, post-fix #680)
+- S5: Project backend — **SHIPPED** (hub-projects 10 endpoints, Zustand store, post-fix #672)
+- S6: Chat Project UI — **SHIPPED** (ProjectSelector, SaveToProject, ContextCards, post-fix #683/#685)
+- Sprint 5 Collective — **SCAFFOLDED** (analytics-types + opt-in route only; engine missing)
+- **CAPA Sprint** — **TODO** (6 corrective actions, ~13-16h; see [`W7_CAPA_SPRINT.md`](./W7_CAPA_SPRINT.md))
 
-### moltworker track (M1-M3)
+### moltworker track (M1-M3) — NOT STARTED
 - M1: Lyra media extension (image_brief + video_brief)
 - M2: Integration/smoke tests (/simulate coverage)
 - M3: Deploy prep + sync docs
@@ -274,7 +276,68 @@ Mandatory early gate: `env.AI` Pages Functions spike must pass before continuing
 
 ---
 
-## 9) Handoff Format for Claude Code Sessions
+## 9) Post-Implementation Audit Findings (2026-03-29)
+
+> Based on audit of ai-hub PRs #662 through #686. Full CAPA spec in [`W7_CAPA_SPRINT.md`](./W7_CAPA_SPRINT.md).
+
+### 9.1) Status Correction
+The ai-hub implementation chain (S1-S6) has shipped but Sprint 5 (Analytics + Collective Intelligence) is **scaffolded, not complete**. PR #686's "WAVE 7 COMPLETE" claim is premature.
+
+### 9.2) Critical: Collective Consent Storage
+The `/api/coaching/collective/opt-in` route reuses `morning_brief_prefs.include_sitmon` as a proxy for collective opt-in consent. This MUST be replaced with dedicated consent storage (new table or column) before collective features are considered operational. **This is a privacy/compliance issue.**
+
+Rule added: **Never reuse an existing column for a different semantic purpose**, especially for consent, billing, or audit data.
+
+### 9.3) Critical: LifePanel Proposal Bug
+Proposal accept/dismiss in `LifePanel` does not check `resp.ok` before tracking analytics and removing the proposal from UI. This causes false analytics events and UI/server desync. Fix is straightforward: gate side effects on response success.
+
+### 9.4) Sprint 5 Missing Deliverables
+The following were specified but not delivered:
+- `src/lib/coaching/collective-intelligence.ts` (the actual engine)
+- Anonymized embedding writes to `VECTORIZE_SHARED`
+- Vector deletion on opt-out
+- Community pattern detection
+- Full PostHog instrumentation (spec vs implementation mismatch on event names/payloads)
+- Dedicated Sprint 5 tests (0 test files added in #686)
+
+### 9.5) Post-Merge Fix Volume
+4 corrective PRs were needed after initial merges:
+- #672: limit bypass, archived project mutations, item_count drift, schema drift
+- #680: proposal deduplication + cooldown (coaching generated noise)
+- #683: "Save to Vault" and "Inject" had no real effect
+- #685: morning brief checkboxes were no-op handlers
+
+This indicates specs were good for velocity but **not constraining enough for behavioral correctness**.
+
+### 9.6) Four-Level Completion Taxonomy (New Rule)
+
+| Level | Meaning | Merge OK? | Mark Complete? |
+|---|---|---|---|
+| scaffolded | Types + routes exist, no real logic | Yes (behind flag) | No |
+| wired | Logic exists, calls real APIs | Yes | No |
+| validated | Tests pass, negative paths covered | Yes | Almost |
+| complete | User-path verification + no blocking TODOs | Yes | Yes |
+
+---
+
+## 10) CAPA Sprint (Corrective Actions — Must Execute Before Wave 7 Closure)
+
+See full spec: [`W7_CAPA_SPRINT.md`](./W7_CAPA_SPRINT.md)
+
+Execution order:
+1. **CAPA-1**: Retract "Wave 7 Complete" status (docs only, immediate)
+2. **CAPA-4**: Fix LifePanel `resp.ok` check (~30min)
+3. **CAPA-2**: Dedicated collective consent storage (~2-3h, migration)
+4. **CAPA-3**: Complete collective intelligence engine (~6-8h)
+5. **CAPA-5**: Audit remaining no-op UI actions (~2h)
+6. **CAPA-6**: Realign analytics event taxonomy (~2h)
+
+Total: ~13-16h. After completion, Wave 7 ai-hub = COMPLETE (with evidence).
+Moltworker M1-M3 remains a separate track (~17h).
+
+---
+
+## 11) Handoff Format for Claude Code Sessions
 
 **Preflight block** (before coding):
 ```text

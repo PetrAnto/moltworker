@@ -4,10 +4,11 @@
 
 > Added 2026-03-29 after deep review of all source files + cherry-picking best solutions from Codex PRs #443-#446.
 
-1. [`W7_CANONICAL_SPEC.md`](./W7_CANONICAL_SPEC.md) — **Single consolidated spec** with conflict resolution, product rules, sprint-by-sprint DoD, and handoff format.
+1. [`W7_CANONICAL_SPEC.md`](./W7_CANONICAL_SPEC.md) — **Single consolidated spec** with conflict resolution, product rules, sprint-by-sprint DoD, audit findings, and handoff format.
 2. [`W7_CONNECTION_LINKS.md`](./W7_CONNECTION_LINKS.md) — Spec-to-code-to-validation connection matrix per sprint (includes actual `src/` file paths).
-3. [`W7_EXECUTION_ROADMAP.md`](./W7_EXECUTION_ROADMAP.md) — Program board, gate checks, parallelization map, QA sign-off matrix, rollback markers.
-4. [`W7_FOLLOWUP_AND_GOVERNANCE.md`](./W7_FOLLOWUP_AND_GOVERNANCE.md) — PR templates, per-sprint artifact pattern, manual action matrix, quality gates.
+3. [`W7_EXECUTION_ROADMAP.md`](./W7_EXECUTION_ROADMAP.md) — Program board (with real statuses from audit), gate checks, parallelization map, QA sign-off matrix, rollback markers.
+4. [`W7_FOLLOWUP_AND_GOVERNANCE.md`](./W7_FOLLOWUP_AND_GOVERNANCE.md) — PR templates, per-sprint artifact pattern, manual action matrix, strengthened quality gates.
+5. [`W7_CAPA_SPRINT.md`](./W7_CAPA_SPRINT.md) — **BLOCKING**: 6 corrective actions from post-implementation audit. Must execute before Wave 7 can be marked complete.
 
 ## Recommended Usage Order
 

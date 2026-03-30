@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-29 (Wave 7 canonical execution specs added)
+**Last Updated:** 2026-03-30 (Security audit + dep fix + Wave 7 canonical spec pack)
 
 ---
 
@@ -61,7 +61,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | S0+S1+S2+S3+S3.7 complete (31 tasks, 2573 tests). PR review fixes applied. | `claude/execute-next-prompt-QN3rA` | 2026-03-25 |
+| Claude | Security audit + W7 spec pack complete. 8 npm vulns fixed. | `claude/security-audit-react2shell-upstream-sync` | 2026-03-30 |
 | Codex | Wave 7 deep-review + 4 PR proposals (#443-#446) — cherry-picked by Claude | `work` (PRs open) | 2026-03-29 |
 | Other | — | — | — |
 
@@ -82,6 +82,9 @@
 3. ~~**S2** — Spark (Tach Brainstorm)~~ — ✅ Complete
 4. ~~**S3** — Nexus (Omni Research)~~ — ✅ Complete (incl S3.7 DO extension)
 5. **ST** — E2E Coding Agent Smoke Tests (see `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)
+6. **SEC-P1** — Implement transient error classifier + auto model rotation (~4-6h, from upstream triage)
+7. **SEC-P1** — Review upstream tool-call abort checkpoint pattern (~3-4h, from upstream triage)
+8. **SEC-P2** — Add Telegram done-reaction UX (~1-2h)
 6. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
 7. **F.7** — Discord full integration (read-only → two-way)
 8. **6.3** — Voice messages (Whisper + TTS)

@@ -109,21 +109,76 @@ This produces deterministic handoff between sessions.
 
 ## 5) Quality Gates Before Marking Sprint Complete
 
+### Gate A: Build Verification
 - [ ] `npm run build` passes
 - [ ] `npm test` passes
 - [ ] `npm run typecheck` passes
 - [ ] No secrets in staged diff
+
+### Gate B: Code Hygiene
 - [ ] Deprecated terms removed where applicable (e.g., `deep` tier)
 - [ ] No residual Deep tier code paths
 - [ ] No PII in collective/shared vector metadata (if applicable)
 - [ ] No unvalidated request bodies in new APIs
-- [ ] All mandatory coordination files updated
+- [ ] No blocking TODOs in shipped code paths (scaffolded != complete)
+- [ ] No semantic column reuse for consent/billing/audit purposes
 
-If any fail, sprint status = **Partial** (never Completed).
+### Gate C: Behavioral Verification (NEW — from audit findings)
+- [ ] All UI action handlers call real API endpoints (no no-ops)
+- [ ] All API responses checked (`resp.ok`) before side effects (analytics, UI removal)
+- [ ] Analytics events emitted ONLY on successful operations
+- [ ] Negative paths tested: mutation refused, access denied, archived entity, duplication
+- [ ] User-path scenarios verified (not just unit tests):
+  - "Save creates a real entry" (verify DB)
+  - "Inject modifies actual state" (verify effect)
+  - "Accept/dismiss stays consistent" (verify UI + server)
+  - "Opt-out actually deletes data" (verify store)
+
+### Gate D: Documentation
+- [ ] All mandatory coordination files updated
+- [ ] Sprint status uses correct taxonomy: `scaffolded | wired | validated | complete`
+- [ ] No "COMPLETE" claim while blocking TODOs exist
+
+If Gate A or B fails: sprint status = **Partial**.
+If Gate C fails: sprint status = **Wired** (not validated).
+If Gate D fails: block merge until corrected.
+
+### Completion Taxonomy (Mandatory)
+
+| Level | Meaning | Merge OK? | Mark Complete? |
+|---|---|---|---|
+| scaffolded | Types + routes exist, no real logic | Yes (behind flag) | No |
+| wired | Logic exists, calls real APIs | Yes | No |
+| validated | Tests pass, negative paths covered | Yes | Almost |
+| complete | User-path verification + no blocking TODOs | Yes | Yes |
 
 ---
 
-## 6) Cross-Link Requirements
+## 6) Mandatory Sprint Spec Sections (Preventive — from audit)
+
+Every future sprint spec MUST include these sections:
+
+### a) Failure Modes / Negative Paths
+- Mutation refused (auth, permissions, limits)
+- Access control edge cases (wrong user, expired session)
+- Archived/deleted entity handling
+- Duplication prevention
+- Store/UI staleness scenarios
+- UI actions that appear to work but don't
+
+### b) Spec -> Code -> Test -> Proof Traceability
+| Requirement | File(s) Modified | Test(s) | Runtime Proof | Status |
+|---|---|---|---|---|
+| Example: Opt-in stores consent | `collective-consent.ts` | `collective.test.ts:L42` | POST returns 200 + record exists | validated |
+
+### c) Rollback Strategy
+- Migration reversal IDs
+- Feature flag disable path
+- UI fallback rendering
+
+---
+
+## 7) Cross-Link Requirements
 
 Each new sprint artifact must link to:
 - The sprint prompt file used
