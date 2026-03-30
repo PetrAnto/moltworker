@@ -39,10 +39,9 @@
 
 ## PetrAnto Manual Actions Before Deploy
 
-1. **Optional:** Upload Lyra media R2 prompts to `moltbot-data/skills/lyra/`
-   - `prompts/lyra/image-system.md` (optional hot-prompt override)
-   - `prompts/lyra/video-system.md` (optional hot-prompt override)
-   - If not uploaded, the bundled `LYRA_IMAGE_SYSTEM_PROMPT` / `LYRA_VIDEO_SYSTEM_PROMPT` are used
+1. **Optional:** Upload a Lyra hot-prompt override to `moltbot-data/prompts/lyra/system.md`
+   - This single file overrides the system prompt for image and video modes (same as text modes)
+   - If not uploaded, the bundled `LYRA_IMAGE_SYSTEM_PROMPT` / `LYRA_VIDEO_SYSTEM_PROMPT` are used per-submode
 
 2. **Deploy:**
    ```bash

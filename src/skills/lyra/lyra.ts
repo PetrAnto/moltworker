@@ -322,6 +322,7 @@ async function executeImage(request: SkillRequest): Promise<SkillResult> {
 
   const start = Date.now();
   const model = selectSkillModel(request.modelAlias, LYRA_META.defaultModel);
+  const systemPrompt = request.context?.hotPrompt ?? LYRA_IMAGE_SYSTEM_PROMPT;
 
   const platformStr = request.flags.for ?? request.flags.platform;
   const styleStr = request.flags.style;
@@ -335,35 +336,35 @@ async function executeImage(request: SkillRequest): Promise<SkillResult> {
   const userPrompt = buildImagePrompt(request.text, platform, style);
 
   const result = await callSkillLLM({
-    systemPrompt: LYRA_IMAGE_SYSTEM_PROMPT,
+    systemPrompt,
     userPrompt,
     modelAlias: model,
     responseFormat: { type: 'json_object' },
     env: request.env,
   });
 
-  let brief = safeJsonParse<ImageBrief>(result.text);
+  const parsed = safeJsonParse<Record<string, unknown>>(result.text);
 
-  if (!brief || !isImageBrief(brief)) {
-    return {
-      skillId: 'lyra',
-      kind: 'text',
-      body: result.text,
-      telemetry: {
-        durationMs: Date.now() - start,
-        model,
-        llmCalls: 1,
-        toolCalls: 0,
-        tokens: result.tokens,
-      },
-    };
+  if (!parsed || typeof parsed !== 'object') {
+    return makeTextFallback('lyra', result, start, model);
   }
 
-  // Inject/override platform dimensions from our canonical map
-  const resolvedPlatform = (platform ?? brief.platform) as ImagePlatform;
+  // Normalize: inject canonical dimensions before validation
+  const resolvedPlatform = (platform ?? parsed.platform) as ImagePlatform;
   if (resolvedPlatform && resolvedPlatform in PLATFORM_DIMENSIONS) {
-    brief = { ...brief, platform: resolvedPlatform, dimensions: PLATFORM_DIMENSIONS[resolvedPlatform] };
+    parsed.platform = resolvedPlatform;
+    parsed.dimensions = PLATFORM_DIMENSIONS[resolvedPlatform];
   }
+
+  // Ensure string defaults for optional fields the LLM may omit
+  if (typeof parsed.negativePrompt !== 'string') parsed.negativePrompt = '';
+  if (typeof parsed.referenceNotes !== 'string') parsed.referenceNotes = '';
+
+  if (!isImageBrief(parsed)) {
+    return makeTextFallback('lyra', result, start, model);
+  }
+
+  const brief = parsed;
 
   return {
     skillId: 'lyra',
@@ -391,6 +392,7 @@ async function executeVideo(request: SkillRequest): Promise<SkillResult> {
 
   const start = Date.now();
   const model = selectSkillModel(request.modelAlias, LYRA_META.defaultModel);
+  const systemPrompt = request.context?.hotPrompt ?? LYRA_VIDEO_SYSTEM_PROMPT;
 
   const platformStr = request.flags.for ?? request.flags.platform;
   const durationStr = request.flags.duration;
@@ -404,35 +406,38 @@ async function executeVideo(request: SkillRequest): Promise<SkillResult> {
   const userPrompt = buildVideoPrompt(request.text, platform, duration && !isNaN(duration) ? duration : undefined);
 
   const result = await callSkillLLM({
-    systemPrompt: LYRA_VIDEO_SYSTEM_PROMPT,
+    systemPrompt,
     userPrompt,
     modelAlias: model,
     responseFormat: { type: 'json_object' },
     env: request.env,
   });
 
-  let brief = safeJsonParse<VideoBrief>(result.text);
+  const parsed = safeJsonParse<Record<string, unknown>>(result.text);
 
-  if (!brief || !isVideoBrief(brief)) {
-    return {
-      skillId: 'lyra',
-      kind: 'text',
-      body: result.text,
-      telemetry: {
-        durationMs: Date.now() - start,
-        model,
-        llmCalls: 1,
-        toolCalls: 0,
-        tokens: result.tokens,
-      },
-    };
+  if (!parsed || typeof parsed !== 'object') {
+    return makeTextFallback('lyra', result, start, model);
   }
 
-  // Inject/override platform specs from our canonical map
-  const resolvedPlatform = (platform ?? brief.platform) as VideoPlatform;
+  // Normalize: inject canonical specs before validation
+  const resolvedPlatform = (platform ?? parsed.platform) as VideoPlatform;
   if (resolvedPlatform && resolvedPlatform in VIDEO_PLATFORM_SPECS) {
-    brief = { ...brief, platform: resolvedPlatform, specs: VIDEO_PLATFORM_SPECS[resolvedPlatform] };
+    parsed.platform = resolvedPlatform;
+    parsed.specs = VIDEO_PLATFORM_SPECS[resolvedPlatform];
   }
+
+  // Ensure script.scenes is an array and totalDuration is set
+  if (typeof parsed.script === 'object' && parsed.script !== null) {
+    const script = parsed.script as Record<string, unknown>;
+    if (!Array.isArray(script.scenes)) script.scenes = [];
+    if (typeof script.totalDuration !== 'number') script.totalDuration = 0;
+  }
+
+  if (!isVideoBrief(parsed)) {
+    return makeTextFallback('lyra', result, start, model);
+  }
+
+  const brief = parsed;
 
   return {
     skillId: 'lyra',
@@ -452,6 +457,27 @@ async function executeVideo(request: SkillRequest): Promise<SkillResult> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Fallback when LLM returns text that isn't a valid brief. */
+function makeTextFallback(
+  skillId: 'lyra',
+  result: { text: string; tokens?: { prompt: number; completion: number } },
+  start: number,
+  model: string,
+): SkillResult {
+  return {
+    skillId,
+    kind: 'text',
+    body: result.text,
+    telemetry: {
+      durationMs: Date.now() - start,
+      model,
+      llmCalls: 1,
+      toolCalls: 0,
+      tokens: result.tokens,
+    },
+  };
+}
 
 function makeError(request: SkillRequest, message: string): SkillResult {
   return {

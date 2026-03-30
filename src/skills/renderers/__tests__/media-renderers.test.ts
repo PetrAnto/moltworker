@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { renderForTelegram, type TelegramChunk } from '../telegram';
+import { renderForTelegram, splitHtmlMessage, type TelegramChunk } from '../telegram';
 import { renderForWeb, type SkillApiResponse } from '../web';
 import type { SkillResult, SkillTelemetry } from '../../types';
 import type { ImageBrief, VideoBrief } from '../../lyra/media-types';
@@ -352,5 +352,52 @@ describe('Cross-kind consistency', () => {
     const vid = renderForWeb(makeResult('video_brief', sampleVideoBrief));
     expect(img.ok).toBe(true);
     expect(vid.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// splitHtmlMessage — tag-aware chunker
+// ---------------------------------------------------------------------------
+
+describe('splitHtmlMessage', () => {
+  it('returns single chunk when text fits', () => {
+    const result = splitHtmlMessage('short text', 100);
+    expect(result).toEqual(['short text']);
+  });
+
+  it('closes and re-opens <b> tags across chunks', () => {
+    // Create text with a bold tag that spans across the split boundary
+    const text = '<b>' + 'A'.repeat(50) + '</b>';
+    const chunks = splitHtmlMessage(text, 30);
+    expect(chunks.length).toBeGreaterThan(1);
+    // First chunk should close the <b> tag
+    expect(chunks[0]).toContain('</b>');
+    // Second chunk should re-open the <b> tag
+    expect(chunks[1]).toMatch('<b>');
+  });
+
+  it('handles <code> blocks across chunks', () => {
+    const text = '<code>' + 'X'.repeat(60) + '</code>';
+    const chunks = splitHtmlMessage(text, 40);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0]).toContain('</code>');
+    expect(chunks[1]).toMatch('<code>');
+  });
+
+  it('handles nested tags', () => {
+    const text = '<b><i>' + 'Y'.repeat(50) + '</i></b>';
+    const chunks = splitHtmlMessage(text, 30);
+    expect(chunks.length).toBeGreaterThan(1);
+    // First chunk closes in reverse order
+    expect(chunks[0]).toMatch(/<\/i><\/b>$/);
+    // Second chunk re-opens in original order
+    expect(chunks[1]).toMatch('<b><i>');
+  });
+
+  it('does not add extra tags when all tags are properly closed', () => {
+    const text = '<b>hello</b> ' + 'Z'.repeat(50);
+    const chunks = splitHtmlMessage(text, 30);
+    // The <b> is already closed before the split, so no tag repair needed
+    expect(chunks[1]).not.toContain('<b>');
   });
 });

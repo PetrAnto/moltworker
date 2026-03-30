@@ -123,6 +123,21 @@ describe('isImageBrief', () => {
   it('returns false for array', () => {
     expect(isImageBrief([1, 2, 3])).toBe(false);
   });
+
+  it('returns false when dimensions are missing', () => {
+    const { dimensions: _, ...noDims } = MOCK_IMAGE_BRIEF;
+    expect(isImageBrief(noDims)).toBe(false);
+  });
+
+  it('returns false when negativePrompt is missing', () => {
+    const { negativePrompt: _, ...noNeg } = MOCK_IMAGE_BRIEF;
+    expect(isImageBrief(noNeg)).toBe(false);
+  });
+
+  it('returns false when dimensions.width is not a number', () => {
+    const bad = { ...MOCK_IMAGE_BRIEF, dimensions: { width: 'big', height: 1080, aspectRatio: '1:1' } };
+    expect(isImageBrief(bad)).toBe(false);
+  });
 });
 
 describe('isVideoBrief', () => {
@@ -140,6 +155,21 @@ describe('isVideoBrief', () => {
 
   it('returns false for missing script', () => {
     expect(isVideoBrief({ title: 'x', concept: 'y', musicDirection: 'z', tags: [] })).toBe(false);
+  });
+
+  it('returns false when specs are missing', () => {
+    const { specs: _, ...noSpecs } = MOCK_VIDEO_BRIEF;
+    expect(isVideoBrief(noSpecs)).toBe(false);
+  });
+
+  it('returns false when script.totalDuration is missing', () => {
+    const bad = { ...MOCK_VIDEO_BRIEF, script: { scenes: [] } };
+    expect(isVideoBrief(bad)).toBe(false);
+  });
+
+  it('returns false when specs.fps is not a number', () => {
+    const bad = { ...MOCK_VIDEO_BRIEF, specs: { ...MOCK_VIDEO_BRIEF.specs, fps: 'fast' } };
+    expect(isVideoBrief(bad)).toBe(false);
   });
 });
 

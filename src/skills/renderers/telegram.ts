@@ -34,8 +34,10 @@ export function renderForTelegram(result: SkillResult): TelegramChunk[] {
     return [raw];
   }
 
-  // Split into chunks
-  const parts = splitMessage(raw.text, CHUNK_MAX);
+  // Split into chunks — use tag-aware splitter for HTML to avoid broken markup
+  const parts = raw.parseMode === 'HTML'
+    ? splitHtmlMessage(raw.text, CHUNK_MAX)
+    : splitMessage(raw.text, CHUNK_MAX);
   return parts.map(text => ({ text, parseMode: raw.parseMode }));
 }
 
@@ -234,4 +236,56 @@ export function splitMessage(text: string, maxLength: number): string[] {
   }
 
   return chunks;
+}
+
+/**
+ * Tag-aware HTML message splitter for Telegram.
+ *
+ * Splits HTML text into chunks that don't exceed maxLength, ensuring
+ * that HTML tags (<b>, <i>, <code>) are properly closed in each chunk
+ * and re-opened in the next.
+ */
+export function splitHtmlMessage(text: string, maxLength: number): string[] {
+  // Fast path: fits in one message
+  if (text.length <= maxLength) return [text];
+
+  const rawChunks = splitMessage(text, maxLength);
+  const result: string[] = [];
+
+  // Track open tags across chunks
+  const TRACKED_TAGS = ['b', 'i', 'code', 'pre'] as const;
+  let openTags: string[] = [];
+
+  for (const chunk of rawChunks) {
+    // Prepend any tags that were open from the previous chunk
+    let patched = openTags.map(t => `<${t}>`).join('') + chunk;
+
+    // Scan this chunk to find which tags are left open
+    const tagStack: string[] = [...openTags];
+    const tagRegex = /<\/?([a-z]+)>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = tagRegex.exec(patched)) !== null) {
+      const fullMatch = m[0];
+      const tagName = m[1].toLowerCase();
+      if (!TRACKED_TAGS.includes(tagName as (typeof TRACKED_TAGS)[number])) continue;
+      if (fullMatch.startsWith('</')) {
+        // Closing tag — pop from stack
+        const idx = tagStack.lastIndexOf(tagName);
+        if (idx !== -1) tagStack.splice(idx, 1);
+      } else {
+        // Opening tag — push to stack
+        tagStack.push(tagName);
+      }
+    }
+
+    // Close any unclosed tags at the end of this chunk (in reverse order)
+    for (let i = tagStack.length - 1; i >= 0; i--) {
+      patched += `</${tagStack[i]}>`;
+    }
+
+    result.push(patched);
+    openTags = tagStack;
+  }
+
+  return result;
 }
