@@ -331,6 +331,19 @@ export default function AdminPage() {
         </p>
       </section>
 
+      <section className="devices-section">
+        <div className="section-header">
+          <h2>AI Engine Cockpit</h2>
+          <a href="/_admin/cockpit" className="btn btn-primary">
+            Open Cockpit
+          </a>
+        </div>
+        <p className="hint">
+          Browse and select from 26+ AI models with the visual engine selector.
+          Search, filter by intent (Fast, Quality, Budget, Code), pin favorites, and see quality ratings at a glance.
+        </p>
+      </section>
+
       <AcontextSessionsSection data={acontextSessions} loading={acontextLoading} />
 
       {loading ? (

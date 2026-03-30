@@ -1,13 +1,21 @@
 import AdminPage from './pages/AdminPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import CockpitPage from './pages/CockpitPage';
 import './App.css';
 
-function getCurrentPage(pathname: string): 'admin' | 'analytics' {
-  return pathname.startsWith('/_admin/analytics') ? 'analytics' : 'admin';
+function getCurrentPage(pathname: string): 'admin' | 'analytics' | 'cockpit' {
+  if (pathname.startsWith('/_admin/cockpit')) return 'cockpit';
+  if (pathname.startsWith('/_admin/analytics')) return 'analytics';
+  return 'admin';
 }
 
 export default function App() {
   const page = getCurrentPage(window.location.pathname);
+
+  // Cockpit gets its own full-bleed shell (no admin header)
+  if (page === 'cockpit') {
+    return <CockpitPage />;
+  }
 
   return (
     <div className="app">
@@ -22,6 +30,9 @@ export default function App() {
           </a>
           <a className={page === 'analytics' ? 'nav-link active' : 'nav-link'} href="/_admin/analytics">
             Analytics
+          </a>
+          <a className="nav-link" href="/_admin/cockpit">
+            Cockpit
           </a>
         </nav>
       </header>

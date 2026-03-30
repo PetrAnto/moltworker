@@ -1,0 +1,847 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Cockpit Design System — AI Selector
+   Typography: Orbitron (labels), Rajdhani (headings), JetBrains Mono (meta)
+   Materials: Dark glass + subtle gold edge + provider accents
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Design Tokens ── */
+:root {
+  /* Cockpit surfaces */
+  --cockpit-bg: #0a0a12;
+  --cockpit-surface: rgba(16, 16, 28, 0.92);
+  --cockpit-surface-hover: rgba(24, 24, 40, 0.95);
+  --cockpit-surface-active: rgba(30, 30, 50, 0.98);
+  --cockpit-glass: rgba(20, 20, 36, 0.85);
+  --cockpit-glass-border: rgba(255, 255, 255, 0.06);
+  --cockpit-glass-border-hover: rgba(255, 255, 255, 0.12);
+
+  /* Gold accent */
+  --cockpit-gold: #c8a96e;
+  --cockpit-gold-dim: rgba(200, 169, 110, 0.3);
+  --cockpit-gold-glow: rgba(200, 169, 110, 0.15);
+
+  /* Text hierarchy */
+  --cockpit-text-primary: #e8e6f0;
+  --cockpit-text-secondary: #8b89a0;
+  --cockpit-text-muted: #5a586e;
+  --cockpit-text-accent: var(--cockpit-gold);
+
+  /* Gecko personality glow */
+  --gecko-active-color: #6366f1;
+  --gecko-active-glow: rgba(99, 102, 241, 0.2);
+
+  /* Motion */
+  --cockpit-transition-fast: 150ms ease;
+  --cockpit-transition-medium: 200ms ease;
+  --cockpit-transition-slow: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Elevation */
+  --shadow-glow-subtle: 0 0 20px rgba(0, 0, 0, 0.4), 0 0 60px rgba(0, 0, 0, 0.2);
+  --shadow-glow-intense: 0 4px 30px rgba(0, 0, 0, 0.6), 0 0 80px rgba(200, 169, 110, 0.05);
+}
+
+/* ── Font imports (subset) ── */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap');
+
+/* ── Glass Panel utility ── */
+.glass-panel {
+  background: var(--cockpit-glass);
+  border: 1px solid var(--cockpit-glass-border);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.gold-leaf-border {
+  border: 1px solid var(--cockpit-gold-dim);
+  box-shadow: inset 0 0 12px var(--cockpit-gold-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CockpitShell
+   ═══════════════════════════════════════════════════════════════════ */
+.cockpit-shell {
+  min-height: 100vh;
+  background: var(--cockpit-bg);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.cockpit-shell::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 800px;
+  height: 400px;
+  background: radial-gradient(ellipse, rgba(200, 169, 110, 0.03) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.cockpit-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BottomBar
+   ═══════════════════════════════════════════════════════════════════ */
+.cockpit-bottom-bar {
+  position: relative;
+  padding: 12px 24px 16px;
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 580px) 1fr;
+  align-items: center;
+  gap: 16px;
+  background: var(--cockpit-surface);
+  border-top: 1px solid var(--cockpit-glass-border);
+  box-shadow: 0 -4px 40px rgba(0, 0, 0, 0.3);
+}
+
+.cockpit-bottom-bar__left,
+.cockpit-bottom-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cockpit-bottom-bar__right {
+  justify-content: flex-end;
+}
+
+.cockpit-bottom-bar__center {
+  display: flex;
+  justify-content: center;
+}
+
+/* Gecko recommendation strip */
+.gecko-recommend-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: var(--gecko-active-glow);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  font-family: 'Orbitron', monospace;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--cockpit-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.gecko-recommend-strip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gecko-active-color);
+  animation: gecko-breathe 3s ease-in-out infinite;
+}
+
+@keyframes gecko-breathe {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AI Selector Trigger (Engine Capsule)
+   ═══════════════════════════════════════════════════════════════════ */
+.ai-selector-trigger {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 520px;
+  height: 54px;
+  padding: 0 16px;
+  border-radius: 14px;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background var(--cockpit-transition-medium),
+    border-color var(--cockpit-transition-medium),
+    box-shadow var(--cockpit-transition-medium);
+
+  background: var(--cockpit-glass);
+  border: 1px solid var(--cockpit-glass-border);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+
+  position: relative;
+  overflow: hidden;
+}
+
+.ai-selector-trigger::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  padding: 1px;
+  background: linear-gradient(
+    135deg,
+    rgba(200, 169, 110, 0.15) 0%,
+    transparent 40%,
+    transparent 60%,
+    rgba(200, 169, 110, 0.08) 100%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.ai-selector-trigger:hover {
+  background: var(--cockpit-surface-hover);
+  border-color: var(--cockpit-glass-border-hover);
+  box-shadow: 0 0 24px rgba(200, 169, 110, 0.06);
+}
+
+.ai-selector-trigger[aria-expanded="true"] {
+  border-color: var(--cockpit-gold-dim);
+  box-shadow: 0 0 30px var(--cockpit-gold-glow);
+}
+
+/* Reactor icon (provider core) */
+.ai-selector-reactor {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  font-family: 'Rajdhani', sans-serif;
+  text-transform: uppercase;
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+}
+
+.ai-selector-reactor::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Reactor breathing animation (subtle) */
+.ai-selector-trigger[aria-expanded="true"] .ai-selector-reactor::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 12px;
+  background: inherit;
+  opacity: 0.3;
+  filter: blur(6px);
+  animation: reactor-breathe 2.5s ease-in-out infinite;
+}
+
+@keyframes reactor-breathe {
+  0%, 100% { opacity: 0.2; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(1.08); }
+}
+
+/* Trigger center text */
+.ai-selector-trigger__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ai-selector-trigger__model-name {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--cockpit-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+
+.ai-selector-trigger__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 300;
+  color: var(--cockpit-text-muted);
+  line-height: 1.2;
+}
+
+.ai-selector-trigger__meta-sep {
+  opacity: 0.4;
+}
+
+/* Quality indicator (right side) */
+.ai-selector-trigger__quality {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.ai-selector-quality-ring {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Orbitron', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--cockpit-text-primary);
+  position: relative;
+}
+
+.ai-selector-quality-ring svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.ai-selector-quality-ring__track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 2;
+}
+
+.ai-selector-quality-ring__fill {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--cockpit-transition-slow);
+}
+
+/* Chevron */
+.ai-selector-trigger__chevron {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--cockpit-text-muted);
+  transition: transform var(--cockpit-transition-medium);
+}
+
+.ai-selector-trigger[aria-expanded="true"] .ai-selector-trigger__chevron {
+  transform: rotate(180deg);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AI Selector Sheet (Flyout)
+   ═══════════════════════════════════════════════════════════════════ */
+.ai-selector-sheet {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 540px;
+  max-height: 480px;
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  background: var(--cockpit-surface);
+  border: 1px solid var(--cockpit-glass-border);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: var(--shadow-glow-intense);
+
+  animation: sheet-enter var(--cockpit-transition-slow) forwards;
+  z-index: 100;
+}
+
+@keyframes sheet-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+/* Sheet header (search + gecko strip) */
+.ai-selector-sheet__header {
+  padding: 14px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.ai-selector-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 38px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--cockpit-glass-border);
+  transition: border-color var(--cockpit-transition-fast);
+}
+
+.ai-selector-search:focus-within {
+  border-color: var(--cockpit-gold-dim);
+}
+
+.ai-selector-search__icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--cockpit-text-muted);
+}
+
+.ai-selector-search__input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--cockpit-text-primary);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ai-selector-search__input::placeholder {
+  color: var(--cockpit-text-muted);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Intent Tabs
+   ═══════════════════════════════════════════════════════════════════ */
+.ai-selector-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 10px 16px 0;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ai-selector-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.ai-selector-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--cockpit-transition-fast),
+    color var(--cockpit-transition-fast);
+
+  background: transparent;
+  color: var(--cockpit-text-muted);
+  font-family: 'Orbitron', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.ai-selector-tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--cockpit-text-secondary);
+}
+
+.ai-selector-tab--active {
+  background: rgba(200, 169, 110, 0.1);
+  color: var(--cockpit-gold);
+  border: 1px solid var(--cockpit-gold-dim);
+}
+
+.ai-selector-tab__icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Model List (scrollable area)
+   ═══════════════════════════════════════════════════════════════════ */
+.ai-selector-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 8px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+}
+
+.ai-selector-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.ai-selector-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ai-selector-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+}
+
+/* Section label */
+.ai-selector-section {
+  padding: 12px 8px 4px;
+  font-family: 'Orbitron', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--cockpit-text-muted);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Model Row
+   ═══════════════════════════════════════════════════════════════════ */
+.ai-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  position: relative;
+  transition:
+    background var(--cockpit-transition-fast),
+    box-shadow var(--cockpit-transition-fast);
+}
+
+.ai-selector-row:hover {
+  background: var(--cockpit-surface-hover);
+}
+
+/* Selected state — left accent rail */
+.ai-selector-row--selected {
+  background: var(--cockpit-surface-active);
+  box-shadow: 0 0 16px rgba(200, 169, 110, 0.04);
+}
+
+.ai-selector-row--selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--cockpit-gold);
+  box-shadow: 0 0 8px var(--cockpit-gold-glow);
+}
+
+/* Provider dot */
+.ai-selector-row__provider-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Row info */
+.ai-selector-row__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ai-selector-row__name {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--cockpit-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.ai-selector-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 300;
+  color: var(--cockpit-text-muted);
+  line-height: 1.2;
+}
+
+.ai-selector-row__meta-sep {
+  opacity: 0.35;
+}
+
+/* Row right side: quality bar + pin */
+.ai-selector-row__right {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Compact quality bar */
+.ai-selector-row__quality-bar {
+  display: flex;
+  gap: 2px;
+}
+
+.ai-selector-row__quality-pip {
+  width: 3px;
+  height: 12px;
+  border-radius: 1.5px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: background var(--cockpit-transition-fast);
+}
+
+.ai-selector-row__quality-pip--filled {
+  background: var(--cockpit-gold);
+}
+
+/* Value tier tags (slim) */
+.ai-selector-row__tier {
+  font-family: 'Orbitron', monospace;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.ai-selector-row__tier--free {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.15);
+}
+
+.ai-selector-row__tier--exceptional {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+  border: 1px solid rgba(96, 165, 250, 0.15);
+}
+
+.ai-selector-row__tier--great {
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.1);
+  border: 1px solid rgba(167, 139, 250, 0.15);
+}
+
+.ai-selector-row__tier--premium {
+  color: var(--cockpit-gold);
+  background: rgba(200, 169, 110, 0.1);
+  border: 1px solid var(--cockpit-gold-dim);
+}
+
+/* Pin button (discreet) */
+.ai-selector-row__pin {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--cockpit-text-muted);
+  opacity: 0;
+  transition:
+    opacity var(--cockpit-transition-fast),
+    color var(--cockpit-transition-fast),
+    background var(--cockpit-transition-fast);
+}
+
+.ai-selector-row:hover .ai-selector-row__pin,
+.ai-selector-row__pin--active {
+  opacity: 1;
+}
+
+.ai-selector-row__pin:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--cockpit-text-secondary);
+}
+
+.ai-selector-row__pin--active {
+  color: var(--cockpit-gold);
+}
+
+.ai-selector-row__pin svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Pinned / Recent strip
+   ═══════════════════════════════════════════════════════════════════ */
+.ai-selector-pinned-strip {
+  display: flex;
+  gap: 6px;
+  padding: 6px 16px 2px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ai-selector-pinned-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.ai-selector-pinned-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--cockpit-glass-border);
+  background: rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--cockpit-transition-fast),
+    border-color var(--cockpit-transition-fast);
+
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--cockpit-text-secondary);
+}
+
+.ai-selector-pinned-chip:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--cockpit-glass-border-hover);
+}
+
+.ai-selector-pinned-chip__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Empty / Loading states
+   ═══════════════════════════════════════════════════════════════════ */
+.ai-selector-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  gap: 8px;
+  text-align: center;
+}
+
+.ai-selector-empty__icon {
+  font-size: 24px;
+  opacity: 0.5;
+}
+
+.ai-selector-empty__text {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 14px;
+  color: var(--cockpit-text-muted);
+}
+
+.ai-selector-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.ai-selector-loading__spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--cockpit-glass-border);
+  border-top-color: var(--cockpit-gold);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Backdrop overlay (click-away)
+   ═══════════════════════════════════════════════════════════════════ */
+.ai-selector-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Responsive — Mobile bottom sheet
+   ═══════════════════════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+  .cockpit-bottom-bar {
+    grid-template-columns: 1fr;
+    padding: 10px 16px 14px;
+  }
+
+  .cockpit-bottom-bar__left,
+  .cockpit-bottom-bar__right {
+    display: none;
+  }
+
+  .ai-selector-trigger {
+    max-width: 100%;
+    height: 48px;
+  }
+
+  .ai-selector-sheet {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    transform: none;
+    width: 100%;
+    max-height: 70vh;
+    border-radius: 16px 16px 0 0;
+    animation: sheet-enter-mobile var(--cockpit-transition-slow) forwards;
+  }
+
+  @keyframes sheet-enter-mobile {
+    from {
+      opacity: 0;
+      transform: translateY(40px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .ai-selector-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
