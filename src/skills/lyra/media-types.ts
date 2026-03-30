@@ -163,6 +163,7 @@ export function isImageBrief(v: unknown): v is ImageBrief {
     typeof obj.title !== 'string' ||
     typeof obj.description !== 'string' ||
     typeof obj.style !== 'string' ||
+    typeof obj.platform !== 'string' ||
     typeof obj.prompt !== 'string' ||
     typeof obj.negativePrompt !== 'string' ||
     typeof obj.referenceNotes !== 'string' ||
@@ -213,6 +214,7 @@ export function isVideoBrief(v: unknown): v is VideoBrief {
   if (
     typeof obj.title !== 'string' ||
     typeof obj.concept !== 'string' ||
+    typeof obj.platform !== 'string' ||
     typeof obj.musicDirection !== 'string' ||
     !Array.isArray(obj.tags)
   ) return false;
