@@ -66,6 +66,8 @@ export type SkillResultKind =
   | 'draft'           // Lyra draft artifact
   | 'headlines'       // Lyra headline variants
   | 'repurpose'       // Lyra repurposed content
+  | 'image_brief'     // Lyra image brief
+  | 'video_brief'     // Lyra video brief
   | 'capture_ack'     // Spark capture acknowledgement
   | 'digest'          // Spark inbox digest
   | 'gauntlet'        // Spark gauntlet result
