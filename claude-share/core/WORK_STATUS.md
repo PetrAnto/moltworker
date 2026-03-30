@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-30 (Security audit + dep fix complete)
+**Last Updated:** 2026-03-30 (Security audit + dep fix + Wave 7 canonical spec pack)
 
 ---
 
@@ -61,11 +61,17 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | Security audit + npm dep fix (React2Shell clean, 8 vulns fixed, upstream triage done) | `claude/security-audit-react2shell-upstream-sync` | 2026-03-30 |
-| Codex | — | — | — |
+| Claude | Security audit + W7 spec pack complete. 8 npm vulns fixed. | `claude/security-audit-react2shell-upstream-sync` | 2026-03-30 |
+| Codex | Wave 7 deep-review + 4 PR proposals (#443-#446) — cherry-picked by Claude | `work` (PRs open) | 2026-03-29 |
 | Other | — | — | — |
 
 ---
+
+### Notes for Other Agents
+
+- Wave 7 planning canon now lives in `claude-share/core/geckolife+pricing_update/W7_CANONICAL_SPEC.md` with companion roadmap, connection links, and governance files.
+- Use `W7_FOLLOWUP_AND_GOVERNANCE.md` when closing each Wave 7 sprint PR to keep sync artifacts consistent.
+- Before starting any W7 coding sprint, read `W7_CANONICAL_SPEC.md` as top-level context to avoid prompt drift.
 
 ### Next Priorities Queue
 

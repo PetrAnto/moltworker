@@ -6,6 +6,13 @@
 
 ---
 
+## Planning Baseline (2026-03-29)
+
+- Canonical spec: [`W7_CANONICAL_SPEC.md`](./W7_CANONICAL_SPEC.md)
+- Connection matrix: [`W7_CONNECTION_LINKS.md`](./W7_CONNECTION_LINKS.md)
+- Execution roadmap: [`W7_EXECUTION_ROADMAP.md`](./W7_EXECUTION_ROADMAP.md)
+- Follow-up governance: [`W7_FOLLOWUP_AND_GOVERNANCE.md`](./W7_FOLLOWUP_AND_GOVERNANCE.md)
+
 ## PetrAnto Manual Actions
 
 ### Before W7-S1 starts
