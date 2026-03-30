@@ -5926,8 +5926,9 @@ Just type a message to chat, or tap a button below to explore:`;
         { text: '🔄 Sync ▸', callback_data: 'start:sub:sync' },
         { text: '⚙️ Settings ▸', callback_data: 'start:sub:settings' },
       ],
-      // Row 6: Help
+      // Row 6: Cockpit + Help
       [
+        { text: '🎛️ AI Cockpit', url: 'https://moltbot-sandbox.petrantonft.workers.dev/_admin/cockpit' },
         { text: '📖 All Commands', callback_data: 'start:help' },
       ],
     ];
