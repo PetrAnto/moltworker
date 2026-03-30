@@ -265,7 +265,54 @@ CAPA-2 (consent storage)       — migration + route update, ~2-3h
 CAPA-3 (collective engine)     — substantial, ~6-8h
 CAPA-5 (no-op audit)           — verification + fixes, ~2h
 CAPA-6 (analytics realignment) — reconciliation, ~2h
+CAPA-7 (PR #448 gecko caps)    — 3 fixes, ~3-4h
 ```
+
+---
+
+## CAPA-7: PR #448 Gecko Capability System Fixes (ai-hub)
+
+**Source**: Audit of PR #448 (gecko capability access + combo selection APIs)
+**Overall PR score**: 7.9/10 — good architectural foundation, 4 meaningful findings
+**Severity**: High (findings 1-2), Medium (findings 3-4), Low (finding 5)
+
+### 7a) Expired grants bypass in POST /api/gecko/combo (HIGH)
+
+**Problem**: `GET /api/gecko/access` filters expired grants correctly, but `POST /api/gecko/combo` reads from `gecko_capability_access` with NO expiry filtering before calling `canAccessGecko()`. Expired trials remain active.
+
+**Fix**:
+- In `src/app/api/gecko/combo/route.ts`: apply same expiry filter as access route
+- Extract shared helper `getValidCapabilityGrants(userId)` to avoid logic drift
+- Add test: expired grant → combo selection rejected
+
+### 7b) Client store too coarse for backend access model (HIGH)
+
+**Problem**: Zustand store uses `hasProAccess: boolean` which ignores trial/admin grants. `setCapability` and `toggleCapability` return early if not Pro, blocking users who have valid trial or admin-granted access.
+
+**Fix**:
+- Replace `hasProAccess: boolean` with `accessibleCapabilities: CapabilityGeckoId[]` (or `accessMap`)
+- Hydrate from `/api/gecko/access` instead of compressing to boolean
+- Update `setCapability`/`toggleCapability` to check actual capability-level access
+- Files: `src/lib/gecko/state.ts`
+
+### 7c) Operational failures masked as free-tier state (MEDIUM)
+
+**Problem**: Both `/api/gecko/access` and `/api/gecko/state` swallow database errors and return 200 with default/locked data. Migration failures go unnoticed.
+
+**Fix**:
+- Add `degraded: true` + `source: "fallback"` field to error responses
+- OR return 500 for real operational failures, with separate explicit fallback for pre-migration states
+- Files: `src/app/api/gecko/access/route.ts`, `src/app/api/gecko/state/route.ts`
+
+### 7d) Verify prompt-merger wiring (LOW / follow-up)
+
+**Problem**: `src/lib/gecko/prompt-merger.ts` is well-designed but PR alone doesn't prove all inference paths use it.
+
+**Fix**:
+- Verify runtime chat path calls `buildCombinedSystemPrompt()` or `buildPersonalityPrompt()`
+- Add integration test covering personality+capability combo prompt
+
+### Effort: ~3-4h total
 
 **Total CAPA effort**: ~13-16h
 
