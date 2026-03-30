@@ -18,6 +18,13 @@ import {
   LYRA_HEADLINE_PROMPT,
   LYRA_REPURPOSE_PROMPT,
 } from './prompts';
+import { LYRA_IMAGE_SYSTEM_PROMPT, LYRA_VIDEO_SYSTEM_PROMPT, buildImagePrompt, buildVideoPrompt } from './media-prompts';
+import {
+  isImageBrief, isVideoBrief,
+  PLATFORM_DIMENSIONS, VIDEO_PLATFORM_SPECS,
+  type ImageBrief, type VideoBrief,
+  type ImagePlatform, type ImageStyle, type VideoPlatform,
+} from './media-types';
 import { safeJsonParse } from '../validators';
 import type { ToolCall } from '../../openrouter/tools';
 
@@ -28,9 +35,9 @@ const QUALITY_THRESHOLD = 3;
 export const LYRA_META: SkillMeta = {
   id: 'lyra',
   name: 'Lyra',
-  description: 'Content creator — drafts, headlines, rewrites, and platform adaptations',
+  description: 'Content creator — drafts, headlines, rewrites, platform adaptations, and media briefs',
   defaultModel: 'flash',
-  subcommands: ['write', 'rewrite', 'headline', 'repurpose'],
+  subcommands: ['write', 'rewrite', 'headline', 'repurpose', 'image', 'video'],
 };
 
 /**
@@ -46,6 +53,10 @@ export async function handleLyra(request: SkillRequest): Promise<SkillResult> {
       return executeHeadline(request);
     case 'repurpose':
       return executeRepurpose(request);
+    case 'image':
+      return executeImage(request);
+    case 'video':
+      return executeVideo(request);
     default:
       return makeError(request, `Unknown Lyra subcommand: ${request.subcommand}`);
   }
@@ -295,6 +306,144 @@ async function executeRepurpose(request: SkillRequest): Promise<SkillResult> {
       model,
       llmCalls: 1,
       toolCalls,
+      tokens: result.tokens,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// /image — generate an image brief
+// ---------------------------------------------------------------------------
+
+async function executeImage(request: SkillRequest): Promise<SkillResult> {
+  if (!request.text.trim()) {
+    return makeError(request, 'Please describe the image. Usage: /image <description> [--for <platform>] [--style <style>]');
+  }
+
+  const start = Date.now();
+  const model = selectSkillModel(request.modelAlias, LYRA_META.defaultModel);
+
+  const platformStr = request.flags.for ?? request.flags.platform;
+  const styleStr = request.flags.style;
+
+  // Validate platform if provided
+  const platform = platformStr && platformStr in PLATFORM_DIMENSIONS
+    ? platformStr as ImagePlatform
+    : undefined;
+  const style = styleStr as ImageStyle | undefined;
+
+  const userPrompt = buildImagePrompt(request.text, platform, style);
+
+  const result = await callSkillLLM({
+    systemPrompt: LYRA_IMAGE_SYSTEM_PROMPT,
+    userPrompt,
+    modelAlias: model,
+    responseFormat: { type: 'json_object' },
+    env: request.env,
+  });
+
+  let brief = safeJsonParse<ImageBrief>(result.text);
+
+  if (!brief || !isImageBrief(brief)) {
+    return {
+      skillId: 'lyra',
+      kind: 'text',
+      body: result.text,
+      telemetry: {
+        durationMs: Date.now() - start,
+        model,
+        llmCalls: 1,
+        toolCalls: 0,
+        tokens: result.tokens,
+      },
+    };
+  }
+
+  // Inject/override platform dimensions from our canonical map
+  const resolvedPlatform = (platform ?? brief.platform) as ImagePlatform;
+  if (resolvedPlatform && resolvedPlatform in PLATFORM_DIMENSIONS) {
+    brief = { ...brief, platform: resolvedPlatform, dimensions: PLATFORM_DIMENSIONS[resolvedPlatform] };
+  }
+
+  return {
+    skillId: 'lyra',
+    kind: 'image_brief',
+    body: brief.title,
+    data: brief,
+    telemetry: {
+      durationMs: Date.now() - start,
+      model,
+      llmCalls: 1,
+      toolCalls: 0,
+      tokens: result.tokens,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// /video — generate a video brief
+// ---------------------------------------------------------------------------
+
+async function executeVideo(request: SkillRequest): Promise<SkillResult> {
+  if (!request.text.trim()) {
+    return makeError(request, 'Please describe the video. Usage: /video <description> [--for <platform>] [--duration <seconds>]');
+  }
+
+  const start = Date.now();
+  const model = selectSkillModel(request.modelAlias, LYRA_META.defaultModel);
+
+  const platformStr = request.flags.for ?? request.flags.platform;
+  const durationStr = request.flags.duration;
+
+  // Validate platform if provided
+  const platform = platformStr && platformStr in VIDEO_PLATFORM_SPECS
+    ? platformStr as VideoPlatform
+    : undefined;
+  const duration = durationStr ? parseInt(durationStr, 10) : undefined;
+
+  const userPrompt = buildVideoPrompt(request.text, platform, duration && !isNaN(duration) ? duration : undefined);
+
+  const result = await callSkillLLM({
+    systemPrompt: LYRA_VIDEO_SYSTEM_PROMPT,
+    userPrompt,
+    modelAlias: model,
+    responseFormat: { type: 'json_object' },
+    env: request.env,
+  });
+
+  let brief = safeJsonParse<VideoBrief>(result.text);
+
+  if (!brief || !isVideoBrief(brief)) {
+    return {
+      skillId: 'lyra',
+      kind: 'text',
+      body: result.text,
+      telemetry: {
+        durationMs: Date.now() - start,
+        model,
+        llmCalls: 1,
+        toolCalls: 0,
+        tokens: result.tokens,
+      },
+    };
+  }
+
+  // Inject/override platform specs from our canonical map
+  const resolvedPlatform = (platform ?? brief.platform) as VideoPlatform;
+  if (resolvedPlatform && resolvedPlatform in VIDEO_PLATFORM_SPECS) {
+    brief = { ...brief, platform: resolvedPlatform, specs: VIDEO_PLATFORM_SPECS[resolvedPlatform] };
+  }
+
+  return {
+    skillId: 'lyra',
+    kind: 'video_brief',
+    body: brief.title,
+    data: brief,
+    telemetry: {
+      durationMs: Date.now() - start,
+      model,
+      llmCalls: 1,
+      toolCalls: 0,
       tokens: result.tokens,
     },
   };

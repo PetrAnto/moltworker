@@ -11,9 +11,9 @@ import {
 } from './command-map';
 
 describe('COMMAND_SKILL_MAP', () => {
-  it('contains all 14 expected command mappings', () => {
+  it('contains all 18 expected command mappings', () => {
     const commands = Object.keys(COMMAND_SKILL_MAP);
-    expect(commands.length).toBe(14);
+    expect(commands.length).toBe(18);
   });
 
   it('maps /orch to orchestra', () => {

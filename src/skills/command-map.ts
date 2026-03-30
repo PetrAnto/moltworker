@@ -28,10 +28,16 @@ export const COMMAND_SKILL_MAP: Record<string, CommandMapping> = {
   '/orchestra': { skillId: 'orchestra', defaultSubcommand: 'run' },
 
   // Lyra — Content Creator (Phase 1)
-  '/write':     { skillId: 'lyra', defaultSubcommand: 'write' },
-  '/rewrite':   { skillId: 'lyra', defaultSubcommand: 'rewrite' },
-  '/headline':  { skillId: 'lyra', defaultSubcommand: 'headline' },
-  '/repurpose': { skillId: 'lyra', defaultSubcommand: 'repurpose' },
+  '/write':      { skillId: 'lyra', defaultSubcommand: 'write' },
+  '/rewrite':    { skillId: 'lyra', defaultSubcommand: 'rewrite' },
+  '/headline':   { skillId: 'lyra', defaultSubcommand: 'headline' },
+  '/repurpose':  { skillId: 'lyra', defaultSubcommand: 'repurpose' },
+
+  // Lyra — Media Briefs (Phase 1b)
+  '/image':      { skillId: 'lyra', defaultSubcommand: 'image' },
+  '/imagine':    { skillId: 'lyra', defaultSubcommand: 'image' },
+  '/video':      { skillId: 'lyra', defaultSubcommand: 'video' },
+  '/storyboard': { skillId: 'lyra', defaultSubcommand: 'video' },
 
   // Spark — Brainstorm (Phase 2)
   '/save':      { skillId: 'spark', defaultSubcommand: 'save' },

@@ -7,6 +7,7 @@
  */
 
 import type { SkillResult } from '../types';
+import { isImageBrief, isVideoBrief, type ImageBrief, type VideoBrief } from '../lyra/media-types';
 
 /** Telegram's message character limit. */
 const TELEGRAM_MAX_LENGTH = 4096;
@@ -69,6 +70,12 @@ function renderSingle(result: SkillResult): TelegramChunk {
     case 'dossier':
       return renderDossier(result);
 
+    case 'image_brief':
+      return renderImageBrief(result);
+
+    case 'video_brief':
+      return renderVideoBrief(result);
+
     case 'source_plan':
       return renderSourcePlan(result);
 
@@ -109,6 +116,72 @@ function renderDossier(result: SkillResult): TelegramChunk {
 
   const tel = result.telemetry;
   lines.push(`\n<i>${tel.model} \u2022 ${tel.llmCalls} calls \u2022 ${(tel.durationMs / 1000).toFixed(1)}s</i>`);
+
+  return { text: lines.join('\n'), parseMode: 'HTML' };
+}
+
+function renderImageBrief(result: SkillResult): TelegramChunk {
+  const brief = result.data as ImageBrief | undefined;
+  if (!brief || !isImageBrief(brief)) {
+    return { text: result.body };
+  }
+
+  const lines: string[] = [];
+  lines.push(`<b>Image Brief: ${escapeHtml(brief.title)}</b>\n`);
+  lines.push(`<b>Style:</b> ${escapeHtml(brief.style)}`);
+  lines.push(`<b>Platform:</b> ${escapeHtml(brief.platform)} (${brief.dimensions.width}x${brief.dimensions.height})`);
+  lines.push('');
+  lines.push(`<b>Description:</b>\n${escapeHtml(brief.description)}`);
+  lines.push('');
+  lines.push(`<b>Prompt:</b>\n<code>${escapeHtml(brief.prompt)}</code>`);
+  if (brief.negativePrompt) {
+    lines.push(`\n<b>Negative:</b>\n<code>${escapeHtml(brief.negativePrompt)}</code>`);
+  }
+  if (brief.referenceNotes) {
+    lines.push(`\n<b>References:</b>\n${escapeHtml(brief.referenceNotes)}`);
+  }
+  if (brief.tags.length > 0) {
+    lines.push(`\n<b>Tags:</b> ${brief.tags.map(t => `#${escapeHtml(t)}`).join(' ')}`);
+  }
+
+  const tel = result.telemetry;
+  lines.push(`\n<i>${tel.model} \u2022 ${(tel.durationMs / 1000).toFixed(1)}s</i>`);
+
+  return { text: lines.join('\n'), parseMode: 'HTML' };
+}
+
+function renderVideoBrief(result: SkillResult): TelegramChunk {
+  const brief = result.data as VideoBrief | undefined;
+  if (!brief || !isVideoBrief(brief)) {
+    return { text: result.body };
+  }
+
+  const lines: string[] = [];
+  lines.push(`<b>Video Brief: ${escapeHtml(brief.title)}</b>\n`);
+  lines.push(`<b>Concept:</b> ${escapeHtml(brief.concept)}`);
+  lines.push(`<b>Platform:</b> ${escapeHtml(brief.platform)} (${brief.specs.width}x${brief.specs.height}, ${brief.specs.fps}fps)`);
+  lines.push(`<b>Duration:</b> ${brief.script.totalDuration}s`);
+  lines.push('');
+
+  for (const scene of brief.script.scenes) {
+    lines.push(`<b>Scene ${scene.sceneNumber}: ${escapeHtml(scene.title)}</b> (${scene.duration}s)`);
+    lines.push(escapeHtml(scene.description));
+    for (const shot of scene.shots) {
+      lines.push(`  \u2022 [${escapeHtml(shot.shotType)}] ${escapeHtml(shot.description)} (${shot.duration}s)`);
+    }
+    if (scene.voiceover) {
+      lines.push(`  <i>VO: ${escapeHtml(scene.voiceover)}</i>`);
+    }
+    lines.push('');
+  }
+
+  lines.push(`<b>Music:</b> ${escapeHtml(brief.musicDirection)}`);
+  if (brief.tags.length > 0) {
+    lines.push(`<b>Tags:</b> ${brief.tags.map(t => `#${escapeHtml(t)}`).join(' ')}`);
+  }
+
+  const tel = result.telemetry;
+  lines.push(`\n<i>${tel.model} \u2022 ${(tel.durationMs / 1000).toFixed(1)}s</i>`);
 
   return { text: lines.join('\n'), parseMode: 'HTML' };
 }
