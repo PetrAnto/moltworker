@@ -181,6 +181,31 @@ export function isImageBrief(v: unknown): v is ImageBrief {
   return true;
 }
 
+/** Type guard for a single ShotDescription parsed from JSON. */
+function isValidShot(v: unknown): v is ShotDescription {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const s = v as Record<string, unknown>;
+  return (
+    typeof s.shotType === 'string' &&
+    typeof s.description === 'string' &&
+    typeof s.duration === 'number'
+  );
+}
+
+/** Type guard for a single VideoScene parsed from JSON. */
+function isValidScene(v: unknown): v is VideoScene {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const s = v as Record<string, unknown>;
+  if (
+    typeof s.sceneNumber !== 'number' ||
+    typeof s.title !== 'string' ||
+    typeof s.description !== 'string' ||
+    typeof s.duration !== 'number' ||
+    !Array.isArray(s.shots)
+  ) return false;
+  return s.shots.every(isValidShot);
+}
+
 /** Type guard for VideoBrief parsed from JSON. */
 export function isVideoBrief(v: unknown): v is VideoBrief {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
@@ -192,10 +217,11 @@ export function isVideoBrief(v: unknown): v is VideoBrief {
     !Array.isArray(obj.tags)
   ) return false;
 
-  // Validate script structure
+  // Validate script structure including scenes and shots
   if (typeof obj.script !== 'object' || obj.script === null) return false;
   const script = obj.script as Record<string, unknown>;
   if (!Array.isArray(script.scenes) || typeof script.totalDuration !== 'number') return false;
+  if (!script.scenes.every(isValidScene)) return false;
 
   // Validate specs (must have width, height, fps, maxDuration)
   if (typeof obj.specs !== 'object' || obj.specs === null) return false;

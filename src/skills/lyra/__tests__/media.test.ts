@@ -171,6 +171,43 @@ describe('isVideoBrief', () => {
     const bad = { ...MOCK_VIDEO_BRIEF, specs: { ...MOCK_VIDEO_BRIEF.specs, fps: 'fast' } };
     expect(isVideoBrief(bad)).toBe(false);
   });
+
+  it('returns false when scenes contain empty objects', () => {
+    const bad = {
+      ...MOCK_VIDEO_BRIEF,
+      script: { scenes: [{}], totalDuration: 15 },
+    };
+    expect(isVideoBrief(bad)).toBe(false);
+  });
+
+  it('returns false when a scene is missing shots array', () => {
+    const bad = {
+      ...MOCK_VIDEO_BRIEF,
+      script: {
+        scenes: [{ sceneNumber: 1, title: 'x', description: 'y', duration: 5 }],
+        totalDuration: 5,
+      },
+    };
+    expect(isVideoBrief(bad)).toBe(false);
+  });
+
+  it('returns false when a shot is missing shotType', () => {
+    const bad = {
+      ...MOCK_VIDEO_BRIEF,
+      script: {
+        scenes: [{
+          sceneNumber: 1, title: 'x', description: 'y', duration: 5,
+          shots: [{ description: 'detail', duration: 5 }],
+        }],
+        totalDuration: 5,
+      },
+    };
+    expect(isVideoBrief(bad)).toBe(false);
+  });
+
+  it('accepts valid scenes with valid shots', () => {
+    expect(isVideoBrief(MOCK_VIDEO_BRIEF)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

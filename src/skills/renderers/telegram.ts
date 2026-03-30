@@ -244,36 +244,43 @@ export function splitMessage(text: string, maxLength: number): string[] {
  * Splits HTML text into chunks that don't exceed maxLength, ensuring
  * that HTML tags (<b>, <i>, <code>) are properly closed in each chunk
  * and re-opened in the next.
+ *
+ * The raw split is done at a reduced limit to leave room for tag
+ * repair markup (closing/reopening tags) so the final output stays
+ * within the intended maxLength.
  */
 export function splitHtmlMessage(text: string, maxLength: number): string[] {
   // Fast path: fits in one message
   if (text.length <= maxLength) return [text];
 
-  const rawChunks = splitMessage(text, maxLength);
+  // Reserve headroom for tag repair — worst case is ~60 chars of tags
+  const TAG_OVERHEAD = 80;
+  const innerLimit = Math.max(maxLength - TAG_OVERHEAD, Math.floor(maxLength / 2));
+  const rawChunks = splitMessage(text, innerLimit);
   const result: string[] = [];
 
-  // Track open tags across chunks
   const TRACKED_TAGS = ['b', 'i', 'code', 'pre'] as const;
+  type TrackedTag = (typeof TRACKED_TAGS)[number];
   let openTags: string[] = [];
 
   for (const chunk of rawChunks) {
     // Prepend any tags that were open from the previous chunk
-    let patched = openTags.map(t => `<${t}>`).join('') + chunk;
+    const prefix = openTags.map(t => `<${t}>`).join('');
+    let patched = prefix + chunk;
 
-    // Scan this chunk to find which tags are left open
-    const tagStack: string[] = [...openTags];
+    // Scan the FULL patched content (including prefix) from scratch
+    // to determine which tags are left open at the end
+    const tagStack: string[] = [];
     const tagRegex = /<\/?([a-z]+)>/gi;
     let m: RegExpExecArray | null;
     while ((m = tagRegex.exec(patched)) !== null) {
       const fullMatch = m[0];
       const tagName = m[1].toLowerCase();
-      if (!TRACKED_TAGS.includes(tagName as (typeof TRACKED_TAGS)[number])) continue;
+      if (!TRACKED_TAGS.includes(tagName as TrackedTag)) continue;
       if (fullMatch.startsWith('</')) {
-        // Closing tag — pop from stack
         const idx = tagStack.lastIndexOf(tagName);
         if (idx !== -1) tagStack.splice(idx, 1);
       } else {
-        // Opening tag — push to stack
         tagStack.push(tagName);
       }
     }
