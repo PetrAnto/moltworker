@@ -426,11 +426,18 @@ async function executeVideo(request: SkillRequest): Promise<SkillResult> {
     parsed.specs = VIDEO_PLATFORM_SPECS[resolvedPlatform];
   }
 
-  // Ensure script.scenes is an array and totalDuration is set
+  // Normalize script structure
   if (typeof parsed.script === 'object' && parsed.script !== null) {
     const script = parsed.script as Record<string, unknown>;
     if (!Array.isArray(script.scenes)) script.scenes = [];
     if (typeof script.totalDuration !== 'number') script.totalDuration = 0;
+
+    // Normalize each scene — ensure shots is always an array
+    for (const scene of script.scenes as Record<string, unknown>[]) {
+      if (typeof scene === 'object' && scene !== null && !Array.isArray(scene)) {
+        if (!Array.isArray(scene.shots)) scene.shots = [];
+      }
+    }
   }
 
   if (!isVideoBrief(parsed)) {

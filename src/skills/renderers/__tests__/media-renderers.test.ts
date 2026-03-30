@@ -400,4 +400,29 @@ describe('splitHtmlMessage', () => {
     // The <b> is already closed before the split, so no tag repair needed
     expect(chunks[1]).not.toContain('<b>');
   });
+
+  it('does not double-count tags when next chunk starts with a closing tag', () => {
+    // Regression: previous chunk ends inside <b>..., next chunk starts with </b> tail
+    // The chunker should NOT produce duplicate </b> or carry a phantom open tag
+    const part1 = '<b>' + 'A'.repeat(30);
+    const part2 = '</b> ' + 'B'.repeat(30);
+    const text = part1 + part2;
+    const chunks = splitHtmlMessage(text, 40);
+
+    // Count total </b> across all chunks — should equal total <b>
+    const allText = chunks.join('');
+    const openCount = (allText.match(/<b>/g) || []).length;
+    const closeCount = (allText.match(/<\/b>/g) || []).length;
+    expect(openCount).toBe(closeCount);
+  });
+
+  it('does not produce chunks exceeding the limit', () => {
+    const text = '<b><i><code>' + 'W'.repeat(200) + '</code></i></b>';
+    const limit = 80;
+    const chunks = splitHtmlMessage(text, limit);
+    // Every chunk should be within limit (the inner split leaves headroom for tag repair)
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(limit);
+    }
+  });
 });
