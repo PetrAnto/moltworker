@@ -159,25 +159,53 @@ export interface VideoBrief {
 export function isImageBrief(v: unknown): v is ImageBrief {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const obj = v as Record<string, unknown>;
-  return (
-    typeof obj.title === 'string' &&
-    typeof obj.description === 'string' &&
-    typeof obj.style === 'string' &&
-    typeof obj.prompt === 'string' &&
-    Array.isArray(obj.tags)
-  );
+  if (
+    typeof obj.title !== 'string' ||
+    typeof obj.description !== 'string' ||
+    typeof obj.style !== 'string' ||
+    typeof obj.prompt !== 'string' ||
+    typeof obj.negativePrompt !== 'string' ||
+    typeof obj.referenceNotes !== 'string' ||
+    !Array.isArray(obj.tags)
+  ) return false;
+
+  // Validate dimensions (must have width, height, aspectRatio)
+  if (typeof obj.dimensions !== 'object' || obj.dimensions === null) return false;
+  const dims = obj.dimensions as Record<string, unknown>;
+  if (
+    typeof dims.width !== 'number' ||
+    typeof dims.height !== 'number' ||
+    typeof dims.aspectRatio !== 'string'
+  ) return false;
+
+  return true;
 }
 
 /** Type guard for VideoBrief parsed from JSON. */
 export function isVideoBrief(v: unknown): v is VideoBrief {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const obj = v as Record<string, unknown>;
-  return (
-    typeof obj.title === 'string' &&
-    typeof obj.concept === 'string' &&
-    typeof obj.musicDirection === 'string' &&
-    typeof obj.script === 'object' &&
-    obj.script !== null &&
-    Array.isArray(obj.tags)
-  );
+  if (
+    typeof obj.title !== 'string' ||
+    typeof obj.concept !== 'string' ||
+    typeof obj.musicDirection !== 'string' ||
+    !Array.isArray(obj.tags)
+  ) return false;
+
+  // Validate script structure
+  if (typeof obj.script !== 'object' || obj.script === null) return false;
+  const script = obj.script as Record<string, unknown>;
+  if (!Array.isArray(script.scenes) || typeof script.totalDuration !== 'number') return false;
+
+  // Validate specs (must have width, height, fps, maxDuration)
+  if (typeof obj.specs !== 'object' || obj.specs === null) return false;
+  const specs = obj.specs as Record<string, unknown>;
+  if (
+    typeof specs.width !== 'number' ||
+    typeof specs.height !== 'number' ||
+    typeof specs.fps !== 'number' ||
+    typeof specs.maxDuration !== 'number'
+  ) return false;
+
+  return true;
 }
