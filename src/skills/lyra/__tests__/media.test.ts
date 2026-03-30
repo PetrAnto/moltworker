@@ -138,6 +138,16 @@ describe('isImageBrief', () => {
     const bad = { ...MOCK_IMAGE_BRIEF, dimensions: { width: 'big', height: 1080, aspectRatio: '1:1' } };
     expect(isImageBrief(bad)).toBe(false);
   });
+
+  it('returns false when platform is missing', () => {
+    const { platform: _, ...noPlatform } = MOCK_IMAGE_BRIEF;
+    expect(isImageBrief(noPlatform)).toBe(false);
+  });
+
+  it('returns false when platform is not a string', () => {
+    const bad = { ...MOCK_IMAGE_BRIEF, platform: 42 };
+    expect(isImageBrief(bad)).toBe(false);
+  });
 });
 
 describe('isVideoBrief', () => {
@@ -207,6 +217,16 @@ describe('isVideoBrief', () => {
 
   it('accepts valid scenes with valid shots', () => {
     expect(isVideoBrief(MOCK_VIDEO_BRIEF)).toBe(true);
+  });
+
+  it('returns false when platform is missing', () => {
+    const { platform: _, ...noPlatform } = MOCK_VIDEO_BRIEF;
+    expect(isVideoBrief(noPlatform)).toBe(false);
+  });
+
+  it('returns false when platform is not a string', () => {
+    const bad = { ...MOCK_VIDEO_BRIEF, platform: 123 };
+    expect(isVideoBrief(bad)).toBe(false);
   });
 });
 
@@ -376,6 +396,19 @@ describe('/image handler', () => {
     expect(data.dimensions.width).toBe(1200);
     expect(data.dimensions.height).toBe(675);
   });
+
+  it('defaults to instagram-post when LLM omits platform', async () => {
+    const { platform: _, dimensions: _d, ...noPlatform } = MOCK_IMAGE_BRIEF;
+    mockCallLLM.mockResolvedValue({
+      text: JSON.stringify(noPlatform),
+    });
+
+    const result = await handleLyra(makeRequest());
+    expect(result.kind).toBe('image_brief');
+    const data = result.data as ImageBrief;
+    expect(data.platform).toBe('instagram-post');
+    expect(data.dimensions.width).toBe(1080);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -412,6 +445,19 @@ describe('/video handler', () => {
         userPrompt: expect.stringContaining('15 seconds'),
       }),
     );
+  });
+
+  it('defaults to instagram-reel when LLM omits platform', async () => {
+    const { platform: _, specs: _s, ...noPlatform } = MOCK_VIDEO_BRIEF;
+    mockCallLLM.mockResolvedValue({
+      text: JSON.stringify(noPlatform),
+    });
+
+    const result = await handleLyra(makeRequest({ subcommand: 'video', text: 'teaser' }));
+    expect(result.kind).toBe('video_brief');
+    const data = result.data as VideoBrief;
+    expect(data.platform).toBe('instagram-reel');
+    expect(data.specs.width).toBe(1080);
   });
 });
 

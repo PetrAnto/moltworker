@@ -349,11 +349,15 @@ async function executeImage(request: SkillRequest): Promise<SkillResult> {
     return makeTextFallback('lyra', result, start, model);
   }
 
-  // Normalize: inject canonical dimensions before validation
-  const resolvedPlatform = (platform ?? parsed.platform) as ImagePlatform;
-  if (resolvedPlatform && resolvedPlatform in PLATFORM_DIMENSIONS) {
+  // Normalize platform and inject canonical dimensions
+  const resolvedPlatform = (platform ?? parsed.platform) as ImagePlatform | undefined;
+  if (typeof resolvedPlatform === 'string' && resolvedPlatform in PLATFORM_DIMENSIONS) {
     parsed.platform = resolvedPlatform;
     parsed.dimensions = PLATFORM_DIMENSIONS[resolvedPlatform];
+  } else if (typeof parsed.platform !== 'string') {
+    // Default platform when LLM omits it entirely
+    parsed.platform = 'instagram-post';
+    parsed.dimensions = PLATFORM_DIMENSIONS['instagram-post'];
   }
 
   // Ensure string defaults for optional fields the LLM may omit
@@ -419,11 +423,15 @@ async function executeVideo(request: SkillRequest): Promise<SkillResult> {
     return makeTextFallback('lyra', result, start, model);
   }
 
-  // Normalize: inject canonical specs before validation
-  const resolvedPlatform = (platform ?? parsed.platform) as VideoPlatform;
-  if (resolvedPlatform && resolvedPlatform in VIDEO_PLATFORM_SPECS) {
+  // Normalize platform and inject canonical specs
+  const resolvedPlatform = (platform ?? parsed.platform) as VideoPlatform | undefined;
+  if (typeof resolvedPlatform === 'string' && resolvedPlatform in VIDEO_PLATFORM_SPECS) {
     parsed.platform = resolvedPlatform;
     parsed.specs = VIDEO_PLATFORM_SPECS[resolvedPlatform];
+  } else if (typeof parsed.platform !== 'string') {
+    // Default platform when LLM omits it entirely
+    parsed.platform = 'instagram-reel';
+    parsed.specs = VIDEO_PLATFORM_SPECS['instagram-reel'];
   }
 
   // Normalize script structure
