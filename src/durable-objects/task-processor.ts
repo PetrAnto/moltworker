@@ -276,6 +276,7 @@ interface TaskState {
   result?: string;
   error?: string;
   statusMessageId?: number;
+  userMessageId?: number; // Original user message for done/fail reactions
   telegramToken?: string; // Store for cancel
   openrouterKey?: string; // Store for alarm recovery
   githubToken?: string; // Store for alarm recovery
@@ -395,6 +396,8 @@ export interface TaskRequest {
   orchestraRepo?: string;
   // Draft init mode: model outputs roadmap in text, DO stores draft + sends preview
   isDraftInit?: boolean;
+  // Original user message ID for Telegram reactions (done/fail indicators)
+  userMessageId?: number;
 }
 
 /**
@@ -2368,7 +2371,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
     // Store status message ID for cancel cleanup
     task.statusMessageId = statusMessageId || undefined;
+    // Store user message ID for done/fail reactions
+    task.userMessageId = request.userMessageId;
     await this.doState.storage.put('task', taskForStorage(task));
+
+    // Set ⏳ reaction on user's original message (task started)
+    if (request.userMessageId && request.telegramToken) {
+      await this.setTelegramReaction(request.telegramToken, request.chatId, request.userMessageId, '⏳');
+    }
 
     const client = createOpenRouterClient(request.openrouterKey);
     // Workspace manager persists staged files in DO storage (survives evictions/auto-resumes)
@@ -5563,6 +5573,15 @@ If you already created the new file and just need to patch the original, call gi
       }
     } finally {
       this.isRunning = false;
+
+      // Set done/fail reaction on user's original message (centralized for all exit paths).
+      // ⏳ was set at task start — now replace with ✅ (success) or 👎 (failure).
+      // Only fires on terminal states (not on yield/resume where status stays 'processing').
+      if (task.userMessageId && task.telegramToken && task.status !== 'processing') {
+        const emoji = task.status === 'completed' ? '👍' : '👎';
+        this.setTelegramReaction(task.telegramToken, task.chatId, task.userMessageId, emoji).catch(() => {});
+      }
+
       // F.23: Release branch-level concurrency lock for orchestra tasks.
       // Runs on all terminal paths (success, failure, error) to prevent deadlocks.
       if (this.r2 && task.orchestraRepo && task.status !== 'processing') {
@@ -5634,6 +5653,31 @@ If you already created the new file and just need to patch the original, call gi
     }
 
     return parts.length > 0 ? '\n\n📋 Progress:\n' + parts.join('\n') : '';
+  }
+
+  /**
+   * Set a reaction emoji on a Telegram message (best-effort, non-fatal).
+   * Used for done/fail indicators on the user's original message.
+   */
+  private async setTelegramReaction(
+    token: string,
+    chatId: number,
+    messageId: number,
+    emoji: string
+  ): Promise<void> {
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/setMessageReaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+          reaction: [{ type: 'emoji', emoji }],
+        }),
+      });
+    } catch {
+      // Non-fatal — reactions are best-effort UX
+    }
   }
 
   /**

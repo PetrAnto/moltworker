@@ -370,6 +370,30 @@ export class TelegramBot {
   }
 
   /**
+   * Set a reaction emoji on a message.
+   * Uses Telegram Bot API setMessageReaction (available since API 6.1).
+   * Bots can use a limited set of emojis: 👍 👎 ❤️ 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮
+   * 💩 🙏 👌 🕊 🤡 🥱 🥴 😍 🐳 ❤️‍🔥 🌚 🌭 💯 🤣 ⚡ 🍌 🏆 💔 🤨 😐 🍓 🍾 💋 🖕
+   * 😈 😴 😭 🤓 👻 👨‍💻 👀 🎃 🙈 😇 😨 🤝 ✍️ 🤗 🫡 🎅 🎄 ☃️ 💅 🤪 🗿 🆒 💘 🙉
+   * 🦄 😘 💊 🙊 😎 👾 🤷‍♂️ 🤷 🤷‍♀️ 😡
+   */
+  async setMessageReaction(chatId: number, messageId: number, emoji: string): Promise<void> {
+    try {
+      await fetch(`${this.baseUrl}/setMessageReaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+          reaction: [{ type: 'emoji', emoji }],
+        }),
+      });
+    } catch {
+      // Non-fatal — reactions are best-effort UX
+    }
+  }
+
+  /**
    * Delete a message
    */
   async deleteMessage(chatId: number, messageId: number): Promise<void> {
@@ -548,6 +572,7 @@ export class TelegramHandler {
   private aaKey?: string; // Artificial Analysis API key for benchmark data
   private nexusKv?: KVNamespace; // KV namespace for Nexus research cache
   private dynamicModelsReady: Promise<void>; // Resolves when dynamic models are loaded from R2
+  private _currentUserMessageId?: number; // Set during message processing for reaction passthrough
   // (sync sessions now persisted in R2 via storage.saveSyncSession)
 
   constructor(
@@ -1917,6 +1942,8 @@ export class TelegramHandler {
     userId: string,
     args: string[]
   ): Promise<void> {
+    // Store message ID for reaction passthrough to executeOrchestra → DO
+    this._currentUserMessageId = message.message_id;
     const sub = args.length > 0 ? args[0].toLowerCase() : '';
 
     // /orch history
@@ -2580,6 +2607,7 @@ export class TelegramHandler {
     prompt: string,
     skipModelGuard: boolean = false,
     draftRevision?: { revision: string; previousDraft: string },
+    userMessageId?: number,
   ): Promise<void> {
     // Clean up stale orchestra tasks before starting new work
     if (this.r2Bucket) {
@@ -2927,6 +2955,7 @@ export class TelegramHandler {
       executionProfile,
       orchestraRepo: repo,
       isDraftInit: mode === 'draft',
+      userMessageId: userMessageId ?? this._currentUserMessageId,
     };
 
     const doId = this.taskProcessor.idFromName(userId);
@@ -3561,6 +3590,7 @@ export class TelegramHandler {
           responseFormat,
           acontextKey: this.acontextKey,
           acontextBaseUrl: this.acontextBaseUrl,
+          userMessageId: message.message_id,
         };
 
         const doId = this.taskProcessor.idFromName(userId);
@@ -3706,6 +3736,9 @@ export class TelegramHandler {
       await this.storage.addMessage(userId, 'user', messageText);
       await this.storage.addMessage(userId, 'assistant', responseText);
 
+      // Set ✅ reaction on user's original message (task done)
+      this.bot.setMessageReaction(chatId, message.message_id, '👍').catch(() => {});
+
       // Send response with HTML formatting (handle long messages)
       if (responseText.length > 4000) {
         // Split into chunks for long responses
@@ -3725,6 +3758,7 @@ export class TelegramHandler {
         }
       }
     } catch (error) {
+      this.bot.setMessageReaction(chatId, message.message_id, '👎').catch(() => {});
       await this.bot.sendMessage(chatId, `Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
