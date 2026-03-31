@@ -82,13 +82,24 @@
 3. ~~**S2** — Spark (Tach Brainstorm)~~ — ✅ Complete
 4. ~~**S3** — Nexus (Omni Research)~~ — ✅ Complete (incl S3.7 DO extension)
 5. **ST** — E2E Coding Agent Smoke Tests (see `claude-share/core/archive/Coding_Agent_Smoke_Tests.md`)
-6. **SEC-P1** — Implement transient error classifier + auto model rotation (~4-6h, from upstream triage)
-7. **SEC-P1** — Review upstream tool-call abort checkpoint pattern (~3-4h, from upstream triage)
-8. **SEC-P2** — Add Telegram done-reaction UX (~1-2h)
-6. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
-7. **F.7** — Discord full integration (read-only → two-way)
-8. **6.3** — Voice messages (Whisper + TTS)
-9. **6.4** — Calendar/reminder tools
+6. ~~**SEC-P1** — Transient error classifier + auto model rotation~~ — ✅ Complete (2026-03-31)
+7. ~~**SEC-P1** — Tool-call abort checkpoint/resume pattern~~ — ✅ Complete (2026-03-31)
+8. ~~**SEC-P2** — Telegram done-reaction UX~~ — ✅ Complete (2026-03-31)
+9. **F.6** — Fork to `storia-agent` (private) — when ready for IDE transport
+10. **F.7** — Discord full integration (read-only → two-way)
+11. **6.3** — Voice messages (Whisper + TTS)
+12. **6.4** — Calendar/reminder tools
+
+### Deferred / Monitor Items
+
+> These require an external trigger (upstream release, platform availability) before work can start.
+> **Review these at the start of each sprint** to check if the trigger condition is met.
+
+| ID | Item | Trigger Condition | Source | Est. Effort |
+|----|------|-------------------|--------|-------------|
+| MON-1 | Workers AI image generation provider abstraction | FLUX.2 [dev] + [klein] stable on Workers AI | Upstream triage CF-1/CF-2 | ~2-3h (integration) or ~4-8h (with full abstraction) |
+| MON-2 | SecretRef auth pattern for BYOK vault | BYOK vault integration from ai-hub Wave 7 ported to moltworker | Upstream triage #8 | ~1h |
+| MON-3 | Separate R2 bucket for backup/restore | Optional — currently shares `moltbot-data` with app storage | PR #456 audit point #3 | ~1h (wrangler config + migrate keys) |
 
 ### Tracked from AI Architecture Reviews (F.20–F.24)
 

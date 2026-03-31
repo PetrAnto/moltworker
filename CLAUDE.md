@@ -17,6 +17,11 @@ If `claude-share/` exists (via symlink or local copy from the private companion 
 
 If not available, commit with standard format and document changes in PR description.
 
+### Deferred Monitor Items (check each session)
+
+Before starting work, scan `claude-share/core/WORK_STATUS.md` → **Deferred / Monitor Items** table.
+If a trigger condition is now met (e.g. a platform release, upstream change), prioritize that item.
+
 ---
 
 ## Project Overview

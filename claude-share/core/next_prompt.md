@@ -42,3 +42,17 @@ All Gecko Skills phases are complete (S0 runtime, S1 Lyra, S2 Spark, S3 Nexus + 
 | 2026-03-25 | S2 Spark brainstorm | Claude Opus 4.6 | /save, /spark, /gauntlet, /brainstorm, /ideas. 31 new tests (2534 total). |
 | 2026-03-25 | S1 Lyra content creator | Claude Opus 4.6 | /write, /rewrite, /headline, /repurpose. 30 new tests (2503 total). |
 | 2026-03-25 | S0 Gecko Skills runtime + hardening | Claude Opus 4.6 | Runtime foundation + reviewer feedback fixes. 2472 tests. |
+
+---
+
+## Deferred / Monitor Items
+
+> **Check these at the start of each session.** They require an external trigger before work can start.
+
+| ID | Item | Trigger Condition | Action When Triggered |
+|----|------|-------------------|-----------------------|
+| MON-1 | Workers AI image provider | FLUX.2 stable on Workers AI | Add `ai` binding, design provider abstraction, cost optimization |
+| MON-2 | SecretRef auth for BYOK vault | BYOK vault ported to moltworker | Ensure unresolved keys fail closed (403) |
+| MON-3 | Separate R2 backup bucket | Sprint planning / cleanup | Split `BACKUP_BUCKET` to dedicated bucket, migrate keys |
+
+**Full details:** `claude-share/upstream-sync/openclaw-triage-2026-Q1.md`
