@@ -72,6 +72,10 @@
     {
       "binding": "MOLTBOT_BUCKET",
       "bucket_name": "moltbot-data"
+    },
+    {
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "moltbot-data"
     }
   ],
   "kv_namespaces": [
@@ -81,7 +85,7 @@
     }
   ],
   "triggers": {
-    "crons": ["*/5 * * * *", "0 */6 * * *"]
+    "crons": ["* * * * *", "*/5 * * * *", "0 */6 * * *"]
   },
   "browser": {
     "binding": "BROWSER"

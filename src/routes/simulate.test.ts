@@ -37,6 +37,7 @@ function createMockEnv(overrides: Partial<MoltbotEnv> = {}): MoltbotEnv {
     DEBUG_API_KEY: 'test-secret-key',
     OPENROUTER_API_KEY: 'or-test-key',
     MOLTBOT_BUCKET: {} as R2Bucket,
+    BACKUP_BUCKET: {} as R2Bucket,
     TASK_PROCESSOR: {
       idFromName: vi.fn().mockReturnValue('mock-do-id'),
       get: vi.fn().mockReturnValue({ fetch: vi.fn() }),

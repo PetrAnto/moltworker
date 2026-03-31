@@ -1,7 +1,9 @@
-FROM docker.io/cloudflare/sandbox:0.7.0
+FROM docker.io/cloudflare/sandbox:0.7.20
 
 # Install Node.js 22 (required by OpenClaw) and rclone (for R2 persistence)
-ENV NODE_VERSION=22.13.1
+# The base image has Node 20, we need to replace it with Node 22
+# Using direct binary download for reliability
+ENV NODE_VERSION=22.22.1
 RUN ARCH="$(dpkg --print-architecture)" \
     && case "${ARCH}" in \
          amd64) NODE_ARCH="x64" ;; \
@@ -9,6 +11,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
          *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;; \
        esac \
     && apt-get update && apt-get install -y xz-utils ca-certificates rclone \
+    && rm -rf /usr/local/lib/node_modules /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     && curl -fsSLk https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz -o /tmp/node.tar.xz \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz \
@@ -37,21 +40,31 @@ RUN mkdir -p /root/repos
 RUN npm install -g pnpm
 
 # Install OpenClaw (formerly clawdbot/moltbot)
-RUN npm install -g openclaw@2026.2.26 \
+RUN npm install -g openclaw@2026.3.23-2 \
     && openclaw --version
 
-# Create OpenClaw directories
-# Legacy .clawdbot paths kept for R2 backup migration
-RUN mkdir -p /root/.openclaw \
-    && mkdir -p /root/clawd \
-    && mkdir -p /root/clawd/skills
+# Use /home/openclaw as the home directory in addition to /root.
+# The Sandbox SDK backup API only allows directories under /home, /workspace,
+# /tmp, or /var/tmp — not /root. Symlinks allow both paths to work.
+ENV HOME=/home/openclaw
+RUN mkdir -p /home/openclaw/.openclaw \
+    && mkdir -p /home/openclaw/clawd \
+    && mkdir -p /home/openclaw/clawd/skills \
+    && ln -sf /home/openclaw/.openclaw /root/.openclaw \
+    && ln -sf /home/openclaw/clawd /root/clawd
 
-# Build cache bust: 2026-03-25-v1-nvidia
+# Build cache bust: 2026-03-31-v1-upstream-sync
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 
-COPY skills/ /root/clawd/skills/
+COPY skills/ /home/openclaw/clawd/skills/
 
-WORKDIR /root/clawd
+# Ensure all files are readable for mksquashfs (Sandbox SDK backup).
+# OpenClaw and other tools may create restrictive config files at runtime,
+# but we fix build-time permissions here; runtime permissions are fixed
+# before each backup via sandbox.exec("chmod -R a+rX /home/openclaw").
+RUN chmod -R a+rX /home/openclaw
+
+WORKDIR /home/openclaw/clawd
 
 EXPOSE 18789
