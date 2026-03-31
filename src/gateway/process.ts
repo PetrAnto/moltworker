@@ -20,7 +20,7 @@ export async function killGateway(sandbox: Sandbox): Promise<void> {
       [
         'kill -9 $(pgrep -x "openclaw-gateway" 2>/dev/null) $(pgrep -x "openclaw" 2>/dev/null) 2>/dev/null',
         'pkill -9 -f "openclaw" 2>/dev/null',
-        `kill -9 $(ss -tlnp sport = :${MOLTBOT_PORT} 2>/dev/null | grep -oP "pid=\\K[0-9]+") 2>/dev/null`,
+        `kill -9 $(ss -tlnp sport = :${MOLTBOT_PORT} 2>/dev/null | awk -F'pid=' '{print $2}' | awk -F',' '{print $1}') 2>/dev/null`,
         'true',
       ].join('; '),
     );

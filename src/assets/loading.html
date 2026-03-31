@@ -146,7 +146,7 @@
         const data = await response.json();
         consecutiveErrors = 0;
         
-        if (data.ok && data.status === 'running') {
+        if (data.ok && (data.status === 'running' || data.status === 'running_undetected')) {
           // Container is ready! Reload the page
           titleEl.innerHTML = '<span class="ready">Moltworker is ready!</span>';
           statusEl.textContent = 'Redirecting...';
