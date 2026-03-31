@@ -4,7 +4,7 @@
 
 ---
 
-## Session: 2026-03-31 | SEC-P1 Fixes + Upstream Sync (Session: session_016Cz67cvLkrjfbSYVKjUUDS)
+## Session: 2026-03-31 | SEC-P1/P2 Fixes + Upstream Sync (Session: session_016Cz67cvLkrjfbSYVKjUUDS)
 
 **AI:** Claude Opus 4.6
 **Branch:** `claude/sync-upstream-changes-X8IrX`
@@ -24,6 +24,13 @@ Implemented both P1 items from the upstream OpenClaw triage: transient error cla
 - Save checkpoint to R2 on stream abort/timeout before retry/rotation loop
 - Watchdog resume now picks up from last good state instead of replaying from scratch
 - Covers STREAM_READ_TIMEOUT, abort, and stream_split timeout errors
+
+### P2: Telegram Done-Reaction UX
+- Added `TelegramBot.setMessageReaction()` + `TaskProcessor.setTelegramReaction()`
+- Direct replies: 👍 on success, 👎 on error
+- DO tasks: ⏳ on start → 👍 on complete / 👎 on fail
+- `userMessageId` threaded through TaskRequest → TaskState for persistence across resumes
+- Bot-safe emoji set (👍/👎/⏳), best-effort (non-fatal)
 
 ### Test Count: 2732 (up from 2717)
 
