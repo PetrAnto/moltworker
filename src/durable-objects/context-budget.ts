@@ -138,14 +138,24 @@ function scorePriority(
 
   // Role-based base scores
   if (msg.role === 'tool') {
-    // Tool results — evidence for claims; scored higher than assistant prose
-    // so older evidence survives over recent intermediate reasoning
-    return 55 + positionScore;
+    const content = typeof msg.content === 'string' ? msg.content : '';
+    // Boost tool results that indicate mutations (file writes, PR creation, commits)
+    // — these represent actionable work state that's critical for continuation
+    const isMutationResult = /(?:created|updated|committed|pushed|merged|wrote|deleted|patched)/i.test(content.slice(0, 500));
+    const mutationBoost = isMutationResult ? 8 : 0;
+    // Penalize very large read-only results (oversized file dumps, long listings)
+    // — these are low-value bulk that can be re-read if needed
+    const sizePenalty = content.length > 8000 && !isMutationResult ? 10 : 0;
+    return 55 + positionScore + mutationBoost - sizePenalty;
   }
 
   if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
     // Assistant tool invocations — decisions
-    return 35 + positionScore;
+    // Boost mutation tool calls (writes, creates, patches) over read-only calls
+    const hasMutationCall = msg.tool_calls.some(tc =>
+      /(?:create|push|write|delete|commit|patch)/i.test(tc.function.name)
+    );
+    return 35 + positionScore + (hasMutationCall ? 6 : 0);
   }
 
   if (msg.role === 'assistant') {
@@ -223,13 +233,25 @@ function summarizeEvicted(evicted: ScoredMessage[]): ChatMessage | null {
 
   const toolCalls: string[] = [];
   const filesMentioned = new Set<string>();
+  const filesModified = new Set<string>();
   const responseSnippets: string[] = [];
   let toolResultCount = 0;
+  let lastMeaningfulAction = '';
 
   for (const { msg } of evicted) {
     if (msg.role === 'assistant' && msg.tool_calls) {
       const names = msg.tool_calls.map(tc => tc.function.name);
       toolCalls.push(...names);
+      // Track files targeted by mutation tool calls
+      for (const tc of msg.tool_calls) {
+        if (/(?:create|push|write|delete|commit|patch)/i.test(tc.function.name)) {
+          try {
+            const args = JSON.parse(tc.function.arguments);
+            const path = args.path || args.file_path || args.filename;
+            if (typeof path === 'string') filesModified.add(path);
+          } catch { /* ignore parse errors */ }
+        }
+      }
     }
 
     if (msg.role === 'tool') {
@@ -241,6 +263,12 @@ function summarizeEvicted(evicted: ScoredMessage[]): ChatMessage | null {
         for (const fm of fileMatches.slice(0, 5)) {
           filesMentioned.add(fm.trim());
         }
+      }
+      // Detect mutation results for last-action tracking
+      const mutationMatch = content.match(/(?:successfully\s+)?(created|updated|committed|pushed|wrote|deleted|patched)\b/i);
+      if (mutationMatch) {
+        const snippet = content.slice(0, 200).split('\n')[0]?.trim();
+        if (snippet) lastMeaningfulAction = snippet;
       }
       // Keep first line of non-trivial tool results as a quick reference
       const firstLine = content.split('\n')[0]?.trim();
@@ -261,6 +289,11 @@ function summarizeEvicted(evicted: ScoredMessage[]): ChatMessage | null {
 
   const parts: string[] = [];
 
+  // Lead with last meaningful action — most useful for continuation
+  if (lastMeaningfulAction) {
+    parts.push(`Last action: ${lastMeaningfulAction}`);
+  }
+
   if (toolCalls.length > 0) {
     // Deduplicate and count
     const counts = new Map<string, number>();
@@ -277,8 +310,15 @@ function summarizeEvicted(evicted: ScoredMessage[]): ChatMessage | null {
     parts.push(`${toolResultCount} tool result${toolResultCount > 1 ? 's' : ''} processed`);
   }
 
+  // Prioritize files that were modified over files that were just read
+  if (filesModified.size > 0) {
+    parts.push(`Files modified: ${[...filesModified].slice(0, 8).join(', ')}`);
+  }
   if (filesMentioned.size > 0) {
-    parts.push(`Files: ${[...filesMentioned].slice(0, 8).join(', ')}`);
+    const readOnly = [...filesMentioned].filter(f => !filesModified.has(f));
+    if (readOnly.length > 0) {
+      parts.push(`Files read: ${readOnly.slice(0, 6).join(', ')}`);
+    }
   }
 
   if (responseSnippets.length > 0) {

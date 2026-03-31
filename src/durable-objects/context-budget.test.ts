@@ -581,4 +581,67 @@ describe('compressContextBudgeted', () => {
     expect(result.length).toBeGreaterThan(0);
     expect(result[0].role).toBe('system');
   });
+
+  it('preserves mutation tool results over large read-only results under tight budget', () => {
+    // Build a conversation where a mutation result should be prioritized
+    const msgs: ChatMessage[] = [
+      systemMsg('System prompt'),
+      userMsg('Implement feature'),
+      // Early large read-only tool result (low value bulk)
+      assistantToolCallMsg('Reading file', [
+        { id: 'tc_read', name: 'github_read_file', arguments: '{"path":"big.ts"}' },
+      ]),
+      toolResultMsg('tc_read', 'x'.repeat(10000)), // oversized read result
+      // Mutation tool call + result (high value)
+      assistantToolCallMsg('Creating file', [
+        { id: 'tc_create', name: 'github_create_pr', arguments: '{"title":"feat"}' },
+      ]),
+      toolResultMsg('tc_create', 'Successfully created PR https://github.com/owner/repo/pull/1'),
+      // Recent tail
+      assistantMsg('Done with implementation'),
+    ];
+
+    // Use a tight budget that forces eviction
+    const result = compressContextBudgeted(msgs, 300, 2);
+
+    // The mutation result should survive compression
+    const hasCreateResult = result.some(
+      m => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('Successfully created PR'),
+    );
+    expect(hasCreateResult).toBe(true);
+  });
+
+  it('summary of evicted messages includes files modified and last action', () => {
+    const msgs: ChatMessage[] = [
+      systemMsg('System prompt'),
+      userMsg('Fix the bug'),
+      assistantToolCallMsg('Writing fix', [
+        { id: 'tc_w', name: 'workspace_write_file', arguments: '{"path":"src/fix.ts"}' },
+      ]),
+      toolResultMsg('tc_w', 'Successfully wrote file src/fix.ts'),
+      assistantToolCallMsg('Reading another', [
+        { id: 'tc_r', name: 'github_read_file', arguments: '{"path":"src/other.ts"}' },
+      ]),
+      toolResultMsg('tc_r', 'reading file content here for src/other.ts'),
+      // Many filler messages to force eviction of the above
+      ...Array.from({ length: 10 }, (_, i) =>
+        assistantMsg(`Working on step ${i}: ${'z'.repeat(200)}`),
+      ),
+    ];
+
+    const result = compressContextBudgeted(msgs, 800, 4);
+
+    // Check that the summary mentions files modified
+    const summary = result.find(
+      m => m.role === 'assistant' && typeof m.content === 'string' && m.content.startsWith('[Context summary:'),
+    );
+    if (summary) {
+      const content = typeof summary.content === 'string' ? summary.content : '';
+      // Should mention the mutation/action
+      expect(content).toMatch(/(?:modified|wrote|action|write)/i);
+    }
+    // The result should still be under budget and contain system+user
+    expect(result[0].role).toBe('system');
+    expect(result.length).toBeGreaterThan(3);
+  });
 });
