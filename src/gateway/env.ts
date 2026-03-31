@@ -27,7 +27,10 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   // Legacy AI Gateway support: AI_GATEWAY_BASE_URL + AI_GATEWAY_API_KEY
   // When set, these override direct keys for backward compatibility
   if (env.AI_GATEWAY_API_KEY && env.AI_GATEWAY_BASE_URL) {
-    const normalizedBaseUrl = env.AI_GATEWAY_BASE_URL.replace(/\/+$/, '');
+    let normalizedBaseUrl = env.AI_GATEWAY_BASE_URL;
+    while (normalizedBaseUrl.endsWith('/')) {
+      normalizedBaseUrl = normalizedBaseUrl.slice(0, -1);
+    }
     envVars.AI_GATEWAY_BASE_URL = normalizedBaseUrl;
     // Legacy path routes through Anthropic base URL
     envVars.ANTHROPIC_BASE_URL = normalizedBaseUrl;
@@ -41,6 +44,7 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   if (env.DEV_MODE) envVars.OPENCLAW_DEV_MODE = env.DEV_MODE;
   if (env.TELEGRAM_BOT_TOKEN) envVars.TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
   if (env.TELEGRAM_DM_POLICY) envVars.TELEGRAM_DM_POLICY = env.TELEGRAM_DM_POLICY;
+  if (env.TELEGRAM_DM_ALLOW_FROM) envVars.TELEGRAM_DM_ALLOW_FROM = env.TELEGRAM_DM_ALLOW_FROM;
   if (env.DISCORD_BOT_TOKEN) envVars.DISCORD_BOT_TOKEN = env.DISCORD_BOT_TOKEN;
   if (env.DISCORD_DM_POLICY) envVars.DISCORD_DM_POLICY = env.DISCORD_DM_POLICY;
   if (env.SLACK_BOT_TOKEN) envVars.SLACK_BOT_TOKEN = env.SLACK_BOT_TOKEN;

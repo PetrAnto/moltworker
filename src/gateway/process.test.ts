@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { findExistingMoltbotProcess } from './process';
+import { findExistingMoltbotProcess, killGateway, isGatewayPortOpen } from './process';
 import type { Sandbox, Process } from '@cloudflare/sandbox';
 import { createMockSandbox } from '../test-utils';
 
@@ -131,5 +131,56 @@ describe('findExistingMoltbotProcess', () => {
 
     const result = await findExistingMoltbotProcess(sandbox);
     expect(result?.id).toBe('gateway-1');
+  });
+});
+
+describe('killGateway', () => {
+  it('attempts multiple kill strategies and cleans up lock files', async () => {
+    const execMock = vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
+    const listProcessesMock = vi.fn().mockResolvedValue([]);
+    const sandbox = {
+      exec: execMock,
+      listProcesses: listProcessesMock,
+    } as unknown as Sandbox;
+
+    await killGateway(sandbox);
+
+    // Should call exec at least twice (kill strategies + lock cleanup)
+    expect(execMock).toHaveBeenCalledTimes(2);
+    // First call includes the kill commands
+    expect(execMock.mock.calls[0][0]).toContain('pgrep');
+    // Second call cleans up lock files
+    expect(execMock.mock.calls[1][0]).toContain('rm -f');
+  });
+
+  it('handles exec failures gracefully', async () => {
+    const execMock = vi.fn().mockRejectedValue(new Error('exec failed'));
+    const listProcessesMock = vi.fn().mockResolvedValue([]);
+    const sandbox = {
+      exec: execMock,
+      listProcesses: listProcessesMock,
+    } as unknown as Sandbox;
+
+    // Should not throw
+    await killGateway(sandbox);
+  });
+});
+
+describe('isGatewayPortOpen', () => {
+  it('returns true when port is open', async () => {
+    const execMock = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const sandbox = { exec: execMock } as unknown as Sandbox;
+
+    const result = await isGatewayPortOpen(sandbox);
+    expect(result).toBe(true);
+    expect(execMock).toHaveBeenCalledWith('nc -z localhost 18789');
+  });
+
+  it('returns false when port is closed', async () => {
+    const execMock = vi.fn().mockResolvedValue({ exitCode: 1 });
+    const sandbox = { exec: execMock } as unknown as Sandbox;
+
+    const result = await isGatewayPortOpen(sandbox);
+    expect(result).toBe(false);
   });
 });

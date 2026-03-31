@@ -14,6 +14,7 @@ export interface MoltbotEnv {
   TASK_PROCESSOR?: DurableObjectNamespace<TaskProcessor>; // Optional: for long-running AI tasks
   ASSETS: Fetcher; // Assets binding for admin UI static files
   MOLTBOT_BUCKET: R2Bucket; // R2 bucket for persistent storage
+  BACKUP_BUCKET: R2Bucket; // R2 bucket for Sandbox SDK backup/restore
   NEXUS_KV?: KVNamespace; // KV namespace for Nexus research cache (4h TTL)
   // Cloudflare AI Gateway configuration (preferred)
   CF_AI_GATEWAY_ACCOUNT_ID?: string; // Cloudflare account ID for AI Gateway
@@ -38,6 +39,7 @@ export interface MoltbotEnv {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_ALLOWED_USERS?: string; // Comma-separated list of allowed Telegram user IDs
   TELEGRAM_DM_POLICY?: string;
+  TELEGRAM_DM_ALLOW_FROM?: string; // Comma-separated user IDs for allowlist DM policy
   GITHUB_TOKEN?: string; // GitHub PAT for tool calls (repo access)
   BRAVE_SEARCH_KEY?: string; // Brave Search API key for web_search tool
   // Direct API keys for non-OpenRouter providers
@@ -72,6 +74,8 @@ export interface MoltbotEnv {
   ACONTEXT_BASE_URL?: string; // Acontext API base URL (default: https://api.acontext.io)
   // Model intelligence data
   ARTIFICIAL_ANALYSIS_KEY?: string; // Artificial Analysis API key for benchmark data
+  // Cron wake-ahead: wake container before OpenClaw cron jobs fire
+  CRON_WAKE_AHEAD_MINUTES?: string; // Minutes before a cron job to wake the container (default: 10)
   // Debug / simulation endpoint
   DEBUG_API_KEY?: string; // Bearer token for /simulate/* endpoints (set via wrangler secret put DEBUG_API_KEY)
 }
