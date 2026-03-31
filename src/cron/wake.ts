@@ -60,9 +60,16 @@ function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | und
 
 /**
  * Parse the cron store JSON from R2 and return enabled jobs with their next run times.
+ * Returns an empty array if the JSON is malformed.
  */
 function parseEnabledJobs(raw: string): CronJob[] {
-  const parsed = JSON.parse(raw) as Partial<CronStoreFile>;
+  let parsed: Partial<CronStoreFile>;
+  try {
+    parsed = JSON.parse(raw) as Partial<CronStoreFile>;
+  } catch {
+    console.error('[CRON] Failed to parse cron store JSON, skipping');
+    return [];
+  }
   const jobs = Array.isArray(parsed?.jobs) ? parsed.jobs : [];
   return jobs.filter((j): j is CronJob => j != null && j.enabled === true);
 }

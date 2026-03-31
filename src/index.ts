@@ -26,7 +26,7 @@ import { getSandbox, Sandbox, type SandboxOptions } from '@cloudflare/sandbox';
 import type { AppEnv, MoltbotEnv } from './types';
 import { MOLTBOT_PORT } from './config';
 import { createAccessMiddleware } from './auth';
-import { ensureMoltbotGateway, findExistingMoltbotProcess, killGateway } from './gateway';
+import { ensureMoltbotGateway, findExistingMoltbotProcess, killGateway, isGatewayPortOpen } from './gateway';
 import { publicRoutes, api, adminUi, debug, cdp, telegram, discord, dream } from './routes';
 import { simulate } from './routes/simulate';
 import { redactSensitiveParams, redactWsPayload } from './utils/logging';
@@ -308,6 +308,18 @@ app.all('*', async (c) => {
     } catch {
       // Treat as not ready
     }
+    // Fallback: the gateway may be running but undetected by listProcesses().
+    // Probe the port directly to avoid showing a loading page when the gateway is live.
+    if (!gatewayReady) {
+      try {
+        gatewayReady = await isGatewayPortOpen(sandbox);
+        if (gatewayReady) {
+          console.log('[PROXY] Gateway running (detected via port probe, not process list)');
+        }
+      } catch {
+        // Port probe failed — treat as not ready
+      }
+    }
     if (!gatewayReady) {
       console.log('[PROXY] Gateway not ready for HTML request, serving loading page');
       return c.html(loadingPageHtml);
@@ -535,11 +547,14 @@ app.all('*', async (c) => {
   // containerFetch can return a 200 with empty/streaming body if the gateway's
   // HTTP handler hasn't fully initialized. Show the loading page instead
   // of a blank page that the user would be stuck on forever.
+  // Only applies to responses that claim to be HTML (content-type check).
   if (acceptsHtml) {
+    const contentType = httpResponse.headers.get('content-type') || '';
+    const isHtmlResponse = contentType.includes('text/html');
     const body = await httpResponse.text();
-    if (!body || body.length < 50) {
+    if (isHtmlResponse && (!body || body.length < 50)) {
       console.log(
-        `[HTTP] Empty/short response (${body.length} bytes) for HTML request, serving loading page`,
+        `[HTTP] Empty/short HTML response (${body.length} bytes), serving loading page`,
       );
       return c.html(loadingPageHtml);
     }
