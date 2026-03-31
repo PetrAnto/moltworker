@@ -2,7 +2,7 @@
 
 > Current sprint status. Updated by every AI agent after every task.
 
-**Last Updated:** 2026-03-30 (Security audit + dep fix + Wave 7 canonical spec pack)
+**Last Updated:** 2026-03-31 (Upstream sync from cloudflare/moltworker — PRs #456 + #457 merged)
 
 ---
 
@@ -61,7 +61,7 @@
 
 | AI Agent | Current Task | Branch | Started |
 |----------|-------------|--------|---------|
-| Claude | Security audit + W7 spec pack complete. 8 npm vulns fixed. | `claude/security-audit-react2shell-upstream-sync` | 2026-03-30 |
+| Claude | Upstream sync complete (PRs #456+#457 merged). Persistence, gateway reliability, cron wake. 2717 tests. | `claude/sync-upstream-changes-X8IrX` | 2026-03-31 |
 | Codex | Wave 7 deep-review + 4 PR proposals (#443-#446) — cherry-picked by Claude | `work` (PRs open) | 2026-03-29 |
 | Other | — | — | — |
 
