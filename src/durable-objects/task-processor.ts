@@ -26,7 +26,7 @@ import type { SkillRequest, SkillResult } from '../skills/types';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
-import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, type ToolErrorTracker } from '../guardrails/tool-validator';
+import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, isTransientApiError, isPermanentApiError, type ToolErrorTracker } from '../guardrails/tool-validator';
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
 import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext, scanCrossFileReferences, type ExtractionCheck } from '../guardrails/extraction-verifier';
 import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
@@ -3237,6 +3237,21 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
             console.log(`[TaskProcessor] API call failed (attempt ${attempt}): ${lastError.message}`);
 
+            // SEC-P1b: Save checkpoint on stream abort/timeout so watchdog resume
+            // picks up from the last known good state instead of replaying from scratch.
+            // This is especially important for mid-stream tool call interruptions where
+            // the partial tool call is discarded but prior conversation state is valid.
+            if (/timeout|abort|stream.?split|STREAM_READ_TIMEOUT/i.test(lastError.message)) {
+              if (this.r2 && conversationMessages.length > 2) {
+                try {
+                  await this.saveCheckpoint(this.r2, request.userId, request.taskId,
+                    conversationMessages, task.toolsUsed, task.iterations, request.prompt,
+                    'latest', false, task.phase, task.modelAlias);
+                  console.log(`[TaskProcessor] Checkpoint saved after stream abort (${conversationMessages.length} msgs)`);
+                } catch { /* non-fatal */ }
+              }
+            }
+
             // 429 rate limit on paid model — distinguish daily vs per-minute limits.
             // Daily (TPD) limits won't reset with short waits — fail fast and suggest alternatives.
             // Per-minute (TPM/RPM) limits are transient — backoff and retry.
@@ -3344,9 +3359,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           const isModelGone = /\b404\b/.test(lastError.message);
           const isContentFilter = /inappropriate.?content|data_inspection_failed/i.test(lastError.message);
           const isInputValidation = /\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length/i.test(lastError.message);
+          // SEC-P1: Classify transient vs permanent API errors.
+          // Transient (502/503/504/timeout): worth rotating to another model.
+          // Permanent (401/403/422): fail fast — rotating won't help.
+          const isTransient = isTransientApiError(lastError.message);
+          const isPermanent = isPermanentApiError(lastError.message);
           const currentIsFree = getModel(task.modelAlias)?.isFree === true;
 
-          if ((isRateLimited || isQuotaExceeded || isModelGone || isContentFilter || isInputValidation) && currentIsFree && rotationIndex < MAX_FREE_ROTATIONS) {
+          // Fail fast on permanent errors — no point trying other models
+          if (isPermanent && !isQuotaExceeded) {
+            console.log(`[TaskProcessor] Permanent API error (${lastError.message.slice(0, 100)}) — failing fast, no rotation`);
+            throw lastError;
+          }
+
+          if ((isRateLimited || isQuotaExceeded || isModelGone || isContentFilter || isInputValidation || isTransient) && currentIsFree && rotationIndex < MAX_FREE_ROTATIONS) {
             // Use capability-aware rotation order (preferred category first, emergency core last)
             const nextAlias = rotationOrder[rotationIndex];
             rotationIndex++;
@@ -3356,7 +3382,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.lastUpdate = Date.now();
             await this.doState.storage.put('task', taskForStorage(task));
 
-            const reason = isInputValidation ? 'context too large (400)' : isContentFilter ? 'content filtered' : isModelGone ? 'unavailable (404)' : 'busy';
+            const reason = isInputValidation ? 'context too large (400)' : isContentFilter ? 'content filtered' : isModelGone ? 'unavailable (404)' : isTransient && !isRateLimited ? 'transient error' : 'busy';
             const isEmergency = EMERGENCY_CORE_ALIASES.includes(nextAlias) && rotationIndex > MAX_FREE_ROTATIONS - EMERGENCY_CORE_ALIASES.length;
             console.log(`[TaskProcessor] Rotating from /${prevAlias} to /${nextAlias} — ${reason} (${rotationIndex}/${MAX_FREE_ROTATIONS}${isEmergency ? ', emergency core' : ''}, task: ${taskCategory})`);
 
