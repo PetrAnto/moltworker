@@ -558,6 +558,8 @@ interface BuildRunPromptParams {
   promptTierOverride?: 'minimal' | 'standard' | 'full';
   /** Pre-resolved execution brief — overrides specificTask in the system prompt. */
   executionBrief?: string;
+  /** Formatted scratchpad context from prior steps — injected when non-empty. */
+  scratchpadContext?: string;
 }
 
 /**
@@ -643,7 +645,7 @@ Execute the next task from the roadmap for **${repo}**.
 ${params.roadmapContent
     ? `## Step 1: TASK SELECTION\nThe roadmap and work log are pre-loaded below — do NOT re-read them.\n${taskInstruction}\n\n## Step 2: READ RELEVANT FILES\nRead only the code files you need to implement the task. Call multiple github_read_file in parallel when possible. Stop reading when you have enough.\n${buildPrefetchedDocsSection(params)}`
     : `## Step 1: READ ROADMAP\nUse \`github_read_file\` with owner="${owner}" repo="${repoName}" to read ROADMAP.md.\nCheck paths: ${ROADMAP_FILE_CANDIDATES.slice(0, 3).join(', ')}. Also read WORK_LOG.md if it exists.\n${taskInstruction}\n\n## Step 2: READ RELEVANT FILES\nRead only the files you need to implement the task. Stop reading when you have enough.`}
-
+${params.scratchpadContext ? `\n${params.scratchpadContext}\n` : ''}
 ## Step 3: IMPLEMENT
 For "patch" action: \`{"path":"file.js","action":"patch","patches":[{"find":"exact text","replace":"new text"}]}\`
 For "create" action: \`{"path":"file.js","action":"create","content":"full content"}\`
@@ -682,6 +684,13 @@ pr: {pr-url from tool result}
 files: {comma-separated changed files}
 summary: {one sentence}
 \`\`\`
+
+## PRE-SUBMIT VERIFICATION (mandatory before PR)
+- Re-read every file you modified with \`github_read_file\` to confirm changes are correct.
+- Verify imports reference real files/modules — do NOT assume a file exists without checking.
+- If you renamed/moved functions or types, verify all references are updated.
+- Successful file writes alone are NOT proof of correctness — you must verify the result.
+- If verification finds issues, fix them before creating the PR.
 
 ## EXTRACTION + TEST QUALITY RULES
 - If you extract code into a new module for testability, you MUST also update the production file to import from the new module and DELETE the inline duplicates. Never leave two copies of the same logic.
@@ -735,7 +744,7 @@ Execute the next task from the roadmap for **${repo}**.
 ${params.roadmapContent
     ? `## Step 1: TASK SELECTION\nThe roadmap and work log are pre-loaded below — do NOT re-read them.\n${taskInstruction}\n\n## Step 2: UNDERSTAND CODEBASE\nUse \`github_list_files\` and \`github_read_file\` to read files related to the task. Call multiple reads in parallel when possible.\nIf any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you may split it as part of this task.\n${buildPrefetchedDocsSection(params)}`
     : `## Step 1: READ ROADMAP\nUse \`github_read_file\` with owner="${owner}" repo="${repoName}" to read ROADMAP.md.\nCheck paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.\n${taskInstruction}\n\n## Step 2: UNDERSTAND CODEBASE\nUse \`github_list_files\` and \`github_read_file\` to read files related to the task.\nIf any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you may split it as part of this task.`}
-
+${params.scratchpadContext ? `\n${params.scratchpadContext}\n` : ''}
 ## Step 3: IMPLEMENT
 Branch: \`${branch}\` (bot/ prefix added automatically)
 Title: under 70 chars, ends with [${modelAlias}]
@@ -799,6 +808,14 @@ summary: {one sentence}
 The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FAILED\`.
 ${historyContext}
 
+## PRE-SUBMIT VERIFICATION (mandatory before PR)
+- Re-read every file you modified with \`github_read_file\` to confirm changes applied correctly.
+- Verify all imports reference real, existing files/modules — never assume.
+- If you renamed or moved functions/types/variables, verify all references across the codebase are updated.
+- If a relevant validation command exists (tests, typecheck, lint), run the narrowest check via \`sandbox_exec\`.
+- Successful file writes alone are NOT proof of correctness — always verify the result.
+- If verification finds issues, fix them before creating the PR.
+
 ## EXTRACTION + TEST QUALITY RULES
 - If you extract code into a new module for testability, you MUST also update the production file to import from the new module and DELETE the inline duplicates. Never leave two copies of the same logic.
 - Test fixtures MUST use real data shapes from the codebase. Read production data files first and use actual key names and value ranges (e.g. \`{en: 0.6}\` not \`{english: 0.9}\`).
@@ -860,7 +877,7 @@ Execute the next task from the project roadmap for **${repo}**.
 ${params.roadmapContent
     ? `## Step 1: SELECT TASK\nThe roadmap and work log are pre-loaded below — do NOT re-read them.\n${taskSelection}\n\n## Step 2: UNDERSTAND CODEBASE\nUse \`github_list_files\` and \`github_read_file\` to read files related to the task. Call multiple reads in parallel when possible.\nIf any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you can split it as part of this task.\n${buildPrefetchedDocsSection(params)}`
     : `## Step 1: READ ROADMAP\nUse \`github_read_file\` with owner="${owner}" repo="${repoName}" to read the roadmap.\nCheck paths: ${ROADMAP_FILE_CANDIDATES.join(', ')}. Also read WORK_LOG.md if it exists.\nIf no roadmap found: "No roadmap found. Run \`/orchestra init ${repo} <description>\` first."\n\n## Step 2: SELECT TASK\n${taskSelection}\n\n## Step 3: UNDERSTAND CODEBASE\nUse \`github_list_files\` and \`github_read_file\` to read files related to the task.\nIf any source file exceeds ~${LARGE_FILE_WARNING_LINES} lines, you can split it as part of this task.`}
-
+${params.scratchpadContext ? `\n${params.scratchpadContext}\n` : ''}
 ## Step ${params.roadmapContent ? '3' : '4'}: IMPLEMENT
 
 **Use "patch" action for editing existing files (especially files >100 lines):**
@@ -951,6 +968,15 @@ summary: {1-2 sentence summary}
 - Use "${modelAlias}" in branch names and commit messages.
 - You MUST produce an ORCHESTRA_RESULT: block with a real PR URL — the task is NOT complete without it
 - **Do NOT output a plan, outline, or list of steps.** CALL tools directly. ${params.roadmapContent ? 'Your first action must be reading the code files needed for the task.' : 'Your first action must be a github_read_file tool call.'}
+
+## PRE-SUBMIT VERIFICATION (mandatory before creating PR)
+Before declaring a step complete, you MUST:
+1. **Re-read every modified file** with \`github_read_file\` to confirm changes applied correctly
+2. **Verify imports** reference real, existing files/modules — never assume a path is valid
+3. **If you renamed or moved** functions, types, or variables — verify ALL references across the codebase are updated
+4. **Run the narrowest relevant validation** via \`sandbox_exec\` if a test/typecheck/lint command exists
+5. **Never treat successful file writes alone as proof of correctness** — the write succeeded but the content may be wrong
+If verification finds issues, fix them before moving on or reporting success.
 
 ## EXTRACTION + TEST QUALITY (mandatory)
 - **No surrogate testing:** If you extract code into a new module for testability, you MUST also update the production file to import from the new module and DELETE the original inline code. Tests that only verify a detached copy while the app runs different code are worthless.

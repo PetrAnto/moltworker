@@ -3514,3 +3514,44 @@ describe('commitDraftRoadmap', () => {
     globalThis.fetch = originalFetch;
   });
 });
+
+// --- Item 1: Pre-Submit Verification in Run Prompts ---
+
+describe('buildRunPrompt verification requirements', () => {
+  it('includes pre-submit verification block in full-tier prompt', () => {
+    const prompt = buildRunPrompt({
+      repo: 'owner/repo',
+      modelAlias: 'claude',
+      previousTasks: [],
+      promptTierOverride: 'full',
+    });
+    expect(prompt).toContain('PRE-SUBMIT VERIFICATION');
+    expect(prompt).toContain('Re-read every modified file');
+    expect(prompt).toContain('Verify imports');
+    expect(prompt).toContain('Never treat successful file writes alone as proof of correctness');
+  });
+
+  it('includes pre-submit verification block in standard-tier prompt', () => {
+    const prompt = buildRunPrompt({
+      repo: 'owner/repo',
+      modelAlias: 'flash',
+      previousTasks: [],
+      promptTierOverride: 'standard',
+    });
+    expect(prompt).toContain('PRE-SUBMIT VERIFICATION');
+    expect(prompt).toContain('Re-read every file you modified');
+    expect(prompt).toContain('renamed or moved');
+  });
+
+  it('includes pre-submit verification block in minimal-tier prompt', () => {
+    const prompt = buildRunPrompt({
+      repo: 'owner/repo',
+      modelAlias: 'flash',
+      previousTasks: [],
+      promptTierOverride: 'minimal',
+    });
+    expect(prompt).toContain('PRE-SUBMIT VERIFICATION');
+    expect(prompt).toContain('Re-read every file you modified');
+    expect(prompt).toContain('Verify imports reference real');
+  });
+});

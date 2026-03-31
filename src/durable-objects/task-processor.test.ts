@@ -2941,3 +2941,48 @@ describe('getStreamPolicy', () => {
     expect(getStreamPolicy('anthropic', 200_000).hardTimeoutMs).toBe(300_000);
   });
 });
+
+// --- Item 3: Resume Context Hardening (source-level verification) ---
+
+describe('Resume context hardening', () => {
+  it('task-processor source contains strengthened resume notice with continuation rules', async () => {
+    // Read the source file to verify resume notice text includes the hardened instructions.
+    // This ensures the prompt changes are not accidentally reverted.
+    const fs = await import('fs');
+    const source = fs.readFileSync(
+      new URL('./task-processor.ts', import.meta.url).pathname,
+      'utf-8',
+    );
+
+    // Verify the resume notice includes key strengthened instructions
+    expect(source).toContain('Continue from the EXACT last known step state');
+    expect(source).toContain('do NOT restart from scratch');
+    expect(source).toContain('Trust the preloaded/resume context above');
+    expect(source).toContain('Prioritize unresolved deliverables');
+    expect(source).toContain('Do NOT output a new plan or summary of prior work');
+  });
+
+  it('sticky context anchor includes continuation guidance', async () => {
+    const fs = await import('fs');
+    const source = fs.readFileSync(
+      new URL('./task-processor.ts', import.meta.url).pathname,
+      'utf-8',
+    );
+
+    // Verify pending deliverables injection includes continuation guidance
+    expect(source).toContain('Continue from where you left off. Do NOT restart repo discovery');
+    expect(source).toContain('Trust the context above and focus on completing these deliverables');
+  });
+
+  it('ORCHESTRA_REVIEW_PROMPT includes file verification check', async () => {
+    const fs = await import('fs');
+    const source = fs.readFileSync(
+      new URL('./task-processor.ts', import.meta.url).pathname,
+      'utf-8',
+    );
+
+    expect(source).toContain('FILE VERIFICATION CHECK');
+    expect(source).toContain('re-read every file you modified');
+    expect(source).toContain('Successful file writes alone are NOT proof of correctness');
+  });
+});
