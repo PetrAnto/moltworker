@@ -3,7 +3,7 @@
 > Copy-paste this prompt to start the next AI session.
 > After completing, update this file to point to the next task.
 
-**Last Updated:** 2026-03-30 (Security audit + W7 spec pack complete. ST smoke tests + upstream P1 items next)
+**Last Updated:** 2026-03-31 (SEC-P1 fixes complete. ST smoke tests + P2 items next)
 
 ---
 
@@ -33,6 +33,8 @@ All Gecko Skills phases are complete (S0 runtime, S1 Lyra, S2 Spark, S3 Nexus + 
 
 | Date | Task | AI | Notes |
 |------|------|----|-------|
+| 2026-03-31 | SEC-P1 fixes (transient classifier + abort checkpoint) | Claude Opus 4.6 | isTransientApiError/isPermanentApiError, auto-rotation on 502/503/504, fail-fast on auth errors, stream abort checkpoint. 2732 tests. |
+| 2026-03-31 | Upstream sync from cloudflare/moltworker | Claude Opus 4.6 | Cherry-picked 157 upstream commits: persistence, gateway reliability, cron wake, Dockerfile upgrades. PRs #456+#457 merged. 2717 tests. |
 | 2026-03-30 | Security audit + upstream triage | Claude Opus 4.6 | React2Shell clean. 8 npm vulns fixed (hono 4.12.9). Upstream: 2 P1 items (api_error failover, tool-call abort). |
 | 2026-03-29 | Wave 7 canonical spec pack | Claude Opus 4.6 | Cherry-picked best from Codex PRs #443-#446. Created `W7_CANONICAL_SPEC.md`, `W7_CONNECTION_LINKS.md`, `W7_EXECUTION_ROADMAP.md`, `W7_FOLLOWUP_AND_GOVERNANCE.md`. |
 | 2026-03-25 | S3.7 DO extension | Claude Opus 4.6 | Async /dossier dispatch to TaskProcessor DO. 4 new tests (2573 total). |

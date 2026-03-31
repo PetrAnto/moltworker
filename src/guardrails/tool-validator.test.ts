@@ -6,6 +6,8 @@ import {
   trackToolError,
   generateCompletionWarning,
   adjustConfidence,
+  isTransientApiError,
+  isPermanentApiError,
 } from './tool-validator';
 
 describe('validateToolResult', () => {
@@ -169,6 +171,71 @@ describe('ToolErrorTracker', () => {
 
     expect(tracker.totalErrors).toBe(1);
     expect(tracker.mutationErrors).toBe(0);
+  });
+});
+
+describe('isTransientApiError', () => {
+  it('classifies 502 Bad Gateway as transient', () => {
+    expect(isTransientApiError('HTTP 502 Bad Gateway')).toBe(true);
+  });
+
+  it('classifies 503 Service Unavailable as transient', () => {
+    expect(isTransientApiError('Error: 503 Service Unavailable')).toBe(true);
+  });
+
+  it('classifies 504 Gateway Timeout as transient', () => {
+    expect(isTransientApiError('504 Gateway Timeout')).toBe(true);
+  });
+
+  it('classifies 429 rate limit as transient', () => {
+    expect(isTransientApiError('429 Too Many Requests - rate limit exceeded')).toBe(true);
+  });
+
+  it('classifies timeout errors as transient', () => {
+    expect(isTransientApiError('Streaming read timeout (no data for 45s after 12 chunks)')).toBe(true);
+  });
+
+  it('classifies overloaded/capacity errors as transient', () => {
+    expect(isTransientApiError('Model is currently overloaded')).toBe(true);
+    expect(isTransientApiError('Server at capacity, please retry')).toBe(true);
+  });
+
+  it('does NOT classify 401 as transient', () => {
+    expect(isTransientApiError('401 Unauthorized')).toBe(false);
+  });
+
+  it('does NOT classify 422 as transient', () => {
+    expect(isTransientApiError('422 Unprocessable Entity')).toBe(false);
+  });
+
+  it('does NOT classify generic errors as transient', () => {
+    expect(isTransientApiError('Something went wrong')).toBe(false);
+  });
+});
+
+describe('isPermanentApiError', () => {
+  it('classifies 401 Unauthorized as permanent', () => {
+    expect(isPermanentApiError('401 Unauthorized - invalid key')).toBe(true);
+  });
+
+  it('classifies 403 Forbidden as permanent', () => {
+    expect(isPermanentApiError('403 Forbidden - bad credentials')).toBe(true);
+  });
+
+  it('classifies 402 Payment Required as permanent', () => {
+    expect(isPermanentApiError('402 Payment Required')).toBe(true);
+  });
+
+  it('does NOT classify 429 as permanent', () => {
+    expect(isPermanentApiError('429 Too Many Requests')).toBe(false);
+  });
+
+  it('does NOT classify 503 as permanent', () => {
+    expect(isPermanentApiError('503 Service Unavailable')).toBe(false);
+  });
+
+  it('does NOT classify timeout as permanent', () => {
+    expect(isPermanentApiError('Connection timed out')).toBe(false);
   });
 });
 

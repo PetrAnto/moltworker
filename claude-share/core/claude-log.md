@@ -4,6 +4,81 @@
 
 ---
 
+## Session: 2026-03-31 | SEC-P1 Fixes + Upstream Sync (Session: session_016Cz67cvLkrjfbSYVKjUUDS)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/sync-upstream-changes-X8IrX`
+**Status:** Completed
+
+### Summary
+Implemented both P1 items from the upstream OpenClaw triage: transient error classifier + auto-rotation (SEC-P1a) and tool-call abort checkpoint/resume pattern (SEC-P1b).
+
+### SEC-P1a: Transient vs Permanent API Error Classification
+- Added `isTransientApiError()`: 429/502/503/504/timeout/overloaded → rotate to next model
+- Added `isPermanentApiError()`: 401/403/402/422 → fail fast, no rotation
+- Wired into TaskProcessor rotation trigger: transient errors now auto-rotate (was 429/402/404 only)
+- Permanent errors fail fast immediately (avoids burning through all models on auth failures)
+- 15 new tests
+
+### SEC-P1b: Tool-Call Abort Checkpoint
+- Save checkpoint to R2 on stream abort/timeout before retry/rotation loop
+- Watchdog resume now picks up from last good state instead of replaying from scratch
+- Covers STREAM_READ_TIMEOUT, abort, and stream_split timeout errors
+
+### Test Count: 2732 (up from 2717)
+
+---
+
+## Session: 2026-03-31 | Upstream Sync from cloudflare/moltworker (Session: session_016Cz67cvLkrjfbSYVKjUUDS)
+
+**AI:** Claude Opus 4.6
+**Branch:** `claude/sync-upstream-changes-X8IrX`
+**Status:** Completed (PR #456 + audit fix PR #457, both merged)
+
+### Summary
+Analyzed 157 upstream commits from `cloudflare/moltworker` and cherry-picked reliability, persistence, and infrastructure improvements while preserving the fork's bot/skills/AI engine layer that upstream had removed.
+
+### Changes Made
+
+#### New files
+- `src/persistence.ts` — Sandbox SDK backup/restore API for cross-isolate persistence
+- `src/cron/wake.ts` — Cron wake-ahead logic (parses OpenClaw cron store, computes next runs)
+- `src/cron/handler.ts` — Cron trigger handler to wake container before jobs fire
+- `src/cron/wake.test.ts` — 12 tests for cron wake feature
+
+#### Gateway reliability (src/gateway/process.ts)
+- Added `killGateway()` with 3 kill strategies (pgrep, pkill, ss+awk)
+- Added `isGatewayPortOpen()` TCP probe as double-spawn safety net
+- Added `waitForReady` option for non-blocking starts from /api/status
+- Crash recovery with automatic restore + restart on containerFetch/wsConnect failures
+
+#### Proxy resilience (src/index.ts)
+- HTTP/WS retry on gateway crash ("is not listening" errors)
+- Empty HTML response detection (content-type aware, avoids false positives)
+- Port probe fallback in HTML catch-all to prevent stuck loading pages
+- `isGatewayCrashedError()` helper
+
+#### Infrastructure
+- Dockerfile: sandbox 0.7.0→0.7.20, Node 22.13→22.22.1, openclaw 2026.2.26→2026.3.23-2
+- Dockerfile: /home/openclaw dir for SDK backup compatibility + symlinks
+- Dockerfile: explicit procps, iproute2, netcat-openbsd installs
+- wrangler.jsonc: BACKUP_BUCKET R2 binding, 1-minute cron trigger
+- Security: replaced polynomial regex with loop (ReDoS prevention in env.ts)
+- `TELEGRAM_DM_ALLOW_FROM` passthrough to container env
+
+#### Audit fixes (PR #457)
+- Port probe fallback in HTML catch-all and /api/status (`running_undetected` state)
+- loading.html accepts `running_undetected` as ready
+- `shouldWakeContainer()` graceful on malformed JSON
+- `grep -P` → portable awk pipeline in killGateway()
+- Test for `ensureMoltbotGateway({ waitForReady: false })`
+
+### Test Count
+- Before: 2714 tests (89 files)
+- After: 2717 tests (89 files) — all passing
+
+---
+
 ## Session: 2026-03-30 | Security Audit + Upstream Triage (Session: session_01WEWeSwrgX5CsSGdeVescZf)
 
 **AI:** Claude Opus 4.6

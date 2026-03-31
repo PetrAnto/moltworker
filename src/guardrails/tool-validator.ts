@@ -16,6 +16,28 @@ export type ToolErrorType =
   | 'invalid_args'
   | 'generic_error';
 
+/**
+ * Classify an API-level error as transient (worth retrying/rotating) or permanent (fail fast).
+ *
+ * Transient: 429 (rate limit), 502/503/504 (gateway/overloaded), timeouts, capacity errors.
+ * These are worth rotating to another model — the current model's provider is temporarily down.
+ *
+ * Permanent: 401/403 (auth), 402 (billing), 422 (invalid request).
+ * Rotating won't help — the error is about credentials, payment, or bad input.
+ */
+export function isTransientApiError(errorMessage: string): boolean {
+  return /\b(429|502|503|504)\b/i.test(errorMessage)
+    || /\b(timeout|timed.?out|deadline.?exceeded|overloaded|capacity|busy|rate.?limit|too many requests|service.?unavailable|bad.?gateway|gateway.?timeout)\b/i.test(errorMessage);
+}
+
+export function isPermanentApiError(errorMessage: string): boolean {
+  return /\b(401|403)\b/.test(errorMessage)
+    && /\b(unauthorized|forbidden|invalid.?key|bad.?credentials|authentication|permission)\b/i.test(errorMessage)
+    || /\b402\b/.test(errorMessage)
+    || /\b422\b/.test(errorMessage)
+    && /\b(unprocessable|invalid.?request)\b/i.test(errorMessage);
+}
+
 /** Result of validating a single tool output */
 export interface ToolValidation {
   isError: boolean;

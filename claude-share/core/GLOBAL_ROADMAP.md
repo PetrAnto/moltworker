@@ -3,7 +3,7 @@
 > **Single source of truth** for all project planning and status tracking.
 > Updated by every AI agent after every task. Human checkpoints marked explicitly.
 
-**Last Updated:** 2026-03-30 (Security audit + npm dep fix + Wave 7 canonical spec pack)
+**Last Updated:** 2026-03-31 (Upstream sync from cloudflare/moltworker — persistence, gateway reliability, cron wake)
 
 ---
 
@@ -634,6 +634,8 @@ All skills done → ST.* (Smoke Tests)
 > Newest first. Format: `YYYY-MM-DD | AI | Description | files`
 
 ```
+2026-03-31 | Claude Opus 4.6 (Session: session_016Cz67cvLkrjfbSYVKjUUDS) | feat(guardrails): SEC-P1 — transient error classifier (isTransientApiError/isPermanentApiError) + auto-rotation on 502/503/504/timeout, fail-fast on 401/403/402/422, abort checkpoint save for watchdog resume. 15 new tests (2732 total). | src/guardrails/tool-validator.ts, src/durable-objects/task-processor.ts
+2026-03-31 | Claude Opus 4.6 (Session: session_016Cz67cvLkrjfbSYVKjUUDS) | feat(infra): upstream sync from cloudflare/moltworker — gateway reliability (killGateway, port probe, crash recovery), Sandbox SDK persistence (backup/restore), cron wake-ahead, Dockerfile upgrades (sandbox 0.7.20, Node 22.22.1, openclaw 2026.3.23-2), ReDoS fix, DM allowlist passthrough. Audit fixes: port probe fallback, shell deps, HTML detection, graceful cron JSON. 2717 tests. | src/persistence.ts, src/cron/wake.ts, src/cron/handler.ts, src/gateway/process.ts, src/index.ts, src/routes/public.ts, Dockerfile, wrangler.jsonc, src/types.ts, src/gateway/env.ts, src/assets/loading.html
 2026-03-30 | Claude Opus 4.6 (Session: session_01WEWeSwrgX5CsSGdeVescZf) | fix(deps): npm audit fix — resolved 8 vulnerabilities (hono 4.12.9, basic-ftp 5.2.0, picomatch, rollup, undici). 0 remaining. | package-lock.json
 2026-03-30 | Claude Opus 4.6 (Session: session_01WEWeSwrgX5CsSGdeVescZf) | docs(security): React2Shell CVE-2025-55182 audit (NOT VULNERABLE — no RSC surface, React 19.2.4 patched) + upstream OpenClaw triage Q1 2026 (2 P1 items: api_error failover, tool-call abort) + CF platform update assessment | claude-share/security/react2shell-audit-moltworker.md, claude-share/upstream-sync/openclaw-triage-2026-Q1.md
 2026-03-29 | Claude Opus 4.6 (Session: session_01WEWeSwrgX5CsSGdeVescZf) | docs(core): cherry-picked best from Codex PRs #443-#446 into canonical Wave 7 execution spec pack (W7_CANONICAL_SPEC.md, W7_CONNECTION_LINKS.md, W7_EXECUTION_ROADMAP.md, W7_FOLLOWUP_AND_GOVERNANCE.md) + updated INDEX.md | claude-share/core/geckolife+pricing_update/W7_CANONICAL_SPEC.md, claude-share/core/geckolife+pricing_update/W7_CONNECTION_LINKS.md, claude-share/core/geckolife+pricing_update/W7_EXECUTION_ROADMAP.md, claude-share/core/geckolife+pricing_update/W7_FOLLOWUP_AND_GOVERNANCE.md, claude-share/core/geckolife+pricing_update/INDEX.md
