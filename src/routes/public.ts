@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { MOLTBOT_PORT } from '../config';
-import { findExistingMoltbotProcess, ensureMoltbotGateway } from '../gateway';
+import { findExistingMoltbotProcess, ensureMoltbotGateway, isGatewayPortOpen } from '../gateway';
 import { restoreIfNeeded } from '../persistence';
 
 /**
@@ -39,6 +39,17 @@ publicRoutes.get('/api/status', async (c) => {
     const process = await findExistingMoltbotProcess(sandbox);
     console.log('[api/status] existing process:', process?.id ?? 'none', process?.status ?? '');
     if (!process) {
+      // Fallback: the gateway may be running but undetected by listProcesses().
+      // Probe the port directly before concluding the gateway is down.
+      try {
+        if (await isGatewayPortOpen(sandbox)) {
+          console.log('[api/status] Gateway running (detected via port probe, not process list)');
+          return c.json({ ok: true, status: 'running_undetected' });
+        }
+      } catch {
+        // Port probe failed — continue with restore + start
+      }
+
       // Restore synchronously — restoreBackup is a fast RPC call (~1-3s).
       // This MUST happen before ensureMoltbotGateway or the gateway starts without
       // the FUSE overlay.

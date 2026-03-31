@@ -117,12 +117,21 @@ describe('shouldWakeContainer', () => {
     expect(shouldWakeContainer(store, NOW, DEFAULT_LEAD_TIME_MS)).toBeNull();
   });
 
-  it('handles invalid JSON gracefully', () => {
-    expect(() => shouldWakeContainer('invalid', NOW, DEFAULT_LEAD_TIME_MS)).toThrow();
+  it('handles invalid JSON gracefully (returns null instead of throwing)', () => {
+    expect(shouldWakeContainer('invalid', NOW, DEFAULT_LEAD_TIME_MS)).toBeNull();
   });
 
   it('handles empty jobs array', () => {
     const store = JSON.stringify({ version: 1, jobs: [] });
     expect(shouldWakeContainer(store, NOW, DEFAULT_LEAD_TIME_MS)).toBeNull();
+  });
+
+  it('handles missing jobs key gracefully', () => {
+    const store = JSON.stringify({ version: 1 });
+    expect(shouldWakeContainer(store, NOW, DEFAULT_LEAD_TIME_MS)).toBeNull();
+  });
+
+  it('handles truncated/corrupt JSON gracefully', () => {
+    expect(shouldWakeContainer('{"version": 1, "jobs": [', NOW, DEFAULT_LEAD_TIME_MS)).toBeNull();
   });
 });

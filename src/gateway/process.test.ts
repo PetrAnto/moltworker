@@ -166,6 +166,39 @@ describe('killGateway', () => {
   });
 });
 
+describe('ensureMoltbotGateway with waitForReady: false', () => {
+  it('does not call waitForPort when waitForReady is false', async () => {
+    const newProcess = createFullMockProcess({ id: 'new-1', status: 'starting' });
+    const startProcessMock = vi.fn().mockResolvedValue(newProcess);
+    const execMock = vi.fn().mockImplementation((cmd: string) => {
+      // nc probe returns exit code 1 (port not open)
+      if (cmd.includes('nc -z')) return Promise.resolve({ exitCode: 1, stdout: '', stderr: '' });
+      // rclone configured flag check returns 'no'
+      if (cmd.includes('test -f')) return Promise.resolve({ exitCode: 0, stdout: 'no\n', stderr: '', success: true });
+      return Promise.resolve({ exitCode: 0, stdout: '', stderr: '', success: true });
+    });
+    const writeFileMock = vi.fn().mockResolvedValue(undefined);
+    const sandbox = {
+      listProcesses: vi.fn().mockResolvedValue([]),
+      startProcess: startProcessMock,
+      exec: execMock,
+      writeFile: writeFileMock,
+    } as unknown as Sandbox;
+
+    const { ensureMoltbotGateway } = await import('./process');
+    const env = {
+      R2_ACCESS_KEY_ID: 'k',
+      R2_SECRET_ACCESS_KEY: 's',
+      CF_ACCOUNT_ID: 'a',
+    } as any;
+
+    const process = await ensureMoltbotGateway(sandbox, env, { waitForReady: false });
+    expect(process).not.toBeNull();
+    // waitForPort should NOT have been called on the returned process
+    expect(newProcess.waitForPort).not.toHaveBeenCalled();
+  });
+});
+
 describe('isGatewayPortOpen', () => {
   it('returns true when port is open', async () => {
     const execMock = vi.fn().mockResolvedValue({ exitCode: 0 });
