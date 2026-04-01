@@ -41,6 +41,7 @@ import {
   commitDraftRoadmap,
   type OrchestraExecutionProfile,
 } from '../orchestra/orchestra';
+import { loadScratchpad, appendScratchpad, formatScratchpadForPrompt } from '../orchestra/scratchpad';
 import type { OrchestraDraft, OrchestraPlanState } from '../openrouter/storage';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
@@ -2717,6 +2718,17 @@ export class TelegramHandler {
       }
     }
 
+    // Load scratchpad for run mode (best-effort — non-blocking, non-fatal)
+    let scratchpadContext = '';
+    if (mode === 'run' && prefetchedRoadmapPath) {
+      try {
+        const pad = await loadScratchpad(this.r2Bucket, userId, repo, prefetchedRoadmapPath);
+        scratchpadContext = formatScratchpadForPrompt(pad);
+      } catch {
+        // Best-effort — scratchpad loading failure should never block execution
+      }
+    }
+
     // Force-escalation: if profile detects heavy task on weak model, auto-upgrade
     // to the top-ranked free orchestra model. If the best free model still doesn't
     // meet the model floor, suggest a paid model (but don't auto-switch to paid).
@@ -2807,6 +2819,7 @@ export class TelegramHandler {
         roadmapContent: prefetchedRoadmap,
         roadmapPath: prefetchedRoadmapPath,
         workLogContent: prefetchedWorkLog,
+        scratchpadContext,
       });
     }
 

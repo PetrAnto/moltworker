@@ -19,6 +19,7 @@ import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extra
 import { UserStorage } from '../openrouter/storage';
 import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, parseDraftBlocks, formatDraftPreview, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile, type RuntimeRiskProfile, createRuntimeRiskProfile, updateRuntimeRisk, formatRuntimeRisk } from '../orchestra/orchestra';
 import { releaseRepoLock } from '../concurrency/branch-lock';
+import { appendScratchpad } from '../orchestra/scratchpad';
 import { runSkill } from '../skills/runtime';
 import { initializeSkills } from '../skills/init';
 import { renderForTelegram } from '../skills/renderers/telegram';
@@ -5157,6 +5158,18 @@ If you already created the new file and just need to patch the original, call gi
                   durationMs: Date.now() - task.startTime,
                 };
                 await storeOrchestraTask(this.r2, task.userId, completedTask);
+
+                // Append scratchpad entry for successful run-mode completions (best-effort)
+                if (taskStatus === 'completed' && orchestraMode === 'run' && this.r2) {
+                  try {
+                    await appendScratchpad(this.r2, task.userId, repo, 'ROADMAP.md', {
+                      step: prompt.substring(0, 100) || orchestraResult.branch,
+                      summary: (taskSummary || `Completed: ${orchestraResult.files.join(', ')}`).substring(0, 150),
+                      timestamp: Date.now(),
+                    });
+                  } catch { /* best-effort — scratchpad failure should never block task completion */ }
+                }
+
                 // Compute run health for event metadata
                 const orchResumeCount = task.autoResumeCount ?? 0;
                 const orchRunHealth = computeRunHealth({
