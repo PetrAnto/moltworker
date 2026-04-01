@@ -342,6 +342,8 @@ interface TaskState {
   runtimeRisk?: RuntimeRiskProfile;
   // F.23: Repo for branch-lock release on completion/failure (set for orchestra tasks)
   orchestraRepo?: string;
+  // Resolved roadmap path for scratchpad keying (e.g. 'docs/ROADMAP.md')
+  orchestraRoadmapPath?: string;
   // Draft init mode: DO stores roadmap draft in R2 + sends preview message with buttons
   isDraftInit?: boolean;
   // 5.1: Multi-agent review — which model reviewed the work
@@ -394,6 +396,8 @@ export interface TaskRequest {
   executionProfile?: OrchestraExecutionProfile;
   // F.23: Repo for branch-lock release (set for orchestra tasks)
   orchestraRepo?: string;
+  // Resolved roadmap path (e.g. 'ROADMAP.md', 'docs/ROADMAP.md') for scratchpad keying
+  orchestraRoadmapPath?: string;
   // Draft init mode: model outputs roadmap in text, DO stores draft + sends preview
   isDraftInit?: boolean;
 }
@@ -1382,6 +1386,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
         orchestraRepo: task.orchestraRepo,
+        orchestraRoadmapPath: task.orchestraRoadmapPath,
         // Preserve execution profile across CPU yield resumes
         executionProfile: task.executionProfile,
       };
@@ -1637,6 +1642,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
         orchestraRepo: task.orchestraRepo,
+        orchestraRoadmapPath: task.orchestraRoadmapPath,
         // Preserve execution profile across resumes so resume cap stays consistent
         executionProfile: task.executionProfile,
       };
@@ -2307,6 +2313,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // F.23: Persist orchestraRepo for lock release on completion/failure
     if (request.orchestraRepo) {
       task.orchestraRepo = request.orchestraRepo;
+    }
+    // Persist roadmap path for scratchpad keying consistency
+    if (request.orchestraRoadmapPath) {
+      task.orchestraRoadmapPath = request.orchestraRoadmapPath;
     }
     // F.20: Initialize runtime risk profile for second-stage classification
     if (!task.runtimeRisk) {
@@ -5162,7 +5172,8 @@ If you already created the new file and just need to patch the original, call gi
                 // Append scratchpad entry for successful run-mode completions (best-effort)
                 if (taskStatus === 'completed' && orchestraMode === 'run' && this.r2) {
                   try {
-                    await appendScratchpad(this.r2, task.userId, repo, 'ROADMAP.md', {
+                    const roadmapPath = task.orchestraRoadmapPath || 'ROADMAP.md';
+                    await appendScratchpad(this.r2, task.userId, repo, roadmapPath, {
                       step: prompt.substring(0, 100) || orchestraResult.branch,
                       summary: (taskSummary || `Completed: ${orchestraResult.files.join(', ')}`).substring(0, 150),
                       timestamp: Date.now(),

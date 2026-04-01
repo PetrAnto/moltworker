@@ -210,6 +210,46 @@ describe('formatScratchpadForPrompt', () => {
   });
 });
 
+// --- Key consistency ---
+
+describe('scratchpad key consistency', () => {
+  it('load and append use the same R2 key for the same repo+roadmapPath', async () => {
+    const r2 = createMockR2();
+    const userId = 'user1';
+    const repo = 'owner/repo';
+    const roadmapPath = 'docs/ROADMAP.md';
+
+    // Append with a non-default roadmap path
+    await appendScratchpad(r2, userId, repo, roadmapPath, {
+      step: 'Step 1',
+      summary: 'Did something',
+      timestamp: Date.now(),
+    });
+
+    // Load with the same path — should find the entry
+    const loaded = await loadScratchpad(r2, userId, repo, roadmapPath);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.entries).toHaveLength(1);
+    expect(loaded!.entries[0].step).toBe('Step 1');
+  });
+
+  it('different roadmap paths produce different scratchpad keys', async () => {
+    const r2 = createMockR2();
+    const userId = 'user1';
+    const repo = 'owner/repo';
+
+    await appendScratchpad(r2, userId, repo, 'ROADMAP.md', {
+      step: 'Step A',
+      summary: 'From default path',
+      timestamp: Date.now(),
+    });
+
+    // Loading with a different roadmap path should return null
+    const loaded = await loadScratchpad(r2, userId, repo, 'docs/ROADMAP.md');
+    expect(loaded).toBeNull();
+  });
+});
+
 // --- Prompt integration ---
 
 describe('scratchpad prompt integration', () => {

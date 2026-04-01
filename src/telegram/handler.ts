@@ -41,7 +41,7 @@ import {
   commitDraftRoadmap,
   type OrchestraExecutionProfile,
 } from '../orchestra/orchestra';
-import { loadScratchpad, appendScratchpad, formatScratchpadForPrompt } from '../orchestra/scratchpad';
+import { loadScratchpad, formatScratchpadForPrompt } from '../orchestra/scratchpad';
 import type { OrchestraDraft, OrchestraPlanState } from '../openrouter/storage';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
@@ -2939,6 +2939,7 @@ export class TelegramHandler {
       acontextBaseUrl: this.acontextBaseUrl,
       executionProfile,
       orchestraRepo: repo,
+      orchestraRoadmapPath: prefetchedRoadmapPath,
       isDraftInit: mode === 'draft',
     };
 
