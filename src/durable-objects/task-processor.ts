@@ -5681,10 +5681,12 @@ If you already created the new file and just need to patch the original, call gi
         }),
       });
 
-      const result = await response.json() as { ok: boolean; result?: { message_id: number } };
+      const result = await response.json() as { ok: boolean; result?: { message_id: number }; description?: string };
       if (result.ok) {
         return result.result?.message_id || null;
       }
+
+      console.error(`[TaskProcessor] Telegram HTML send failed: ${result.description}`);
 
       // Fallback: send as plain text if HTML parsing failed
       const fallback = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -5695,9 +5697,13 @@ If you already created the new file and just need to patch the original, call gi
           text: text.slice(0, 4000),
         }),
       });
-      const fbResult = await fallback.json() as { ok: boolean; result?: { message_id: number } };
+      const fbResult = await fallback.json() as { ok: boolean; result?: { message_id: number }; description?: string };
+      if (!fbResult.ok) {
+        console.error(`[TaskProcessor] Telegram plaintext send also failed: ${fbResult.description}`);
+      }
       return fbResult.ok ? fbResult.result?.message_id || null : null;
-    } catch {
+    } catch (err) {
+      console.error('[TaskProcessor] Failed to send Telegram message:', err);
       return null;
     }
   }
@@ -5726,10 +5732,12 @@ If you already created the new file and just need to patch the original, call gi
         }),
       });
 
-      const result = await response.json() as { ok: boolean; result?: { message_id: number } };
+      const result = await response.json() as { ok: boolean; result?: { message_id: number }; description?: string };
       if (result.ok) {
         return result.result?.message_id || null;
       }
+
+      console.error(`[TaskProcessor] Telegram HTML+buttons send failed: ${result.description}`);
 
       // Fallback: plain text without parse_mode
       const fallback = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -5743,9 +5751,13 @@ If you already created the new file and just need to patch the original, call gi
           },
         }),
       });
-      const fbResult = await fallback.json() as { ok: boolean; result?: { message_id: number } };
+      const fbResult = await fallback.json() as { ok: boolean; result?: { message_id: number }; description?: string };
+      if (!fbResult.ok) {
+        console.error(`[TaskProcessor] Telegram plaintext+buttons send also failed: ${fbResult.description}`);
+      }
       return fbResult.ok ? fbResult.result?.message_id || null : null;
-    } catch {
+    } catch (err) {
+      console.error('[TaskProcessor] Failed to send Telegram message with buttons:', err);
       return null;
     }
   }
