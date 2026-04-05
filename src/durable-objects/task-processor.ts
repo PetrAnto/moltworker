@@ -287,6 +287,7 @@ interface TaskState {
   moonshotKey?: string;
   deepseekKey?: string;
   anthropicKey?: string;
+  nvidiaKey?: string;
   // Auto-resume settings
   autoResume?: boolean; // If true, automatically resume on timeout
   autoResumeCount?: number; // Number of auto-resumes so far
@@ -380,6 +381,7 @@ export interface TaskRequest {
   moonshotKey?: string;    // For Kimi (Moonshot)
   deepseekKey?: string;    // For DeepSeek
   anthropicKey?: string;   // For Claude (Anthropic direct)
+  nvidiaKey?: string;      // For NVIDIA NIM free models
   cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
   // Auto-resume setting
   autoResume?: boolean;    // If true, auto-resume on timeout
@@ -420,6 +422,7 @@ export interface SkillTaskRequest {
   moonshotKey?: string;
   deepseekKey?: string;
   anthropicKey?: string;
+  nvidiaKey?: string;
   cloudflareApiToken?: string;
 }
 
@@ -1382,6 +1385,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         moonshotKey: task.moonshotKey,
         deepseekKey: task.deepseekKey,
         anthropicKey: task.anthropicKey,
+        nvidiaKey: task.nvidiaKey,
         autoResume: task.autoResume,
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
@@ -1475,7 +1479,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Check if auto-resume is enabled and under limit.
     // Direct-API models (DeepSeek, Moonshot, DashScope) may not have an OpenRouter key
     // — check for any provider key to avoid blocking auto-resume for direct providers.
-    const hasAnyProviderKey = !!(task.openrouterKey || task.deepseekKey || task.moonshotKey || task.dashscopeKey || task.anthropicKey);
+    const hasAnyProviderKey = !!(task.openrouterKey || task.deepseekKey || task.moonshotKey || task.dashscopeKey || task.anthropicKey || task.nvidiaKey);
     if (task.autoResume && resumeCount < maxResumes && task.telegramToken && hasAnyProviderKey) {
       // --- STALL DETECTION ---
       // Two layers:
@@ -1638,6 +1642,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         moonshotKey: task.moonshotKey,
         deepseekKey: task.deepseekKey,
         anthropicKey: task.anthropicKey,
+        nvidiaKey: task.nvidiaKey,
         autoResume: task.autoResume,
         reasoningLevel: task.reasoningLevel,
         responseFormat: task.responseFormat,
@@ -2304,6 +2309,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.dashscopeKey = request.dashscopeKey;
     task.moonshotKey = request.moonshotKey;
     task.deepseekKey = request.deepseekKey;
+    task.nvidiaKey = request.nvidiaKey;
     task.anthropicKey = request.anthropicKey;
     // Preserve auto-resume setting (and count if resuming)
     task.autoResume = request.autoResume;
@@ -2837,6 +2843,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             break;
           case 'anthropic':
             apiKey = request.anthropicKey || '';
+            break;
+          case 'nvidia':
+            apiKey = request.nvidiaKey || '';
             break;
           default:
             apiKey = request.openrouterKey;

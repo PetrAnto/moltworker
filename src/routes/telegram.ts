@@ -70,6 +70,7 @@ telegram.post('/webhook/:token', async (c) => {
       env.MOONSHOT_API_KEY, // Moonshot for Kimi
       env.DEEPSEEK_API_KEY, // DeepSeek for DeepSeek Coder
       env.ANTHROPIC_API_KEY, // Anthropic for Claude direct
+      env.NVIDIA_NIM_API_KEY, // NVIDIA NIM free models
       sandbox, // Sandbox container for sandbox_exec tool
       env.ACONTEXT_API_KEY, // Acontext observability
       env.ACONTEXT_BASE_URL, // Acontext API base URL
@@ -173,6 +174,7 @@ telegram.get('/info', async (c) => {
     moonshot_configured: !!env.MOONSHOT_API_KEY,
     deepseek_configured: !!env.DEEPSEEK_API_KEY,
     anthropic_configured: !!env.ANTHROPIC_API_KEY,
+    nvidia_nim_configured: !!env.NVIDIA_NIM_API_KEY,
     acontext_configured: !!env.ACONTEXT_API_KEY,
     cloudflare_api_configured: !!env.CLOUDFLARE_API_TOKEN,
     webhook_path: '/telegram/webhook/:token',

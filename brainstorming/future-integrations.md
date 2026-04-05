@@ -278,6 +278,82 @@ Via WhatsApp Business API (requires approval).
 
 ---
 
+## Priority 6: OpenClaw Integration (Post-Debug Audit, Apr 2026)
+
+> Identified during the bot-unresponsive debug session. The OpenClaw gateway
+> running in the Sandbox container has features worth absorbing into the
+> Moltworker Telegram pipeline rather than running two competing bots.
+
+### 6.1 NVIDIA NIM Free Models
+**Status:** Not started — **NEXT UP**
+**Effort:** Low (2-3 hours)
+**Value:** Medium — 12 free models expand the free tier significantly
+
+NVIDIA NIM (build.nvidia.com) offers free models via OpenAI-compatible API.
+Add as a direct provider alongside DeepSeek/Moonshot/DashScope.
+
+**Models to add:**
+- Nemotron Ultra 253B (nvidia/llama-3.3-nemotron-super-49b-v1)
+- Qwen 3.5 32B / 72B (qwen/qwen3.5-32b, qwen/qwen3.5-72b)
+- DeepSeek R1 (deepseek-ai/deepseek-r1)
+- Kimi K2 (moonshotai/kimi-k2)
+- Devstral Small (mistralai/devstral-small)
+- GLM-5 (THUDM/glm-5-32b-chat)
+
+**Implementation:**
+- Add `nvidia` provider in `src/openrouter/models.ts` (baseUrl: `https://integrate.api.nvidia.com/v1`)
+- Add model entries with aliases (e.g., `/nemotron`, `/glm5`)
+- Add `NVIDIA_NIM_API_KEY` to env types and `src/routes/telegram.ts`
+- Wire into TaskProcessor's provider switch (same pattern as DeepSeek/Moonshot)
+- No special auth — standard Bearer token, OpenAI-compatible /chat/completions
+
+### 6.2 Web Chat UI (Route Through Moltworker Pipeline)
+**Status:** Not started
+**Effort:** Medium (1-2 weeks)
+**Value:** Medium — provides browser-based access to all Moltworker features
+
+The OpenClaw gateway's WebSocket chat UI is already proxied through the Worker
+catch-all route. Currently it uses OpenClaw's own AI handler (separate models,
+no tools, no orchestra). Route it through Moltworker's pipeline instead.
+
+**What this enables:**
+- Use all 26+ Moltworker models from the browser
+- Full tool access (GitHub, web search, sandbox, etc.) from web UI
+- Orchestra commands from browser
+- Shared conversation history between Telegram and web
+
+**Implementation approach:**
+- Add a WebSocket route `/ws/chat` that bypasses the catch-all proxy
+- WebSocket handler creates same `TaskRequest` as Telegram handler
+- TaskProcessor sends results back via WebSocket instead of Telegram API
+- Add a `transport` field to TaskRequest: `'telegram' | 'websocket'`
+- Reuse existing system prompt, tools, model selection, memory
+- Web UI served from existing `/dist/client` (extend dashboard with chat tab)
+
+**Key decisions needed:**
+- Auth: reuse Cloudflare Access JWT or separate session tokens?
+- Whether to keep OpenClaw's chat UI or build a minimal custom one
+- How to handle long-running tasks (WebSocket keepalive vs polling)
+
+### 6.3 Multi-Agent Sessions (Parallel Sub-Agents)
+**Status:** ⏸️ Deferred — to be reviewed later, not useful now
+**Effort:** Medium (1-2 weeks)
+**Value:** Low for single-user bot — sequential DO pipeline already fast enough
+
+Parallel sub-agents sound impressive but provide limited value for a single-user
+Telegram bot. The existing TaskProcessor DO handles tasks sequentially with
+auto-resume, and tools already run in parallel within a task. The main scenarios
+(parallel research, orchestra parallelism) don't justify the added complexity,
+failure modes, and 3x token cost. Revisit if multi-user support is added or
+if a concrete workflow emerges that genuinely needs parallel agents.
+
+OpenClaw's implementation is gateway-coupled (WebSocket RPC to gateway:18789)
+and cannot be imported as a library. Two viable approaches exist if needed:
+- **Delegate to gateway**: call `sessions.create/send/abort` RPC (adds OpenClaw dependency)
+- **Build with DOs**: `MultiAgentCoordinator` DO spawning N child `TaskProcessor` DOs (no dependency)
+
+---
+
 ## Orchestra Evolution (Post-F.18 Review Backlog)
 
 > Identified by GPT/Grok/Gemini architecture reviews of the ExecutionProfile work.
