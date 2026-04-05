@@ -284,74 +284,8 @@ Via WhatsApp Business API (requires approval).
 > running in the Sandbox container has features worth absorbing into the
 > Moltworker Telegram pipeline rather than running two competing bots.
 
-### 6.1 Multi-Agent Sessions (Parallel Sub-Agents)
-**Status:** Not started
-**Effort:** Medium (1-2 weeks) — reuse OpenClaw gateway as execution backend
-**Value:** High — biggest capability gap vs OpenClaw
-
-OpenClaw's multi-agent system is **gateway-coupled** — spawn, registry, session
-lifecycle, and parent→child messaging all run inside the `openclaw gateway`
-process via WebSocket RPC. It cannot be imported as a standalone library.
-
-**What this enables:**
-- "Research X, Y, Z simultaneously" → 3 parallel sub-agents, results merged
-- Orchestra parallelism: run non-dependent roadmap tasks concurrently
-- Background monitoring: spawn a watcher agent while chatting normally
-
-**Architecture: Delegate to OpenClaw gateway (already running in container)**
-
-The gateway exposes these RPC methods (via WebSocket on port 18789):
-- `sessions.create` — create a child session with task + model + label
-- `sessions.send` — send a message to a session
-- `sessions.abort` — cancel a running session
-- `sessions.list` — list active/recent sessions
-- `sessions.history` — get session transcript
-
-OpenClaw's own sub-agent system uses exactly these methods internally via
-`callGateway()`. We call the same API from the Worker via `containerFetch()`.
-
-```
-Telegram "/spawn research AI safety"
-  → Worker: parse command
-  → containerFetch(sandbox, 'ws://localhost:18789')
-    → gateway RPC: sessions.create({ task, model, label })
-    → gateway spawns child session internally
-    → child session runs with OpenClaw's AI + tools
-  → gateway RPC: sessions.subscribe(childKey)
-    → completion event arrives
-  → Worker: forward result to Telegram
-```
-
-**Implementation steps:**
-1. Add `src/multiagent/gateway-client.ts` — WebSocket RPC client for gateway
-   (reuse `callGateway` protocol: JSON-RPC over WebSocket, method+params)
-2. Add `src/multiagent/coordinator.ts` — tracks spawned agents per user,
-   merges results, handles timeouts and cleanup
-3. Wire into Telegram handler:
-   - `/spawn <task>` — spawn a sub-agent via `sessions.create`
-   - `/agents` — list active sub-agents via `sessions.list`
-   - `/kill <id>` — abort a sub-agent via `sessions.abort`
-   - `/steer <id> <msg>` — redirect a sub-agent via `sessions.send`
-4. Completion delivery: gateway announces results back to parent session;
-   coordinator captures and forwards to Telegram chat
-5. Limit: max 3-5 concurrent agents per user (cost control)
-
-**Why this works better than building from scratch:**
-- OpenClaw gateway already handles session isolation, tool execution,
-  context management, model routing, and result delivery
-- We get OpenClaw's full tool set (exec, web, files) inside sub-agents
-- Moltworker stays the Telegram interface; gateway stays the AI runtime
-- No DO changes needed — coordinator runs in Worker or a dedicated DO
-
-**Key decisions needed:**
-- Auth: pass `OPENCLAW_GATEWAY_TOKEN` for RPC calls
-- Model routing: let gateway use its own catalog or override with Moltworker's?
-- Result format: raw text vs structured summary
-- Whether sub-agents can access Moltworker tools (GitHub, Brave) or only
-  OpenClaw's built-in tools
-
-### 6.2 NVIDIA NIM Free Models
-**Status:** Not started
+### 6.1 NVIDIA NIM Free Models
+**Status:** Not started — **NEXT UP**
 **Effort:** Low (2-3 hours)
 **Value:** Medium — 12 free models expand the free tier significantly
 
@@ -373,7 +307,7 @@ Add as a direct provider alongside DeepSeek/Moonshot/DashScope.
 - Wire into TaskProcessor's provider switch (same pattern as DeepSeek/Moonshot)
 - No special auth — standard Bearer token, OpenAI-compatible /chat/completions
 
-### 6.3 Web Chat UI (Route Through Moltworker Pipeline)
+### 6.2 Web Chat UI (Route Through Moltworker Pipeline)
 **Status:** Not started
 **Effort:** Medium (1-2 weeks)
 **Value:** Medium — provides browser-based access to all Moltworker features
@@ -400,6 +334,23 @@ no tools, no orchestra). Route it through Moltworker's pipeline instead.
 - Auth: reuse Cloudflare Access JWT or separate session tokens?
 - Whether to keep OpenClaw's chat UI or build a minimal custom one
 - How to handle long-running tasks (WebSocket keepalive vs polling)
+
+### 6.3 Multi-Agent Sessions (Parallel Sub-Agents)
+**Status:** ⏸️ Deferred — to be reviewed later, not useful now
+**Effort:** Medium (1-2 weeks)
+**Value:** Low for single-user bot — sequential DO pipeline already fast enough
+
+Parallel sub-agents sound impressive but provide limited value for a single-user
+Telegram bot. The existing TaskProcessor DO handles tasks sequentially with
+auto-resume, and tools already run in parallel within a task. The main scenarios
+(parallel research, orchestra parallelism) don't justify the added complexity,
+failure modes, and 3x token cost. Revisit if multi-user support is added or
+if a concrete workflow emerges that genuinely needs parallel agents.
+
+OpenClaw's implementation is gateway-coupled (WebSocket RPC to gateway:18789)
+and cannot be imported as a library. Two viable approaches exist if needed:
+- **Delegate to gateway**: call `sessions.create/send/abort` RPC (adds OpenClaw dependency)
+- **Build with DOs**: `MultiAgentCoordinator` DO spawning N child `TaskProcessor` DOs (no dependency)
 
 ---
 
