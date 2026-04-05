@@ -144,11 +144,17 @@ app.use('*', async (c, next) => {
   await next();
 });
 
-// Middleware: Initialize sandbox for all requests
+// Middleware: Initialize sandbox for all requests (non-fatal — sandbox
+// unavailability must never block Telegram webhooks or other critical routes)
 app.use('*', async (c, next) => {
-  const options = buildSandboxOptions(c.env);
-  const sandbox = getSandbox(c.env.Sandbox, 'moltbot', options);
-  c.set('sandbox', sandbox);
+  try {
+    const options = buildSandboxOptions(c.env);
+    const sandbox = getSandbox(c.env.Sandbox, 'moltbot', options);
+    c.set('sandbox', sandbox);
+  } catch (err) {
+    console.error('[Middleware] Sandbox initialization failed (non-fatal):', err);
+    // Continue without sandbox — routes that need it will handle the absence
+  }
   await next();
 });
 

@@ -78,8 +78,26 @@ telegram.post('/webhook/:token', async (c) => {
       env.NEXUS_KV, // KV namespace for Nexus research cache
     );
 
-    // Process update asynchronously
-    c.executionCtx.waitUntil(handler.handleUpdate(update));
+    // Process update asynchronously.
+    // Wrap in error handler so failures are logged — waitUntil silently
+    // swallows rejected promises, making the bot appear completely dead.
+    c.executionCtx.waitUntil(
+      handler.handleUpdate(update).catch((err) => {
+        console.error('[Telegram] Unhandled error in handleUpdate:', err);
+        // Last-resort attempt to notify user
+        const chatId = update.message?.chat.id || update.callback_query?.message?.chat.id;
+        if (chatId && env.TELEGRAM_BOT_TOKEN) {
+          return fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: `⚠️ Bot error: ${err instanceof Error ? err.message : 'Unknown error'}. Please try again.`,
+            }),
+          }).catch(() => { /* truly nothing we can do */ });
+        }
+      })
+    );
 
     // Return immediately to Telegram
     return c.json({ ok: true });
