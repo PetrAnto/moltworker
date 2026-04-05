@@ -65,7 +65,7 @@ describe('buildEnvVars', () => {
     expect(result.OPENCLAW_DEV_MODE).toBe('true');
   });
 
-  it('includes all channel tokens when set', () => {
+  it('includes channel tokens but NOT TELEGRAM_BOT_TOKEN (handled by Worker)', () => {
     const env = createMockEnv({
       TELEGRAM_BOT_TOKEN: 'tg-token',
       TELEGRAM_DM_POLICY: 'pairing',
@@ -76,7 +76,8 @@ describe('buildEnvVars', () => {
     });
     const result = buildEnvVars(env);
 
-    expect(result.TELEGRAM_BOT_TOKEN).toBe('tg-token');
+    // TELEGRAM_BOT_TOKEN must NOT be passed to avoid dual-bot conflict
+    expect(result.TELEGRAM_BOT_TOKEN).toBeUndefined();
     expect(result.TELEGRAM_DM_POLICY).toBe('pairing');
     expect(result.DISCORD_BOT_TOKEN).toBe('discord-token');
     expect(result.DISCORD_DM_POLICY).toBe('open');
@@ -122,7 +123,7 @@ describe('buildEnvVars', () => {
     expect(result.R2_BUCKET_NAME).toBe('my-bucket');
   });
 
-  it('combines all env vars correctly', () => {
+  it('combines all env vars correctly (excludes TELEGRAM_BOT_TOKEN)', () => {
     const env = createMockEnv({
       ANTHROPIC_API_KEY: 'sk-key',
       MOLTBOT_GATEWAY_TOKEN: 'token',
@@ -133,7 +134,7 @@ describe('buildEnvVars', () => {
     expect(result).toEqual({
       ANTHROPIC_API_KEY: 'sk-key',
       OPENCLAW_GATEWAY_TOKEN: 'token',
-      TELEGRAM_BOT_TOKEN: 'tg',
+      // TELEGRAM_BOT_TOKEN intentionally excluded — Worker handles Telegram
     });
   });
 });

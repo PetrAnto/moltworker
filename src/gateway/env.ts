@@ -42,7 +42,11 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   // Map MOLTBOT_GATEWAY_TOKEN to OPENCLAW_GATEWAY_TOKEN (container expects this name)
   if (env.MOLTBOT_GATEWAY_TOKEN) envVars.OPENCLAW_GATEWAY_TOKEN = env.MOLTBOT_GATEWAY_TOKEN;
   if (env.DEV_MODE) envVars.OPENCLAW_DEV_MODE = env.DEV_MODE;
-  if (env.TELEGRAM_BOT_TOKEN) envVars.TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
+  // NOTE: TELEGRAM_BOT_TOKEN is intentionally NOT passed to the container.
+  // Telegram is handled by the Moltworker Worker (src/routes/telegram.ts)
+  // via its own webhook handler + TaskProcessor DO. Passing the token here
+  // caused the OpenClaw gateway to also respond to messages, creating
+  // duplicate/conflicting responses and hiding Moltworker's real replies.
   if (env.TELEGRAM_DM_POLICY) envVars.TELEGRAM_DM_POLICY = env.TELEGRAM_DM_POLICY;
   if (env.TELEGRAM_DM_ALLOW_FROM) envVars.TELEGRAM_DM_ALLOW_FROM = env.TELEGRAM_DM_ALLOW_FROM;
   if (env.DISCORD_BOT_TOKEN) envVars.DISCORD_BOT_TOKEN = env.DISCORD_BOT_TOKEN;
