@@ -92,7 +92,7 @@ telegram.post('/webhook/:token', async (c) => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               chat_id: chatId,
-              text: `⚠️ Bot error: ${err instanceof Error ? err.message : 'Unknown error'}. Please try again.`,
+              text: '⚠️ Temporary internal error. Please try again in a moment.',
             }),
           }).catch(() => { /* truly nothing we can do */ });
         }
