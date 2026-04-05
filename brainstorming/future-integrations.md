@@ -286,29 +286,69 @@ Via WhatsApp Business API (requires approval).
 
 ### 6.1 Multi-Agent Sessions (Parallel Sub-Agents)
 **Status:** Not started
-**Effort:** High (2-3 weeks)
+**Effort:** Medium (1-2 weeks) — reuse OpenClaw gateway as execution backend
 **Value:** High — biggest capability gap vs OpenClaw
 
-OpenClaw can spawn sub-agents that work in parallel on independent tasks.
-Moltworker currently runs one task per user (single DO per userId).
+OpenClaw's multi-agent system is **gateway-coupled** — spawn, registry, session
+lifecycle, and parent→child messaging all run inside the `openclaw gateway`
+process via WebSocket RPC. It cannot be imported as a standalone library.
 
 **What this enables:**
-- "Research X, Y, Z simultaneously" → 3 parallel DOs, results merged
+- "Research X, Y, Z simultaneously" → 3 parallel sub-agents, results merged
 - Orchestra parallelism: run non-dependent roadmap tasks concurrently
 - Background monitoring: spawn a watcher agent while chatting normally
 
-**Implementation approach:**
-- New `MultiAgentCoordinator` Durable Object that owns N child `TaskProcessor` DOs
-- Each child DO gets its own task + tools + checkpoint
-- Coordinator merges results and sends unified Telegram response
-- New commands: `/spawn <task>`, `/agents` (list active), `/kill <id>`
-- Limit: max 3-5 concurrent agents per user (cost control)
+**Architecture: Delegate to OpenClaw gateway (already running in container)**
+
+The gateway exposes these RPC methods (via WebSocket on port 18789):
+- `sessions.create` — create a child session with task + model + label
+- `sessions.send` — send a message to a session
+- `sessions.abort` — cancel a running session
+- `sessions.list` — list active/recent sessions
+- `sessions.history` — get session transcript
+
+OpenClaw's own sub-agent system uses exactly these methods internally via
+`callGateway()`. We call the same API from the Worker via `containerFetch()`.
+
+```
+Telegram "/spawn research AI safety"
+  → Worker: parse command
+  → containerFetch(sandbox, 'ws://localhost:18789')
+    → gateway RPC: sessions.create({ task, model, label })
+    → gateway spawns child session internally
+    → child session runs with OpenClaw's AI + tools
+  → gateway RPC: sessions.subscribe(childKey)
+    → completion event arrives
+  → Worker: forward result to Telegram
+```
+
+**Implementation steps:**
+1. Add `src/multiagent/gateway-client.ts` — WebSocket RPC client for gateway
+   (reuse `callGateway` protocol: JSON-RPC over WebSocket, method+params)
+2. Add `src/multiagent/coordinator.ts` — tracks spawned agents per user,
+   merges results, handles timeouts and cleanup
+3. Wire into Telegram handler:
+   - `/spawn <task>` — spawn a sub-agent via `sessions.create`
+   - `/agents` — list active sub-agents via `sessions.list`
+   - `/kill <id>` — abort a sub-agent via `sessions.abort`
+   - `/steer <id> <msg>` — redirect a sub-agent via `sessions.send`
+4. Completion delivery: gateway announces results back to parent session;
+   coordinator captures and forwards to Telegram chat
+5. Limit: max 3-5 concurrent agents per user (cost control)
+
+**Why this works better than building from scratch:**
+- OpenClaw gateway already handles session isolation, tool execution,
+  context management, model routing, and result delivery
+- We get OpenClaw's full tool set (exec, web, files) inside sub-agents
+- Moltworker stays the Telegram interface; gateway stays the AI runtime
+- No DO changes needed — coordinator runs in Worker or a dedicated DO
 
 **Key decisions needed:**
-- How to merge results (sequential summary vs interleaved updates)
-- Context sharing between agents (shared R2 prefix? read-only workspace?)
-- Cost attribution (aggregate across agents per session)
-- Whether to use DO-per-agent or a single DO with async Promise.all
+- Auth: pass `OPENCLAW_GATEWAY_TOKEN` for RPC calls
+- Model routing: let gateway use its own catalog or override with Moltworker's?
+- Result format: raw text vs structured summary
+- Whether sub-agents can access Moltworker tools (GitHub, Brave) or only
+  OpenClaw's built-in tools
 
 ### 6.2 NVIDIA NIM Free Models
 **Status:** Not started
