@@ -278,6 +278,91 @@ Via WhatsApp Business API (requires approval).
 
 ---
 
+## Priority 6: OpenClaw Integration (Post-Debug Audit, Apr 2026)
+
+> Identified during the bot-unresponsive debug session. The OpenClaw gateway
+> running in the Sandbox container has features worth absorbing into the
+> Moltworker Telegram pipeline rather than running two competing bots.
+
+### 6.1 Multi-Agent Sessions (Parallel Sub-Agents)
+**Status:** Not started
+**Effort:** High (2-3 weeks)
+**Value:** High — biggest capability gap vs OpenClaw
+
+OpenClaw can spawn sub-agents that work in parallel on independent tasks.
+Moltworker currently runs one task per user (single DO per userId).
+
+**What this enables:**
+- "Research X, Y, Z simultaneously" → 3 parallel DOs, results merged
+- Orchestra parallelism: run non-dependent roadmap tasks concurrently
+- Background monitoring: spawn a watcher agent while chatting normally
+
+**Implementation approach:**
+- New `MultiAgentCoordinator` Durable Object that owns N child `TaskProcessor` DOs
+- Each child DO gets its own task + tools + checkpoint
+- Coordinator merges results and sends unified Telegram response
+- New commands: `/spawn <task>`, `/agents` (list active), `/kill <id>`
+- Limit: max 3-5 concurrent agents per user (cost control)
+
+**Key decisions needed:**
+- How to merge results (sequential summary vs interleaved updates)
+- Context sharing between agents (shared R2 prefix? read-only workspace?)
+- Cost attribution (aggregate across agents per session)
+- Whether to use DO-per-agent or a single DO with async Promise.all
+
+### 6.2 NVIDIA NIM Free Models
+**Status:** Not started
+**Effort:** Low (2-3 hours)
+**Value:** Medium — 12 free models expand the free tier significantly
+
+NVIDIA NIM (build.nvidia.com) offers free models via OpenAI-compatible API.
+Add as a direct provider alongside DeepSeek/Moonshot/DashScope.
+
+**Models to add:**
+- Nemotron Ultra 253B (nvidia/llama-3.3-nemotron-super-49b-v1)
+- Qwen 3.5 32B / 72B (qwen/qwen3.5-32b, qwen/qwen3.5-72b)
+- DeepSeek R1 (deepseek-ai/deepseek-r1)
+- Kimi K2 (moonshotai/kimi-k2)
+- Devstral Small (mistralai/devstral-small)
+- GLM-5 (THUDM/glm-5-32b-chat)
+
+**Implementation:**
+- Add `nvidia` provider in `src/openrouter/models.ts` (baseUrl: `https://integrate.api.nvidia.com/v1`)
+- Add model entries with aliases (e.g., `/nemotron`, `/glm5`)
+- Add `NVIDIA_NIM_API_KEY` to env types and `src/routes/telegram.ts`
+- Wire into TaskProcessor's provider switch (same pattern as DeepSeek/Moonshot)
+- No special auth — standard Bearer token, OpenAI-compatible /chat/completions
+
+### 6.3 Web Chat UI (Route Through Moltworker Pipeline)
+**Status:** Not started
+**Effort:** Medium (1-2 weeks)
+**Value:** Medium — provides browser-based access to all Moltworker features
+
+The OpenClaw gateway's WebSocket chat UI is already proxied through the Worker
+catch-all route. Currently it uses OpenClaw's own AI handler (separate models,
+no tools, no orchestra). Route it through Moltworker's pipeline instead.
+
+**What this enables:**
+- Use all 26+ Moltworker models from the browser
+- Full tool access (GitHub, web search, sandbox, etc.) from web UI
+- Orchestra commands from browser
+- Shared conversation history between Telegram and web
+
+**Implementation approach:**
+- Add a WebSocket route `/ws/chat` that bypasses the catch-all proxy
+- WebSocket handler creates same `TaskRequest` as Telegram handler
+- TaskProcessor sends results back via WebSocket instead of Telegram API
+- Add a `transport` field to TaskRequest: `'telegram' | 'websocket'`
+- Reuse existing system prompt, tools, model selection, memory
+- Web UI served from existing `/dist/client` (extend dashboard with chat tab)
+
+**Key decisions needed:**
+- Auth: reuse Cloudflare Access JWT or separate session tokens?
+- Whether to keep OpenClaw's chat UI or build a minimal custom one
+- How to handle long-running tasks (WebSocket keepalive vs polling)
+
+---
+
 ## Orchestra Evolution (Post-F.18 Review Backlog)
 
 > Identified by GPT/Grok/Gemini architecture reviews of the ExecutionProfile work.
