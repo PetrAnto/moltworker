@@ -74,6 +74,39 @@ describe('detectToolIntent', () => {
     expect(result.needsTools).toBe(true);
   });
 
+  // Web search signals — regression for mimo picking run_code instead of web_search
+  it('detects "search the web for X"', () => {
+    const result = detectToolIntent('search the web for openrouter pricing');
+    expect(result.needsTools).toBe(true);
+    expect(result.reason).toContain('Web search');
+  });
+
+  it('detects "search online"', () => {
+    const result = detectToolIntent('can you search online for the latest Cloudflare Workers limits');
+    expect(result.needsTools).toBe(true);
+  });
+
+  it('detects "look it up online"', () => {
+    const result = detectToolIntent('please look it up online');
+    expect(result.needsTools).toBe(true);
+  });
+
+  it('detects "look this up on google"', () => {
+    const result = detectToolIntent('look this up on google');
+    expect(result.needsTools).toBe(true);
+  });
+
+  it('detects "find online"', () => {
+    const result = detectToolIntent('find online reviews for the new laptop');
+    expect(result.needsTools).toBe(true);
+  });
+
+  it('does NOT flag "search" in code/internal contexts', () => {
+    // Make sure we didn't make the pattern too aggressive
+    expect(detectToolIntent('how do I implement binary search in python').needsTools).toBe(false);
+    expect(detectToolIntent('search this array for duplicates').needsTools).toBe(false);
+  });
+
   // Code execution signals
   it('detects "run this code"', () => {
     const result = detectToolIntent('run this code in a sandbox');

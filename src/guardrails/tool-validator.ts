@@ -26,8 +26,11 @@ export type ToolErrorType =
  * Rotating won't help — the error is about credentials, payment, or bad input.
  */
 export function isTransientApiError(errorMessage: string): boolean {
-  return /\b(429|502|503|504)\b/i.test(errorMessage)
-    || /\b(timeout|timed.?out|deadline.?exceeded|overloaded|capacity|busy|rate.?limit|too many requests|service.?unavailable|bad.?gateway|gateway.?timeout)\b/i.test(errorMessage);
+  // HTTP 5xx: standard gateway/server errors (502/503/504) and Cloudflare-specific
+  // origin errors (520/521/522/523/524/525/526/527/530). 1016 is the DNS sub-code
+  // Cloudflare reports inside 530 bodies when an origin hostname can't be resolved.
+  return /\b(429|502|503|504|520|521|522|523|524|525|526|527|530|1016)\b/i.test(errorMessage)
+    || /\b(timeout|timed.?out|deadline.?exceeded|overloaded|capacity|busy|rate.?limit|too many requests|service.?unavailable|bad.?gateway|gateway.?timeout|origin.?unreachable|connection.?lost)\b/i.test(errorMessage);
 }
 
 export function isPermanentApiError(errorMessage: string): boolean {
@@ -85,7 +88,8 @@ function classifyError(content: string): ToolErrorType {
   if (/\b(404|not found)\b/.test(lower)) return 'not_found';
   if (/\b(429|rate.?limit|too many requests)\b/.test(lower)) return 'rate_limit';
   if (/\b(invalid json|invalid argument|missing required)\b/.test(lower)) return 'invalid_args';
-  if (/\b(500|502|503|504|server error|internal error)\b/.test(lower)) return 'http_error';
+  // HTTP 5xx including Cloudflare origin errors (520-530) and 1016 DNS sub-code
+  if (/\b(500|502|503|504|520|521|522|523|524|525|526|527|530|1016|server error|internal error|origin unreachable|connection lost)\b/.test(lower)) return 'http_error';
   return 'generic_error';
 }
 

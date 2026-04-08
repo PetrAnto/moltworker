@@ -2514,11 +2514,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const MAX_EMPTY_SPLITS_BAIL = 5; // After 5, bail — model can't adapt
     // P2 guardrails: track tool errors for "No Fake Success" enforcement
     const toolErrorTracker = createToolErrorTracker();
-    // Error threshold guardrail: if the same tool returns the same error 3 consecutive times,
+    // Error threshold guardrail: if the same tool returns the same error N consecutive times,
     // force-abort the tool to prevent burning iterations on a static validation error.
+    // Lowered from 3 → 2 because small models (mimo, nano, haiku) often self-abandon
+    // after 2 identical errors, so a threshold of 3 never fires and the guardrail
+    // never gets to inject its guidance message.
     let lastToolErrorSig = '';
     let consecutiveIdenticalErrors = 0;
-    const MAX_IDENTICAL_ERRORS = 3;
+    const MAX_IDENTICAL_ERRORS = 2;
+    // One-shot guidance flag: on the first transient HTTP error from any tool,
+    // inject a system-authored hint telling the model the service is down and
+    // it should try a different approach. Prevents wasted retries against an
+    // outage and gives the model permission to answer from memory if appropriate.
+    let transientToolErrorGuidanceSent = false;
 
     let conversationMessages: ChatMessage[] = [...request.messages];
     const maxIterations = 100; // Very high limit for complex tasks
@@ -3903,6 +3911,25 @@ If you already created the new file and just need to patch the original, call gi
                 task.sandboxStalled = true;
               }
 
+              // Transient service-outage guidance (one-shot per task):
+              // When a tool returns a transient 5xx / Cloudflare origin error, the backing
+              // service is down. Small models otherwise retry the same tool a couple of
+              // times then give up with a near-empty response. Inject an explicit system
+              // hint the first time we see this so the model knows to pivot to a different
+              // tool or answer from memory instead of burning iterations on a dead service.
+              if (
+                !transientToolErrorGuidanceSent &&
+                validation.errorType === 'http_error' &&
+                isTransientApiError(toolResult.content)
+              ) {
+                transientToolErrorGuidanceSent = true;
+                conversationMessages.push({
+                  role: 'system',
+                  content: `[SYSTEM] The "${toolName}" tool just returned a transient service error (e.g. 5xx / origin unreachable). The backing service appears to be temporarily unavailable. Do NOT retry "${toolName}" — it will keep failing. Instead: try a different tool (e.g. web_search or fetch_url for information lookups), or if no alternative tool fits, answer from your existing knowledge and clearly note that live data was unavailable.`,
+                });
+                console.log(`[TaskProcessor] Injected transient-error guidance after ${toolName} returned ${validation.errorType}`);
+              }
+
               // Error threshold guardrail: detect identical errors repeating
               const errorSig = `${toolName}:${toolResult.content.slice(0, 200)}`;
               if (errorSig === lastToolErrorSig) {
@@ -4771,9 +4798,26 @@ If you already created the new file and just need to patch the original, call gi
               const reviewResult = parseReviewResponse(reviewContent, reviewerAlias);
               console.log(`[TaskProcessor] 5.1 Review decision: ${reviewResult.decision} (by ${reviewerAlias})`);
 
-              if (reviewResult.decision === 'approve') {
+              // Quality gate: a reviewer "approve" on a near-empty work-phase
+              // answer plus tracked tool errors almost always means the model
+              // gave up after a transient outage. Annotate the thin result so
+              // the user sees that tools were unavailable instead of receiving
+              // a mysterious one-line reply.
+              const workLen = task.workPhaseContent.trim().length;
+              const hasErrors = toolErrorTracker.totalErrors > 0;
+              const thinApproval = reviewResult.decision === 'approve' && workLen < 100 && hasErrors;
+
+              if (reviewResult.decision === 'approve' && !thinApproval) {
                 // Reviewer approved — use work-phase answer directly, skip self-review loop
                 task.result = task.workPhaseContent;
+                task.status = 'completed';
+              } else if (reviewResult.decision === 'approve' && thinApproval) {
+                // Thin approval: reviewer rubber-stamped a near-empty answer after
+                // tool failures. Keep the work-phase text but append a visible note
+                // so the user understands what happened.
+                console.log(`[TaskProcessor] 5.1 Thin approval overridden: workPhase=${workLen} chars, errors=${toolErrorTracker.totalErrors}`);
+                const note = '\n\n_⚠️ Note: Some tools returned errors during this request (service temporarily unavailable). The answer above is based on the model\'s existing knowledge; live data may be unavailable._';
+                task.result = (task.workPhaseContent.trim() || 'I was unable to complete this request.') + note;
                 task.status = 'completed';
               } else {
                 // Reviewer revised — use their version
