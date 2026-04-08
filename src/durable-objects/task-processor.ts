@@ -28,7 +28,7 @@ import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
 import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, isTransientApiError, isPermanentApiError, type ToolErrorTracker } from '../guardrails/tool-validator';
-import { createWebSearchLimiter, parseWebSearchLimiterConfig } from '../rate-limit/web-search-limiter';
+import { buildWebSearchLimiter } from '../rate-limit/web-search-limiter';
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
 import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext, scanCrossFileReferences, type ExtractionCheck } from '../guardrails/extraction-verifier';
 import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
@@ -2453,25 +2453,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       console.log('[TaskProcessor] Sandbox available but profile says requiresSandbox=false — sandbox_exec removed from tool set');
     }
 
-    // Build the web_search rate limiter (one per task invocation — per-task
-    // counter resets on task restart, per-user + global persist in R2).
-    // Requires an R2 bucket; if unavailable (shouldn't happen in production),
-    // the limiter is undefined and web_search runs with no cap enforcement.
-    const webSearchLimiter = this.r2
-      ? createWebSearchLimiter(
-          {
-            r2: this.r2,
-            userId: request.userId,
-            taskId: task.taskId,
-          },
-          parseWebSearchLimiterConfig({
-            WEB_SEARCH_USER_DAILY_LIMIT: this.doEnv.WEB_SEARCH_USER_DAILY_LIMIT,
-            WEB_SEARCH_TASK_LIMIT: this.doEnv.WEB_SEARCH_TASK_LIMIT,
-            WEB_SEARCH_GLOBAL_DAILY_LIMIT: this.doEnv.WEB_SEARCH_GLOBAL_DAILY_LIMIT,
-            WEB_SEARCH_ALLOWLIST_USERS: this.doEnv.WEB_SEARCH_ALLOWLIST_USERS,
-          }),
-        )
-      : undefined;
+    // Build the web_search rate limiter. One per task invocation — per-task
+    // counter resets on task restart; per-user + global counters persist in R2.
+    // Returns undefined when R2 is unavailable (no cap enforcement — matches
+    // historical behavior and keeps web_search working on misconfigured DOs).
+    const webSearchLimiter = buildWebSearchLimiter({
+      r2: this.r2,
+      userId: request.userId,
+      taskId: task.taskId,
+      env: this.doEnv,
+    });
 
     const toolContext: ToolContext = {
       githubToken: request.githubToken,

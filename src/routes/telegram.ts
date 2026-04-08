@@ -78,6 +78,14 @@ telegram.post('/webhook/:token', async (c) => {
       env.ARTIFICIAL_ANALYSIS_KEY, // AA benchmark data
       env.NEXUS_KV, // KV namespace for Nexus research cache
       env.TAVILY_API_KEY, // Tavily Search API key (preferred for web_search — no credit card)
+      // web_search rate limit config — enforced in every non-DO execution path
+      // (skill tool contexts, direct fallback tool contexts), not just the DO.
+      {
+        WEB_SEARCH_USER_DAILY_LIMIT: env.WEB_SEARCH_USER_DAILY_LIMIT,
+        WEB_SEARCH_TASK_LIMIT: env.WEB_SEARCH_TASK_LIMIT,
+        WEB_SEARCH_GLOBAL_DAILY_LIMIT: env.WEB_SEARCH_GLOBAL_DAILY_LIMIT,
+        WEB_SEARCH_ALLOWLIST_USERS: env.WEB_SEARCH_ALLOWLIST_USERS,
+      },
     );
 
     // Process update asynchronously.

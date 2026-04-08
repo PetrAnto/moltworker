@@ -219,3 +219,41 @@ export function parseWebSearchLimiterConfig(env: {
     allowlistUsers: allowlist,
   };
 }
+
+/**
+ * Convenience factory that builds a WebSearchLimiter in one call.
+ *
+ * Every code path that constructs a ToolContext should use this (not
+ * `createWebSearchLimiter` directly) so the config parsing, R2 dependency
+ * check, and fallback-on-missing-r2 behavior stay consistent.
+ *
+ * Returns `undefined` when R2 is unavailable. Callers treat undefined as
+ * "no rate limiting" (the tool still runs but without cap enforcement),
+ * which matches the DO's historical behavior when R2 is missing.
+ *
+ * The config is read from an env-shaped object using the same field names
+ * as MoltbotEnv (WEB_SEARCH_USER_DAILY_LIMIT, WEB_SEARCH_TASK_LIMIT, etc).
+ * Pass the worker `env` directly — no copy/rename needed.
+ */
+export function buildWebSearchLimiter(params: {
+  r2: Pick<R2Bucket, 'get' | 'put'> | undefined;
+  userId: string;
+  /** Optional. Used only for logging — safe to default if caller has no task concept. */
+  taskId?: string;
+  env: {
+    WEB_SEARCH_USER_DAILY_LIMIT?: string;
+    WEB_SEARCH_TASK_LIMIT?: string;
+    WEB_SEARCH_GLOBAL_DAILY_LIMIT?: string;
+    WEB_SEARCH_ALLOWLIST_USERS?: string;
+  };
+}): WebSearchLimiter | undefined {
+  if (!params.r2) return undefined;
+  return createWebSearchLimiter(
+    {
+      r2: params.r2,
+      userId: params.userId,
+      taskId: params.taskId ?? `${params.userId}-${Date.now()}`,
+    },
+    parseWebSearchLimiterConfig(params.env),
+  );
+}

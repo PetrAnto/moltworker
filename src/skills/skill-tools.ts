@@ -8,6 +8,7 @@
 
 import { executeTool, AVAILABLE_TOOLS, type ToolCall, type ToolResult, type ToolContext, type ToolDefinition } from '../openrouter/tools';
 import { getToolAllowlist } from './tool-policy';
+import { buildWebSearchLimiter } from '../rate-limit/web-search-limiter';
 import type { SkillId } from './types';
 import type { MoltbotEnv } from '../types';
 
@@ -48,10 +49,28 @@ export function getSkillTools(skillId: SkillId): ToolDefinition[] {
  * Build a ToolContext from worker env bindings for use in skill tool calls.
  */
 export function buildSkillToolContext(env: MoltbotEnv, userId?: string): ToolContext {
+  // Build a rate limiter so skill-invoked web_search is capped identically
+  // to DO-invoked web_search. Requires both R2 and a userId; when either is
+  // missing the limiter is undefined (no enforcement), matching the DO's
+  // fallback behavior on misconfigured infrastructure.
+  const webSearchLimiter = userId && env.MOLTBOT_BUCKET
+    ? buildWebSearchLimiter({
+        r2: env.MOLTBOT_BUCKET,
+        userId,
+        env: {
+          WEB_SEARCH_USER_DAILY_LIMIT: env.WEB_SEARCH_USER_DAILY_LIMIT,
+          WEB_SEARCH_TASK_LIMIT: env.WEB_SEARCH_TASK_LIMIT,
+          WEB_SEARCH_GLOBAL_DAILY_LIMIT: env.WEB_SEARCH_GLOBAL_DAILY_LIMIT,
+          WEB_SEARCH_ALLOWLIST_USERS: env.WEB_SEARCH_ALLOWLIST_USERS,
+        },
+      })
+    : undefined;
+
   return {
     githubToken: env.GITHUB_TOKEN,
     braveSearchKey: env.BRAVE_SEARCH_KEY,
     tavilyKey: env.TAVILY_API_KEY,
+    webSearchLimiter,
     browser: env.BROWSER,
     r2Bucket: env.MOLTBOT_BUCKET,
     r2FilePrefix: userId ? `files/${userId}/` : undefined,

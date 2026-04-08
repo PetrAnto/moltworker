@@ -45,6 +45,7 @@ import { loadScratchpad, formatScratchpadForPrompt } from '../orchestra/scratchp
 import type { OrchestraDraft, OrchestraPlanState } from '../openrouter/storage';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
+import { buildWebSearchLimiter } from '../rate-limit/web-search-limiter';
 import { acquireRepoLock, forceReleaseRepoLock } from '../concurrency/branch-lock';
 import { runSmokeTests, formatTestResults, getTestNames } from './smoke-tests';
 import { classifyTaskComplexity } from '../utils/task-classifier';
@@ -535,6 +536,15 @@ export class TelegramHandler {
   private openrouterKey: string; // Store for DO
   private braveSearchKey?: string; // Brave Search API key for web_search tool (fallback)
   private tavilyKey?: string; // Tavily Search API key (preferred for web_search — no credit card required)
+  // web_search rate-limit env vars — propagated into skill env builders and
+  // used to build WebSearchLimiter instances for non-DO execution paths so
+  // rate limiting is enforced uniformly, not only in TaskProcessor.
+  private webSearchRateLimitEnv: {
+    WEB_SEARCH_USER_DAILY_LIMIT?: string;
+    WEB_SEARCH_TASK_LIMIT?: string;
+    WEB_SEARCH_GLOBAL_DAILY_LIMIT?: string;
+    WEB_SEARCH_ALLOWLIST_USERS?: string;
+  } = {};
   private taskProcessor?: DurableObjectNamespace<TaskProcessor>; // For long-running tasks
   private browser?: Fetcher; // Browser binding for browse_url tool
   private sandbox?: SandboxLike; // Sandbox container for sandbox_exec tool
@@ -576,6 +586,12 @@ export class TelegramHandler {
     aaKey?: string, // Artificial Analysis API key for benchmark data
     nexusKv?: KVNamespace, // KV namespace for Nexus research cache
     tavilyKey?: string, // Tavily Search API key (preferred for web_search — no credit card)
+    webSearchRateLimitEnv?: {
+      WEB_SEARCH_USER_DAILY_LIMIT?: string;
+      WEB_SEARCH_TASK_LIMIT?: string;
+      WEB_SEARCH_GLOBAL_DAILY_LIMIT?: string;
+      WEB_SEARCH_ALLOWLIST_USERS?: string;
+    }, // web_search rate limit config (flows into skill env + non-DO tool contexts)
   ) {
     this.bot = new TelegramBot(telegramToken);
     this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
@@ -588,6 +604,7 @@ export class TelegramHandler {
     this.openrouterKey = openrouterKey;
     this.braveSearchKey = braveSearchKey;
     this.tavilyKey = tavilyKey;
+    this.webSearchRateLimitEnv = webSearchRateLimitEnv ?? {};
     this.taskProcessor = taskProcessor;
     this.browser = browser;
     this.sandbox = sandbox;
@@ -878,8 +895,12 @@ export class TelegramHandler {
         OPENROUTER_API_KEY: this.openrouterKey,
         GITHUB_TOKEN: this.githubToken,
         BRAVE_SEARCH_KEY: this.braveSearchKey,
+        TAVILY_API_KEY: this.tavilyKey,
         TASK_PROCESSOR: this.taskProcessor,
         NEXUS_KV: this.nexusKv,
+        // Rate-limit env vars: propagate so buildSkillToolContext can build
+        // a WebSearchLimiter from the same config as the DO path.
+        ...this.webSearchRateLimitEnv,
       } as import('../types').MoltbotEnv;
       const skillRequest: SkillRequest = {
         skillId: skillParsed.mapping.skillId,
@@ -3235,7 +3256,19 @@ export class TelegramHandler {
           modelAlias, messages, {
             maxToolCalls: 10,
             maxTimeMs: 120000,
-            toolContext: { githubToken: this.githubToken, braveSearchKey: this.braveSearchKey, tavilyKey: this.tavilyKey, cloudflareApiToken: this.cloudflareApiToken, browser: this.browser, sandbox: this.sandbox, acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl), acontextSessionId: `chat-${userId}`, r2Bucket: this.r2Bucket, r2FilePrefix: `files/${userId}/` },
+            toolContext: {
+              githubToken: this.githubToken,
+              braveSearchKey: this.braveSearchKey,
+              tavilyKey: this.tavilyKey,
+              webSearchLimiter: buildWebSearchLimiter({ r2: this.r2Bucket, userId, env: this.webSearchRateLimitEnv }),
+              cloudflareApiToken: this.cloudflareApiToken,
+              browser: this.browser,
+              sandbox: this.sandbox,
+              acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl),
+              acontextSessionId: `chat-${userId}`,
+              r2Bucket: this.r2Bucket,
+              r2FilePrefix: `files/${userId}/`,
+            },
           }
         );
 
@@ -3687,6 +3720,7 @@ export class TelegramHandler {
               githubToken: this.githubToken,
               braveSearchKey: this.braveSearchKey,
               tavilyKey: this.tavilyKey,
+              webSearchLimiter: buildWebSearchLimiter({ r2: this.r2Bucket, userId, env: this.webSearchRateLimitEnv }),
               cloudflareApiToken: this.cloudflareApiToken,
               browser: this.browser,
               sandbox: this.sandbox,
@@ -4591,8 +4625,12 @@ export class TelegramHandler {
         OPENROUTER_API_KEY: this.openrouterKey,
         GITHUB_TOKEN: this.githubToken,
         BRAVE_SEARCH_KEY: this.braveSearchKey,
+        TAVILY_API_KEY: this.tavilyKey,
         TASK_PROCESSOR: this.taskProcessor,
         NEXUS_KV: this.nexusKv,
+        // Rate-limit env vars: propagate so buildSkillToolContext can build
+        // a WebSearchLimiter from the same config as the DO path.
+        ...this.webSearchRateLimitEnv,
       } as import('../types').MoltbotEnv;
       const skillRequest: SkillRequest = {
         skillId: skillParsed.mapping.skillId,
@@ -6482,6 +6520,12 @@ export function createTelegramHandler(
   aaKey?: string,
   nexusKv?: KVNamespace,
   tavilyKey?: string,
+  webSearchRateLimitEnv?: {
+    WEB_SEARCH_USER_DAILY_LIMIT?: string;
+    WEB_SEARCH_TASK_LIMIT?: string;
+    WEB_SEARCH_GLOBAL_DAILY_LIMIT?: string;
+    WEB_SEARCH_ALLOWLIST_USERS?: string;
+  },
 ): TelegramHandler {
   return new TelegramHandler(
     telegramToken,
@@ -6506,5 +6550,6 @@ export function createTelegramHandler(
     aaKey,
     nexusKv,
     tavilyKey,
+    webSearchRateLimitEnv,
   );
 }
