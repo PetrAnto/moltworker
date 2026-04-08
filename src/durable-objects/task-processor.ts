@@ -28,6 +28,7 @@ import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
 import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, isTransientApiError, isPermanentApiError, type ToolErrorTracker } from '../guardrails/tool-validator';
+import { createWebSearchLimiter, parseWebSearchLimiterConfig } from '../rate-limit/web-search-limiter';
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
 import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext, scanCrossFileReferences, type ExtractionCheck } from '../guardrails/extraction-verifier';
 import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
@@ -280,7 +281,8 @@ interface TaskState {
   telegramToken?: string; // Store for cancel
   openrouterKey?: string; // Store for alarm recovery
   githubToken?: string; // Store for alarm recovery
-  braveSearchKey?: string; // Store for alarm recovery
+  braveSearchKey?: string; // Store for alarm recovery (fallback web_search)
+  tavilyKey?: string; // Store for alarm recovery (preferred web_search provider)
   cloudflareApiToken?: string; // Store for alarm recovery
   // Direct provider API keys for alarm recovery
   dashscopeKey?: string;
@@ -381,7 +383,8 @@ export interface TaskRequest {
   telegramToken: string;
   openrouterKey: string;
   githubToken?: string;
-  braveSearchKey?: string;
+  braveSearchKey?: string; // Brave Search (fallback web_search provider)
+  tavilyKey?: string;      // Tavily Search (preferred web_search provider — no credit card)
   // Direct API keys (optional)
   dashscopeKey?: string;   // For Qwen (DashScope/Alibaba)
   moonshotKey?: string;    // For Kimi (Moonshot)
@@ -424,6 +427,7 @@ export interface SkillTaskRequest {
   openrouterKey?: string;
   githubToken?: string;
   braveSearchKey?: string;
+  tavilyKey?: string;
   dashscopeKey?: string;
   moonshotKey?: string;
   deepseekKey?: string;
@@ -449,6 +453,11 @@ interface TaskProcessorEnv {
   NEXUS_KV?: KVNamespace; // KV namespace for Nexus research cache
   Sandbox?: DurableObjectNamespace<SandboxClass>; // Sandbox container binding (for sandbox_exec in DO)
   SANDBOX_SLEEP_AFTER?: string; // Controls container keep-alive behavior
+  // web_search rate limit config (read from worker env vars — see src/types.ts MoltbotEnv)
+  WEB_SEARCH_USER_DAILY_LIMIT?: string;
+  WEB_SEARCH_TASK_LIMIT?: string;
+  WEB_SEARCH_GLOBAL_DAILY_LIMIT?: string;
+  WEB_SEARCH_ALLOWLIST_USERS?: string;
 }
 
 // Watchdog alarm interval (90 seconds)
@@ -1396,6 +1405,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         openrouterKey: task.openrouterKey || '',
         githubToken: task.githubToken,
         braveSearchKey: task.braveSearchKey,
+        tavilyKey: task.tavilyKey,
         cloudflareApiToken: task.cloudflareApiToken,
         dashscopeKey: task.dashscopeKey,
         moonshotKey: task.moonshotKey,
@@ -1652,6 +1662,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         openrouterKey: task.openrouterKey || '',
         githubToken: task.githubToken,
         braveSearchKey: task.braveSearchKey,
+        tavilyKey: task.tavilyKey,
         cloudflareApiToken: task.cloudflareApiToken,
         // Include direct provider API keys for resume
         dashscopeKey: task.dashscopeKey,
@@ -2050,6 +2061,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         OPENROUTER_API_KEY: request.openrouterKey,
         GITHUB_TOKEN: request.githubToken,
         BRAVE_SEARCH_KEY: request.braveSearchKey,
+        TAVILY_API_KEY: request.tavilyKey,
         CLOUDFLARE_API_TOKEN: request.cloudflareApiToken,
         // DO-level bindings (available in the DO's own env)
         MOLTBOT_BUCKET: this.doEnv.MOLTBOT_BUCKET,
@@ -2183,7 +2195,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       }
       // Strip secrets from status response — these are stored for alarm recovery
       // but must never be exposed via the status API
-      const { telegramToken, openrouterKey, githubToken, braveSearchKey,
+      const { telegramToken, openrouterKey, githubToken, braveSearchKey, tavilyKey,
               cloudflareApiToken, dashscopeKey, moonshotKey, deepseekKey, anthropicKey,
               ...safeTask } = task;
       return new Response(JSON.stringify(safeTask), {
@@ -2320,6 +2332,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     task.openrouterKey = request.openrouterKey;
     task.githubToken = request.githubToken;
     task.braveSearchKey = request.braveSearchKey;
+    task.tavilyKey = request.tavilyKey;
     task.cloudflareApiToken = request.cloudflareApiToken;
     // Store direct provider API keys for alarm recovery
     task.dashscopeKey = request.dashscopeKey;
@@ -2440,9 +2453,31 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       console.log('[TaskProcessor] Sandbox available but profile says requiresSandbox=false — sandbox_exec removed from tool set');
     }
 
+    // Build the web_search rate limiter (one per task invocation — per-task
+    // counter resets on task restart, per-user + global persist in R2).
+    // Requires an R2 bucket; if unavailable (shouldn't happen in production),
+    // the limiter is undefined and web_search runs with no cap enforcement.
+    const webSearchLimiter = this.r2
+      ? createWebSearchLimiter(
+          {
+            r2: this.r2,
+            userId: request.userId,
+            taskId: task.taskId,
+          },
+          parseWebSearchLimiterConfig({
+            WEB_SEARCH_USER_DAILY_LIMIT: this.doEnv.WEB_SEARCH_USER_DAILY_LIMIT,
+            WEB_SEARCH_TASK_LIMIT: this.doEnv.WEB_SEARCH_TASK_LIMIT,
+            WEB_SEARCH_GLOBAL_DAILY_LIMIT: this.doEnv.WEB_SEARCH_GLOBAL_DAILY_LIMIT,
+            WEB_SEARCH_ALLOWLIST_USERS: this.doEnv.WEB_SEARCH_ALLOWLIST_USERS,
+          }),
+        )
+      : undefined;
+
     const toolContext: ToolContext = {
       githubToken: request.githubToken,
       braveSearchKey: request.braveSearchKey,
+      tavilyKey: request.tavilyKey,
+      webSearchLimiter,
       cloudflareApiToken: request.cloudflareApiToken,
       sandbox, // Sandbox container for sandbox_exec tool (undefined if binding unavailable)
       acontextClient: createAcontextClient(request.acontextKey, request.acontextBaseUrl),

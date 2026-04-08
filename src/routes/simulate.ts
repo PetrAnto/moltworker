@@ -153,6 +153,7 @@ simulate.post('/chat', async (c) => {
     openrouterKey: env.OPENROUTER_API_KEY,
     githubToken: env.GITHUB_TOKEN,
     braveSearchKey: env.BRAVE_SEARCH_KEY,
+    tavilyKey: env.TAVILY_API_KEY,
     dashscopeKey: env.DASHSCOPE_API_KEY,
     moonshotKey: env.MOONSHOT_API_KEY,
     deepseekKey: env.DEEPSEEK_API_KEY,
@@ -262,6 +263,7 @@ simulate.post('/command', async (c) => {
     env.CLOUDFLARE_API_TOKEN,
     env.ARTIFICIAL_ANALYSIS_KEY,
     env.NEXUS_KV,
+    env.TAVILY_API_KEY,
   );
 
   // Inject CapturingBot
@@ -404,6 +406,7 @@ simulate.get('/health', async (c) => {
       r2: !!env.MOLTBOT_BUCKET,
       github: !!env.GITHUB_TOKEN,
       braveSearch: !!env.BRAVE_SEARCH_KEY,
+      tavily: !!env.TAVILY_API_KEY,
       sandbox: !!env.Sandbox,
     },
   });
@@ -469,6 +472,7 @@ simulate.get('/sandbox-test', async (c) => {
       openrouterKey: env.OPENROUTER_API_KEY || '',
       githubToken: env.GITHUB_TOKEN,
       braveSearchKey: env.BRAVE_SEARCH_KEY,
+      tavilyKey: env.TAVILY_API_KEY,
       autoResume: false,
       prompt: '[sandbox-test] echo sandbox-do-ok',
       acontextKey: env.ACONTEXT_API_KEY,

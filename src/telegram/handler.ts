@@ -533,7 +533,8 @@ export class TelegramHandler {
   private githubToken?: string; // GitHub token for tool calls
   private telegramToken: string; // Store for DO
   private openrouterKey: string; // Store for DO
-  private braveSearchKey?: string; // Brave Search API key for web_search tool
+  private braveSearchKey?: string; // Brave Search API key for web_search tool (fallback)
+  private tavilyKey?: string; // Tavily Search API key (preferred for web_search — no credit card required)
   private taskProcessor?: DurableObjectNamespace<TaskProcessor>; // For long-running tasks
   private browser?: Fetcher; // Browser binding for browse_url tool
   private sandbox?: SandboxLike; // Sandbox container for sandbox_exec tool
@@ -560,7 +561,7 @@ export class TelegramHandler {
     defaultSkill: string = 'storia-orchestrator',
     allowedUserIds?: string[], // Pass user IDs to restrict access
     githubToken?: string, // GitHub token for tool authentication
-    braveSearchKey?: string, // Brave Search API key
+    braveSearchKey?: string, // Brave Search API key (fallback for web_search)
     taskProcessor?: DurableObjectNamespace<TaskProcessor>, // DO for long tasks
     browser?: Fetcher, // Browser binding for browse_url tool
     dashscopeKey?: string, // DashScope API key (Qwen)
@@ -574,6 +575,7 @@ export class TelegramHandler {
     cloudflareApiToken?: string, // Cloudflare API token for Code Mode MCP
     aaKey?: string, // Artificial Analysis API key for benchmark data
     nexusKv?: KVNamespace, // KV namespace for Nexus research cache
+    tavilyKey?: string, // Tavily Search API key (preferred for web_search — no credit card)
   ) {
     this.bot = new TelegramBot(telegramToken);
     this.openrouter = createOpenRouterClient(openrouterKey, workerUrl);
@@ -585,6 +587,7 @@ export class TelegramHandler {
     this.telegramToken = telegramToken;
     this.openrouterKey = openrouterKey;
     this.braveSearchKey = braveSearchKey;
+    this.tavilyKey = tavilyKey;
     this.taskProcessor = taskProcessor;
     this.browser = browser;
     this.sandbox = sandbox;
@@ -1713,6 +1716,7 @@ export class TelegramHandler {
             openrouterKey: this.openrouterKey,
             githubToken: this.githubToken,
             braveSearchKey: this.braveSearchKey,
+            tavilyKey: this.tavilyKey,
           }, testFilter);
 
           const summary = formatTestResults(results);
@@ -2931,6 +2935,7 @@ export class TelegramHandler {
       openrouterKey: this.openrouterKey,
       githubToken: this.githubToken,
       braveSearchKey: this.braveSearchKey,
+      tavilyKey: this.tavilyKey,
       cloudflareApiToken: this.cloudflareApiToken,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
@@ -3202,6 +3207,7 @@ export class TelegramHandler {
             openrouterKey: this.openrouterKey,
             githubToken: this.githubToken,
             braveSearchKey: this.braveSearchKey,
+            tavilyKey: this.tavilyKey,
             cloudflareApiToken: this.cloudflareApiToken,
             dashscopeKey: this.dashscopeKey,
             moonshotKey: this.moonshotKey,
@@ -3229,7 +3235,7 @@ export class TelegramHandler {
           modelAlias, messages, {
             maxToolCalls: 10,
             maxTimeMs: 120000,
-            toolContext: { githubToken: this.githubToken, braveSearchKey: this.braveSearchKey, cloudflareApiToken: this.cloudflareApiToken, browser: this.browser, sandbox: this.sandbox, acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl), acontextSessionId: `chat-${userId}`, r2Bucket: this.r2Bucket, r2FilePrefix: `files/${userId}/` },
+            toolContext: { githubToken: this.githubToken, braveSearchKey: this.braveSearchKey, tavilyKey: this.tavilyKey, cloudflareApiToken: this.cloudflareApiToken, browser: this.browser, sandbox: this.sandbox, acontextClient: createAcontextClient(this.acontextKey, this.acontextBaseUrl), acontextSessionId: `chat-${userId}`, r2Bucket: this.r2Bucket, r2FilePrefix: `files/${userId}/` },
           }
         );
 
@@ -3338,6 +3344,7 @@ export class TelegramHandler {
       openrouterKey: this.openrouterKey,
       githubToken: this.githubToken,
       braveSearchKey: this.braveSearchKey,
+      tavilyKey: this.tavilyKey,
       cloudflareApiToken: this.cloudflareApiToken,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
@@ -3405,6 +3412,7 @@ export class TelegramHandler {
       openrouterKey: this.openrouterKey,
       githubToken: this.githubToken,
       braveSearchKey: this.braveSearchKey,
+      tavilyKey: this.tavilyKey,
       cloudflareApiToken: this.cloudflareApiToken,
       dashscopeKey: this.dashscopeKey,
       moonshotKey: this.moonshotKey,
@@ -3572,6 +3580,7 @@ export class TelegramHandler {
           openrouterKey: this.openrouterKey,
           githubToken: this.githubToken,
           braveSearchKey: this.braveSearchKey,
+          tavilyKey: this.tavilyKey,
           cloudflareApiToken: this.cloudflareApiToken,
           dashscopeKey: this.dashscopeKey,
           moonshotKey: this.moonshotKey,
@@ -3677,6 +3686,7 @@ export class TelegramHandler {
             toolContext: {
               githubToken: this.githubToken,
               braveSearchKey: this.braveSearchKey,
+              tavilyKey: this.tavilyKey,
               cloudflareApiToken: this.cloudflareApiToken,
               browser: this.browser,
               sandbox: this.sandbox,
@@ -4116,6 +4126,7 @@ export class TelegramHandler {
               openrouterKey: this.openrouterKey,
               githubToken: this.githubToken,
               braveSearchKey: this.braveSearchKey,
+              tavilyKey: this.tavilyKey,
               cloudflareApiToken: this.cloudflareApiToken,
               dashscopeKey: this.dashscopeKey,
               moonshotKey: this.moonshotKey,
@@ -4474,6 +4485,7 @@ export class TelegramHandler {
             openrouterKey: this.openrouterKey,
             githubToken: this.githubToken,
             braveSearchKey: this.braveSearchKey,
+            tavilyKey: this.tavilyKey,
           });
           await this.bot.sendMessage(chatId, formatTestResults(testResults));
         } catch (error) {
@@ -6469,6 +6481,7 @@ export function createTelegramHandler(
   cloudflareApiToken?: string,
   aaKey?: string,
   nexusKv?: KVNamespace,
+  tavilyKey?: string,
 ): TelegramHandler {
   return new TelegramHandler(
     telegramToken,
@@ -6492,5 +6505,6 @@ export function createTelegramHandler(
     cloudflareApiToken,
     aaKey,
     nexusKv,
+    tavilyKey,
   );
 }

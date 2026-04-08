@@ -41,7 +41,13 @@ export interface MoltbotEnv {
   TELEGRAM_DM_POLICY?: string;
   TELEGRAM_DM_ALLOW_FROM?: string; // Comma-separated user IDs for allowlist DM policy
   GITHUB_TOKEN?: string; // GitHub PAT for tool calls (repo access)
-  BRAVE_SEARCH_KEY?: string; // Brave Search API key for web_search tool
+  BRAVE_SEARCH_KEY?: string; // Brave Search API key for web_search tool (fallback)
+  TAVILY_API_KEY?: string; // Tavily Search API key for web_search tool (preferred — no credit card required, AI-shaped results)
+  // web_search rate limiting (defense in depth for multi-user deployments)
+  WEB_SEARCH_USER_DAILY_LIMIT?: string; // Max web searches per user per day (default: 20)
+  WEB_SEARCH_TASK_LIMIT?: string; // Max web searches per single task/conversation turn (default: 5)
+  WEB_SEARCH_GLOBAL_DAILY_LIMIT?: string; // Max web searches across all users per day (default: 200)
+  WEB_SEARCH_ALLOWLIST_USERS?: string; // Comma-separated Telegram user IDs exempt from rate limits
   // Direct API keys for non-OpenRouter providers
   DASHSCOPE_API_KEY?: string; // Alibaba DashScope (Qwen models)
   MOONSHOT_API_KEY?: string; // Moonshot (Kimi models)
