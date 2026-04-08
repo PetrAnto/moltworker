@@ -352,6 +352,12 @@ interface TaskState {
   // Run health signals — tracked across the task lifetime
   sandboxStalled?: boolean; // Set true if any sandbox_exec detected stagnation
   prefetch404Count?: number; // Count of prefetch 404 errors
+  // Set true once a tool returns a transient HTTP error (5xx / Cloudflare origin
+  // error) for which the one-shot transient-outage guidance was injected.
+  // Persisted on TaskState so the multi-agent reviewer's "thin approval" override
+  // remains correctly gated even when the work and review phases happen across
+  // separate processTask() invocations (auto-resume from alarm or DO eviction).
+  hadTransientToolError?: boolean;
   // CPU budget yield: set when processTask proactively yields to get fresh CPU budget.
   // The alarm handler resumes immediately without stall detection or auto-resume counting.
   yieldPending?: boolean;
@@ -2359,6 +2365,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       if (existingTask.orchestraRepo) {
         task.orchestraRepo = existingTask.orchestraRepo;
       }
+      // Preserve transient-tool-error flag so the multi-agent reviewer's
+      // thin-approval gate stays correct when work and review phases run
+      // across separate processTask() invocations.
+      if (existingTask.hadTransientToolError) {
+        task.hadTransientToolError = true;
+      }
     }
     await this.doState.storage.put('task', taskForStorage(task));
 
@@ -2523,15 +2535,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     let consecutiveIdenticalErrors = 0;
     const MAX_IDENTICAL_ERRORS = 2;
     // One-shot guidance flag: on the first transient HTTP error from any tool,
-    // inject a system-authored hint telling the model the service is down and
-    // it should try a different approach. Prevents wasted retries against an
-    // outage and gives the model permission to answer from memory if appropriate.
-    let transientToolErrorGuidanceSent = false;
-    // Sticky flag: did this task encounter at least one transient tool error?
-    // Used to gate the multi-agent reviewer's "thin approval" override so we
-    // only annotate near-empty answers as "service unavailable" when that's
-    // actually what happened — not for routine 404s, invalid_args, etc.
-    let hadTransientToolError = false;
+    // inject a hint telling the model the service is down and to try a different
+    // approach. Initialized from the persisted task flag so we don't re-send the
+    // nudge after a checkpoint/auto-resume — the model has already seen it in the
+    // restored conversation history.
+    let transientToolErrorGuidanceSent = task.hadTransientToolError === true;
 
     let conversationMessages: ChatMessage[] = [...request.messages];
     const maxIterations = 100; // Very high limit for complex tasks
@@ -3935,7 +3943,10 @@ If you already created the new file and just need to patch the original, call gi
                 isTransientApiError(toolResult.content)
               ) {
                 transientToolErrorGuidanceSent = true;
-                hadTransientToolError = true;
+                // Persist on TaskState so the thin-approval gate stays correct
+                // even if work and review phases run across separate processTask()
+                // invocations (auto-resume from alarm or DO eviction).
+                task.hadTransientToolError = true;
                 conversationMessages.push({
                   role: 'user',
                   content: `[SYSTEM] The "${toolName}" tool just returned a transient service error (e.g. 5xx / origin unreachable). The backing service appears to be temporarily unavailable. Do NOT retry "${toolName}" — it will keep failing. Instead: try a different tool (e.g. web_search or fetch_url for information lookups), or if no alternative tool fits, answer from your existing knowledge and clearly note that live data was unavailable.`,
@@ -4817,14 +4828,18 @@ If you already created the new file and just need to patch the original, call gi
               // the thin result so the user sees that tools were unavailable
               // instead of receiving a mysterious one-line reply.
               //
-              // Gated specifically on `hadTransientToolError` (not the broader
-              // `toolErrorTracker.totalErrors > 0`) so we don't mislabel routine
-              // 404s, invalid_args, or one-off failures as "service unavailable".
-              // For non-transient errors a near-empty answer is usually a model
-              // quality issue, not an outage, and the misleading note would lie
-              // about the cause.
+              // Gated specifically on `task.hadTransientToolError` (not the
+              // broader `toolErrorTracker.totalErrors > 0`) so we don't mislabel
+              // routine 404s, invalid_args, or one-off failures as "service
+              // unavailable". For non-transient errors a near-empty answer is
+              // usually a model quality issue, not an outage, and the misleading
+              // note would lie about the cause.
+              //
+              // Reads from `task.hadTransientToolError` (persisted) rather than
+              // a local variable so the gate stays correct when work and review
+              // phases happen across separate processTask() invocations.
               const workLen = task.workPhaseContent.trim().length;
-              const thinApproval = reviewResult.decision === 'approve' && workLen < 100 && hadTransientToolError;
+              const thinApproval = reviewResult.decision === 'approve' && workLen < 100 && task.hadTransientToolError === true;
 
               if (reviewResult.decision === 'approve' && !thinApproval) {
                 // Reviewer approved — use work-phase answer directly, skip self-review loop
