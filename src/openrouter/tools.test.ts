@@ -2307,7 +2307,9 @@ describe('web_search tool', () => {
       },
     });
 
-    expect(result.content).toContain('Web search requires a Brave Search API key');
+    expect(result.content).toContain('Web search is not configured');
+    expect(result.content).toContain('TAVILY_API_KEY');
+    expect(result.content).toContain('BRAVE_SEARCH_KEY');
   });
 
   it('should handle API error response gracefully', async () => {
@@ -2426,6 +2428,172 @@ describe('web_search tool', () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  // --- Tavily provider (preferred) ---
+
+  it('should call Tavily API when tavilyKey is set', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        query: 'tavily test',
+        results: [
+          { title: 'Tavily Result', url: 'https://tavily.com/result', content: 'From Tavily', score: 0.9 },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await executeTool({
+      id: 'web_tavily_1',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'tavily test' }),
+      },
+    }, { tavilyKey: 'tvly-test-key' });
+
+    expect(result.content).toContain('1. **Tavily Result** (https://tavily.com/result)');
+    expect(result.content).toContain('From Tavily');
+    // Verify it actually hit the Tavily endpoint, not Brave
+    expect(String(mockFetch.mock.calls[0][0])).toContain('api.tavily.com');
+  });
+
+  it('should prefer Tavily over Brave when both keys are set', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        query: 'dual test',
+        results: [{ title: 'From Tavily', url: 'https://tavily.com', content: 'Tavily won' }],
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await executeTool({
+      id: 'web_dual_1',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'dual test' }),
+      },
+    }, { tavilyKey: 'tvly-key', braveSearchKey: 'brave-key' });
+
+    expect(result.content).toContain('Tavily won');
+    expect(String(mockFetch.mock.calls[0][0])).toContain('api.tavily.com');
+    expect(String(mockFetch.mock.calls[0][0])).not.toContain('api.search.brave.com');
+  });
+
+  it('should fall back to Brave when only braveSearchKey is set', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        web: {
+          results: [{ title: 'Brave Result', url: 'https://brave.com/r', description: 'From Brave' }],
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await executeTool({
+      id: 'web_brave_1',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'brave fallback' }),
+      },
+    }, { braveSearchKey: 'brave-key' });
+
+    expect(result.content).toContain('Brave Result');
+    expect(String(mockFetch.mock.calls[0][0])).toContain('api.search.brave.com');
+  });
+
+  it('should surface Tavily API errors via "Web search failed" wrapper', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: () => Promise.resolve('invalid api key'),
+    }));
+
+    const result = await executeTool({
+      id: 'web_tavily_err',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'err query' }),
+      },
+    }, { tavilyKey: 'bad-key' });
+
+    expect(result.content).toContain('Web search failed');
+    expect(result.content).toContain('Tavily API error 401');
+  });
+
+  // --- Rate limiter integration ---
+
+  it('should respect rate limiter decisions', async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+
+    // Stub limiter that blocks every request
+    const limiter = {
+      checkAndIncrement: vi.fn().mockResolvedValue({
+        allowed: false,
+        scope: 'task' as const,
+        reason: 'Per-task web_search limit reached (5 searches in this task).',
+      }),
+    };
+
+    const result = await executeTool({
+      id: 'web_rl_1',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'blocked query' }),
+      },
+    }, { tavilyKey: 'tvly-key', webSearchLimiter: limiter });
+
+    expect(result.content).toContain('Per-task web_search limit reached');
+    // Provider must NOT have been called when limiter blocks
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('should bypass limiter for cache hits but still notify it', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        results: [{ title: 'Cached', url: 'https://ex.com', content: 'cached' }],
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const limiter = {
+      checkAndIncrement: vi.fn().mockResolvedValue({ allowed: true }),
+    };
+
+    // First call — live hit, limiter called with cached: false
+    await executeTool({
+      id: 'web_rl_2a',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'rl cache test' }),
+      },
+    }, { tavilyKey: 'tvly-key', webSearchLimiter: limiter });
+
+    // Second call — cached, limiter called with cached: true
+    await executeTool({
+      id: 'web_rl_2b',
+      type: 'function',
+      function: {
+        name: 'web_search',
+        arguments: JSON.stringify({ query: 'rl cache test' }),
+      },
+    }, { tavilyKey: 'tvly-key', webSearchLimiter: limiter });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1); // Only the first (cache served the second)
+    expect(limiter.checkAndIncrement).toHaveBeenCalledTimes(2);
+    expect(limiter.checkAndIncrement).toHaveBeenNthCalledWith(1, { cached: false });
+    expect(limiter.checkAndIncrement).toHaveBeenNthCalledWith(2, { cached: true });
   });
 });
 

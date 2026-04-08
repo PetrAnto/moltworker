@@ -26,6 +26,7 @@ interface SmokeTestConfig {
   openrouterKey: string;
   githubToken?: string;
   braveSearchKey?: string;
+  tavilyKey?: string;
 }
 
 /** Status response from the DO /status endpoint */
@@ -85,6 +86,7 @@ async function runTask(
     openrouterKey: config.openrouterKey,
     githubToken: config.githubToken,
     braveSearchKey: config.braveSearchKey,
+    tavilyKey: config.tavilyKey,
     autoResume: false, // Don't auto-resume during tests
     prompt: `[smoke-test] ${taskId}`,
   };

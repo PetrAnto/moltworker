@@ -51,6 +51,7 @@ export function buildSkillToolContext(env: MoltbotEnv, userId?: string): ToolCon
   return {
     githubToken: env.GITHUB_TOKEN,
     braveSearchKey: env.BRAVE_SEARCH_KEY,
+    tavilyKey: env.TAVILY_API_KEY,
     browser: env.BROWSER,
     r2Bucket: env.MOLTBOT_BUCKET,
     r2FilePrefix: userId ? `files/${userId}/` : undefined,

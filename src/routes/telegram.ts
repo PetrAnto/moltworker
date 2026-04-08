@@ -77,6 +77,7 @@ telegram.post('/webhook/:token', async (c) => {
       env.CLOUDFLARE_API_TOKEN, // Cloudflare API token for Code Mode MCP
       env.ARTIFICIAL_ANALYSIS_KEY, // AA benchmark data
       env.NEXUS_KV, // KV namespace for Nexus research cache
+      env.TAVILY_API_KEY, // Tavily Search API key (preferred for web_search — no credit card)
     );
 
     // Process update asynchronously.
@@ -162,6 +163,16 @@ telegram.get('/setup', async (c) => {
 telegram.get('/info', async (c) => {
   const env = c.env;
 
+  // Parse web_search rate limit config the same way the DO does, so /info
+  // reflects the effective limits (including env overrides) not the defaults.
+  const { parseWebSearchLimiterConfig } = await import('../rate-limit/web-search-limiter');
+  const webSearchConfig = parseWebSearchLimiterConfig({
+    WEB_SEARCH_USER_DAILY_LIMIT: env.WEB_SEARCH_USER_DAILY_LIMIT,
+    WEB_SEARCH_TASK_LIMIT: env.WEB_SEARCH_TASK_LIMIT,
+    WEB_SEARCH_GLOBAL_DAILY_LIMIT: env.WEB_SEARCH_GLOBAL_DAILY_LIMIT,
+    WEB_SEARCH_ALLOWLIST_USERS: env.WEB_SEARCH_ALLOWLIST_USERS,
+  });
+
   return c.json({
     telegram_configured: !!env.TELEGRAM_BOT_TOKEN,
     openrouter_configured: !!env.OPENROUTER_API_KEY,
@@ -177,6 +188,16 @@ telegram.get('/info', async (c) => {
     nvidia_nim_configured: !!env.NVIDIA_NIM_API_KEY,
     acontext_configured: !!env.ACONTEXT_API_KEY,
     cloudflare_api_configured: !!env.CLOUDFLARE_API_TOKEN,
+    // web_search providers — Tavily preferred (no credit card), Brave fallback
+    tavily_configured: !!env.TAVILY_API_KEY,
+    brave_search_configured: !!env.BRAVE_SEARCH_KEY,
+    // web_search rate limits (effective values, defaults applied)
+    web_search_rate_limits: {
+      user_daily_limit: webSearchConfig.userDailyLimit,
+      task_limit: webSearchConfig.taskLimit,
+      global_daily_limit: webSearchConfig.globalDailyLimit,
+      allowlist_user_count: webSearchConfig.allowlistUsers.size,
+    },
     webhook_path: '/telegram/webhook/:token',
     setup_path: '/telegram/setup',
   });

@@ -84,6 +84,7 @@ async function dispatchOrInline(request: SkillRequest): Promise<SkillResult> {
     openrouterKey: request.env.OPENROUTER_API_KEY,
     githubToken: request.env.GITHUB_TOKEN,
     braveSearchKey: request.env.BRAVE_SEARCH_KEY,
+    tavilyKey: request.env.TAVILY_API_KEY,
     cloudflareApiToken: request.env.CLOUDFLARE_API_TOKEN,
   };
 

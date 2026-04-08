@@ -203,7 +203,9 @@ export interface WorkspaceFile {
  */
 export interface ToolContext {
   githubToken?: string;
-  braveSearchKey?: string;
+  braveSearchKey?: string; // Brave Search API key (fallback for web_search)
+  tavilyKey?: string; // Tavily Search API key (preferred for web_search — no credit card)
+  webSearchLimiter?: import('../rate-limit/web-search-limiter').WebSearchLimiter; // Optional rate limiter for web_search
   browser?: Fetcher; // Cloudflare Browser Rendering binding
   browserSessionId?: string; // Persistent browser session ID across browse_url calls
   sandbox?: SandboxLike; // Sandbox container for code execution
@@ -994,7 +996,11 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
         result = await fetchNews(args.source, args.topic);
         break;
       case 'web_search':
-        result = await webSearch(args.query, args.num_results, context?.braveSearchKey);
+        result = await webSearch(args.query, args.num_results, {
+          tavilyKey: context?.tavilyKey,
+          braveKey: context?.braveSearchKey,
+          limiter: context?.webSearchLimiter,
+        });
         break;
       case 'convert_currency':
         result = await convertCurrency(args.from, args.to, args.amount);
@@ -4083,40 +4089,148 @@ async function geolocateIp(ip: string): Promise<string> {
 }
 
 /**
- * Search the web via Brave Search API
+ * Search the web. Tries Tavily first (preferred — no credit card on file,
+ * AI-shaped results), falls back to Brave if only the Brave key is set.
+ *
+ * Rate limiting is enforced via the optional `limiter` — cached hits bypass
+ * the limiter, live hits consume per-task / per-user / global quotas.
  */
-async function webSearch(query: string, numResults = '5', apiKey?: string): Promise<string> {
-  if (!apiKey) {
-    return 'Web search requires a Brave Search API key. Set BRAVE_SEARCH_KEY in worker secrets.';
-  }
-
+async function webSearch(
+  query: string,
+  numResults: string | undefined,
+  opts: {
+    tavilyKey?: string;
+    braveKey?: string;
+    limiter?: import('../rate-limit/web-search-limiter').WebSearchLimiter;
+  },
+): Promise<string> {
   const trimmedQuery = query.trim();
   if (!trimmedQuery) {
     throw new Error('Search query cannot be empty.');
   }
 
-  const parsedCount = Number.parseInt(numResults, 10);
+  const parsedCount = Number.parseInt(numResults || '5', 10);
   const count = Number.isNaN(parsedCount) ? 5 : Math.min(Math.max(parsedCount, 1), 10);
-  const cacheKey = `${trimmedQuery}:${count}`;
+
+  // Cache-key includes the provider so a Brave-cached result isn't served
+  // from a Tavily-configured worker (and vice versa) — different schemas
+  // would serialize differently and confuse downstream consumers.
+  const provider: 'tavily' | 'brave' | null = opts.tavilyKey
+    ? 'tavily'
+    : opts.braveKey
+      ? 'brave'
+      : null;
+
+  if (!provider) {
+    return 'Web search is not configured. Set TAVILY_API_KEY (recommended — no credit card required) or BRAVE_SEARCH_KEY in worker secrets.';
+  }
+
+  const cacheKey = `${provider}:${trimmedQuery}:${count}`;
   const cached = webSearchCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < WEB_SEARCH_CACHE_TTL_MS) {
+    // Cached: tell the limiter so it can track "used but free" if desired,
+    // and return without incrementing any counter.
+    if (opts.limiter) {
+      await opts.limiter.checkAndIncrement({ cached: true });
+    }
     return cached.data;
   }
 
+  // Rate limit check BEFORE hitting the provider — we don't want to burn
+  // provider quota on a request we're about to reject anyway.
+  if (opts.limiter) {
+    const decision = await opts.limiter.checkAndIncrement({ cached: false });
+    if (!decision.allowed) {
+      return `Error: ${decision.reason}`;
+    }
+  }
+
+  let output: string;
+  try {
+    output = provider === 'tavily'
+      ? await tavilySearch(trimmedQuery, count, opts.tavilyKey!)
+      : await braveSearch(trimmedQuery, count, opts.braveKey!);
+  } catch (err) {
+    return `Web search failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  if (output.length > 20000) {
+    output = output.slice(0, 20000) + '\n\n[Content truncated - exceeded 20KB]';
+  }
+
+  webSearchCache.set(cacheKey, { data: output, timestamp: Date.now() });
+  return output;
+}
+
+/**
+ * Tavily Search API (preferred — https://tavily.com)
+ * AI-optimized search with clean snippets and source URLs. Free tier
+ * does not require a credit card on file.
+ */
+async function tavilySearch(query: string, count: number, apiKey: string): Promise<string> {
+  const response = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      api_key: apiKey,
+      query,
+      max_results: count,
+      search_depth: 'basic',
+      include_answer: false,
+      include_raw_content: false,
+      include_images: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Tavily API error ${response.status}: ${errorText || response.statusText}`);
+  }
+
+  const data = await response.json() as {
+    query?: string;
+    results?: Array<{
+      title?: string;
+      url?: string;
+      content?: string;
+      score?: number;
+    }>;
+  };
+
+  const results = data.results || [];
+  if (results.length === 0) {
+    return `No web results found for "${query}".`;
+  }
+
+  return results.map((result, index) => {
+    const title = result.title || 'Untitled';
+    const url = result.url || 'No URL';
+    const description = result.content || 'No description available.';
+    return `${index + 1}. **${title}** (${url})\n${description}`;
+  }).join('\n\n');
+}
+
+/**
+ * Brave Search API (fallback — https://brave.com/search/api/)
+ * Kept for backward compatibility with existing deployments.
+ */
+async function braveSearch(query: string, count: number, apiKey: string): Promise<string> {
   const response = await fetch(
-    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(trimmedQuery)}&count=${count}`,
+    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`,
     {
       headers: {
         'Accept': 'application/json',
         'Accept-Encoding': 'gzip',
         'X-Subscription-Token': apiKey,
       },
-    }
+    },
   );
 
   if (!response.ok) {
     const errorText = await response.text();
-    return `Brave Search API error ${response.status}: ${errorText || response.statusText}`;
+    throw new Error(`Brave Search API error ${response.status}: ${errorText || response.statusText}`);
   }
 
   const data = await response.json() as {
@@ -4131,22 +4245,15 @@ async function webSearch(query: string, numResults = '5', apiKey?: string): Prom
 
   const results = data.web?.results || [];
   if (results.length === 0) {
-    return `No web results found for "${trimmedQuery}".`;
+    return `No web results found for "${query}".`;
   }
 
-  let output = results.map((result, index) => {
+  return results.map((result, index) => {
     const title = result.title || 'Untitled';
     const url = result.url || 'No URL';
     const description = result.description || 'No description available.';
     return `${index + 1}. **${title}** (${url})\n${description}`;
   }).join('\n\n');
-
-  if (output.length > 20000) {
-    output = output.slice(0, 20000) + '\n\n[Content truncated - exceeded 20KB]';
-  }
-
-  webSearchCache.set(cacheKey, { data: output, timestamp: Date.now() });
-  return output;
 }
 
 /**
