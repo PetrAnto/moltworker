@@ -2604,36 +2604,6 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           }
         }
 
-        // Transient-tool-error guidance: ground truth is the conversation, not
-        // task state. The flag and the conversation message can drift if the DO
-        // is evicted between the DO storage write and the R2 checkpoint write
-        // (or vice versa). Scan the restored conversation for the marker and
-        // reconcile:
-        //
-        //   marker present  → guidance already in context, suppress re-injection
-        //   marker absent + flag false → fresh task, nothing to do
-        //   marker absent + flag true  → drift: re-inject so the resumed model
-        //                                actually sees why it shouldn't retry
-        //
-        // The marker is a stable prefix shared by builder and scanner so the two
-        // paths can never diverge.
-        const markerPresent = conversationMessages.some(
-          (m) => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(TRANSIENT_TOOL_ERROR_MARKER),
-        );
-        if (markerPresent) {
-          transientToolErrorGuidanceSent = true;
-        } else if (task.hadTransientToolError === true) {
-          // Drift recovery: flag says yes, conversation says no. Re-inject a
-          // generic guidance message (we don't know which tool originally failed
-          // — that detail is in the lost message — so use a tool-agnostic form).
-          conversationMessages.push({
-            role: 'user',
-            content: `${TRANSIENT_TOOL_ERROR_MARKER} — a tool returned a 5xx / origin-unreachable response earlier in this task. The backing service may still be unavailable. Avoid retrying tools that previously failed; prefer alternative tools (web_search, fetch_url) or answer from existing knowledge and clearly note that live data was unavailable.`,
-          });
-          transientToolErrorGuidanceSent = true;
-          console.log('[TaskProcessor] Re-injected transient-error guidance after checkpoint resume (flag set but marker missing in restored conversation)');
-        }
-
         // Build a "last action summary" from the conversation tail BEFORE compression.
         // This tells the model exactly what it was doing when interrupted, so it doesn't
         // waste iterations re-reading files to rediscover its own progress.
@@ -2728,6 +2698,45 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             console.log(`[TaskProcessor] Sticky context anchor injected: ${pending.length} pending deliverables (resume #${task.autoResumeCount})`);
           }
         }
+      }
+    }
+
+    // Transient-tool-error guidance reconciliation (runs unconditionally — covers
+    // every path that produces the initial conversationMessages, not just the
+    // checkpoint-restored path):
+    //
+    //   1. Fresh task               → flag false, marker absent → no-op
+    //   2. Checkpoint resume        → marker may be present in restored convo
+    //   3. No-checkpoint resume     → flag may have been persisted to DO storage
+    //                                  (every iteration's storage.put includes it)
+    //                                  but the in-memory guidance message was lost
+    //                                  with the conversation that was never
+    //                                  R2-checkpointed
+    //
+    // For cases 2 and 3, we treat the conversation as ground truth. If the marker
+    // is in the conversation, suppress duplicate injection. If the flag is true
+    // but the marker is missing (drift), re-inject a tool-agnostic guidance so
+    // the resumed model still knows not to retry transient failures.
+    //
+    // Done here — after all checkpoint/resume context loading is complete, before
+    // the main iteration loop — so the reconciliation sees the final pre-loop
+    // conversation regardless of which path produced it.
+    {
+      const markerPresent = conversationMessages.some(
+        (m) => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(TRANSIENT_TOOL_ERROR_MARKER),
+      );
+      if (markerPresent) {
+        transientToolErrorGuidanceSent = true;
+      } else if (task.hadTransientToolError === true) {
+        // Drift recovery: flag says yes, conversation says no. Re-inject a
+        // generic guidance message (we don't know which tool originally failed
+        // — that detail was in the lost message — so use a tool-agnostic form).
+        conversationMessages.push({
+          role: 'user',
+          content: `${TRANSIENT_TOOL_ERROR_MARKER} — a tool returned a 5xx / origin-unreachable response earlier in this task. The backing service may still be unavailable. Avoid retrying tools that previously failed; prefer alternative tools (web_search, fetch_url) or answer from existing knowledge and clearly note that live data was unavailable.`,
+        });
+        transientToolErrorGuidanceSent = true;
+        console.log(`[TaskProcessor] Re-injected transient-error guidance (flag set but marker missing in conversation; resumedFromCheckpoint=${resumedFromCheckpoint})`);
       }
     }
 
