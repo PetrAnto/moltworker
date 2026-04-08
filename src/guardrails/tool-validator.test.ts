@@ -63,6 +63,18 @@ describe('validateToolResult', () => {
     expect(result.errorType).toBe('http_error');
   });
 
+  it('classifies Cloudflare 530 origin-unreachable as http_error', () => {
+    // Regression: previously fell through to generic_error because 530 was not
+    // in the 500|502|503|504 pattern — meant the transient-outage guardrail
+    // could not detect it and the model kept retrying against a dead service.
+    const result = validateToolResult(
+      'run_code',
+      'Error executing run_code: Acontext API POST /api/v1/sandbox/execute failed: 530 error code: 1016',
+    );
+    expect(result.isError).toBe(true);
+    expect(result.errorType).toBe('http_error');
+  });
+
   it('classifies invalid args errors', () => {
     const result = validateToolResult('generate_chart', 'Error: Invalid JSON arguments: {broken');
     expect(result.isError).toBe(true);
@@ -198,6 +210,20 @@ describe('isTransientApiError', () => {
   it('classifies overloaded/capacity errors as transient', () => {
     expect(isTransientApiError('Model is currently overloaded')).toBe(true);
     expect(isTransientApiError('Server at capacity, please retry')).toBe(true);
+  });
+
+  it('classifies Cloudflare origin errors (520-530) as transient', () => {
+    // Cloudflare returns 520-527 when origin misbehaves and 530 when origin is
+    // unreachable. 1016 is the DNS sub-code reported inside 530 bodies.
+    expect(isTransientApiError('Acontext API POST /api/v1/sessions failed: 530 error code: 1016')).toBe(true);
+    expect(isTransientApiError('Error: 521 Web Server Is Down')).toBe(true);
+    expect(isTransientApiError('522 Connection Timed Out')).toBe(true);
+    expect(isTransientApiError('524 A Timeout Occurred')).toBe(true);
+  });
+
+  it('classifies "origin unreachable" and "connection lost" as transient', () => {
+    expect(isTransientApiError('Origin unreachable')).toBe(true);
+    expect(isTransientApiError('Network connection lost')).toBe(true);
   });
 
   it('does NOT classify 401 as transient', () => {

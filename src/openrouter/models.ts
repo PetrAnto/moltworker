@@ -2275,6 +2275,13 @@ export function detectToolIntent(message: string): { needsTools: boolean; reason
     return { needsTools: true, reason: 'Real-time data lookups require tools (🔧)' };
   }
 
+  // Strong web-search signals (explicit "search the web" / "look up online" phrases).
+  // These should steer the model toward web_search, not run_code — small models
+  // otherwise sometimes pick code execution for "find pricing" style prompts.
+  if (/\b(search\s+(the\s+)?(web|internet|online|google)|look\s+(this\s+|it\s+)?up\s+(online|on\s+(the\s+)?(web|internet|google))|find\s+(out\s+)?(online|on\s+(the\s+)?(web|internet)))\b/i.test(lower)) {
+    return { needsTools: true, reason: 'Web search requires tools (🔧 use web_search)' };
+  }
+
   // Strong code execution signals
   if (/\b(run\s+this\s+(code|script|command)|execute\s+(in\s+)?sandbox)\b/i.test(lower)) {
     return { needsTools: true, reason: 'Code execution requires tools (🔧)' };
