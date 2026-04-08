@@ -453,6 +453,16 @@ interface TaskProcessorEnv {
 
 // Watchdog alarm interval (90 seconds)
 const WATCHDOG_INTERVAL_MS = 90000;
+
+// Stable prefix used to mark the one-shot transient-tool-error guidance message
+// in the conversation history. The full message is built by buildTransientToolErrorGuidance().
+// Used both for injection (write site) and for detection (post-checkpoint-load
+// scan), so the two paths can never drift out of sync.
+const TRANSIENT_TOOL_ERROR_MARKER = '[SYSTEM] Tool returned a transient service error';
+
+function buildTransientToolErrorGuidance(toolName: string): string {
+  return `${TRANSIENT_TOOL_ERROR_MARKER} — "${toolName}" failed with a 5xx / origin-unreachable response. The backing service appears to be temporarily unavailable. Do NOT retry "${toolName}" — it will keep failing. Instead: try a different tool (e.g. web_search or fetch_url for information lookups), or if no alternative tool fits, answer from your existing knowledge and clearly note that live data was unavailable.`;
+}
 // Max time without update before considering task stuck.
 // Must be > max idle timeout (180s for 60K+ tokens) to avoid false positives.
 // Free models: 150s — covers 120s max idle timeout + 30s buffer
@@ -2536,10 +2546,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const MAX_IDENTICAL_ERRORS = 2;
     // One-shot guidance flag: on the first transient HTTP error from any tool,
     // inject a hint telling the model the service is down and to try a different
-    // approach. Initialized from the persisted task flag so we don't re-send the
-    // nudge after a checkpoint/auto-resume — the model has already seen it in the
-    // restored conversation history.
-    let transientToolErrorGuidanceSent = task.hadTransientToolError === true;
+    // approach. Initialized below — AFTER checkpoint load — by scanning the
+    // restored conversation for an actual marker, not by trusting task state.
+    // See the marker scan after the loadCheckpoint() block.
+    let transientToolErrorGuidanceSent = false;
 
     let conversationMessages: ChatMessage[] = [...request.messages];
     const maxIterations = 100; // Very high limit for complex tasks
@@ -2592,6 +2602,36 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith(resumeNoticePrefix)) {
             conversationMessages.splice(i, 1);
           }
+        }
+
+        // Transient-tool-error guidance: ground truth is the conversation, not
+        // task state. The flag and the conversation message can drift if the DO
+        // is evicted between the DO storage write and the R2 checkpoint write
+        // (or vice versa). Scan the restored conversation for the marker and
+        // reconcile:
+        //
+        //   marker present  → guidance already in context, suppress re-injection
+        //   marker absent + flag false → fresh task, nothing to do
+        //   marker absent + flag true  → drift: re-inject so the resumed model
+        //                                actually sees why it shouldn't retry
+        //
+        // The marker is a stable prefix shared by builder and scanner so the two
+        // paths can never diverge.
+        const markerPresent = conversationMessages.some(
+          (m) => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(TRANSIENT_TOOL_ERROR_MARKER),
+        );
+        if (markerPresent) {
+          transientToolErrorGuidanceSent = true;
+        } else if (task.hadTransientToolError === true) {
+          // Drift recovery: flag says yes, conversation says no. Re-inject a
+          // generic guidance message (we don't know which tool originally failed
+          // — that detail is in the lost message — so use a tool-agnostic form).
+          conversationMessages.push({
+            role: 'user',
+            content: `${TRANSIENT_TOOL_ERROR_MARKER} — a tool returned a 5xx / origin-unreachable response earlier in this task. The backing service may still be unavailable. Avoid retrying tools that previously failed; prefer alternative tools (web_search, fetch_url) or answer from existing knowledge and clearly note that live data was unavailable.`,
+          });
+          transientToolErrorGuidanceSent = true;
+          console.log('[TaskProcessor] Re-injected transient-error guidance after checkpoint resume (flag set but marker missing in restored conversation)');
         }
 
         // Build a "last action summary" from the conversation tail BEFORE compression.
@@ -3949,7 +3989,7 @@ If you already created the new file and just need to patch the original, call gi
                 task.hadTransientToolError = true;
                 conversationMessages.push({
                   role: 'user',
-                  content: `[SYSTEM] The "${toolName}" tool just returned a transient service error (e.g. 5xx / origin unreachable). The backing service appears to be temporarily unavailable. Do NOT retry "${toolName}" — it will keep failing. Instead: try a different tool (e.g. web_search or fetch_url for information lookups), or if no alternative tool fits, answer from your existing knowledge and clearly note that live data was unavailable.`,
+                  content: buildTransientToolErrorGuidance(toolName),
                 });
                 console.log(`[TaskProcessor] Injected transient-error guidance after ${toolName} returned ${validation.errorType}`);
               }
