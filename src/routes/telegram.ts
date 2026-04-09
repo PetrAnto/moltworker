@@ -157,8 +157,24 @@ telegram.get('/setup', async (c) => {
 });
 
 /**
- * Health check and info
- * GET /telegram/info
+ * Health check and info — GET /telegram/info
+ *
+ * Disclosure policy (intentional, reviewed):
+ *   - This endpoint is unauthenticated by design: the Telegram routes skip
+ *     Cloudflare Access so Telegram itself can hit /webhook without a token.
+ *     /info sits under the same route, so it is reachable by anyone who
+ *     knows the URL.
+ *   - Every field returned is a boolean or a count. Never a secret value,
+ *     never a URL, never a user ID.
+ *   - Boolean presence flags (e.g. `debug_api_configured`) DO reveal the
+ *     functional surface of the deployment (i.e. "which features are
+ *     enabled"). That is an accepted trade-off: operators need one
+ *     low-friction way to audit configuration without digging through
+ *     `wrangler secret list`, and the information is only useful to
+ *     someone already aware this worker exists.
+ *   - If future fields need to expose anything more structured (URLs,
+ *     user IDs, rate limit counters with values), add auth first or put
+ *     that data on a separate authenticated route.
  */
 telegram.get('/info', async (c) => {
   const env = c.env;
@@ -187,9 +203,10 @@ telegram.get('/info', async (c) => {
     anthropic_configured: !!env.ANTHROPIC_API_KEY,
     nvidia_nim_configured: !!env.NVIDIA_NIM_API_KEY,
     acontext_configured: !!env.ACONTEXT_API_KEY,
-    // Effective Acontext base URL (null when default "https://api.acontext.io"
-    // is in use — lets operators spot misconfigured overrides at a glance).
-    acontext_base_url: env.ACONTEXT_BASE_URL || null,
+    // True iff a custom Acontext base URL is configured (the actual URL is
+    // NOT exposed — internal staging hosts / partner subdomains would leak
+    // infra topology via a public /info response).
+    acontext_custom_base_url_configured: !!env.ACONTEXT_BASE_URL,
     cloudflare_api_configured: !!env.CLOUDFLARE_API_TOKEN,
     // Model intelligence data (gates benchmark/ranking features)
     artificial_analysis_configured: !!env.ARTIFICIAL_ANALYSIS_KEY,
