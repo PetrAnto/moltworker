@@ -187,7 +187,20 @@ telegram.get('/info', async (c) => {
     anthropic_configured: !!env.ANTHROPIC_API_KEY,
     nvidia_nim_configured: !!env.NVIDIA_NIM_API_KEY,
     acontext_configured: !!env.ACONTEXT_API_KEY,
+    // Effective Acontext base URL (null when default "https://api.acontext.io"
+    // is in use — lets operators spot misconfigured overrides at a glance).
+    acontext_base_url: env.ACONTEXT_BASE_URL || null,
     cloudflare_api_configured: !!env.CLOUDFLARE_API_TOKEN,
+    // Model intelligence data (gates benchmark/ranking features)
+    artificial_analysis_configured: !!env.ARTIFICIAL_ANALYSIS_KEY,
+    // Auth for the /simulate endpoint (required for HTTP-based bot testing)
+    debug_api_configured: !!env.DEBUG_API_KEY,
+    // Shared secret for Storia → Moltworker integration
+    storia_integration_configured: !!env.STORIA_MOLTWORKER_SECRET,
+    // Telegram access control — 0 means "allow all" (no allowlist set)
+    telegram_allowed_user_count: env.TELEGRAM_ALLOWED_USERS
+      ? env.TELEGRAM_ALLOWED_USERS.split(',').map((s) => s.trim()).filter(Boolean).length
+      : 0,
     // web_search providers — Tavily preferred (no credit card), Brave fallback
     tavily_configured: !!env.TAVILY_API_KEY,
     brave_search_configured: !!env.BRAVE_SEARCH_KEY,
