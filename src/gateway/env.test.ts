@@ -123,6 +123,24 @@ describe('buildEnvVars', () => {
     expect(result.R2_BUCKET_NAME).toBe('my-bucket');
   });
 
+  it('passes CODEX_AUTH_JSON_BOOTSTRAP and CODEX_MODEL when set', () => {
+    const authBlob = JSON.stringify({ access_token: 'jwt', refresh_token: 'rt', expires: 1 });
+    const env = createMockEnv({
+      CODEX_AUTH_JSON_BOOTSTRAP: authBlob,
+      CODEX_MODEL: 'codex/gpt-5.4',
+    });
+    const result = buildEnvVars(env);
+    expect(result.CODEX_AUTH_JSON_BOOTSTRAP).toBe(authBlob);
+    expect(result.CODEX_MODEL).toBe('codex/gpt-5.4');
+  });
+
+  it('omits Codex vars when not set (no empty strings)', () => {
+    const env = createMockEnv({});
+    const result = buildEnvVars(env);
+    expect(result.CODEX_AUTH_JSON_BOOTSTRAP).toBeUndefined();
+    expect(result.CODEX_MODEL).toBeUndefined();
+  });
+
   it('combines all env vars correctly (excludes TELEGRAM_BOT_TOKEN)', () => {
     const env = createMockEnv({
       ANTHROPIC_API_KEY: 'sk-key',

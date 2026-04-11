@@ -65,5 +65,11 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   if (env.R2_SECRET_ACCESS_KEY) envVars.R2_SECRET_ACCESS_KEY = env.R2_SECRET_ACCESS_KEY;
   if (env.R2_BUCKET_NAME) envVars.R2_BUCKET_NAME = env.R2_BUCKET_NAME;
 
+  // Codex bundled provider bootstrap (OpenClaw >= 2026.4.10).
+  // CODEX_AUTH_JSON_BOOTSTRAP is consumed by start-openclaw.sh at first boot
+  // only; the file on disk takes precedence thereafter.
+  if (env.CODEX_AUTH_JSON_BOOTSTRAP) envVars.CODEX_AUTH_JSON_BOOTSTRAP = env.CODEX_AUTH_JSON_BOOTSTRAP;
+  if (env.CODEX_MODEL) envVars.CODEX_MODEL = env.CODEX_MODEL;
+
   return envVars;
 }

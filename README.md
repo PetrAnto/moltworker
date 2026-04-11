@@ -415,6 +415,8 @@ The previous `AI_GATEWAY_API_KEY` + `AI_GATEWAY_BASE_URL` approach is still supp
 | `ANTHROPIC_API_KEY` | Yes* | Direct Anthropic API key (alternative to AI Gateway) |
 | `ANTHROPIC_BASE_URL` | No | Direct Anthropic API base URL |
 | `OPENAI_API_KEY` | No | OpenAI API key (alternative provider) |
+| `CODEX_AUTH_JSON_BOOTSTRAP` | No | One-shot bootstrap for Codex subscription auth. See [Using Codex with your ChatGPT subscription](#using-codex-with-your-chatgpt-subscription) |
+| `CODEX_MODEL` | No | Primary model when Codex auth is active (default: `codex/gpt-5.4`) |
 | `CF_ACCESS_TEAM_DOMAIN` | Yes* | Cloudflare Access team domain (required for admin UI) |
 | `CF_ACCESS_AUD` | Yes* | Cloudflare Access application audience (required for admin UI) |
 | `MOLTBOT_GATEWAY_TOKEN` | Yes | Gateway token for authentication (pass via `?token=` query param) |
@@ -432,6 +434,47 @@ The previous `AI_GATEWAY_API_KEY` + `AI_GATEWAY_BASE_URL` approach is still supp
 | `SLACK_APP_TOKEN` | No | Slack app token |
 | `CDP_SECRET` | No | Shared secret for CDP endpoint authentication (see [Browser Automation](#optional-browser-automation-cdp)) |
 | `WORKER_URL` | No | Public URL of the worker (required for CDP) |
+
+## Using Codex with your ChatGPT subscription
+
+> **Status:** Scaffolded but not yet active. Requires OpenClaw ≥ 2026.4.10, which ships the bundled Codex provider. The moltworker container is currently pinned to an older OpenClaw release; setting the secret below has no effect until the version bump lands. This section documents the flow for when it does.
+
+If you have a ChatGPT Plus or Pro subscription, OpenClaw ≥ 2026.4.10 can run the `codex/gpt-*` model family against your subscription credits instead of paid API tokens. Moltworker bootstraps the auth file from a single Cloudflare secret; after first boot, the Codex CLI inside the container owns the refresh lifecycle and moltworker persists each rotation to R2 within milliseconds.
+
+### Setup
+
+1. On your workstation, install the Codex CLI and log in once:
+   ```bash
+   npm install -g @openai/codex
+   codex login
+   ```
+   Follow the device-code prompts and authorize with the ChatGPT account that holds the subscription. This creates `~/.codex/auth.json`.
+
+2. Copy the full contents of `~/.codex/auth.json` into a Cloudflare secret:
+   ```bash
+   cat ~/.codex/auth.json | wrangler secret put CODEX_AUTH_JSON_BOOTSTRAP
+   ```
+   Optionally set a non-default primary model:
+   ```bash
+   echo 'codex/gpt-5.4-mini' | wrangler secret put CODEX_MODEL
+   ```
+
+3. Redeploy the worker. On the next cold-start the container writes the bootstrap auth to `/root/.codex/auth.json` (only if no existing file is present — the R2-restored copy always wins), the bundled Codex provider discovers it, and `agents.defaults.model.primary` is set to your `CODEX_MODEL`.
+
+### What happens on refresh
+
+Codex invalidates prior refresh tokens on every rotation. Moltworker handles this with a two-layer persistence strategy:
+
+- **Fast path** (`scripts/codex-auth-watcher.mjs`) — a Node helper using `fs.watch` triggers an immediate `rclone copyto` to R2 the moment Codex writes a new `auth.json`. Debounced at 500ms.
+- **Safety net** — the existing 30s bulk sync loop covers any write that the watcher misses (which can happen in certain container environments).
+
+Both paths push to the same R2 key (`r2:${R2_BUCKET}/codex/auth.json`), and on the next container boot the R2 restore runs **before** the bootstrap secret is considered, so a refreshed token from a prior container run always wins over the static secret.
+
+### Do NOT update the secret after initial bootstrap
+
+The `CODEX_AUTH_JSON_BOOTSTRAP` secret is a one-shot scaffold. If you rotate it to a newer value, the next container boot will *still* skip it — because an existing (R2-restored) `auth.json` is always preferred. To force a fresh login, delete the `r2:${R2_BUCKET}/codex/` folder before redeploying, then the bootstrap secret takes effect on the next boot.
+
+If your subscription lapses or the refresh token expires past the point Codex can renew, run `codex login` again on your workstation, delete the R2 `codex/` folder, paste the new `auth.json` into `CODEX_AUTH_JSON_BOOTSTRAP`, and redeploy.
 
 ## Security Considerations
 

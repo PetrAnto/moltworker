@@ -345,6 +345,13 @@ debug.get('/env', async (c) => {
     has_r2_access_key: !!c.env.R2_ACCESS_KEY_ID,
     has_r2_secret_key: !!c.env.R2_SECRET_ACCESS_KEY,
     has_cf_account_id: !!c.env.CF_ACCOUNT_ID,
+    // Codex bundled provider (OpenClaw >= 2026.4.10).
+    // Booleans only — raw token never touches the response. On-disk state
+    // lives in the container; use /debug/processes to confirm the codex
+    // app-server subprocess is running and /debug/container-config to
+    // read the effective openclaw.json after patching.
+    has_codex_bootstrap_secret: !!c.env.CODEX_AUTH_JSON_BOOTSTRAP,
+    codex_model: c.env.CODEX_MODEL || null,
     dev_mode: c.env.DEV_MODE,
     debug_routes: c.env.DEBUG_ROUTES,
     dev_mode_enabled: c.env.DEV_MODE === 'true',
