@@ -437,7 +437,7 @@ The previous `AI_GATEWAY_API_KEY` + `AI_GATEWAY_BASE_URL` approach is still supp
 
 ## Using Codex with your ChatGPT subscription
 
-> **Status:** Scaffolded but not yet active. Requires OpenClaw ≥ 2026.4.10, which ships the bundled Codex provider. The moltworker container is currently pinned to an older OpenClaw release; setting the secret below has no effect until the version bump lands. This section documents the flow for when it does.
+> **Status:** Scaffolded but not yet active. Requires OpenClaw ≥ 2026.4.10 (which ships the bundled Codex provider) AND the `@openai/codex` CLI installed in the container image. The moltworker container is currently pinned to an older OpenClaw release and does not install the Codex CLI; until a follow-up PR adds both, every Codex path in `start-openclaw.sh` is hard-gated off by `command -v codex`. Setting `CODEX_AUTH_JSON_BOOTSTRAP` today is safely ignored — the startup script explicitly logs "waiting for PR 3 version bump" when the secret is present but the binary is not. This section documents the flow for when both land.
 
 If you have a ChatGPT Plus or Pro subscription, OpenClaw ≥ 2026.4.10 can run the `codex/gpt-*` model family against your subscription credits instead of paid API tokens. Moltworker bootstraps the auth file from a single Cloudflare secret; after first boot, the Codex CLI inside the container owns the refresh lifecycle and moltworker persists each rotation to R2 within milliseconds.
 

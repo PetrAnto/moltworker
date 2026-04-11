@@ -10,7 +10,15 @@
 
 PR 2 (the Codex scaffolding PR) lands all the wiring to support the bundled Codex provider shipped in OpenClaw 2026.4.10 **without** actually bumping the dependency. This doc tracks the bump itself as a discrete, reviewable change so the rollback story stays clean.
 
-The Codex scaffolding PR is a no-op in production until `CODEX_AUTH_JSON_BOOTSTRAP` is set. The scaffolding PR is designed to be safe on the old OpenClaw: legacy scrub only removes fields that existed pre-4.5, the config patch's Codex branch is gated on the bootstrap secret, and the watcher helper fails closed if `.codex/auth.json` never appears.
+PR 2 is a **strict no-op** in production because every Codex code path in `start-openclaw.sh` is hard-gated on `command -v codex` (the `CODEX_STAGE_ACTIVE` flag). Since PR 2 does not install `@openai/codex`, the binary is absent, the flag is `0`, and none of the following run:
+
+- the `.codex` R2 restore
+- the `CODEX_AUTH_JSON_BOOTSTRAP` pre-seed (logs "waiting for PR 3 version bump" if the secret is set)
+- the `codex/*` primary-model override in the config patch
+- the `.codex` entries in the bulk rclone sync loop
+- the `fs.watch` helper subprocess
+
+PR 3 (the OpenClaw version bump) installs the binary, which physically flips the gate on — zero additional code changes are needed to activate PR 2's wiring. This gating strategy was added in response to the ChatGPT review of the initial PR 2 draft, which correctly identified that an earlier guard (`if (process.env.CODEX_AUTH_JSON_BOOTSTRAP)`) was operator-discipline-only, not enforced by the code.
 
 ## Headline feature (drives the bump)
 
@@ -66,12 +74,13 @@ The Codex scaffolding PR is a no-op in production until `CODEX_AUTH_JSON_BOOTSTR
 
 ### Stage 2 (this PR) — PR 2: `feat(codex): scaffold bundled Codex provider bootstrap`
 - `CODEX_AUTH_JSON_BOOTSTRAP` + `CODEX_MODEL` env vars plumbed through types/env/debug
-- Bootstrap-only pre-seed in `start-openclaw.sh` (never overwrites existing `auth.json`)
+- `CODEX_STAGE_ACTIVE` hard-gate in `start-openclaw.sh` (`command -v codex`)
+- Bootstrap-only pre-seed that never overwrites existing `auth.json`
 - R2 restore + sync loop + `fs.watch` helper (`scripts/codex-auth-watcher.mjs`)
 - Pre-flight legacy-config scrub with `openclaw.json.invalid-<ts>` fallback
 - README section + this doc
 
-**No OpenClaw version bump.** No `@openai/codex` install. Safe to ship on the existing 2026.3.23-2 pin; all new code paths are gated on `CODEX_AUTH_JSON_BOOTSTRAP` being set, which users will not do until Stage 3 lands.
+**No OpenClaw version bump.** No `@openai/codex` install. **Strict no-op in production** because `command -v codex` returns false — every new code path short-circuits. The gate is physical, not operator-discipline. Setting `CODEX_AUTH_JSON_BOOTSTRAP` today is safely ignored (logged, not applied).
 
 ### Stage 3 (separate future PR) — `chore(deps): bump openclaw to 2026.4.10 + install @openai/codex`
 - Bump `Dockerfile:44` from `openclaw@2026.3.23-2` → `openclaw@2026.4.10`
