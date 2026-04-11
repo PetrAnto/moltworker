@@ -47,14 +47,18 @@ RUN npm install -g openclaw@2026.3.23-2 \
 # Use /home/openclaw as the home directory in addition to /root.
 # The Sandbox SDK backup API only allows directories under /home, /workspace,
 # /tmp, or /var/tmp — not /root. Symlinks allow both paths to work.
+# .codex is scaffolded here so the bundled Codex provider (OpenClaw >= 2026.4.10)
+# has a writable home for ~/.codex/auth.json that participates in R2 backup.
 ENV HOME=/home/openclaw
 RUN mkdir -p /home/openclaw/.openclaw \
+    && mkdir -p /home/openclaw/.codex \
     && mkdir -p /home/openclaw/clawd \
     && mkdir -p /home/openclaw/clawd/skills \
     && ln -sf /home/openclaw/.openclaw /root/.openclaw \
+    && ln -sf /home/openclaw/.codex /root/.codex \
     && ln -sf /home/openclaw/clawd /root/clawd
 
-# Build cache bust: 2026-03-31-v1-upstream-sync
+# Build cache bust: 2026-04-11-v1-startup-hardening
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 
