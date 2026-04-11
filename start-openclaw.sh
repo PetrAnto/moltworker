@@ -104,16 +104,19 @@ fi
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "No existing config found, running openclaw onboard..."
 
+    # Secrets (ANTHROPIC_API_KEY, OPENAI_API_KEY, CLOUDFLARE_AI_GATEWAY_API_KEY)
+    # are read directly from environment variables by `openclaw onboard` and
+    # must NEVER be passed on the command line — argv is visible to every
+    # process in the container via ps/proc. Only non-sensitive identifiers
+    # (account/gateway IDs) are safe to pass as flags.
+    # Matches upstream cloudflare/moltworker hardening.
     AUTH_ARGS=""
     if [ -n "$CLOUDFLARE_AI_GATEWAY_API_KEY" ] && [ -n "$CF_AI_GATEWAY_ACCOUNT_ID" ] && [ -n "$CF_AI_GATEWAY_GATEWAY_ID" ]; then
-        AUTH_ARGS="--auth-choice cloudflare-ai-gateway-api-key \
-            --cloudflare-ai-gateway-account-id $CF_AI_GATEWAY_ACCOUNT_ID \
-            --cloudflare-ai-gateway-gateway-id $CF_AI_GATEWAY_GATEWAY_ID \
-            --cloudflare-ai-gateway-api-key $CLOUDFLARE_AI_GATEWAY_API_KEY"
+        AUTH_ARGS="--auth-choice cloudflare-ai-gateway-api-key --cloudflare-ai-gateway-account-id $CF_AI_GATEWAY_ACCOUNT_ID --cloudflare-ai-gateway-gateway-id $CF_AI_GATEWAY_GATEWAY_ID"
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
-        AUTH_ARGS="--auth-choice apiKey --anthropic-api-key $ANTHROPIC_API_KEY"
+        AUTH_ARGS="--auth-choice apiKey"
     elif [ -n "$OPENAI_API_KEY" ]; then
-        AUTH_ARGS="--auth-choice openai-api-key --openai-api-key $OPENAI_API_KEY"
+        AUTH_ARGS="--auth-choice openai-api-key"
     fi
 
     openclaw onboard --non-interactive --accept-risk \
@@ -186,7 +189,20 @@ config.gateway.port = 18789;
 config.gateway.mode = 'local';
 config.gateway.trustedProxies = ['10.1.0.0'];
 
-// Set gateway token if provided
+// Allow any origin to connect to the gateway control UI.
+// The gateway runs inside a Cloudflare Container behind the Worker, which
+// proxies requests from the public workers.dev domain. Without this,
+// openclaw >= 2026.2.26 rejects WebSocket connections because the browser's
+// origin (https://....workers.dev) doesn't match the gateway's localhost.
+// Security is handled by CF Access + gateway token auth, not origin checks.
+// Matches upstream cloudflare/moltworker.
+config.gateway.controlUi = config.gateway.controlUi || {};
+config.gateway.controlUi.allowedOrigins = ['*'];
+
+// Set gateway token if provided.
+// The token is written to the config file rather than passed as a CLI
+// argument because argv is visible to every process in the container
+// via ps/proc. The gateway reads gateway.auth.token from the config on boot.
 if (process.env.OPENCLAW_GATEWAY_TOKEN) {
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -194,7 +210,6 @@ if (process.env.OPENCLAW_GATEWAY_TOKEN) {
 
 // Allow insecure auth for dev mode
 if (process.env.OPENCLAW_DEV_MODE === 'true') {
-    config.gateway.controlUi = config.gateway.controlUi || {};
     config.gateway.controlUi.allowInsecureAuth = true;
 }
 
@@ -433,10 +448,13 @@ rm -f "$CONFIG_DIR/gateway.lock" 2>/dev/null || true
 
 echo "Dev mode: ${OPENCLAW_DEV_MODE:-false}"
 
+# The gateway token (if set) is already written to openclaw.json by the
+# config patch above (gateway.auth.token). We deliberately avoid passing
+# --token on the command line because CLI arguments are visible to every
+# process in the container via ps/proc. Matches upstream cloudflare/moltworker.
 if [ -n "$OPENCLAW_GATEWAY_TOKEN" ]; then
     echo "Starting gateway with token auth..."
-    exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan --token "$OPENCLAW_GATEWAY_TOKEN"
 else
     echo "Starting gateway with device pairing (no token)..."
-    exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan
 fi
+exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan
