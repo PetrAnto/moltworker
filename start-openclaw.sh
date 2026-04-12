@@ -199,7 +199,8 @@ fi
 # Targeted patterns:
 #   1. agents.defaults.cliBackends          (removed in OpenClaw 2026.4.5)
 #   2. models.providers.anthropic.profiles.claude-cli (deprecated)
-#   3. models.providers.openai-codex         (superseded by bundled codex/*)
+#   3. models.providers.openai-codex         (ONLY when CODEX_STAGE_ACTIVE=1;
+#      pre-bump this is a working provider and must not be deleted)
 #
 # Fallback: if the scrub itself crashes (malformed JSON, unexpected
 # schema), we quarantine the config to openclaw.json.invalid-<ts> and let
@@ -230,9 +231,11 @@ if (cfg.models?.providers?.anthropic?.profiles?.['claude-cli']) {
 }
 
 // openai-codex provider — superseded by bundled codex/* provider in 2026.4.10.
-// Remove stale direct-OAuth entries so the bundled provider can take over
-// cleanly. Users with CODEX_AUTH_JSON_BOOTSTRAP get the new flow automatically.
-if (cfg.models?.providers?.['openai-codex']) {
+// ONLY remove when the bundled replacement is actually available (codex binary
+// installed, CODEX_STAGE_ACTIVE=1). Pre-bump, openai-codex/* is a working
+// provider that some deployments actively use; deleting it without a
+// replacement would break their model resolution.
+if (process.env.CODEX_STAGE_ACTIVE === '1' && cfg.models?.providers?.['openai-codex']) {
     delete cfg.models.providers['openai-codex'];
     console.log('[scrub] removed models.providers.openai-codex (superseded by codex/*)');
     changed = true;
