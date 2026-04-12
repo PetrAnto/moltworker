@@ -58,9 +58,11 @@ RUN mkdir -p /home/openclaw/.openclaw \
     && ln -sf /home/openclaw/.codex /root/.codex \
     && ln -sf /home/openclaw/clawd /root/clawd
 
-# Build cache bust: 2026-04-11-v1-startup-hardening
+# Build cache bust: 2026-04-11-v2-codex-bootstrap-scaffold
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
-RUN chmod +x /usr/local/bin/start-openclaw.sh
+COPY scripts/codex-auth-watcher.mjs /usr/local/bin/codex-auth-watcher.mjs
+RUN chmod +x /usr/local/bin/start-openclaw.sh \
+    && chmod +x /usr/local/bin/codex-auth-watcher.mjs
 
 COPY skills/ /home/openclaw/clawd/skills/
 

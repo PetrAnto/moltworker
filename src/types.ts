@@ -84,6 +84,15 @@ export interface MoltbotEnv {
   CRON_WAKE_AHEAD_MINUTES?: string; // Minutes before a cron job to wake the container (default: 10)
   // Debug / simulation endpoint
   DEBUG_API_KEY?: string; // Bearer token for /simulate/* endpoints (set via wrangler secret put DEBUG_API_KEY)
+  // Codex subscription auth (bundled provider in OpenClaw >= 2026.4.10).
+  // BOOTSTRAP-ONLY: the secret below is written to ~/.codex/auth.json at
+  // first container boot if no existing auth file is present. After that,
+  // the Codex CLI owns refresh and persists fresh tokens via the rclone
+  // sync loop + fs.watch helper. NEVER overwrite an existing file — Codex
+  // invalidates prior refresh tokens on rotation, so an older secret would
+  // brick the subscription.
+  CODEX_AUTH_JSON_BOOTSTRAP?: string; // Full content of a local ~/.codex/auth.json (JSON string)
+  CODEX_MODEL?: string; // Primary model when Codex is active (default: codex/gpt-5.4)
 }
 
 /**

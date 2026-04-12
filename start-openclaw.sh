@@ -18,12 +18,40 @@ CONFIG_DIR="/root/.openclaw"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
 WORKSPACE_DIR="/root/clawd"
 SKILLS_DIR="/root/clawd/skills"
+CODEX_DIR="/root/.codex"
+CODEX_AUTH_FILE="$CODEX_DIR/auth.json"
 RCLONE_CONF="/root/.config/rclone/rclone.conf"
 LAST_SYNC_FILE="/tmp/.last-sync"
 
 echo "Config directory: $CONFIG_DIR"
 
 mkdir -p "$CONFIG_DIR"
+mkdir -p "$CODEX_DIR"
+
+# ============================================================
+# CODEX STAGE GATE
+# ============================================================
+# Every Codex-related code path below is gated on the presence of the
+# `codex` CLI binary. The bundled Codex provider in OpenClaw >= 2026.4.10
+# delegates auth and execution to this binary; if it is not installed,
+# NONE of the Codex paths should activate — no file writes, no model
+# overrides, no background watchers, no rclone sync of .codex/, no
+# restore from R2. This is a physical gate, not a flag: staging the
+# @openai/codex install in the Dockerfile is what activates it.
+#
+# PR 2 (this commit's parent) ships all the Codex scaffolding without
+# installing the binary, making PR 2 a strict no-op in production. PR 3
+# (the OpenClaw version bump) adds `npm install -g @openai/codex` to
+# the Dockerfile, which flips this gate and activates every path below
+# with zero additional code changes.
+if command -v codex >/dev/null 2>&1; then
+    CODEX_STAGE_ACTIVE=1
+    echo "Codex CLI detected — bundled Codex provider paths active"
+else
+    CODEX_STAGE_ACTIVE=0
+    echo "Codex CLI not installed — bundled Codex provider paths disabled (PR 2 scaffolding)"
+fi
+export CODEX_STAGE_ACTIVE
 
 # ============================================================
 # RCLONE SETUP
@@ -94,8 +122,146 @@ if r2_configured; then
         rclone copy "r2:${R2_BUCKET}/skills/" "$SKILLS_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: skills restore failed with exit code $?"
         echo "Skills restored"
     fi
+
+    # Restore Codex auth (bundled provider, OpenClaw >= 2026.4.10).
+    # Gated on CODEX_STAGE_ACTIVE — if the codex binary is not installed,
+    # we skip the restore entirely. Nothing in the container would read
+    # the restored file, so restoring would only waste I/O and leave a
+    # stale ~/.codex/auth.json that could confuse future debugging.
+    if [ "$CODEX_STAGE_ACTIVE" = "1" ]; then
+        REMOTE_CODEX_COUNT=$(rclone ls "r2:${R2_BUCKET}/codex/" $RCLONE_FLAGS 2>/dev/null | wc -l)
+        if [ "$REMOTE_CODEX_COUNT" -gt 0 ]; then
+            echo "Restoring Codex auth from R2 ($REMOTE_CODEX_COUNT files)..."
+            rclone copy "r2:${R2_BUCKET}/codex/" "$CODEX_DIR/" $RCLONE_FLAGS -v 2>&1 || echo "WARNING: codex restore failed with exit code $?"
+            chmod 600 "$CODEX_AUTH_FILE" 2>/dev/null || true
+            echo "Codex auth restored"
+        fi
+    fi
 else
     echo "R2 not configured, starting fresh"
+fi
+
+# ============================================================
+# CODEX AUTH BOOTSTRAP (one-shot, non-destructive, stage-gated)
+# ============================================================
+# Write $CODEX_AUTH_JSON_BOOTSTRAP to ~/.codex/auth.json IF AND ONLY IF:
+#   1. The codex CLI binary is installed (CODEX_STAGE_ACTIVE=1), AND
+#   2. No existing auth file is present (neither R2-restored nor local).
+#
+# Rules enforced by this logic:
+#   - NEVER overwrite an existing file. Codex invalidates prior refresh
+#     tokens on rotation, and a stale static secret would brick the live
+#     subscription on the next boot.
+#   - NEVER run pre-bump. If the binary is absent, the bootstrap is a
+#     no-op — PR 2 ships this logic but PR 3 is what installs codex.
+#
+# The secret is a one-shot scaffold. Once the file exists, Codex CLI owns
+# the lifecycle and the fs.watch helper + bulk sync loop propagate every
+# rotation to R2 within milliseconds.
+if [ "$CODEX_STAGE_ACTIVE" = "1" ] && [ -n "$CODEX_AUTH_JSON_BOOTSTRAP" ]; then
+    if [ -f "$CODEX_AUTH_FILE" ]; then
+        echo "Codex auth already present on disk (restored or pre-existing) — bootstrap skipped"
+    else
+        echo "Writing Codex bootstrap auth from CODEX_AUTH_JSON_BOOTSTRAP..."
+        # Validate JSON shape before writing. Fail-soft: log and continue
+        # without Codex rather than crash the whole container startup.
+        if printf '%s' "$CODEX_AUTH_JSON_BOOTSTRAP" | node -e 'JSON.parse(require("fs").readFileSync(0, "utf8"))' 2>/dev/null; then
+            umask 077
+            TMP_CODEX_AUTH="$(mktemp "${CODEX_DIR}/.auth.json.XXXXXX")"
+            printf '%s' "$CODEX_AUTH_JSON_BOOTSTRAP" > "$TMP_CODEX_AUTH"
+            chmod 600 "$TMP_CODEX_AUTH"
+            mv "$TMP_CODEX_AUTH" "$CODEX_AUTH_FILE"
+            umask 022
+            echo "Codex bootstrap auth written to $CODEX_AUTH_FILE"
+        else
+            echo "WARNING: CODEX_AUTH_JSON_BOOTSTRAP is not valid JSON — ignoring" >&2
+        fi
+    fi
+elif [ "$CODEX_STAGE_ACTIVE" = "0" ] && [ -n "$CODEX_AUTH_JSON_BOOTSTRAP" ]; then
+    echo "CODEX_AUTH_JSON_BOOTSTRAP is set but codex binary is not installed — ignoring (waiting for PR 3 version bump)"
+fi
+
+# ============================================================
+# CONFIG PRE-FLIGHT SCRUB (targeted legacy field removal + fallback)
+# ============================================================
+# Strip known-legacy fields from R2-restored configs before onboard/patch.
+# This protects against OpenClaw's tighter config validation in v2026.4.5+
+# rejecting old backups at startup.
+#
+# Scope is deliberately narrow — we only remove the three patterns we've
+# actually observed to break gateway boot. A generic "missing models array"
+# sweep was tried in development and false-positived on valid provider
+# entries declaring only `profiles` or `baseUrl` overrides (e.g. a custom
+# anthropic profile override). If the current targeted scrubs miss a new
+# breakage, the quarantine fallback below catches it and we re-run fresh
+# onboard rather than crash-looping.
+#
+# Targeted patterns:
+#   1. agents.defaults.cliBackends          (removed in OpenClaw 2026.4.5)
+#   2. models.providers.anthropic.profiles.claude-cli (deprecated)
+#   3. models.providers.openai-codex         (ONLY when CODEX_STAGE_ACTIVE=1;
+#      pre-bump this is a working provider and must not be deleted)
+#
+# Fallback: if the scrub itself crashes (malformed JSON, unexpected
+# schema), we quarantine the config to openclaw.json.invalid-<ts> and let
+# the onboard block below fall through to a fresh setup.
+if [ -f "$CONFIG_FILE" ]; then
+    if ! node <<'EOFSCRUB'
+const fs = require('fs');
+const path = '/root/.openclaw/openclaw.json';
+const raw = fs.readFileSync(path, 'utf8');
+const cfg = JSON.parse(raw);
+let changed = false;
+
+// agents.defaults.cliBackends — removed in OpenClaw 2026.4.5
+if (cfg.agents?.defaults?.cliBackends !== undefined) {
+    delete cfg.agents.defaults.cliBackends;
+    console.log('[scrub] removed agents.defaults.cliBackends');
+    changed = true;
+}
+
+// Legacy claude-cli profile under the anthropic provider.
+// Upstream 2026.4.5 removed the Claude CLI backend from new onboarding and
+// `openclaw doctor` can repair stale state, but we scrub here as well so
+// R2-restored configs boot cleanly on the first run.
+if (cfg.models?.providers?.anthropic?.profiles?.['claude-cli']) {
+    delete cfg.models.providers.anthropic.profiles['claude-cli'];
+    console.log('[scrub] removed models.providers.anthropic.profiles.claude-cli');
+    changed = true;
+}
+
+// openai-codex provider — superseded by bundled codex/* provider in 2026.4.10.
+// ONLY remove when the bundled replacement is actually available (codex binary
+// installed, CODEX_STAGE_ACTIVE=1). Pre-bump, openai-codex/* is a working
+// provider that some deployments actively use; deleting it without a
+// replacement would break their model resolution.
+if (process.env.CODEX_STAGE_ACTIVE === '1' && cfg.models?.providers?.['openai-codex']) {
+    delete cfg.models.providers['openai-codex'];
+    console.log('[scrub] removed models.providers.openai-codex (superseded by codex/*)');
+    changed = true;
+}
+
+// NOTE: we deliberately do NOT do a generic "missing models array" sweep
+// over models.providers.*. Valid provider entries can declare profiles or
+// baseUrl overrides without a models array. The targeted scrubs above
+// cover the known-broken patterns; the existing block below this node
+// runner handles two more (broken anthropic model entries, orphan
+// openrouter provider). If OpenClaw 2026.4.5+ rejects the result, the
+// fallback clause around this heredoc quarantines the config and triggers
+// a fresh onboard.
+
+if (changed) {
+    fs.writeFileSync(path, JSON.stringify(cfg, null, 2));
+    console.log('[scrub] config rewritten');
+} else {
+    console.log('[scrub] no legacy fields found, config untouched');
+}
+EOFSCRUB
+    then
+        TS="$(date +%s)"
+        mv "$CONFIG_FILE" "${CONFIG_FILE}.invalid-${TS}"
+        echo "WARNING: config scrub failed, quarantined to ${CONFIG_FILE}.invalid-${TS} — re-running fresh onboard" >&2
+    fi
 fi
 
 # ============================================================
@@ -386,6 +552,19 @@ if (process.env.NVIDIA_NIM_API_KEY) {
     console.log('NVIDIA NIM: 12 free models registered (nemotron, super49, nemo3, nemonano, nemo9b, dsnv, qwennv, qwencodernv, qwen35nv, glm5nv, kiminv, devnv)');
 }
 
+// Codex bundled provider (OpenClaw >= 2026.4.10).
+// HARD-GATED: requires BOTH the codex CLI binary (CODEX_STAGE_ACTIVE=1,
+// set by the outer shell) AND an explicit CODEX_AUTH_JSON_BOOTSTRAP
+// secret. The shell gate catches the pre-bump case where the binary is
+// absent — without it, writing codex/* as the primary model would make
+// OpenClaw boot with an unknown model alias. PR 2 scaffolds this block
+// as a strict no-op; PR 3 installs the binary which flips the gate.
+if (process.env.CODEX_STAGE_ACTIVE === '1' && process.env.CODEX_AUTH_JSON_BOOTSTRAP) {
+    const codexModel = process.env.CODEX_MODEL || 'codex/gpt-5.4';
+    config.agents.defaults.model.primary = codexModel;
+    console.log('Codex bundled provider active — default model: ' + codexModel);
+}
+
 // Write updated config
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
@@ -407,6 +586,12 @@ if r2_configured; then
             CHANGED=/tmp/.changed-files
             {
                 find "$CONFIG_DIR" -newer "$MARKER" -type f -printf '%P\n' 2>/dev/null
+                # .codex is only watched when the codex binary is installed.
+                # Without it, scanning the empty dir just wastes inotify/find
+                # cycles and the rclone sync below is also skipped.
+                if [ "$CODEX_STAGE_ACTIVE" = "1" ]; then
+                    find "$CODEX_DIR" -newer "$MARKER" -type f -printf '%P\n' 2>/dev/null
+                fi
                 find "$WORKSPACE_DIR" -newer "$MARKER" \
                     -not -path '*/node_modules/*' \
                     -not -path '*/.git/*' \
@@ -419,6 +604,13 @@ if r2_configured; then
                 echo "[sync] Uploading changes ($COUNT files) at $(date)" >> "$LOGFILE"
                 rclone sync "$CONFIG_DIR/" "r2:${R2_BUCKET}/openclaw/" \
                     $RCLONE_FLAGS --exclude='*.lock' --exclude='*.log' --exclude='*.tmp' --exclude='.git/**' 2>> "$LOGFILE"
+                # Codex auth persistence (safety-net path; the fs.watch helper
+                # below is the primary fast-path on token rotation). Gated on
+                # codex binary presence — no point syncing an unused dir.
+                if [ "$CODEX_STAGE_ACTIVE" = "1" ] && [ -d "$CODEX_DIR" ]; then
+                    rclone sync "$CODEX_DIR/" "r2:${R2_BUCKET}/codex/" \
+                        $RCLONE_FLAGS --exclude='.auth.json.*' 2>> "$LOGFILE"
+                fi
                 if [ -d "$WORKSPACE_DIR" ]; then
                     rclone sync "$WORKSPACE_DIR/" "r2:${R2_BUCKET}/workspace/" \
                         $RCLONE_FLAGS --exclude='skills/**' --exclude='.git/**' --exclude='node_modules/**' 2>> "$LOGFILE"
@@ -434,6 +626,26 @@ if r2_configured; then
         done
     ) &
     echo "Background sync loop started (PID: $!)"
+
+    # Codex auth fast-path: fs.watch triggers an immediate rclone push on
+    # every modification of ~/.codex/auth.json. Codex invalidates prior
+    # refresh tokens on rotation, so losing even one write means a bricked
+    # subscription on the next container boot. The bulk sync loop above
+    # runs every 30s as a safety net; the watcher catches tokens within
+    # milliseconds of being written.
+    #
+    # Gated on codex binary presence. Starting the watcher pre-bump would
+    # just spin a node process forever waiting for a file that nothing
+    # writes — wasteful and confusing in debug output.
+    if [ "$CODEX_STAGE_ACTIVE" = "1" ] && { [ -x /usr/local/bin/codex-auth-watcher.mjs ] || [ -f /usr/local/bin/codex-auth-watcher.mjs ]; }; then
+        echo "Starting Codex auth fs.watch helper..."
+        (
+            R2_BUCKET="$R2_BUCKET" \
+            CODEX_DIR="$CODEX_DIR" \
+            node /usr/local/bin/codex-auth-watcher.mjs >> /tmp/codex-auth-watcher.log 2>&1
+        ) &
+        echo "Codex auth watcher started (PID: $!)"
+    fi
 fi
 
 # ============================================================
