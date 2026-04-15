@@ -40,9 +40,16 @@ RUN mkdir -p /root/repos
 # Install pnpm globally
 RUN npm install -g pnpm
 
-# Install OpenClaw (formerly clawdbot/moltbot)
-RUN npm install -g openclaw@2026.3.23-2 \
-    && openclaw --version
+# Install OpenClaw + bundled Codex provider binary (Stage 3 of the openclaw
+# bump plan — see claude-share/upstream-sync/openclaw-bump-2026.4.10.md).
+# `@openai/codex` flips CODEX_STAGE_ACTIVE=1 in start-openclaw.sh, which
+# enables the Codex auth restore/sync paths and the codex/* model override.
+#
+# @openai/codex is pinned exactly because OpenClaw 2026.4.14 does not
+# declare it as a peer dependency, so there is no upstream compatibility range.
+RUN npm install -g openclaw@2026.4.14 @openai/codex@0.121.0 \
+    && openclaw --version \
+    && codex --version
 
 # Use /home/openclaw as the home directory in addition to /root.
 # The Sandbox SDK backup API only allows directories under /home, /workspace,
@@ -58,7 +65,7 @@ RUN mkdir -p /home/openclaw/.openclaw \
     && ln -sf /home/openclaw/.codex /root/.codex \
     && ln -sf /home/openclaw/clawd /root/clawd
 
-# Build cache bust: 2026-04-11-v2-codex-bootstrap-scaffold
+# Build cache bust: 2026-04-15-v3-openclaw-2026.4.14-codex-0.121.0
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 COPY scripts/codex-auth-watcher.mjs /usr/local/bin/codex-auth-watcher.mjs
 RUN chmod +x /usr/local/bin/start-openclaw.sh \
