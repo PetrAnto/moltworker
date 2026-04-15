@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { createAccessMiddleware } from '../auth';
-import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2, waitForProcess } from '../gateway';
+import { ensureMoltbotGateway, findExistingMoltbotProcess, killGateway, syncToR2, waitForProcess } from '../gateway';
 import { createAcontextClient } from '../acontext/client';
 import type { LearningHistory, TaskLearning } from '../openrouter/learnings';
 import type { OrchestraHistory, OrchestraTask } from '../orchestra/orchestra';
@@ -428,19 +428,15 @@ adminApi.post('/gateway/restart', async (c) => {
   const sandbox = c.get('sandbox');
 
   try {
-    // Find and kill the existing gateway process
+    // Find and kill the existing gateway process. Use killGateway() so we
+    // get the multi-strategy kill (pgrep/pkill/ss), lock-file cleanup, and
+    // poll-for-port-closed behavior in one place — a hard 2s sleep was
+    // simultaneously too short under slow teardown and wasteful normally.
     const existingProcess = await findExistingMoltbotProcess(sandbox);
-    
     if (existingProcess) {
       console.log('Killing existing gateway process:', existingProcess.id);
-      try {
-        await existingProcess.kill();
-      } catch (killErr) {
-        console.error('Error killing process:', killErr);
-      }
-      // Wait a moment for the process to die
-      await new Promise(r => setTimeout(r, 2000));
     }
+    await killGateway(sandbox);
 
     // Start a new gateway in the background
     const bootPromise = ensureMoltbotGateway(sandbox, c.env).catch((err) => {
@@ -450,7 +446,7 @@ adminApi.post('/gateway/restart', async (c) => {
 
     return c.json({
       success: true,
-      message: existingProcess 
+      message: existingProcess
         ? 'Gateway process killed, new instance starting...'
         : 'No existing process found, starting new instance...',
       previousProcessId: existingProcess?.id,

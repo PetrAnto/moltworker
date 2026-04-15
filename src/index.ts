@@ -24,7 +24,7 @@ import { Hono } from 'hono';
 import { getSandbox, Sandbox, type SandboxOptions } from '@cloudflare/sandbox';
 
 import type { AppEnv, MoltbotEnv } from './types';
-import { MOLTBOT_PORT } from './config';
+import { MOLTBOT_PORT, HTML_FETCH_TIMEOUT_MS, HTML_BODY_READ_TIMEOUT_MS } from './config';
 import { createAccessMiddleware } from './auth';
 import { ensureMoltbotGateway, findExistingMoltbotProcess, killGateway, isGatewayPortOpen } from './gateway';
 import { publicRoutes, api, adminUi, debug, cdp, telegram, discord, dream } from './routes';
@@ -60,6 +60,36 @@ function transformErrorMessage(message: string, host: string): string {
 function isGatewayCrashedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return error.message.includes('is not listening');
+}
+
+/** Sentinel symbol on timeout errors produced by withTimeout(). */
+const TIMEOUT_ERROR_TAG = '__moltworker_timeout__';
+
+/**
+ * Race a promise against a timeout. The rejection carries a tag so callers
+ * can tell a timeout apart from a real gateway error.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${label} timed out after ${ms}ms`) as Error & {
+        [TIMEOUT_ERROR_TAG]?: true;
+      };
+      err[TIMEOUT_ERROR_TAG] = true;
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+function isTimeoutError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as Error & { [TIMEOUT_ERROR_TAG]?: true })[TIMEOUT_ERROR_TAG] === true
+  );
 }
 
 export { Sandbox };
@@ -515,10 +545,30 @@ app.all('*', async (c) => {
 
   console.log('[HTTP] Proxying:', url.pathname + url.search);
 
+  // For HTML requests we put a hard cap on how long we'll wait for the gateway:
+  // a stuck container can otherwise burn the entire Worker wall-clock budget
+  // (30s) and return 1101 instead of the user-friendly loading page. Non-HTML
+  // responses (SSE, downloads) may legitimately stream longer, so they pass
+  // through without a timeout.
+  const fetchContainer = () =>
+    acceptsHtml
+      ? withTimeout(
+          sandbox.containerFetch(request, MOLTBOT_PORT),
+          HTML_FETCH_TIMEOUT_MS,
+          'containerFetch',
+        )
+      : sandbox.containerFetch(request, MOLTBOT_PORT);
+
   let httpResponse: Response;
   try {
-    httpResponse = await sandbox.containerFetch(request, MOLTBOT_PORT);
+    httpResponse = await fetchContainer();
   } catch (err) {
+    if (acceptsHtml && isTimeoutError(err)) {
+      // Gateway took too long to respond — serve the loading page so the
+      // browser retries via /api/status rather than showing a blank error.
+      console.log('[HTTP] containerFetch timed out for HTML, serving loading page');
+      return c.html(loadingPageHtml);
+    }
     if (isGatewayCrashedError(err)) {
       console.log('[HTTP] Gateway crashed, attempting restore + restart and retry...');
       await killGateway(sandbox);
@@ -529,8 +579,12 @@ app.all('*', async (c) => {
       }
       await ensureMoltbotGateway(sandbox, c.env);
       try {
-        httpResponse = await sandbox.containerFetch(request, MOLTBOT_PORT);
+        httpResponse = await fetchContainer();
       } catch (retryErr) {
+        if (acceptsHtml && isTimeoutError(retryErr)) {
+          console.log('[HTTP] containerFetch retry timed out, serving loading page');
+          return c.html(loadingPageHtml);
+        }
         console.error('[HTTP] Retry after restart also failed:', retryErr);
         if (acceptsHtml) return c.html(loadingPageHtml);
         return c.json({ error: 'Gateway crashed and recovery failed' }, 503);
@@ -557,7 +611,22 @@ app.all('*', async (c) => {
   if (acceptsHtml) {
     const contentType = httpResponse.headers.get('content-type') || '';
     const isHtmlResponse = contentType.includes('text/html');
-    const body = await httpResponse.text();
+    // Bound the body read too — a hung/streaming body drains CPU time exactly
+    // like a hung containerFetch.
+    let body: string;
+    try {
+      body = await withTimeout(
+        httpResponse.text(),
+        HTML_BODY_READ_TIMEOUT_MS,
+        'body read',
+      );
+    } catch (err) {
+      if (isTimeoutError(err)) {
+        console.log('[HTTP] HTML body read timed out, serving loading page');
+        return c.html(loadingPageHtml);
+      }
+      throw err;
+    }
     if (isHtmlResponse && (!body || body.length < 50)) {
       console.log(
         `[HTTP] Empty/short HTML response (${body.length} bytes), serving loading page`,
