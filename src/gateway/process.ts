@@ -1,6 +1,11 @@
 import type { Sandbox, Process } from '@cloudflare/sandbox';
 import type { MoltbotEnv } from '../types';
-import { MOLTBOT_PORT, STARTUP_TIMEOUT_MS } from '../config';
+import {
+  MOLTBOT_PORT,
+  STARTUP_TIMEOUT_MS,
+  GATEWAY_SHUTDOWN_POLL_INTERVAL_MS,
+  GATEWAY_SHUTDOWN_TIMEOUT_MS,
+} from '../config';
 import { buildEnvVars } from './env';
 import { ensureRcloneConfig } from './r2';
 
@@ -47,8 +52,32 @@ export async function killGateway(sandbox: Sandbox): Promise<void> {
     // ignore
   }
 
-  // Wait for process to fully die
-  await new Promise((r) => setTimeout(r, 2000));
+  // Poll for the port to actually close instead of a fixed sleep. A hard
+  // `setTimeout(2s)` is simultaneously too short under slow teardown (the
+  // next restart then fails to bind port 18789) and wasteful when the
+  // process dies instantly. Poll `isGatewayPortOpen` with a cap so we
+  // never block indefinitely.
+  await waitForGatewayPortClosed(sandbox);
+}
+
+/**
+ * Wait for the gateway port to stop listening, up to GATEWAY_SHUTDOWN_TIMEOUT_MS.
+ * Returns true if the port closed, false if we timed out.
+ */
+async function waitForGatewayPortClosed(sandbox: Sandbox): Promise<boolean> {
+  const deadline = Date.now() + GATEWAY_SHUTDOWN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    let open: boolean;
+    try {
+      open = await isGatewayPortOpen(sandbox);
+    } catch {
+      // Probe failed — can't tell; break out so caller isn't stuck forever.
+      return false;
+    }
+    if (!open) return true;
+    await new Promise((r) => setTimeout(r, GATEWAY_SHUTDOWN_POLL_INTERVAL_MS));
+  }
+  return false;
 }
 
 /**

@@ -78,11 +78,19 @@ publicRoutes.get('/api/status', async (c) => {
       return c.json({ ok: false, status: 'starting', restoreError });
     }
 
-    // Process exists, check if it's actually responding
-    // Try to reach the gateway with a short timeout
+    // Process exists — check if the port is actually listening with the
+    // cheap one-shot TCP probe. `process.waitForPort(..., timeout: 5000)`
+    // blocks inside the Sandbox SDK with internal retries and can exceed
+    // the Worker CPU budget when /api/status is polled every 2s from the
+    // loading page. A single `nc -z` is ~instant; if the port happens to
+    // not be open this poll cycle, the loading page's next poll (2s later)
+    // will pick it up.
     try {
-      await process.waitForPort(18789, { mode: 'tcp', timeout: 5000 });
-      return c.json({ ok: true, status: 'running', processId: process.id });
+      const isOpen = await isGatewayPortOpen(sandbox);
+      if (isOpen) {
+        return c.json({ ok: true, status: 'running', processId: process.id });
+      }
+      return c.json({ ok: false, status: 'not_responding', processId: process.id });
     } catch {
       return c.json({ ok: false, status: 'not_responding', processId: process.id });
     }

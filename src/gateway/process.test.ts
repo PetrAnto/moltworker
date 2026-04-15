@@ -135,8 +135,12 @@ describe('findExistingMoltbotProcess', () => {
 });
 
 describe('killGateway', () => {
-  it('attempts multiple kill strategies and cleans up lock files', async () => {
-    const execMock = vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
+  it('attempts multiple kill strategies, cleans up lock files, and polls for port closed', async () => {
+    const execMock = vi.fn().mockImplementation((cmd: string) => {
+      // Port probe reports the port as already closed so the poll returns immediately.
+      if (cmd.includes('nc -z')) return Promise.resolve({ exitCode: 1, stdout: '', stderr: '' });
+      return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+    });
     const listProcessesMock = vi.fn().mockResolvedValue([]);
     const sandbox = {
       exec: execMock,
@@ -145,12 +149,39 @@ describe('killGateway', () => {
 
     await killGateway(sandbox);
 
-    // Should call exec at least twice (kill strategies + lock cleanup)
-    expect(execMock).toHaveBeenCalledTimes(2);
-    // First call includes the kill commands
-    expect(execMock.mock.calls[0][0]).toContain('pgrep');
-    // Second call cleans up lock files
-    expect(execMock.mock.calls[1][0]).toContain('rm -f');
+    const calls = execMock.mock.calls.map((c) => c[0] as string);
+    // Multi-strategy kill (pgrep/pkill/ss)
+    expect(calls.some((c) => c.includes('pgrep'))).toBe(true);
+    // Lockfile cleanup
+    expect(calls.some((c) => c.includes('rm -f'))).toBe(true);
+    // Port-closed poll — replaces the old fixed 2s sleep
+    expect(calls.some((c) => c.includes('nc -z'))).toBe(true);
+  });
+
+  it('polls until the gateway port closes rather than sleeping a fixed time', async () => {
+    let probeCallsBeforeClose = 0;
+    const execMock = vi.fn().mockImplementation((cmd: string) => {
+      if (cmd.includes('nc -z')) {
+        probeCallsBeforeClose += 1;
+        // Port is still open for the first two probes, then closes.
+        return Promise.resolve({
+          exitCode: probeCallsBeforeClose <= 2 ? 0 : 1,
+          stdout: '',
+          stderr: '',
+        });
+      }
+      return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+    });
+    const sandbox = {
+      exec: execMock,
+      listProcesses: vi.fn().mockResolvedValue([]),
+    } as unknown as Sandbox;
+
+    await killGateway(sandbox);
+
+    // We should have probed at least 3 times (two "open", one "closed") rather
+    // than returning after a single fixed sleep.
+    expect(probeCallsBeforeClose).toBeGreaterThanOrEqual(3);
   });
 
   it('handles exec failures gracefully', async () => {
@@ -161,7 +192,7 @@ describe('killGateway', () => {
       listProcesses: listProcessesMock,
     } as unknown as Sandbox;
 
-    // Should not throw
+    // Should not throw even when every exec rejects (including the port probe).
     await killGateway(sandbox);
   });
 });
