@@ -2,10 +2,12 @@
 
 **Date opened**: 2026-04-11
 **Last updated**: 2026-04-16
-**Status**: Stage 3 staged on `claude/openclaw-bump-2026.4.14` at commit `60735b9`, rebased onto current `main` (`2a23d0f`). Ready for staging validation; no PR open yet.
+**Status**: Stage 3 staged on `claude/openclaw-bump-2026.4.14` at commit `60735b9`, rebased onto current `main` (`2a23d0f`). Ready for staging validation; Stage 3 PR not yet opened.
 **Current pin**: `openclaw@2026.3.23-2` (Dockerfile:44)
 **Target pin**: `openclaw@2026.4.14` + `@openai/codex@0.121.0` (exact pin; see Stage 3 notes below)
-**Releases skipped**: 2026.3.28, 2026.4.5, 2026.4.9, 2026.4.10, 2026.4.14 (2026.4.15 is a beta, skipped)
+**Releases reviewed (skipped by 2026.3.23-2)**: 2026.3.28, 2026.4.5, 2026.4.9, 2026.4.10 — their fixes inherit into Stage 3 via 2026.4.14. 2026.4.15 is a beta and is explicitly skipped.
+
+> **Filename note**: this file is `openclaw-bump-2026.4.10.md` by design — it is referenced by path in the Stage 2 and Stage 3 commit messages, so renaming it would break that cross-reference. The content tracks the actual target version (2026.4.14) rather than the filename.
 
 ## Why this doc exists
 
@@ -104,7 +106,7 @@ The branch is rebased onto current `main` (`2a23d0f`, which includes the `fix(ga
 
 **Validation without the secret**: Operators can deploy this image without setting `CODEX_AUTH_JSON_BOOTSTRAP` to validate the version pin in isolation — the bootstrap pre-seed and the `codex/*` primary-model override (line 562 of `start-openclaw.sh`) both require the secret in addition to `CODEX_STAGE_ACTIVE`. Bot keeps using OpenRouter Auto until the secret lands.
 
-**Timing**: 2026.4.14 has been stable since shipping; no outstanding `.N` patch known at time of staging (2026-04-15). Re-check on the morning of the PR open.
+**Timing**: no known 2026.4.14-N patch at time of staging (2026-04-15). Re-check before the PR opens — the earlier reviewer note about "hurried release notes correlate with rapid patch follow-ups" still applies.
 
 ## Out of scope (future follow-ups)
 
