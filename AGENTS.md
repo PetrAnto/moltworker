@@ -2,7 +2,7 @@
 
 Guidelines for AI agents working on this codebase.
 
-> **IMPORTANT:** Also read `CLAUDE.md` for project instructions and `claude-share/core/SYNC_CHECKLIST.md` for post-task requirements.
+> **IMPORTANT:** Also read `CLAUDE.md` for project instructions, `TOOLS.md` for the canonical tool reference (purpose, latency, truncation, failure modes), and `claude-share/core/SYNC_CHECKLIST.md` for post-task requirements.
 
 ## Project Overview
 
