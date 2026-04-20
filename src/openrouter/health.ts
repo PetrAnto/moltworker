@@ -145,9 +145,9 @@ export async function pingAllModels(
   if (modelAliases) {
     models = modelAliases.map(a => getModel(a)).filter((m): m is ModelInfo => !!m);
   } else {
-    // Default: all curated models that aren't image-gen
+    // Default: all curated chat models (not media-gen)
     models = Object.values(getAllModels()).filter(m =>
-      !m.isImageGen && m.alias !== 'auto'
+      !m.isImageGen && !m.isVideoGen && m.alias !== 'auto'
     );
     // Cap at 20 to stay within time limits
     models = models.slice(0, 20);

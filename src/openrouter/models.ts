@@ -195,6 +195,7 @@ export interface ModelInfo {
   supportsVision?: boolean;
   supportsTools?: boolean;
   isImageGen?: boolean;
+  isVideoGen?: boolean;
   isFree?: boolean;
   provider?: Provider; // Direct API provider (default: openrouter)
   // Extended capability metadata (R2)
@@ -324,6 +325,17 @@ export const MODELS: Record<string, ModelInfo> = {
     name: 'GLM-5 (Pony Alpha)',
     specialty: 'Free Coding/Agentic/Reasoning',
     score: '744B MoE (40B active), 77.8% SWE-Bench, MIT license',
+    cost: 'FREE',
+    supportsTools: true,
+    isFree: true,
+    maxContext: 200000,
+  },
+  elephant: {
+    id: 'openrouter/elephant-alpha',
+    alias: 'elephant',
+    name: 'Elephant Alpha',
+    specialty: 'Free Stealth Model (Alpha)',
+    score: 'Stealth/cloaked frontier model, large context',
     cost: 'FREE',
     supportsTools: true,
     isFree: true,
@@ -460,6 +472,26 @@ export const MODELS: Record<string, ModelInfo> = {
     isImageGen: true,
   },
 
+  // === VIDEO GENERATION ===
+  wan27: {
+    id: 'alibaba/wan-2.7',
+    alias: 'wan27',
+    name: 'Wan 2.7',
+    specialty: 'Text/Image-to-Video (Alibaba)',
+    score: 'Up to 1080p, high-motion coherence, multilingual prompts',
+    cost: '$0.20/second',
+    isVideoGen: true,
+  },
+  seedance2: {
+    id: 'bytedance/seedance-2.0',
+    alias: 'seedance2',
+    name: 'Seedance 2.0',
+    specialty: 'Text/Image-to-Video (ByteDance)',
+    score: 'Cinematic motion, multi-shot, strong prompt adherence',
+    cost: '$0.25/second',
+    isVideoGen: true,
+  },
+
   // === PAID MODELS (by cost) ===
   // nemo removed — Mistral Nemo 12B (mid-2024), completely superseded
   // qwencoder7b removed — Qwen 2.5 era, 2 generations behind Qwen3 Coder
@@ -496,6 +528,19 @@ export const MODELS: Record<string, ModelInfo> = {
     cost: '$0.07/$0.40',
     supportsTools: true,
     structuredOutput: true,
+    maxContext: 200000,
+  },
+  glm51: {
+    id: 'z-ai/glm-5.1',
+    alias: 'glm51',
+    name: 'GLM 5.1',
+    specialty: 'Paid Agentic/Coding/Reasoning (GLM-5 successor)',
+    score: '744B MoE, improved SWE-Bench + tool reliability over GLM-5',
+    cost: '$0.30/$1.20',
+    supportsTools: true,
+    parallelCalls: true,
+    structuredOutput: true,
+    reasoning: 'configurable',
     maxContext: 200000,
   },
   mini: {
@@ -935,8 +980,8 @@ export const MODELS: Record<string, ModelInfo> = {
   glm5nv: {
     id: 'z-ai/glm5',
     alias: 'glm5nv',
-    name: 'GLM-5 (NIM)',
-    specialty: 'NVIDIA NIM — Zhipu GLM-5',
+    name: 'GLM-5 (NIM, Deprecated)',
+    specialty: 'NVIDIA NIM — Zhipu GLM-5 (deprecation: 2026-04-20; z-ai/glm-5.1 not yet on NIM)',
     score: '128K ctx, free',
     cost: 'FREE',
     isFree: true,
@@ -966,6 +1011,58 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsTools: false, // TODO: validate (Devstral likely supports tools)
     provider: 'nvidia',
     maxContext: 131072,
+  },
+
+  // === Latest NVIDIA NIM additions (April 2026) ===
+  nemo4nano: {
+    id: 'nvidia/nemotron-3-nano-4b',
+    alias: 'nemo4nano',
+    name: 'Nemotron 3 Nano 4B (NIM)',
+    specialty: 'NVIDIA NIM — Ultra-compact Nano, hybrid Mamba-Transformer',
+    score: '4B params, 1M ctx, 4x throughput vs Nemotron 2 Nano',
+    cost: 'FREE',
+    isFree: true,
+    provider: 'nvidia',
+    reasoning: 'configurable',
+    maxContext: 1048576,
+  },
+  minimaxnv: {
+    id: 'minimax/minimax-m2.7',
+    alias: 'minimaxnv',
+    name: 'MiniMax M2.7 (NIM)',
+    specialty: 'NVIDIA NIM — MiniMax flagship agentic/coding hosted free',
+    score: 'MiniMax M2.7, 196K ctx — capabilities unverified',
+    cost: 'FREE',
+    isFree: true,
+    supportsTools: false, // TODO: validate via /simulate
+    provider: 'nvidia',
+    maxContext: 196608,
+  },
+  kimivlnv: {
+    id: 'moonshotai/kimi-k2.5-vl',
+    alias: 'kimivlnv',
+    name: 'Kimi K2.5 VL (NIM)',
+    specialty: 'NVIDIA NIM — Kimi K2.5 Vision-Language hosted free',
+    score: '1T MoE with vision, 256K ctx — capabilities unverified',
+    cost: 'FREE',
+    isFree: true,
+    supportsVision: true,
+    supportsTools: false, // TODO: validate
+    provider: 'nvidia',
+    maxContext: 262144,
+  },
+  qwenvlnv: {
+    id: 'qwen/qwen3.5-vl-400b',
+    alias: 'qwenvlnv',
+    name: 'Qwen 3.5 VLM 400B (NIM)',
+    specialty: 'NVIDIA NIM — Qwen3.5 Vision-Language MoE 400B',
+    score: '400B MoE vision+chat+RAG+agents, 256K ctx — capabilities unverified',
+    cost: 'FREE',
+    isFree: true,
+    supportsVision: true,
+    supportsTools: false, // TODO: validate
+    provider: 'nvidia',
+    maxContext: 262144,
   },
 
   // === NEW MODELS (March 2026 refresh) ===
@@ -1530,6 +1627,23 @@ export function isImageGenModel(alias: string): boolean {
 }
 
 /**
+ * Check if model is for video generation
+ */
+export function isVideoGenModel(alias: string): boolean {
+  const model = getModel(alias);
+  return model?.isVideoGen || false;
+}
+
+/**
+ * Check if model is a non-chat media generator (image OR video).
+ * These models are excluded from chat model lists and filters.
+ */
+export function isMediaGenModel(alias: string): boolean {
+  const model = getModel(alias);
+  return !!(model?.isImageGen || model?.isVideoGen);
+}
+
+/**
  * Check if a model supports structured output (JSON schema)
  */
 export function supportsStructuredOutput(alias: string): boolean {
@@ -1740,7 +1854,7 @@ export function formatModelsList(currentAlias?: string): string {
     lines.push('🤖 Models\n');
   }
 
-  const all = Object.values(getAllModels()).filter(m => !m.isImageGen && m.alias !== 'auto');
+  const all = Object.values(getAllModels()).filter(m => !m.isImageGen && !m.isVideoGen && m.alias !== 'auto');
 
   // Track shown model IDs to avoid repeats across categories
   const shown = new Set<string>();
@@ -1811,7 +1925,7 @@ export function formatModelsList(currentAlias?: string): string {
 export function formatModelsListLegacy(): string {
   const lines: string[] = ['📋 Full Model Catalog\n'];
   const all = Object.values(getAllModels()).filter(m =>
-    !m.isImageGen && (isCuratedModel(m.alias) || !isAutoSyncedModel(m.alias))
+    !m.isImageGen && !m.isVideoGen && (isCuratedModel(m.alias) || !isAutoSyncedModel(m.alias))
   );
   const sortByRating = (a: ModelInfo, b: ModelInfo) => {
     const ra = computeRating(a);
@@ -1842,6 +1956,13 @@ export function formatModelsListLegacy(): string {
     for (const m of imageGen) lines.push(`  /${m.alias} ${m.cost}`);
   }
 
+  // Video gen
+  const videoGen = Object.values(getAllModels()).filter(m => m.isVideoGen);
+  if (videoGen.length > 0) {
+    lines.push('🎬 VIDEO GEN:');
+    for (const m of videoGen) lines.push(`  /${m.alias} ${m.cost}`);
+  }
+
   const autoSyncedCount = getAutoSyncedModelCount();
   if (autoSyncedCount > 0) {
     lines.push(`\n+${autoSyncedCount} auto-synced models — /model search <query> to find them`);
@@ -1859,7 +1980,7 @@ export function formatModelHub(currentAlias: string): string {
   const lines: string[] = [];
   const model = getModel(currentAlias);
   const all = Object.values(getAllModels());
-  const chatModels = all.filter(m => !m.isImageGen);
+  const chatModels = all.filter(m => !m.isImageGen && !m.isVideoGen);
 
   // Header
   lines.push('🤖 Model Hub\n');
@@ -2052,6 +2173,9 @@ export function formatModelInfoCard(alias: string): string | null {
   }
   if (model.isImageGen) {
     lines.push('Type: Image Generation');
+  }
+  if (model.isVideoGen) {
+    lines.push('Type: Video Generation');
   }
   lines.push('');
 
@@ -2247,7 +2371,7 @@ export function isReasoningMandatoryError(errorMessage: string): boolean {
 export function getFreeToolModels(): string[] {
   const all = getAllModels();
   return Object.values(all)
-    .filter(m => m.isFree && m.supportsTools && !m.isImageGen)
+    .filter(m => m.isFree && m.supportsTools && !m.isImageGen && !m.isVideoGen)
     .sort((a, b) => (b.maxContext || 0) - (a.maxContext || 0))
     .map(m => m.alias);
 }
@@ -2324,7 +2448,7 @@ export type ValueTier = 'free' | 'exceptional' | 'great' | 'good' | 'premium' | 
  */
 export function getValueTier(model: ModelInfo): ValueTier {
   if (model.isFree || model.cost === 'FREE') return 'free';
-  if (model.isImageGen) return 'good'; // Image gen pricing is different
+  if (model.isImageGen || model.isVideoGen) return 'good'; // Media gen pricing is different
 
   // Parse output cost from "$/M_in / $/M_out" format
   const costMatch = model.cost.match(/\$[\d.]+\/\$([\d.]+)/);
@@ -2433,7 +2557,7 @@ export function getRankedOrchestraModels(taskHint?: {
 }): RankedOrchestraModel[] {
   const all = getAllModels();
   const toolModels = Object.values(all).filter(m =>
-    m.supportsTools && !m.isImageGen && m.alias !== 'auto'
+    m.supportsTools && !m.isImageGen && !m.isVideoGen && m.alias !== 'auto'
   );
 
   const scored = toolModels.map(m => {
@@ -2660,6 +2784,11 @@ export const DEFAULT_MODEL = 'auto';
  */
 export const DEFAULT_IMAGE_MODEL = 'fluxpro';
 
+/**
+ * Default video generation model
+ */
+export const DEFAULT_VIDEO_MODEL = 'wan27';
+
 // === TASK ROUTER ===
 
 /** Escalation targets for coding tasks, ordered by preference (cost-effective first). */
@@ -2817,7 +2946,7 @@ const PICK_LABELS: Record<PickIntent, { emoji: string; title: string }> = {
  * Returns 3 models (2 paid + 1 free for paid intents, or 3 free for free intent).
  */
 export function getPickRecommendations(intent: PickIntent): ModelInfo[] {
-  const all = Object.values(getAllModels()).filter(m => !m.isImageGen);
+  const all = Object.values(getAllModels()).filter(m => !m.isImageGen && !m.isVideoGen);
 
   let candidates: ModelInfo[];
   switch (intent) {

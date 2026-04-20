@@ -68,6 +68,7 @@ import {
   getTopModelPicks,
   supportsVision,
   isImageGenModel,
+  isVideoGenModel,
   DEFAULT_MODEL,
   parseReasoningOverride,
   parseJsonPrefix,
@@ -221,7 +222,7 @@ export class TelegramBot {
   /**
    * Send a "typing" action
    */
-  async sendChatAction(chatId: number, action: 'typing' | 'upload_photo' = 'typing'): Promise<void> {
+  async sendChatAction(chatId: number, action: 'typing' | 'upload_photo' | 'upload_video' = 'typing'): Promise<void> {
     await fetch(`${this.baseUrl}/sendChatAction`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1094,6 +1095,11 @@ export class TelegramHandler {
         await this.handleImageCommand(chatId, args.join(' '));
         break;
 
+      case '/video':
+      case '/vid':
+        await this.handleVideoCommand(chatId, args.join(' '));
+        break;
+
       case '/credits':
         try {
           const credits = await this.openrouter.getCredits();
@@ -1901,6 +1907,57 @@ export class TelegramHandler {
       }
     } catch (error) {
       await this.bot.sendMessage(chatId, `Image generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle /video command
+   * Usage: /video <prompt> or /video <model> <prompt>
+   * Example: /video a cat astronaut floating in space
+   * Example: /video seedance2 drone shot over a neon city at night
+   */
+  private async handleVideoCommand(chatId: number, promptInput: string): Promise<void> {
+    if (!promptInput) {
+      await this.bot.sendMessage(
+        chatId,
+        '🎬 Video Generation\n\n' +
+        'Usage: /video <prompt>\n' +
+        'Or: /video <model> <prompt>\n\n' +
+        'Available models:\n' +
+        '  wan27 - Alibaba Wan 2.7 (default, $0.20/s)\n' +
+        '  seedance2 - ByteDance Seedance 2.0 ($0.25/s, cinematic)\n\n' +
+        'Examples:\n' +
+        '  /video a cat astronaut floating in space\n' +
+        '  /video seedance2 drone shot over a neon city at night'
+      );
+      return;
+    }
+
+    const words = promptInput.split(/\s+/);
+    let modelAlias: string | undefined;
+    let prompt: string;
+
+    if (words.length > 1 && isVideoGenModel(words[0].toLowerCase())) {
+      modelAlias = words[0].toLowerCase();
+      prompt = words.slice(1).join(' ');
+    } else {
+      prompt = promptInput;
+    }
+
+    await this.bot.sendChatAction(chatId, 'upload_video');
+
+    try {
+      const result = await this.openrouter.generateVideo(prompt, modelAlias);
+      const videoUrl = result.data[0]?.url;
+      const caption = modelAlias ? `[${modelAlias}] ${prompt}` : prompt;
+
+      if (videoUrl) {
+        await this.bot.sendMessage(chatId, `${caption}\n\n${videoUrl}`);
+      } else {
+        await this.bot.sendMessage(chatId, 'No video was generated. Try a different prompt.');
+      }
+    } catch (error) {
+      await this.bot.sendMessage(chatId, `Video generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -3452,6 +3509,12 @@ export class TelegramHandler {
     // If user's model is image-gen only, fall back to default text model
     if (isImageGenModel(modelAlias)) {
       await this.bot.sendMessage(chatId, `Model /${modelAlias} is image-only. Use /img <prompt> to generate images.\nFalling back to /${DEFAULT_MODEL} for text.`);
+      modelAlias = DEFAULT_MODEL;
+    }
+
+    // If user's model is video-gen only, fall back to default text model
+    if (isVideoGenModel(modelAlias)) {
+      await this.bot.sendMessage(chatId, `Model /${modelAlias} is video-only. Use /video <prompt> to generate videos.\nFalling back to /${DEFAULT_MODEL} for text.`);
       modelAlias = DEFAULT_MODEL;
     }
 
@@ -6017,18 +6080,23 @@ Try it: "What's on the front page of Hacker News?"
 Try it: "Summarize https://example.com"`;
 
       case 'images':
-        return `🎨 Image Generation
+        return `🎨 Image & Video Generation
 
-Create images with FLUX.2 models — from quick drafts to high-quality renders.
+Create images with FLUX.2 and videos with Wan/Seedance.
 
-Usage: /img <prompt>
+Images — Usage: /img <prompt>
 Example: /img a cat astronaut floating in space
 
-Models (pick by quality):
 /img fluxklein — Fast draft ($0.014/MP)
 /img fluxpro — Default, great quality ($0.05/MP)
 /img fluxflex — Best for text in images ($0.06/MP)
-/img fluxmax — Highest quality ($0.07/MP)`;
+/img fluxmax — Highest quality ($0.07/MP)
+
+Videos — Usage: /video <prompt>
+Example: /video drone shot over a neon city at night
+
+/video wan27 — Alibaba Wan 2.7 (default, $0.20/s)
+/video seedance2 — ByteDance Seedance 2.0 ($0.25/s, cinematic)`;
 
       case 'tools':
         return `🔧 Tools & Live Data
@@ -6230,6 +6298,7 @@ Each /orch next picks up where the last one left off.`;
       orchset: '🔒 Usage: /orch set <owner/repo>\n\nExample:\n/orch set PetrAnto/myapp',
       orchinit: '📋 Usage: /orch init <project description>\n\nExample:\n/orch init Build a user auth system with JWT and OAuth',
       img: '🎨 Usage: /img <prompt>\n\nExamples:\n/img a cat astronaut floating in space\n/img fluxmax a photorealistic mountain landscape at sunset',
+      video: '🎬 Usage: /video <prompt>\n\nExamples:\n/video a cat astronaut floating in space\n/video seedance2 drone shot over a neon city at night',
       cfsearch: '🔍 Usage: /cf search <query>\n\nExamples:\n/cf search workers\n/cf search dns records',
       curate: '📦 Usage: /curate <model-id> <alias>\n\nFetch model from OpenRouter and register with clean alias.\n\nExamples:\n/curate qwen/qwen3.5-397b-a17b qwen35\n/curate google/gemini-3.1-flash-lite-preview flashlite',
     };
@@ -6301,6 +6370,7 @@ Each /orch next picks up where the last one left off.`;
         return [
           [
             { text: '🎨 /img', callback_data: 'start:hint:img' },
+            { text: '🎬 /video', callback_data: 'start:hint:video' },
           ],
           back,
         ];
@@ -6375,6 +6445,11 @@ Quick switch: /deep /grok /sonnet /flash /opus etc.
 /img <prompt> — Generate (default: FLUX.2 Pro)
 /img fluxmax <prompt> — Pick model
 Available: fluxklein, fluxpro, fluxflex, fluxmax
+
+━━━ Video Generation ━━━
+/video <prompt> — Generate (default: Wan 2.7)
+/video seedance2 <prompt> — Pick model
+Available: wan27 (Alibaba Wan 2.7), seedance2 (ByteDance Seedance 2.0)
 
 ━━━ Checkpoints ━━━
 /saves — List saved slots

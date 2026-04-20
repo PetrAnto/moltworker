@@ -60,7 +60,7 @@ export class CapturingBot extends TelegramBot {
     return this.makeFakeMessage(chatId, text);
   }
 
-  override async sendChatAction(chatId: number, action: 'typing' | 'upload_photo' = 'typing'): Promise<void> {
+  override async sendChatAction(chatId: number, action: 'typing' | 'upload_photo' | 'upload_video' = 'typing'): Promise<void> {
     this.captured.push({ type: 'action', chatId, action });
   }
 
