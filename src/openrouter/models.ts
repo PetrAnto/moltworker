@@ -1269,6 +1269,7 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     reasoning: 'configurable',
     maxContext: 262144,
+    fixedTemperature: 1, // Moonshot API rejects anything else: "only 1 is allowed for this model"
   },
 };
 
