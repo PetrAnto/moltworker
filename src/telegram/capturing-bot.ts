@@ -9,13 +9,14 @@ import type { TelegramMessage, TelegramFile, InlineKeyboardButton } from './hand
 
 /** A single captured output from the bot */
 export interface CapturedMessage {
-  type: 'text' | 'text_with_buttons' | 'photo' | 'edit' | 'edit_with_buttons' | 'delete' | 'action' | 'callback_answer';
+  type: 'text' | 'text_with_buttons' | 'photo' | 'video' | 'edit' | 'edit_with_buttons' | 'delete' | 'action' | 'callback_answer';
   chatId: number;
   text?: string;
   parseMode?: string;
   buttons?: InlineKeyboardButton[][];
   messageId?: number;
   photoUrl?: string;
+  videoUrl?: string;
   caption?: string;
   action?: string;
 }
@@ -66,6 +67,11 @@ export class CapturingBot extends TelegramBot {
 
   override async sendPhoto(chatId: number, photoUrl: string, caption?: string): Promise<void> {
     this.captured.push({ type: 'photo', chatId, photoUrl, caption });
+  }
+
+  override async sendVideo(chatId: number, videoUrl: string, caption?: string): Promise<{ ok: boolean; description?: string }> {
+    this.captured.push({ type: 'video', chatId, videoUrl, caption });
+    return { ok: true };
   }
 
   override async sendPhotoBase64(chatId: number, _base64Data: string, caption?: string): Promise<void> {

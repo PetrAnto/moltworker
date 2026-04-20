@@ -254,6 +254,28 @@ export class TelegramBot {
   }
 
   /**
+   * Send a video from a URL. Returns { ok, description }: `ok: false` means
+   * Telegram rejected the URL (e.g. file too large, URL not reachable, short-
+   * lived signed URL expired). `description` carries Telegram's error text
+   * when available so the caller can log it before falling back to sending
+   * the URL as plain text.
+   */
+  async sendVideo(chatId: number, videoUrl: string, caption?: string): Promise<{ ok: boolean; description?: string }> {
+    const response = await fetch(`${this.baseUrl}/sendVideo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        video: videoUrl,
+        caption,
+      }),
+    });
+
+    const result = await response.json() as { ok: boolean; description?: string };
+    return { ok: !!result.ok, description: result.description };
+  }
+
+  /**
    * Send a photo from base64 data
    */
   async sendPhotoBase64(chatId: number, base64Data: string, caption?: string): Promise<void> {
@@ -1951,10 +1973,21 @@ export class TelegramHandler {
       const videoUrl = result.data[0]?.url;
       const caption = modelAlias ? `[${modelAlias}] ${prompt}` : prompt;
 
-      if (videoUrl) {
-        await this.bot.sendMessage(chatId, `${caption}\n\n${videoUrl}`);
-      } else {
+      if (!videoUrl) {
         await this.bot.sendMessage(chatId, 'No video was generated. Try a different prompt.');
+        return;
+      }
+
+      // Prefer inline playable video; fall back to link if Telegram rejects
+      // the URL (common for very large files or short-lived signed URLs).
+      const sent = await this.bot.sendVideo(chatId, videoUrl, caption);
+      if (!sent.ok) {
+        // Log only the hostname — video URLs are typically signed/tokenized
+        // and full URLs in retained logs would leak credentials.
+        let host = 'unknown';
+        try { host = new URL(videoUrl).hostname; } catch { /* malformed URL */ }
+        console.warn(`[VideoCommand] Telegram sendVideo rejected host=${host}: ${sent.description ?? 'no description'}`);
+        await this.bot.sendMessage(chatId, `${caption}\n\n${videoUrl}`);
       }
     } catch (error) {
       await this.bot.sendMessage(chatId, `Video generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2693,7 +2726,7 @@ export class TelegramHandler {
       const events = await getRecentOrchestraEvents(this.r2Bucket, 3, modelAlias, 50);
       hasProvenHistory = events.some(ev => ev.eventType === 'task_complete');
     }
-    if (modelInfo.orchestraReady !== true && !modelInfo.isImageGen && !skipModelGuard && !hasProvenHistory) {
+    if (modelInfo.orchestraReady !== true && !modelInfo.isImageGen && !modelInfo.isVideoGen && !skipModelGuard && !hasProvenHistory) {
       const recs = getOrchestraRecommendations();
       const betterModels = [...recs.free.slice(0, 2), ...recs.paid.slice(0, 2)];
       const buttons = betterModels.map(r => ({
@@ -4722,7 +4755,7 @@ export class TelegramHandler {
    */
   async sendModelPicker(chatId: number): Promise<void> {
     const all = Object.values(getAllModels());
-    const toolModels = all.filter(m => m.supportsTools && !m.isImageGen);
+    const toolModels = all.filter(m => m.supportsTools && !m.isImageGen && !m.isVideoGen);
 
     // Score models for picker ranking (higher = better pick)
     const scored = toolModels.map(m => {
@@ -4783,7 +4816,7 @@ export class TelegramHandler {
     buttons.push(...toRows(valueTop, '🏆'));
     buttons.push(...toRows(premiumTop, '💎'));
 
-    const totalCount = all.filter(m => !m.isImageGen).length;
+    const totalCount = all.filter(m => !m.isImageGen && !m.isVideoGen).length;
     await this.bot.sendMessageWithButtons(
       chatId,
       `🤖 Top models (${totalCount} available):\n🆓 = free  🏆 = best value  💎 = premium\n🔧 = tools  👁️ = vision\n\nTip: /use <alias> for any model\nFull list: /models`,
@@ -4827,7 +4860,7 @@ export class TelegramHandler {
    */
   private detectReplacements(newModels: SyncModelCandidate[], currentModels: Record<string, ModelInfo>): SyncReplacement[] {
     const replacements: SyncReplacement[] = [];
-    const existingFree = Object.values(currentModels).filter(m => m.isFree && !m.isImageGen);
+    const existingFree = Object.values(currentModels).filter(m => m.isFree && !m.isImageGen && !m.isVideoGen);
 
     for (const newModel of newModels) {
       const newCat = newModel.category || 'general';
@@ -4869,7 +4902,7 @@ export class TelegramHandler {
    */
   private buildSyncMessage(session: SyncSession): string {
     const currentModels = getAllModels();
-    const catalogCount = Object.values(currentModels).filter(m => m.isFree && !m.isImageGen).length;
+    const catalogCount = Object.values(currentModels).filter(m => m.isFree && !m.isImageGen && !m.isVideoGen).length;
 
     const categoryLabels: Record<string, string> = {
       coding: '💻 Coding & Agents',
@@ -5083,7 +5116,7 @@ export class TelegramHandler {
       const freeApiIds = new Set(freeApiModels.map(m => m.id));
       const staleModels: SyncModelCandidate[] = [];
       for (const m of Object.values(currentModels)) {
-        if (!m.isFree || m.isImageGen || m.alias === 'auto') continue;
+        if (!m.isFree || m.isImageGen || m.isVideoGen || m.alias === 'auto') continue;
         if (!freeApiIds.has(m.id)) {
           staleModels.push({
             alias: m.alias,

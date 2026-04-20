@@ -66,9 +66,9 @@ export async function runSyncCheck(apiKey: string): Promise<SyncCheckResult> {
     const curatedIds = new Set<string>();
 
     for (const [alias, model] of Object.entries(MODELS)) {
-      // Skip direct API models and image gen — they don't go through OpenRouter
+      // Skip direct API models and media-gen (image/video) — they don't go through the chat model sync
       if (model.provider && model.provider !== 'openrouter') continue;
-      if (model.isImageGen) continue;
+      if (model.isImageGen || model.isVideoGen) continue;
       // Skip auto-routing
       if (model.id === 'openrouter/auto') continue;
 
