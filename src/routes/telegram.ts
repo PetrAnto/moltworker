@@ -134,6 +134,7 @@ telegram.get('/setup', async (c) => {
     { command: 'models', description: 'All models with prices' },
     { command: 'new', description: 'Clear conversation' },
     { command: 'img', description: 'Generate an image' },
+    { command: 'video', description: 'Generate a video (Wan 2.7 / Seedance 2.0)' },
     { command: 'briefing', description: 'Daily briefing (weather+news)' },
     { command: 'costs', description: 'Token usage summary' },
     { command: 'status', description: 'Bot status & info' },

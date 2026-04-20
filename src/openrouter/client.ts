@@ -3,7 +3,7 @@
  * Direct integration with OpenRouter API using OpenAI-compatible format
  */
 
-import { getModelId, isImageGenModel, DEFAULT_IMAGE_MODEL, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isAnthropicModel, isReasoningMandatoryError, type ReasoningLevel, type ReasoningParam } from './models';
+import { getModelId, isImageGenModel, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isAnthropicModel, isReasoningMandatoryError, type ReasoningLevel, type ReasoningParam } from './models';
 import { AVAILABLE_TOOLS, executeTool, type ToolDefinition, type ToolCall, type ToolResult, type ToolContext } from './tools';
 import { injectCacheControl } from './prompt-cache';
 
@@ -329,6 +329,15 @@ export interface ImageGenerationResponse {
   data: Array<{
     url?: string;
     b64_json?: string;
+  }>;
+}
+
+export interface VideoGenerationResponse {
+  created: number;
+  data: Array<{
+    url?: string;
+    b64_json?: string;
+    mime_type?: string;
   }>;
 }
 
@@ -721,6 +730,68 @@ export class OpenRouterClient {
     return {
       created: Date.now(),
       data: images.map(img => ({ url: img.image_url.url })),
+    };
+  }
+
+  /**
+   * Generate a video using Wan / Seedance or other video models via OpenRouter.
+   * Uses chat/completions with modalities: ['video'].
+   */
+  async generateVideo(
+    prompt: string,
+    modelAlias?: string
+  ): Promise<VideoGenerationResponse> {
+    const alias = modelAlias || DEFAULT_VIDEO_MODEL;
+    const modelId = getModelId(alias);
+
+    const request = {
+      model: modelId,
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      modalities: ['video'],
+      transforms: [] as string[],
+      plugins: [] as unknown[],
+    };
+
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage: string;
+      try {
+        const error = JSON.parse(errorText) as OpenRouterError;
+        errorMessage = error.error?.message || response.statusText;
+      } catch {
+        errorMessage = errorText || response.statusText;
+      }
+      throw new Error(`Video generation error: ${errorMessage}`);
+    }
+
+    const result = await response.json() as {
+      choices: Array<{
+        message: {
+          content?: string;
+          videos?: Array<{
+            video_url: { url: string };
+            mime_type?: string;
+          }>;
+        };
+      }>;
+    };
+
+    const videos = result.choices[0]?.message?.videos || [];
+
+    return {
+      created: Date.now(),
+      data: videos.map(v => ({ url: v.video_url.url, mime_type: v.mime_type })),
     };
   }
 
