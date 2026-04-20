@@ -69,9 +69,9 @@ export class CapturingBot extends TelegramBot {
     this.captured.push({ type: 'photo', chatId, photoUrl, caption });
   }
 
-  override async sendVideo(chatId: number, videoUrl: string, caption?: string): Promise<boolean> {
+  override async sendVideo(chatId: number, videoUrl: string, caption?: string): Promise<{ ok: boolean; description?: string }> {
     this.captured.push({ type: 'video', chatId, videoUrl, caption });
-    return true;
+    return { ok: true };
   }
 
   override async sendPhotoBase64(chatId: number, _base64Data: string, caption?: string): Promise<void> {

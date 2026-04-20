@@ -77,8 +77,8 @@ export function computeOrchestraReady(
   // Must support tools
   if (!model.supportsTools) return false;
 
-  // Image gen models are never orchestra-ready
-  if (model.isImageGen) return false;
+  // Media gen models (image/video) are never orchestra-ready
+  if (model.isImageGen || model.isVideoGen) return false;
 
   // Codex models support tools in metadata but don't use them in practice
   // (they output code/plans as text instead of making function calls)
@@ -162,7 +162,7 @@ export async function runEnrichment(
     for (const [alias, model] of Object.entries(allModels)) {
       // Skip special models
       if (model.id === 'openrouter/auto') continue;
-      if (model.isImageGen) continue;
+      if (model.isImageGen || model.isVideoGen) continue;
 
       const patch: Partial<ModelInfo> = {};
 
