@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { parseSSEStream } from './client';
+import { parseSSEStream, parseVideoResponse } from './client';
 import type { ToolCall } from './tools';
 
 // ─── Helper: build a ReadableStream from SSE text ───────────────────────────
@@ -302,5 +302,99 @@ describe('parseSSEStream onToolCallReady', () => {
     });
 
     expect(firedIds).toEqual(['call_a', 'call_b', 'call_c']);
+  });
+});
+
+// ─── parseVideoResponse ─────────────────────────────────────────────────────
+
+describe('parseVideoResponse', () => {
+  it('parses canonical message.videos[].video_url.url shape (Wan/Seedance)', () => {
+    const raw = {
+      choices: [{
+        message: {
+          videos: [{ video_url: { url: 'https://cdn.example/a.mp4' }, mime_type: 'video/mp4' }],
+        },
+      }],
+    };
+    expect(parseVideoResponse(raw)).toEqual([
+      { url: 'https://cdn.example/a.mp4', mime_type: 'video/mp4' },
+    ]);
+  });
+
+  it('parses message.videos[].url (alternate OpenRouter shape)', () => {
+    const raw = {
+      choices: [{
+        message: {
+          videos: [{ url: 'https://cdn.example/b.mp4' }],
+        },
+      }],
+    };
+    expect(parseVideoResponse(raw)).toEqual([{ url: 'https://cdn.example/b.mp4' }]);
+  });
+
+  it('parses message.videos[].asset_url (provider-specific shape)', () => {
+    const raw = {
+      choices: [{
+        message: {
+          videos: [{ asset_url: 'https://cdn.example/c.mp4' }],
+        },
+      }],
+    };
+    expect(parseVideoResponse(raw)).toEqual([{ url: 'https://cdn.example/c.mp4' }]);
+  });
+
+  it('parses message.content[] parts with type=output_video', () => {
+    const raw = {
+      choices: [{
+        message: {
+          content: [
+            { type: 'text', text: 'here is your video' },
+            { type: 'output_video', video_url: { url: 'https://cdn.example/d.mp4' } },
+          ],
+        },
+      }],
+    };
+    expect(parseVideoResponse(raw)).toEqual([{ url: 'https://cdn.example/d.mp4' }]);
+  });
+
+  it('parses message.content[] parts with type=video and direct url', () => {
+    const raw = {
+      choices: [{
+        message: {
+          content: [{ type: 'video', url: 'https://cdn.example/e.webm', mime_type: 'video/webm' }],
+        },
+      }],
+    };
+    expect(parseVideoResponse(raw)).toEqual([
+      { url: 'https://cdn.example/e.webm', mime_type: 'video/webm' },
+    ]);
+  });
+
+  it('falls back to extracting a URL from content string', () => {
+    const raw = {
+      choices: [{
+        message: { content: 'Generated: https://cdn.example/f.mp4?sig=abc now ready' },
+      }],
+    };
+    expect(parseVideoResponse(raw)).toEqual([{ url: 'https://cdn.example/f.mp4?sig=abc' }]);
+  });
+
+  it('returns [] on unknown shapes', () => {
+    expect(parseVideoResponse({ choices: [{ message: { content: 'no url here' } }] })).toEqual([]);
+    expect(parseVideoResponse({ choices: [{ message: {} }] })).toEqual([]);
+    expect(parseVideoResponse({})).toEqual([]);
+    expect(parseVideoResponse(null)).toEqual([]);
+    expect(parseVideoResponse(undefined)).toEqual([]);
+  });
+
+  it('skips video entries without a resolvable url', () => {
+    const raw = {
+      choices: [{
+        message: {
+          videos: [{ mime_type: 'video/mp4' }, { url: 'https://cdn.example/g.mp4' }],
+        },
+      }],
+    };
+    expect(parseVideoResponse(raw)).toEqual([{ url: 'https://cdn.example/g.mp4' }]);
   });
 });

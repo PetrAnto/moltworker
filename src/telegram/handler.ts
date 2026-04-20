@@ -254,6 +254,26 @@ export class TelegramBot {
   }
 
   /**
+   * Send a video from a URL. Returns true on success, false on API-level rejection
+   * (e.g. file too large, URL not reachable from Telegram). Caller should fall
+   * back to a plain-text message with the URL in that case.
+   */
+  async sendVideo(chatId: number, videoUrl: string, caption?: string): Promise<boolean> {
+    const response = await fetch(`${this.baseUrl}/sendVideo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        video: videoUrl,
+        caption,
+      }),
+    });
+
+    const result = await response.json() as { ok: boolean; description?: string };
+    return !!result.ok;
+  }
+
+  /**
    * Send a photo from base64 data
    */
   async sendPhotoBase64(chatId: number, base64Data: string, caption?: string): Promise<void> {
@@ -1951,10 +1971,16 @@ export class TelegramHandler {
       const videoUrl = result.data[0]?.url;
       const caption = modelAlias ? `[${modelAlias}] ${prompt}` : prompt;
 
-      if (videoUrl) {
-        await this.bot.sendMessage(chatId, `${caption}\n\n${videoUrl}`);
-      } else {
+      if (!videoUrl) {
         await this.bot.sendMessage(chatId, 'No video was generated. Try a different prompt.');
+        return;
+      }
+
+      // Prefer inline playable video; fall back to link if Telegram rejects
+      // the URL (common for very large files or short-lived signed URLs).
+      const sent = await this.bot.sendVideo(chatId, videoUrl, caption);
+      if (!sent) {
+        await this.bot.sendMessage(chatId, `${caption}\n\n${videoUrl}`);
       }
     } catch (error) {
       await this.bot.sendMessage(chatId, `Video generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);

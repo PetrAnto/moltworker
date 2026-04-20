@@ -3,7 +3,7 @@
  * Direct integration with OpenRouter API using OpenAI-compatible format
  */
 
-import { getModelId, isImageGenModel, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isAnthropicModel, isReasoningMandatoryError, type ReasoningLevel, type ReasoningParam } from './models';
+import { getModelId, isImageGenModel, isVideoGenModel, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isAnthropicModel, isReasoningMandatoryError, type ReasoningLevel, type ReasoningParam } from './models';
 import { AVAILABLE_TOOLS, executeTool, type ToolDefinition, type ToolCall, type ToolResult, type ToolContext } from './tools';
 import { injectCacheControl } from './prompt-cache';
 
@@ -333,7 +333,7 @@ export interface ImageGenerationResponse {
 }
 
 export interface VideoGenerationResponse {
-  created: number;
+  createdMs: number;
   data: Array<{
     url?: string;
     b64_json?: string;
@@ -347,6 +347,66 @@ export interface OpenRouterError {
     type: string;
     code?: string;
   };
+}
+
+/**
+ * Parse a video-generation response into a list of { url, mime_type } entries.
+ * Exported for tests. Accepts multiple provider shapes:
+ *   - choices[0].message.videos[].video_url.url  (canonical OpenRouter shape)
+ *   - choices[0].message.videos[].url
+ *   - choices[0].message.videos[].asset_url
+ *   - choices[0].message.content parts with type "output_video" | "video"
+ *   - choices[0].message.content as a plain URL string
+ * Unknown shapes return [].
+ */
+export function parseVideoResponse(raw: unknown): Array<{ url: string; mime_type?: string }> {
+  const result = (raw ?? {}) as {
+    choices?: Array<{
+      message?: {
+        content?: unknown;
+        videos?: unknown;
+      };
+    }>;
+  };
+  const msg = result.choices?.[0]?.message;
+  if (!msg) return [];
+
+  const out: Array<{ url: string; mime_type?: string }> = [];
+
+  // Shape 1: message.videos[] with various URL field names
+  if (Array.isArray(msg.videos)) {
+    for (const v of msg.videos as Array<Record<string, unknown>>) {
+      const videoUrl = v?.video_url as { url?: unknown } | undefined;
+      const url =
+        (typeof videoUrl?.url === 'string' ? videoUrl.url : undefined) ??
+        (typeof v?.url === 'string' ? (v.url as string) : undefined) ??
+        (typeof v?.asset_url === 'string' ? (v.asset_url as string) : undefined);
+      const mime = typeof v?.mime_type === 'string' ? (v.mime_type as string) : undefined;
+      if (url) out.push(mime ? { url, mime_type: mime } : { url });
+    }
+  }
+
+  // Shape 2: message.content is an array of parts
+  if (out.length === 0 && Array.isArray(msg.content)) {
+    for (const part of msg.content as Array<Record<string, unknown>>) {
+      if (part?.type === 'output_video' || part?.type === 'video') {
+        const videoUrl = part?.video_url as { url?: unknown } | undefined;
+        const url =
+          (typeof videoUrl?.url === 'string' ? videoUrl.url : undefined) ??
+          (typeof part?.url === 'string' ? (part.url as string) : undefined);
+        const mime = typeof part?.mime_type === 'string' ? (part.mime_type as string) : undefined;
+        if (url) out.push(mime ? { url, mime_type: mime } : { url });
+      }
+    }
+  }
+
+  // Shape 3: message.content is a plain URL string (last-ditch fallback)
+  if (out.length === 0 && typeof msg.content === 'string') {
+    const match = msg.content.match(/https?:\/\/\S+\.(?:mp4|mov|webm|m4v)\S*/i);
+    if (match) out.push({ url: match[0] });
+  }
+
+  return out;
 }
 
 /**
@@ -736,12 +796,24 @@ export class OpenRouterClient {
   /**
    * Generate a video using Wan / Seedance or other video models via OpenRouter.
    * Uses chat/completions with modalities: ['video'].
+   *
+   * Response parsing is intentionally permissive because different providers
+   * (Alibaba Wan, ByteDance Seedance) may return slightly different shapes:
+   *   - message.videos[].video_url.url (canonical)
+   *   - message.videos[].url
+   *   - message.content[] parts with type "output_video" | "video"
+   * If the response is 200 OK but contains no recognizable video URL, we
+   * throw an error surfacing a raw fragment so callers can report usefully
+   * instead of silently showing "no video generated".
    */
   async generateVideo(
     prompt: string,
     modelAlias?: string
   ): Promise<VideoGenerationResponse> {
     const alias = modelAlias || DEFAULT_VIDEO_MODEL;
+    if (!isVideoGenModel(alias)) {
+      throw new Error(`Model /${alias} does not support video generation`);
+    }
     const modelId = getModelId(alias);
 
     const request = {
@@ -775,23 +847,19 @@ export class OpenRouterClient {
       throw new Error(`Video generation error: ${errorMessage}`);
     }
 
-    const result = await response.json() as {
-      choices: Array<{
-        message: {
-          content?: string;
-          videos?: Array<{
-            video_url: { url: string };
-            mime_type?: string;
-          }>;
-        };
-      }>;
-    };
+    const raw = await response.json() as unknown;
+    const videos = parseVideoResponse(raw);
 
-    const videos = result.choices[0]?.message?.videos || [];
+    if (videos.length === 0) {
+      // 200 OK but no recognizable video in the payload — surface a small
+      // fragment of the raw response so the caller can log/report it.
+      const preview = JSON.stringify(raw).slice(0, 200);
+      throw new Error(`Video generation returned no video payload. Raw fragment: ${preview}`);
+    }
 
     return {
-      created: Date.now(),
-      data: videos.map(v => ({ url: v.video_url.url, mime_type: v.mime_type })),
+      createdMs: Date.now(),
+      data: videos,
     };
   }
 
