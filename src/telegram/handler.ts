@@ -1982,7 +1982,11 @@ export class TelegramHandler {
       // the URL (common for very large files or short-lived signed URLs).
       const sent = await this.bot.sendVideo(chatId, videoUrl, caption);
       if (!sent.ok) {
-        console.warn(`[VideoCommand] Telegram sendVideo rejected url=${videoUrl}: ${sent.description ?? 'no description'}`);
+        // Log only the hostname — video URLs are typically signed/tokenized
+        // and full URLs in retained logs would leak credentials.
+        let host = 'unknown';
+        try { host = new URL(videoUrl).hostname; } catch { /* malformed URL */ }
+        console.warn(`[VideoCommand] Telegram sendVideo rejected host=${host}: ${sent.description ?? 'no description'}`);
         await this.bot.sendMessage(chatId, `${caption}\n\n${videoUrl}`);
       }
     } catch (error) {
