@@ -1253,6 +1253,23 @@ export const MODELS: Record<string, ModelInfo> = {
     reasoning: 'mandatory',
     maxContext: 262144,
   },
+
+  // --- Moonshot Direct: Kimi K2.6 (latest flagship) ---
+  kimi26: {
+    id: 'kimi-k2.6',
+    alias: 'kimi26',
+    name: 'Kimi K2.6 (Direct)',
+    specialty: 'Direct Moonshot — Flagship Agentic/Coding/Multimodal',
+    score: '1T MoE (32B active) + 400M vision, 256K ctx, #1 SWE-Bench Pro, Thinking+Instant modes, cache hits $0.16/M',
+    cost: '$0.95/$4.00',
+    supportsTools: true,
+    supportsVision: true,
+    provider: 'moonshot',
+    parallelCalls: true,
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 262144,
+  },
 };
 
 // === DYNAMIC MODELS (synced from OpenRouter at runtime) ===
