@@ -414,6 +414,10 @@ export interface TaskRequest {
   // Review draft: same plumbing as isDraftInit, but label/branch/PR distinguish
   // a revision of an existing roadmap from a fresh init. Set by /orch review.
   isReviewDraft?: boolean;
+  // Review-mode parameters carried through to the stored draft so Revise
+  // rounds can rehydrate the original --import + user focus intent.
+  reviewImportMode?: boolean;
+  reviewUserFocus?: string;
 }
 
 /**
@@ -5431,6 +5435,9 @@ If you already created the new file and just need to patch the original, call gi
                 status: 'draft',
                 baseSha,
                 mode: isReviewDraft ? 'review' : 'init',
+                // Preserve review intent for future Revise rounds.
+                reviewImportMode: isReviewDraft ? request.reviewImportMode : undefined,
+                reviewUserFocus: isReviewDraft ? request.reviewUserFocus : undefined,
               });
 
               const elapsed = Math.round((Date.now() - task.startTime) / 1000);

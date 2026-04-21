@@ -33,6 +33,7 @@ import {
   buildExecutionProfile,
   buildDraftInitPrompt,
   buildReviewPrompt,
+  buildReviewEntryPrompt,
   parseDraftBlocks,
   formatDraftPreview,
   getPlannerRecommendation,
@@ -3632,6 +3633,47 @@ describe('hasActiveReviewGate', () => {
   });
 });
 
+describe('buildReviewEntryPrompt', () => {
+  it('returns bare __REVIEW__ for auto-triggered review with no params', () => {
+    expect(buildReviewEntryPrompt({})).toBe('__REVIEW__');
+  });
+
+  it('preserves --import flag', () => {
+    expect(buildReviewEntryPrompt({ importMode: true })).toBe('__REVIEW__--import');
+  });
+
+  it('preserves user focus', () => {
+    expect(buildReviewEntryPrompt({ userFocus: 'focus on auth' }))
+      .toBe('__REVIEW__focus on auth');
+  });
+
+  it('combines --import with user focus', () => {
+    expect(buildReviewEntryPrompt({ importMode: true, userFocus: 'phase 3' }))
+      .toBe('__REVIEW__--import phase 3');
+  });
+
+  it('output is byte-identical to handler-side manual construction', () => {
+    // Guard against the helper drifting from the inline prompt-construction
+    // logic the /orch review handler used to use. Revise rounds now call
+    // this helper to rehydrate; if the entry and rehydration paths drift,
+    // review intent would silently change.
+    const manual = `__REVIEW__${true ? '--import ' : ''}my focus`.trim();
+    const helper = buildReviewEntryPrompt({ importMode: true, userFocus: 'my focus' });
+    expect(helper).toBe(manual);
+  });
+
+  it('round-trips --import through executeOrchestra parsing logic', () => {
+    // Same regex the handler uses to extract flags. Ensures what we build
+    // survives what we parse, even after --import+focus rehydration on Revise.
+    const rebuilt = buildReviewEntryPrompt({ importMode: true, userFocus: 'check phase 3' });
+    const payload = rebuilt.slice('__REVIEW__'.length).trim();
+    const importMode = /(^|\s)--import\b/.test(payload);
+    const userFocus = payload.replace(/(^|\s)--import\b/g, ' ').replace(/\s+/g, ' ').trim();
+    expect(importMode).toBe(true);
+    expect(userFocus).toBe('check phase 3');
+  });
+});
+
 describe('countRecentRiskEscalations', () => {
   const mkEvent = (overrides: Partial<OrchestraEvent>): OrchestraEvent => ({
     timestamp: 0,
@@ -3886,6 +3928,72 @@ describe('commitDraftRoadmap', () => {
       userId: '42',
     });
     expect(prUrl).toBe('https://github.com/pr/1');
+
+    globalThis.fetch = originalFetch;
+  });
+
+  it('review drafts store mode: review in orchestra history', async () => {
+    // Regression guard: commitDraftRoadmap used to hard-code mode: 'init'
+    // in the history entry even when draft.mode === 'review'. The /orch
+    // history list and downstream model-stats aggregation would then
+    // mislabel review PRs as init roadmaps.
+    const originalFetch = globalThis.fetch;
+    let capturedTaskJson: string | null = null;
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ default_branch: 'main' }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ html_url: 'https://github.com/pr/review-1' }),
+      } as Response);
+    globalThis.fetch = mockFetch;
+
+    const draft: OrchestraDraft = {
+      repo: 'owner/repo',
+      chatId: 123,
+      modelAlias: 'claude',
+      userPrompt: 'Review my roadmap',
+      roadmapContent: '# Revised Roadmap\n- [x] Done\n- [ ] Next',
+      workLogContent: '# Log',
+      revisions: [],
+      revisionCount: 0,
+      status: 'draft',
+      mode: 'review',
+    };
+
+    const mockR2 = {
+      get: vi.fn().mockResolvedValue(null),
+      put: vi.fn((key: string, value: string) => {
+        if (key.endsWith('history.json')) capturedTaskJson = value;
+        return Promise.resolve();
+      }),
+    } as unknown as R2Bucket;
+
+    await commitDraftRoadmap({
+      githubToken: 'test-token',
+      draft,
+      userId: '42',
+      r2: mockR2,
+    });
+
+    expect(capturedTaskJson).not.toBeNull();
+    const parsed = JSON.parse(capturedTaskJson!) as { tasks: OrchestraTask[] };
+    expect(parsed.tasks.length).toBeGreaterThan(0);
+    const lastTask = parsed.tasks[parsed.tasks.length - 1];
+    expect(lastTask.mode).toBe('review');
+    expect(lastTask.summary).toContain('review');
+
+    // Also verify the PR creation call used the review-specific title.
+    const prCall = mockFetch.mock.calls.find(c =>
+      typeof c[1]?.body === 'string' && c[1].body.includes('"title"'),
+    );
+    expect(prCall).toBeDefined();
+    expect(prCall![1].body).toContain('revise project roadmap');
 
     globalThis.fetch = originalFetch;
   });
