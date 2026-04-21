@@ -3816,6 +3816,88 @@ describe('parseDraftBlocks (defensive)', () => {
 // --- commitDraftRoadmap freshness check ---
 
 describe('commitDraftRoadmap', () => {
+  it('falls back to user locked repo when draft.repo is empty', async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ default_branch: 'main' }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ object: { sha: 'sha' } }) } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ html_url: 'https://github.com/pr/recover-1' }),
+      } as Response);
+    globalThis.fetch = mockFetch;
+
+    const draft: OrchestraDraft = {
+      repo: '',
+      chatId: 123,
+      modelAlias: 'kimi26',
+      userPrompt: 'test',
+      roadmapContent: '# Roadmap',
+      workLogContent: '',
+      revisions: [],
+      revisionCount: 0,
+      status: 'draft',
+    };
+
+    const mockR2 = {
+      get: vi.fn((key: string) => {
+        if (key === 'telegram-users/42/preferences.json') {
+          return Promise.resolve({
+            json: () => Promise.resolve({
+              userId: '42',
+              model: 'kimi26',
+              orchestraRepo: 'owner/recovered-repo',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            }),
+          });
+        }
+        return Promise.resolve(null);
+      }),
+      put: vi.fn().mockResolvedValue(undefined),
+    } as unknown as R2Bucket;
+
+    const prUrl = await commitDraftRoadmap({
+      githubToken: 'test-token',
+      draft,
+      userId: '42',
+      r2: mockR2,
+    });
+    expect(prUrl).toBe('https://github.com/pr/recover-1');
+    expect(mockFetch.mock.calls[0][0]).toContain('/repos/owner/recovered-repo');
+
+    globalThis.fetch = originalFetch;
+  });
+
+  it('still throws Invalid repo format when draft.repo empty AND no locked repo', async () => {
+    const draft: OrchestraDraft = {
+      repo: '',
+      chatId: 123,
+      modelAlias: 'kimi26',
+      userPrompt: 'test',
+      roadmapContent: '# Roadmap',
+      workLogContent: '',
+      revisions: [],
+      revisionCount: 0,
+      status: 'draft',
+    };
+
+    const mockR2 = {
+      get: vi.fn().mockResolvedValue(null),
+      put: vi.fn().mockResolvedValue(undefined),
+    } as unknown as R2Bucket;
+
+    await expect(commitDraftRoadmap({
+      githubToken: 'test-token',
+      draft,
+      userId: '42',
+      r2: mockR2,
+    })).rejects.toThrow('Invalid repo format');
+  });
+
   it('rejects approval when baseSha has drifted', async () => {
     // Mock fetch to simulate repo with a different current SHA
     const originalFetch = globalThis.fetch;

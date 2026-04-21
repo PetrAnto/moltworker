@@ -3632,6 +3632,112 @@ export class TelegramHandler {
   }
 
   /**
+   * Pull the stored task state from the DO for a given user and return
+   * orchestra-resume context if the task was an orchestra flow. Returns
+   * null when the last task wasn't orchestra or no task is stored.
+   *
+   * Used by /resume, the resume: button callback, and the "continue"
+   * keyword to route orchestra tasks back through the orchestra pipeline
+   * instead of rebuilding a generic chat TaskRequest (which loses
+   * isDraftInit/isReviewDraft/reviewImportMode/reviewUserFocus/
+   * orchestraRepo/executionProfile).
+   */
+  private async getOrchestraResumeContext(userId: string): Promise<{
+    mode: 'init' | 'run' | 'redo' | 'do' | 'draft';
+    repo: string;
+    prompt: string;
+    isReview: boolean;
+    reviewImportMode?: boolean;
+    reviewUserFocus?: string;
+  } | null> {
+    if (!this.taskProcessor) return null;
+    try {
+      const doId = this.taskProcessor.idFromName(userId);
+      const doStub = this.taskProcessor.get(doId);
+      const resp = await fetchDOWithRetry(doStub, new Request('https://do/status', { method: 'GET' }));
+      if (!resp.ok) return null;
+      const task = await resp.json() as {
+        status?: string;
+        isOrchestraTask?: boolean;
+        isDraftInit?: boolean;
+        isReviewDraft?: boolean;
+        reviewImportMode?: boolean;
+        reviewUserFocus?: string;
+        orchestraRepo?: string;
+        prompt?: string;
+      };
+      if (!task.isOrchestraTask || !task.orchestraRepo) return null;
+
+      // Recover the raw user prompt. task.prompt is the wrapped display
+      // string "[Orchestra <Label>] repo: <body>" — we only need the
+      // <body> portion, which was already truncated to 150 chars at
+      // send time.
+      const body = (task.prompt || '').replace(/^\[Orchestra [^\]]+\]\s+[^:]+:\s*/, '').trim();
+
+      if (task.isReviewDraft) {
+        return {
+          mode: 'draft',
+          repo: task.orchestraRepo,
+          prompt: '', // unused — rebuilt below
+          isReview: true,
+          reviewImportMode: task.reviewImportMode,
+          reviewUserFocus: task.reviewUserFocus,
+        };
+      }
+      if (task.isDraftInit) {
+        return { mode: 'draft', repo: task.orchestraRepo, prompt: body, isReview: false };
+      }
+      // Non-draft orchestra task: /orch next or specific task. Cannot
+      // reliably tell run/do/redo apart from status alone, so default
+      // to 'run' — the most common case and the one the user asked for
+      // when they hit Resume.
+      return { mode: 'run', repo: task.orchestraRepo, prompt: body, isReview: false };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Route a resume intent through the orchestra pipeline when the stored
+   * task was an orchestra flow. Returns true when the re-dispatch
+   * happened; callers should early-return. Returns false when the stored
+   * task wasn't orchestra → caller falls through to the generic chat
+   * resume path.
+   */
+  private async tryOrchestraResume(chatId: number, userId: string): Promise<boolean> {
+    const ctx = await this.getOrchestraResumeContext(userId);
+    if (!ctx) return false;
+
+    if (ctx.isReview) {
+      const reviewPrompt = buildReviewEntryPrompt({
+        importMode: ctx.reviewImportMode,
+        userFocus: ctx.reviewUserFocus,
+      });
+      await this.bot.sendMessage(
+        chatId,
+        `🔄 Resuming /orch review on ${ctx.repo}` +
+        (ctx.reviewImportMode ? ' (--import)' : '') +
+        (ctx.reviewUserFocus ? ` · focus: ${ctx.reviewUserFocus}` : '') +
+        '…',
+      );
+      await this.executeOrchestra(chatId, userId, 'draft', ctx.repo, reviewPrompt);
+      return true;
+    }
+    if (ctx.mode === 'draft') {
+      await this.bot.sendMessage(chatId, `🔄 Resuming /orch init on ${ctx.repo}…`);
+      await this.executeOrchestra(chatId, userId, 'draft', ctx.repo, ctx.prompt);
+      return true;
+    }
+    // 'run' — /orch next with whatever task body was stored.
+    await this.bot.sendMessage(
+      chatId,
+      `🔄 Resuming /orch next on ${ctx.repo}${ctx.prompt ? ` · "${ctx.prompt}"` : ''}…`,
+    );
+    await this.executeOrchestra(chatId, userId, 'run', ctx.repo, ctx.prompt);
+    return true;
+  }
+
+  /**
    * Resolve the model to use for resume, with escalation logic.
    * If the last checkpoint was on a weak free model and the task is coding-related,
    * suggest (or auto-switch to) a stronger model.
@@ -3679,6 +3785,11 @@ export class TelegramHandler {
     if (!this.taskProcessor) return;
 
     await this.bot.sendChatAction(chatId, 'typing');
+
+    // Orchestra-aware resume: if the interrupted task was an orchestra
+    // flow, re-dispatch through executeOrchestra instead of rebuilding
+    // a generic chat TaskRequest (see tryOrchestraResume comment).
+    if (await this.tryOrchestraResume(chatId, userId)) return;
 
     // Get the last user message from storage (the original task, not "continue")
     const history = await this.storage.getConversation(userId, 1);
@@ -3741,6 +3852,14 @@ export class TelegramHandler {
     if (!this.taskProcessor) return;
 
     await this.bot.sendChatAction(chatId, 'typing');
+
+    // If the interrupted task was an orchestra flow (init/review/run),
+    // re-dispatch through executeOrchestra so the orchestra system
+    // prompt, planner gate, and review flags survive the resume.
+    // Generic chat TaskRequests drop all of that silently.
+    if (args.length === 0 && await this.tryOrchestraResume(chatId, userId)) {
+      return;
+    }
 
     const history = await this.storage.getConversation(userId, 1);
     const lastUserMessage = history.find(m => m.role === 'user');
@@ -4585,6 +4704,11 @@ export class TelegramHandler {
           if (query.message) {
             await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
           }
+
+          // Orchestra-aware resume: re-dispatch through executeOrchestra
+          // when the interrupted task was /orch init / review / next.
+          // Falls through to generic chat resume for non-orchestra tasks.
+          if (await this.tryOrchestraResume(chatId, userId)) break;
 
           // Get the last user message from storage to resume with
           const history = await this.storage.getConversation(userId, 1);
