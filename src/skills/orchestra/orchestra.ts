@@ -491,6 +491,246 @@ export function formatDraftPreview(roadmapContent: string, maxLength: number = 3
 }
 
 // ============================================================
+// REVIEW MODE — Critique and revise an existing roadmap
+// ============================================================
+
+/**
+ * Regex for the `<!-- review-gate -->` marker that a planner or user can
+ * drop in ROADMAP.md to signal a natural review checkpoint.
+ *
+ * Accepted forms (case-insensitive):
+ *   <!-- review-gate -->
+ *   <!--review-gate-->
+ *   <!-- review-gate: after phase 1 -->
+ *
+ * Matches the marker anywhere on a line.
+ */
+export const REVIEW_GATE_MARKER_PATTERN = /<!--\s*review-gate(?:\s*:\s*[^>]*)?\s*-->/i;
+
+/**
+ * Detect whether a roadmap's next pending task sits *after* a review-gate
+ * marker. The heuristic: find the line index of the last completed task
+ * (`- [x]`) and the line index of the first review-gate marker after it.
+ * If a marker exists and the next pending `- [ ]` is further down still,
+ * the user has crossed a gate and should be offered /orch review.
+ *
+ * Returns true when /orch next should suggest /orch review first.
+ */
+export function hasActiveReviewGate(roadmapContent: string): boolean {
+  const lines = roadmapContent.split('\n');
+  let lastCompletedLine = -1;
+  let firstPendingLine = -1;
+  let gateLine = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Track task state using the same syntax parseRoadmapPhases understands.
+    if (/^[\t ]{0,8}[-*]\s+\[[xX]\]/.test(line) || /^[\t ]{0,8}\d+\.\s+\[[xX]\]/.test(line)) {
+      lastCompletedLine = i;
+    } else if (firstPendingLine === -1 && (/^[\t ]{0,8}[-*]\s+\[\s\]/.test(line) || /^[\t ]{0,8}\d+\.\s+\[\s\]/.test(line))) {
+      firstPendingLine = i;
+    }
+    if (gateLine === -1 && REVIEW_GATE_MARKER_PATTERN.test(line)) {
+      gateLine = i;
+    }
+  }
+
+  // Gate must exist and sit between the last completed task and the next
+  // pending one (i.e. we just crossed it). If there's no pending task, the
+  // gate has no effect — the roadmap is done.
+  if (gateLine === -1 || firstPendingLine === -1) return false;
+  return gateLine > lastCompletedLine && gateLine < firstPendingLine;
+}
+
+/**
+ * Build the system prompt for /orch review.
+ *
+ * Two modes:
+ * - Standard review: execution-aware critique. The model sees the current
+ *   roadmap + work log + recent completed history and proposes edits
+ *   based on what was learned during execution.
+ * - Import mode: the roadmap is assumed to be hand-written or imported
+ *   from another tool. The model tightens vague tasks, verifies file
+ *   hints, and populates missing schema fields aggressively.
+ *
+ * Output flows through the SAME DRAFT_ROADMAP / DRAFT_WORKLOG blocks used
+ * by /orch init, so the existing preview → approve/revise → commit
+ * pipeline applies unchanged.
+ */
+export function buildReviewPrompt(params: {
+  repo: string;
+  modelAlias: string;
+  /** Current ROADMAP.md content — always required. */
+  roadmapContent: string;
+  /** Current WORK_LOG.md content (empty string if absent). */
+  workLogContent?: string;
+  /** Recent completed tasks for execution context. */
+  recentHistory?: OrchestraTask[];
+  /** Import mode: treat roadmap as untrusted / potentially low-quality. */
+  importMode?: boolean;
+  /** Optional user feedback driving the review focus. */
+  userFocus?: string;
+  /** Revision feedback (when user taps Revise on a review draft). */
+  revision?: string;
+  /** Previous review draft when revising. */
+  previousDraft?: string;
+}): string {
+  const {
+    repo, modelAlias, roadmapContent, workLogContent,
+    recentHistory, importMode, userFocus, revision, previousDraft,
+  } = params;
+  const [owner, repoName] = repo.split('/');
+  const isRevision = !!revision && !!previousDraft;
+
+  // Abbreviated history: last 5 completed/failed tasks give execution context
+  // without blowing the prompt size.
+  const historyBlock = (recentHistory && recentHistory.length > 0)
+    ? `\n## Recent Execution History (last ${Math.min(recentHistory.length, 5)})\n${
+        recentHistory.slice(-5).map(t => {
+          const icon = t.status === 'completed' ? '✅' : t.status === 'failed' ? '❌' : '⏳';
+          const sum = t.summary ? ` — ${t.summary.substring(0, 120)}` : '';
+          return `${icon} [${t.branchName}] "${t.prompt.substring(0, 80)}"${sum}`;
+        }).join('\n')
+      }\n`
+    : '';
+
+  const workLogBlock = workLogContent
+    ? `\n## Current WORK_LOG.md\n\`\`\`\n${workLogContent}\n\`\`\`\n`
+    : '\n## Current WORK_LOG.md\n(empty or not found)\n';
+
+  const focusBlock = userFocus
+    ? `\n## User Focus\n${userFocus}\n`
+    : '';
+
+  const revisionBlock = isRevision ? `
+## REVISION REQUEST
+The user reviewed your previous proposed revision and wants further changes:
+
+**Previous proposed roadmap:**
+\`\`\`markdown
+${previousDraft}
+\`\`\`
+
+**User feedback:**
+${revision}
+
+Apply the user's feedback on top of your previous proposal. Keep parts they didn't mention.
+` : '';
+
+  const importHeader = importMode
+    ? `
+## IMPORT MODE
+This roadmap may have been written by a human or another tool. Do NOT trust:
+- That file hints actually exist in the repo — verify suspicious paths with \`github_list_files\` / \`github_read_file\` (up to 5 reads).
+- That tasks are correctly scoped — aggressively tighten vague titles.
+- That Acceptance criteria are testable — rewrite any judgment-call criteria as grep / test / exit-code checks.
+- That tasks still make sense — delete tasks superseded by the current codebase state.
+`
+    : '';
+
+  return `# Orchestra REVIEW Mode — Roadmap Critique
+
+You are auditing an EXISTING roadmap for **${repo}** and proposing improvements. You do NOT create a PR — the user reviews your proposed roadmap via the same preview flow as /orch init.
+
+**CRITICAL: DO NOT call github_create_pr. Output the revised roadmap in DRAFT_ROADMAP + DRAFT_WORKLOG blocks only.**
+
+## Target Repository
+- Owner: ${owner}
+- Repo: ${repoName}
+- Full: ${repo}
+${importHeader}${revisionBlock}${focusBlock}
+## Current ROADMAP.md
+\`\`\`markdown
+${roadmapContent}
+\`\`\`
+${workLogBlock}${historyBlock}
+## Workflow
+
+### Step 1: READ EXECUTION CONTEXT (BUDGET: up to 6 file reads)
+**BUDGET: up to 10 total tool calls.**
+- You already have the roadmap and work log above — do NOT re-fetch them.
+- Use \`github_list_files\` to verify directories referenced by tasks still exist.
+- Use \`github_read_file\` to sample 2-4 files that completed tasks touched — this reveals what "done" actually looks like so you can tighten upcoming tasks accordingly.
+${importMode ? '- In import mode, also spot-check file paths hinted by pending tasks. Flag any that don\'t exist.\n' : ''}
+### Step 2: AUDIT EACH PENDING TASK
+For every \`- [ ]\` task, evaluate:
+- **Title specificity**: is it anchored on a real identifier/path? If not, tighten.
+- **Files hint**: are the listed files real? Did completed work change their location?
+- **Acceptance criterion**: testable (grep / test name / HTTP response / exit code)?
+- **Caveats**: complete given what completed tasks surfaced? Add caveats discovered from work log.
+- **Tier**: still realistic given what similar completed tasks actually needed?
+- **Obsolescence**: has this task been subsumed by completed work?
+- **Missing tasks**: did the execution surface work that wasn't planned? Add it.
+
+### Step 3: PROPOSE EDITS
+Valid edit operations (describe in the revised roadmap):
+- **Tighten**: rewrite a vague title with specific identifiers/paths
+- **Split**: break a task that grew in scope into 2+ tasks
+- **Merge**: collapse duplicates
+- **Delete**: remove obsolete tasks (mention in Notes why)
+- **Add**: insert newly discovered work
+- **Reorder**: move tasks to reflect actual dependencies discovered during execution
+- **Augment**: add missing Acceptance / Caveats / Pattern / Risk fields to tasks that lack them
+
+### Step 4: PRESERVE COMPLETED WORK
+- Every \`- [x]\` task MUST remain \`- [x]\` with its original title byte-for-byte. Never unmark or rephrase completed tasks.
+- Your edits apply only to \`- [ ]\` tasks and the Risks/Notes sections.
+
+### Step 5: UPDATE RISKS & OPEN QUESTIONS
+- Remove items resolved by completed execution.
+- Add items surfaced by the work log (e.g. "Discovered the Sandbox DO requires a wake ping before first use — document this in the Cloudflare deployment task").
+
+### Step 6: OUTPUT
+
+\`\`\`DRAFT_ROADMAP
+# Project Roadmap
+
+> Revised via /orch review | Model: ${modelAlias} | {date}
+
+## Overview
+{keep or lightly refresh the original overview}
+
+## Phases
+
+### Phase 1: {phase name}
+- [x] **Task 1.1**: {completed task — kept byte-for-byte}
+- [ ] **Task 1.2**: {pending task — revised title, files, acceptance, caveats, pattern, risk, tier}
+  - Description: ...
+  - Files: ...
+  - Depends on: ...
+  - Tier: ...
+  - Acceptance: ...
+  - Caveats: ...
+  - Pattern: ...
+  - Risk: ...
+...
+
+## Risks & Open Questions
+- {updated list}
+
+## Notes
+{architectural context; mention any tasks you deleted and why}
+
+## Review Log
+- {ISO date} — Reviewed by /${modelAlias}: {one-line summary of what changed}
+\`\`\`
+
+\`\`\`DRAFT_WORKLOG
+{existing WORK_LOG.md content byte-for-byte, plus a new row at the bottom:}
+| {date} | Roadmap review | ${modelAlias} | - | pending | 📝 Review |
+\`\`\`
+
+## Rules
+- Preserve completed tasks byte-for-byte — same title, same order, same \`- [x]\`.
+- Every pending task must carry the enriched schema (Description / Files / Depends on / Tier / Acceptance / Caveats / Pattern / Risk).
+- Keep the "Risks & Open Questions" section (required).
+- Add a "Review Log" trail so future reviews can see what was changed.
+- Do NOT call github_create_pr — output DRAFT_* blocks only.
+- Do NOT delete history. Work log rows are append-only; add the review row at the bottom.
+- After the blocks, summarise in ≤5 bullets what changed and why.`;
+}
+
+// ============================================================
 // DO MODE — One-shot task execution without a roadmap
 // ============================================================
 
@@ -2972,6 +3212,50 @@ export async function getRecentOrchestraEvents(
   return events.slice(0, limit);
 }
 
+/** Default threshold: suggest /orch review when ≥N risk escalations in the recent window. */
+export const REVIEW_RISK_THRESHOLD = 2;
+
+/**
+ * Count runtime_risk_escalation events that match a repo within the N
+ * most-recent terminal events (task_complete | stall_abort | task_abort).
+ *
+ * Input `events` is assumed newest-first (matches getRecentOrchestraEvents).
+ *
+ * Returns the number of escalations observed in the recent window. Used
+ * by the /orch next auto-trigger: when this count crosses
+ * REVIEW_RISK_THRESHOLD, the handler suggests running /orch review
+ * before starting the next task.
+ *
+ * @param events - Recent events, newest-first.
+ * @param repo - Repo filter (owner/repo). When unset, counts across all repos.
+ * @param windowSize - How many recent terminal events to consider (default 5).
+ */
+export function countRecentRiskEscalations(
+  events: OrchestraEvent[],
+  repo?: string,
+  windowSize: number = 5,
+): number {
+  const terminalTypes = new Set(['task_complete', 'stall_abort', 'task_abort']);
+  const matchesRepo = (ev: OrchestraEvent): boolean =>
+    !repo || ev.details.repo === repo;
+
+  // Walk newest-first; count terminal events until we have `windowSize`, and
+  // count escalations observed in that window.
+  let terminalCount = 0;
+  let escalations = 0;
+  for (const ev of events) {
+    if (!matchesRepo(ev)) continue;
+    if (terminalTypes.has(ev.eventType)) {
+      terminalCount++;
+      if (terminalCount > windowSize) break;
+    }
+    if (terminalCount <= windowSize && ev.eventType === 'runtime_risk_escalation') {
+      escalations++;
+    }
+  }
+  return escalations;
+}
+
 /**
  * Aggregate orchestra event stats for display.
  */
@@ -3133,9 +3417,12 @@ export async function commitDraftRoadmap(params: {
     'Content-Type': 'application/json',
   };
 
-  // Generate branch name
+  // Generate branch name — differs between new roadmap and review/update
   const suffix = Date.now().toString(36).slice(-4);
-  const branchName = `bot/roadmap-init-${draft.modelAlias}-${suffix}`;
+  const isReview = draft.mode === 'review';
+  const branchName = isReview
+    ? `bot/roadmap-review-${draft.modelAlias}-${suffix}`
+    : `bot/roadmap-init-${draft.modelAlias}-${suffix}`;
 
   // 1. Get default branch SHA
   const repoResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}`, { headers });
@@ -3195,18 +3482,31 @@ export async function commitDraftRoadmap(params: {
     }
   };
 
-  await writeFile('ROADMAP.md', draft.roadmapContent, `feat: initialize project roadmap [${draft.modelAlias}]`);
+  const roadmapCommitMsg = isReview
+    ? `chore(roadmap): revise via /orch review [${draft.modelAlias}]`
+    : `feat: initialize project roadmap [${draft.modelAlias}]`;
+  const workLogCommitMsg = isReview
+    ? `chore(worklog): append review entry [${draft.modelAlias}]`
+    : `feat: initialize work log [${draft.modelAlias}]`;
+  await writeFile('ROADMAP.md', draft.roadmapContent, roadmapCommitMsg);
   if (draft.workLogContent) {
-    await writeFile('WORK_LOG.md', draft.workLogContent, `feat: initialize work log [${draft.modelAlias}]`);
+    await writeFile('WORK_LOG.md', draft.workLogContent, workLogCommitMsg);
   }
 
   // 4. Create PR
-  const prBody = `## Roadmap Preview\n\n${draft.roadmapContent.slice(0, 3000)}\n\n---\nGenerated by Orchestra Mode (/${draft.modelAlias})\nApproved by user before commit.`;
+  const prTitle = isReview
+    ? `chore: revise project roadmap [${draft.modelAlias}]`
+    : `feat: initialize project roadmap [${draft.modelAlias}]`;
+  const prHeading = isReview ? '## Roadmap Review' : '## Roadmap Preview';
+  const prGeneratedBy = isReview
+    ? `Generated by Orchestra Mode /orch review (/${draft.modelAlias})`
+    : `Generated by Orchestra Mode (/${draft.modelAlias})`;
+  const prBody = `${prHeading}\n\n${draft.roadmapContent.slice(0, 3000)}\n\n---\n${prGeneratedBy}\nApproved by user before commit.`;
   const prResp = await fetch(`${GITHUB_API}/repos/${owner}/${repoName}/pulls`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      title: `feat: initialize project roadmap [${draft.modelAlias}]`,
+      title: prTitle,
       body: prBody,
       head: branchName,
       base: defaultBranch,
@@ -3232,7 +3532,9 @@ export async function commitDraftRoadmap(params: {
       prUrl: prData.html_url,
       status: 'completed',
       filesChanged: draft.workLogContent ? ['ROADMAP.md', 'WORK_LOG.md'] : ['ROADMAP.md'],
-      summary: 'Roadmap created via draft preview flow',
+      summary: isReview
+        ? 'Roadmap revised via /orch review preview flow'
+        : 'Roadmap created via draft preview flow',
       durationMs: 0,
     };
     await storeOrchestraTask(r2, userId, orchestraTask);
