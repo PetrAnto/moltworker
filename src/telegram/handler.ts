@@ -2438,7 +2438,9 @@ export class TelegramHandler {
           await this.bot.sendMessage(
             chatId,
             `🧠 **Review suggested before next task**\n\n${reasons.join('\n')}\n\n` +
-            `A quick /orch review uses execution experience to tighten the rest of the roadmap before you spend more tokens on tasks that may be mis-scoped.`,
+            `A quick /orch review uses execution experience to tighten the rest of the roadmap before you spend more tokens on tasks that may be mis-scoped.\n\n` +
+            `• **Run /orch review** → opens a review draft. After the review PR is merged, re-run /orch next to continue on the revised roadmap.\n` +
+            `• **Skip & run next task** → ignore the suggestion and execute your queued next task as-is.`,
             {
               parseMode: 'Markdown',
               reply_markup: {
@@ -2449,7 +2451,10 @@ export class TelegramHandler {
               },
             },
           );
-          // Stash the pending next-task so the callback can resume it
+          // Stash the queued next-task so the 'skip' callback can resume it.
+          // The 'review' callback deliberately discards this and lets the
+          // user re-run /orch next after the revised roadmap is merged —
+          // the review may have changed which task is "next".
           await this.storage.setPendingOrchestra(userId, chatId, {
             mode: 'run', repo: lockedRepo, prompt: specificTask, chatId,
           });
@@ -4256,9 +4261,13 @@ export class TelegramHandler {
 
       case 'orchnext': {
         // Review auto-trigger resolution for /orch next.
-        // - payload 'review' → run /orch review against the same repo,
-        //   preserving the pending next-task so the user can resume later.
-        // - payload 'skip' → proceed with the deferred next task immediately.
+        // - payload 'review' → run /orch review against the same repo.
+        //   The queued next-task is NOT preserved: the review may delete,
+        //   split, or reorder tasks, so "the next task" has to be
+        //   re-resolved from the revised roadmap. Users re-run /orch next
+        //   after the review PR lands.
+        // - payload 'skip' → proceed with the deferred next task
+        //   immediately (original roadmap, user explicitly declined review).
         if (query.message) {
           await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
         }
@@ -4306,14 +4315,19 @@ export class TelegramHandler {
             await this.bot.sendMessage(
               chatId,
               `🧠 **Planner model gate (review)**\n\n${planner.reason}\n\n` +
-              `Picking a planner uses it ONLY for this review. Your chat model stays on /${currentModelAlias}.`,
+              `Picking a planner uses it ONLY for this review. Your chat model stays on /${currentModelAlias}.\n\n` +
+              `After the review PR is merged, run /orch next again to continue on the revised roadmap.`,
               {
                 parseMode: 'Markdown',
                 reply_markup: { inline_keyboard: [buttons] },
               },
             );
           } else {
-            await this.bot.sendMessage(chatId, `📝 Starting review for ${reviewRepo}…`);
+            await this.bot.sendMessage(
+              chatId,
+              `📝 Starting review for ${reviewRepo}…\n\n` +
+              `After the review PR is merged, run /orch next again to continue on the revised roadmap.`,
+            );
             await this.executeOrchestra(chatId, userId, 'draft', reviewRepo, '__REVIEW__');
           }
         } else if (payload === 'skip') {

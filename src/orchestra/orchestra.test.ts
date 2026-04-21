@@ -3569,6 +3569,42 @@ describe('hasActiveReviewGate', () => {
   it('tolerates tight whitespace', () => {
     expect(REVIEW_GATE_MARKER_PATTERN.test('<!--review-gate-->')).toBe(true);
   });
+
+  it('activates the SECOND gate once the first has been crossed', () => {
+    const roadmap = `### Phase 1
+- [x] Task 1
+<!-- review-gate: after phase 1 -->
+- [x] Task 2
+
+### Phase 2
+- [x] Task 3
+<!-- review-gate: after phase 2 -->
+- [ ] Task 4`;
+    expect(hasActiveReviewGate(roadmap)).toBe(true);
+  });
+
+  it('does not re-trigger a gate once completed work has passed it', () => {
+    const roadmap = `- [x] Task 1
+<!-- review-gate -->
+- [x] Task 2 (past the gate)
+- [ ] Task 3`;
+    expect(hasActiveReviewGate(roadmap)).toBe(false);
+  });
+
+  it('does not activate a gate before any completed work exists', () => {
+    const roadmap = `<!-- review-gate -->
+- [ ] Task 1
+- [ ] Task 2`;
+    expect(hasActiveReviewGate(roadmap)).toBe(false);
+  });
+
+  it('ignores gates that sit past the next pending task', () => {
+    const roadmap = `- [x] Task 1
+- [ ] Task 2
+<!-- review-gate -->
+- [ ] Task 3`;
+    expect(hasActiveReviewGate(roadmap)).toBe(false);
+  });
 });
 
 describe('countRecentRiskEscalations', () => {

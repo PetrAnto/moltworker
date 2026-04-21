@@ -508,11 +508,23 @@ export function formatDraftPreview(roadmapContent: string, maxLength: number = 3
 export const REVIEW_GATE_MARKER_PATTERN = /<!--\s*review-gate(?:\s*:\s*[^>]*)?\s*-->/i;
 
 /**
- * Detect whether a roadmap's next pending task sits *after* a review-gate
- * marker. The heuristic: find the line index of the last completed task
- * (`- [x]`) and the line index of the first review-gate marker after it.
- * If a marker exists and the next pending `- [ ]` is further down still,
- * the user has crossed a gate and should be offered /orch review.
+ * Detect whether a roadmap has an *active* review-gate — a
+ * `<!-- review-gate -->` marker that sits strictly between the last
+ * completed task and the next pending task. Such a marker means the
+ * user has crossed a planned checkpoint and should be offered
+ * /orch review before starting the next task.
+ *
+ * Semantics:
+ * - Nothing pending → no active gate (roadmap is done).
+ * - Nothing completed → no active gate (nothing to review yet).
+ * - Otherwise, scan only the window (lastCompletedLine, firstPendingLine)
+ *   for ANY matching marker. This intentionally ignores:
+ *     (a) gates placed before the last completed task — they've been
+ *         crossed and reviewed already (or explicitly skipped).
+ *     (b) gates placed deeper in the roadmap past the next pending task
+ *         — they'll become active when the user reaches them later.
+ * - Roadmaps with multiple gates therefore stay usable: each gate
+ *   activates exactly once, when the next pending task first crosses it.
  *
  * Returns true when /orch next should suggest /orch review first.
  */
@@ -520,7 +532,6 @@ export function hasActiveReviewGate(roadmapContent: string): boolean {
   const lines = roadmapContent.split('\n');
   let lastCompletedLine = -1;
   let firstPendingLine = -1;
-  let gateLine = -1;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -530,16 +541,17 @@ export function hasActiveReviewGate(roadmapContent: string): boolean {
     } else if (firstPendingLine === -1 && (/^[\t ]{0,8}[-*]\s+\[\s\]/.test(line) || /^[\t ]{0,8}\d+\.\s+\[\s\]/.test(line))) {
       firstPendingLine = i;
     }
-    if (gateLine === -1 && REVIEW_GATE_MARKER_PATTERN.test(line)) {
-      gateLine = i;
-    }
   }
 
-  // Gate must exist and sit between the last completed task and the next
-  // pending one (i.e. we just crossed it). If there's no pending task, the
-  // gate has no effect — the roadmap is done.
-  if (gateLine === -1 || firstPendingLine === -1) return false;
-  return gateLine > lastCompletedLine && gateLine < firstPendingLine;
+  // Roadmap complete, or no progress yet — no gate is active.
+  if (firstPendingLine === -1 || lastCompletedLine === -1) return false;
+
+  // Scan strictly between the last completed task and the first pending one.
+  // Any marker inside this window counts as an active gate.
+  for (let i = lastCompletedLine + 1; i < firstPendingLine; i++) {
+    if (REVIEW_GATE_MARKER_PATTERN.test(lines[i])) return true;
+  }
+  return false;
 }
 
 /**
