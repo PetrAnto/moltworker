@@ -24,7 +24,7 @@ export interface OrchestraTask {
   timestamp: number;
   modelAlias: string;
   repo: string;            // owner/repo
-  mode: 'init' | 'run' | 'redo' | 'do' | 'draft';
+  mode: 'init' | 'run' | 'redo' | 'do' | 'draft' | 'review';
   prompt: string;          // Original user prompt (truncated)
   branchName: string;      // Branch created
   durationMs?: number;     // Execution duration in milliseconds
@@ -506,6 +506,21 @@ export function formatDraftPreview(roadmapContent: string, maxLength: number = 3
  * Matches the marker anywhere on a line.
  */
 export const REVIEW_GATE_MARKER_PATTERN = /<!--\s*review-gate(?:\s*:\s*[^>]*)?\s*-->/i;
+
+/**
+ * Build the raw review prompt string (with __REVIEW__ prefix, --import flag
+ * and user focus) from structured inputs. Used both by the /orch review
+ * entry handler and the Revise-rehydration path so the two produce
+ * byte-identical prompts that parse consistently downstream.
+ */
+export function buildReviewEntryPrompt(params: {
+  importMode?: boolean;
+  userFocus?: string;
+}): string {
+  const flag = params.importMode ? '--import ' : '';
+  const focus = params.userFocus ?? '';
+  return `__REVIEW__${flag}${focus}`.trim();
+}
 
 /**
  * Detect whether a roadmap has an *active* review-gate — a
@@ -1646,7 +1661,10 @@ export function formatOrchestraHistory(history: OrchestraHistory | null): string
   for (const task of history.tasks.slice(-10).reverse()) {
     const status = task.status === 'completed' ? '✅' : task.status === 'failed' ? '❌' : '⏳';
     const date = new Date(task.timestamp).toLocaleDateString();
-    const modeTag = task.mode === 'init' ? ' [INIT]' : task.mode === 'redo' ? ' [REDO]' : '';
+    const modeTag = task.mode === 'init' ? ' [INIT]'
+      : task.mode === 'review' ? ' [REVIEW]'
+      : task.mode === 'redo' ? ' [REDO]'
+      : '';
     const duration = task.durationMs
       ? ` | ⏱ ${task.durationMs >= 60000 ? `${Math.round(task.durationMs / 60000)}m` : `${Math.round(task.durationMs / 1000)}s`}`
       : '';
@@ -3538,7 +3556,10 @@ export async function commitDraftRoadmap(params: {
       timestamp: Date.now(),
       modelAlias: draft.modelAlias,
       repo: draft.repo,
-      mode: 'init',
+      // Match the mode to the actual flow: review drafts produce 'review'
+      // history entries, init drafts produce 'init'. Keeps /orch history +
+      // downstream model-stats aggregation labelled correctly.
+      mode: isReview ? 'review' : 'init',
       prompt: draft.userPrompt.substring(0, 200),
       branchName,
       prUrl: prData.html_url,

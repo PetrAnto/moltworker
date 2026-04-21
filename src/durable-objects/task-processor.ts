@@ -411,6 +411,13 @@ export interface TaskRequest {
   orchestraRoadmapPath?: string;
   // Draft init mode: model outputs roadmap in text, DO stores draft + sends preview
   isDraftInit?: boolean;
+  // Review draft: same plumbing as isDraftInit, but label/branch/PR distinguish
+  // a revision of an existing roadmap from a fresh init. Set by /orch review.
+  isReviewDraft?: boolean;
+  // Review-mode parameters carried through to the stored draft so Revise
+  // rounds can rehydrate the original --import + user focus intent.
+  reviewImportMode?: boolean;
+  reviewUserFocus?: string;
 }
 
 /**
@@ -5411,12 +5418,11 @@ If you already created the new file and just need to patch the original, call gi
                 }
               }
 
-              // Review flows prefix the user prompt with __REVIEW__ so the
-              // Durable Object can distinguish a review draft from a plain
-              // init draft when persisting. The prefix is preserved in the
-              // stored userPrompt so subsequent revisions re-enter review
-              // mode in executeOrchestra.
-              const isReviewDraft = (request.prompt || '').startsWith('__REVIEW__');
+              // Review flows are tagged via the typed request.isReviewDraft
+              // flag (the request.prompt string is a formatted display
+              // string like "[Orchestra Draft] repo: …" — not the raw
+              // prompt — so a substring check there is unreliable).
+              const isReviewDraft = request.isReviewDraft === true;
               await storage.setOrchestraDraft(request.userId, request.chatId, {
                 repo: task.orchestraRepo || '',
                 chatId: request.chatId,
@@ -5429,6 +5435,9 @@ If you already created the new file and just need to patch the original, call gi
                 status: 'draft',
                 baseSha,
                 mode: isReviewDraft ? 'review' : 'init',
+                // Preserve review intent for future Revise rounds.
+                reviewImportMode: isReviewDraft ? request.reviewImportMode : undefined,
+                reviewUserFocus: isReviewDraft ? request.reviewUserFocus : undefined,
               });
 
               const elapsed = Math.round((Date.now() - task.startTime) / 1000);

@@ -39,6 +39,7 @@ import {
   buildExecutionProfile,
   buildDraftInitPrompt,
   buildReviewPrompt,
+  buildReviewEntryPrompt,
   commitDraftRoadmap,
   getPlannerRecommendation,
   hasActiveReviewGate,
@@ -2595,7 +2596,7 @@ export class TelegramHandler {
 
         // Encode review parameters in the pending prompt so the orchplanner
         // callback can restore them. Prefix lets executeOrchestra detect review mode.
-        const reviewPrompt = `__REVIEW__${importMode ? '--import ' : ''}${userFocus}`.trim();
+        const reviewPrompt = buildReviewEntryPrompt({ importMode, userFocus });
         await this.storage.setPendingOrchestra(userId, chatId, {
           mode: 'draft', repo: lockedRepo, prompt: reviewPrompt, chatId,
         });
@@ -2613,7 +2614,7 @@ export class TelegramHandler {
       }
 
       // Proceed directly when the current model meets the floor.
-      const reviewPrompt = `__REVIEW__${importMode ? '--import ' : ''}${userFocus}`.trim();
+      const reviewPrompt = buildReviewEntryPrompt({ importMode, userFocus });
       return this.executeOrchestra(chatId, userId, 'draft', lockedRepo, reviewPrompt);
     }
 
@@ -2878,8 +2879,20 @@ export class TelegramHandler {
     // Route through the normal draft flow but with revision context.
     // Pass draft.modelAlias as modelOverride so a transient-planner draft
     // stays on that planner for subsequent revisions.
+    //
+    // For review drafts, rehydrate the full __REVIEW__ prefix (including
+    // --import and user focus) so executeOrchestra's isReviewFlow detection
+    // routes to buildReviewPrompt again AND the original review intent
+    // survives across Revise rounds. draft.mode is the source-of-truth;
+    // draft.userPrompt is the wrapped display string and not trusted here.
+    const effectivePrompt = draft.mode === 'review'
+      ? buildReviewEntryPrompt({
+          importMode: draft.reviewImportMode,
+          userFocus: draft.reviewUserFocus,
+        })
+      : draft.userPrompt;
     return this.executeOrchestra(
-      chatId, userId, 'draft', draft.repo, draft.userPrompt,
+      chatId, userId, 'draft', draft.repo, effectivePrompt,
       false,
       { revision: revisionText, previousDraft: draft.roadmapContent },
       draft.modelAlias,
@@ -3109,9 +3122,13 @@ export class TelegramHandler {
     let orchestraSystemPrompt: string;
     // Strip bot/ prefix to get the slug the model should use in tool calls
     const branchSlug = branchName.replace(/^bot\//, '');
-    // Detect the /orch review flow: prompt is prefixed with __REVIEW__ and may
-    // contain --import + user focus. Review flows reuse mode='draft' plumbing
-    // but swap in buildReviewPrompt.
+    // Review-flow signal — derived ONCE here from the incoming prompt and
+    // then propagated to every downstream consumer (system prompt builder,
+    // user-message builder, TaskRequest flags, DO draft storage). The
+    // `__REVIEW__` prefix is the *entry* marker only: callers (/orch review
+    // handler branch, orchnext:review callback, executeOrchestraDraftRevision
+    // rehydration) all construct the same shape. Once parsed here, nothing
+    // else should re-sniff the prompt.
     const isReviewFlow = mode === 'draft' && prompt.startsWith('__REVIEW__');
     let reviewImportMode = false;
     let reviewUserFocus = '';
@@ -3294,6 +3311,13 @@ export class TelegramHandler {
       orchestraRepo: repo,
       orchestraRoadmapPath: prefetchedRoadmapPath,
       isDraftInit: mode === 'draft',
+      // Review-flow signals: computed once from the raw prompt at entry.
+      // executeOrchestra above already parsed these into isReviewFlow /
+      // reviewImportMode / reviewUserFocus — reuse those to keep the
+      // handler and the DO aligned on a single source of truth.
+      isReviewDraft: isReviewFlow,
+      reviewImportMode: isReviewFlow && reviewImportMode ? true : undefined,
+      reviewUserFocus: isReviewFlow && reviewUserFocus ? reviewUserFocus : undefined,
     };
 
     const doId = this.taskProcessor.idFromName(userId);

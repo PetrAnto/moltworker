@@ -45,6 +45,14 @@ export interface OrchestraDraft {
    * Drives branch name and PR title in commitDraftRoadmap.
    */
   mode?: 'init' | 'review';
+  /**
+   * Review-mode parameters preserved across Revise rounds.
+   * Set when mode === 'review'. Rehydrated into the __REVIEW__ prompt
+   * prefix on revisions so --import and focus notes survive a full
+   * draft session (initial → revise → revise → approve).
+   */
+  reviewImportMode?: boolean;
+  reviewUserFocus?: string;
 }
 
 /**
