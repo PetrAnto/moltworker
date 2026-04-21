@@ -683,6 +683,34 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     maxContext: 262144,
   },
+  // Kimi K2.6 via OpenRouter — same model as the kimi26 direct entry, routed
+  // through OpenRouter for cheaper providers (Parasail at $0.60/$2.80) and
+  // easier fallback between providers. Use /kimi26 for the direct Moonshot
+  // API, /kimi26or for the OpenRouter-routed path.
+  // Benchmarks verified against Artificial Analysis + HuggingFace model card
+  // + OpenRouter listing (Apr 2026): AA IQ:54 (#4 overall, #1 open-weights),
+  // 80.2% SWE-Bench Verified, 89.6 LiveCodeBench v6, 66.7 Terminal-Bench 2.0.
+  kimi26or: {
+    id: 'moonshotai/kimi-k2.6',
+    alias: 'kimi26or',
+    name: 'Kimi K2.6 (OpenRouter)',
+    specialty: 'Paid Agentic/Coding/Multimodal — routed via OpenRouter',
+    score: '1T MoE (32B active) + vision, 256K ctx, 80.2% SWE-Bench Verified, 89.6 LiveCodeBench v6, 66.7 Terminal-Bench 2.0, #4 AA IQ, Thinking+Instant modes',
+    // Parasail via OpenRouter — cheapest provider at time of catalog entry.
+    // OpenRouter auto-falls back to Moonshot Direct / NovitaAI / Cloudflare.
+    cost: '$0.60/$2.80',
+    supportsTools: true,
+    supportsVision: true,
+    parallelCalls: true,
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 262144,
+    intelligenceIndex: 54,
+    benchmarks: {
+      livecodebench: 89.6,
+    },
+    orchestraReady: true,
+  },
   flash: {
     id: 'google/gemini-3-flash-preview',
     alias: 'flash',
@@ -1255,12 +1283,17 @@ export const MODELS: Record<string, ModelInfo> = {
   },
 
   // --- Moonshot Direct: Kimi K2.6 (latest flagship) ---
+  // Benchmarks verified against Artificial Analysis + HuggingFace model card
+  // + OpenRouter listing (Apr 2026). AA ranks this #4 overall intelligence
+  // (IQ:54) and #1 open-weights model. Strong agentic stamina (4000+ tool
+  // calls, 12h continuous execution), coding, and multimodal.
   kimi26: {
     id: 'kimi-k2.6',
     alias: 'kimi26',
     name: 'Kimi K2.6 (Direct)',
     specialty: 'Direct Moonshot — Flagship Agentic/Coding/Multimodal',
-    score: '1T MoE (32B active) + 400M vision, 256K ctx, #1 SWE-Bench Pro, Thinking+Instant modes, cache hits $0.16/M',
+    // SWE-Bench percentage in score text feeds the ranker's SWE regex (+25 pts).
+    score: '1T MoE (32B active) + vision, 256K ctx, 80.2% SWE-Bench Verified, 89.6 LiveCodeBench v6, 66.7 Terminal-Bench 2.0, #4 AA IQ, Thinking+Instant modes, cache hits $0.16/M',
     cost: '$0.95/$4.00',
     supportsTools: true,
     supportsVision: true,
@@ -1270,6 +1303,16 @@ export const MODELS: Record<string, ModelInfo> = {
     reasoning: 'configurable',
     maxContext: 262144,
     fixedTemperature: 1, // Moonshot API rejects anything else: "only 1 is allowed for this model"
+    // AA Intelligence Index (composite 0-100, higher = stronger reasoning/coding).
+    // 54 puts kimi26 safely above PLANNER_FLOOR_IQ=45 → eligible as planner upgrade.
+    intelligenceIndex: 54,
+    benchmarks: {
+      // LiveCodeBench v6 pass@1 — AA-tracked real-world coding signal.
+      livecodebench: 89.6,
+    },
+    // Marked orchestra-ready: 80.2% SWE-Bench Verified, 66.7 Terminal-Bench 2.0,
+    // 50 Toolathlon — validated for multi-step tool-calling execution.
+    orchestraReady: true,
   },
 };
 

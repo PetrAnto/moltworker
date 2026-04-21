@@ -38,6 +38,13 @@ export interface OrchestraDraft {
   status: 'draft' | 'approving' | 'approved' | 'cancelled';
   /** SHA of the default branch at draft time — used for freshness check on approve */
   baseSha?: string;
+  /**
+   * Source mode of the draft.
+   * - 'init' (default): brand-new roadmap via /orch init
+   * - 'review': edit to an existing roadmap via /orch review (or --import)
+   * Drives branch name and PR title in commitDraftRoadmap.
+   */
+  mode?: 'init' | 'review';
 }
 
 /**

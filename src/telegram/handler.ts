@@ -38,8 +38,12 @@ import {
   getEventBasedModelScores,
   buildExecutionProfile,
   buildDraftInitPrompt,
+  buildReviewPrompt,
   commitDraftRoadmap,
   getPlannerRecommendation,
+  hasActiveReviewGate,
+  countRecentRiskEscalations,
+  REVIEW_RISK_THRESHOLD,
   type OrchestraExecutionProfile,
 } from '../orchestra/orchestra';
 import { loadScratchpad, formatScratchpadForPrompt } from '../orchestra/scratchpad';
@@ -2375,7 +2379,15 @@ export class TelegramHandler {
       return;
     }
 
-    // /orch next [specific task] — shorthand for run with locked repo
+    // /orch next [specific task] — shorthand for run with locked repo.
+    //
+    // Before running, check two auto-triggers that suggest /orch review:
+    //   (a) a <!-- review-gate --> marker has been crossed in ROADMAP.md
+    //   (b) ≥REVIEW_RISK_THRESHOLD runtime_risk_escalation events occurred
+    //       in the recent terminal-event window for this repo
+    // Either trigger surfaces a one-tap "Run /orch review?" prompt. The user
+    // can dismiss with "Skip & run next task" and proceed as before.
+    // Use /orch next --force to bypass both triggers.
     if (sub === 'next') {
       const lockedRepo = await this.storage.getOrchestraRepo(userId);
       if (!lockedRepo) {
@@ -2385,8 +2397,66 @@ export class TelegramHandler {
         );
         return;
       }
-      // Treat remaining args as optional specific task
-      const specificTask = args.slice(1).join(' ').trim();
+
+      // Light flag parsing — --force bypasses review-gate + risk auto-triggers.
+      const rawRest = args.slice(1).join(' ').trim();
+      const forceBypass = /(^|\s)--force\b/.test(rawRest);
+      const specificTask = rawRest.replace(/(^|\s)--force\b/g, ' ').replace(/\s+/g, ' ').trim();
+
+      if (!forceBypass) {
+        // Trigger A: review-gate marker in ROADMAP.md
+        let gateTriggered = false;
+        if (this.githubToken) {
+          try {
+            const [owner, repoName] = lockedRepo.split('/');
+            const { content } = await fetchRoadmapFromGitHub(owner, repoName, this.githubToken);
+            gateTriggered = hasActiveReviewGate(content);
+          } catch {
+            // Roadmap unavailable — skip gate check, proceed with run
+          }
+        }
+
+        // Trigger B: runtime-risk escalations in recent window
+        let riskCount = 0;
+        if (this.r2Bucket) {
+          try {
+            const recentEvents = await getRecentOrchestraEvents(this.r2Bucket, 2, undefined, 100);
+            riskCount = countRecentRiskEscalations(recentEvents, lockedRepo);
+          } catch {
+            // Event store unavailable — skip risk check, proceed
+          }
+        }
+
+        if (gateTriggered || riskCount >= REVIEW_RISK_THRESHOLD) {
+          const reasons: string[] = [];
+          if (gateTriggered) {
+            reasons.push('📍 A `<!-- review-gate -->` marker in ROADMAP.md has been crossed.');
+          }
+          if (riskCount >= REVIEW_RISK_THRESHOLD) {
+            reasons.push(`⚠️ ${riskCount} runtime risk escalations in recent runs — plan may be drifting.`);
+          }
+          await this.bot.sendMessage(
+            chatId,
+            `🧠 **Review suggested before next task**\n\n${reasons.join('\n')}\n\n` +
+            `A quick /orch review uses execution experience to tighten the rest of the roadmap before you spend more tokens on tasks that may be mis-scoped.`,
+            {
+              parseMode: 'Markdown',
+              reply_markup: {
+                inline_keyboard: [[
+                  { text: '📝 Run /orch review', callback_data: 'orchnext:review' },
+                  { text: '▶️ Skip & run next task', callback_data: 'orchnext:skip' },
+                ]],
+              },
+            },
+          );
+          // Stash the pending next-task so the callback can resume it
+          await this.storage.setPendingOrchestra(userId, chatId, {
+            mode: 'run', repo: lockedRepo, prompt: specificTask, chatId,
+          });
+          return;
+        }
+      }
+
       return this.executeOrchestra(chatId, userId, 'run', lockedRepo, specificTask);
     }
 
@@ -2471,6 +2541,75 @@ export class TelegramHandler {
 
       // Use draft mode: model generates roadmap for preview, user approves before PR
       return this.executeOrchestra(chatId, userId, 'draft', repo, prompt);
+    }
+
+    // /orch review [--import] [focus notes…]
+    //   Critique the current roadmap using execution experience and propose edits.
+    //   Flows through the same draft preview pipeline as /orch init.
+    //   --import flag → treat roadmap as untrusted / hand-written / imported.
+    if (sub === 'review') {
+      const lockedRepo = await this.storage.getOrchestraRepo(userId);
+      if (!lockedRepo) {
+        await this.bot.sendMessage(
+          chatId,
+          '❌ No default repo set.\n\nUse: /orch review [--import] [focus notes]\nOr: /orch set owner/repo first',
+        );
+        return;
+      }
+
+      // Light flag parsing — --import is the only supported flag here.
+      const rawRest = args.slice(1).join(' ').trim();
+      const importMode = /\s--import\b|^--import\b/.test(rawRest) || rawRest === '--import';
+      const userFocus = rawRest.replace(/(^|\s)--import\b/g, ' ').replace(/\s+/g, ' ').trim();
+
+      // Planner gate: same floor as /orch init — reviewing a roadmap is
+      // planner-caliber work, so weak models produce vague critiques.
+      const currentModelAlias = await this.storage.getUserModel(userId);
+      const planner = getPlannerRecommendation(currentModelAlias);
+      const hasUpgrade = planner.paidOptions.length > 0 || planner.freeOptions.length > 0;
+      if (planner.shouldEscalate && hasUpgrade) {
+        const buttons: { text: string; callback_data: string }[] = [];
+        if (planner.paidOptions.length > 0) {
+          const top = planner.paidOptions[0];
+          buttons.push({
+            text: `⚡ /${top.alias} (IQ:${top.intelligence.toFixed(0)} • ${top.cost})`,
+            callback_data: `orchplanner:${top.alias}`,
+          });
+        }
+        if (planner.freeOptions.length > 0) {
+          const topFree = planner.freeOptions[0];
+          buttons.push({
+            text: `🆓 /${topFree.alias} (IQ:${topFree.intelligence.toFixed(0)})`,
+            callback_data: `orchplanner:${topFree.alias}`,
+          });
+        }
+        buttons.push({
+          text: `Proceed with /${currentModelAlias}`,
+          callback_data: 'orchplanner:proceed',
+        });
+
+        // Encode review parameters in the pending prompt so the orchplanner
+        // callback can restore them. Prefix lets executeOrchestra detect review mode.
+        const reviewPrompt = `__REVIEW__${importMode ? '--import ' : ''}${userFocus}`.trim();
+        await this.storage.setPendingOrchestra(userId, chatId, {
+          mode: 'draft', repo: lockedRepo, prompt: reviewPrompt, chatId,
+        });
+        await this.bot.sendMessage(
+          chatId,
+          `🧠 **Planner model gate (review)**\n\n${planner.reason}\n\n` +
+          `Reviewing a roadmap is planner-caliber work — a stronger reviewer spots mis-scoped tasks that weaker ones miss.\n\n` +
+          `Picking a planner uses it ONLY for this review. Your chat model stays on /${currentModelAlias}.`,
+          {
+            parseMode: 'Markdown',
+            reply_markup: { inline_keyboard: [buttons] },
+          },
+        );
+        return;
+      }
+
+      // Proceed directly when the current model meets the floor.
+      const reviewPrompt = `__REVIEW__${importMode ? '--import ' : ''}${userFocus}`.trim();
+      return this.executeOrchestra(chatId, userId, 'draft', lockedRepo, reviewPrompt);
     }
 
     // /orch modify — modify existing roadmap via draft preview flow
@@ -2661,10 +2800,11 @@ export class TelegramHandler {
       '━━━ Commands ━━━\n' +
       '/orch do <description> — Execute a task directly (no roadmap)\n' +
       '/orch init <description> — Plan: create roadmap (no code)\n' +
-      '/orch modify <changes> — Revise existing roadmap (preview flow)\n' +
+      '/orch review [--import] [focus] — Critique roadmap & propose edits\n' +
+      '/orch modify <changes> — User-driven roadmap edit (preview flow)\n' +
       '/orch plan — Conversational requirements gathering\n' +
       '/orch advise — Analyze next task & pick best model\n' +
-      '/orch next [task] — Run next (or specific) task\n' +
+      '/orch next [task] [--force] — Run next (or specific) task\n' +
       '/orch roadmap — View roadmap status\n' +
       '/orch history — View past tasks\n' +
       '/orch stats [model] — Event metrics (stalls, aborts)\n' +
@@ -2672,10 +2812,15 @@ export class TelegramHandler {
       '/orch merge <PR#> [method] — Merge a PR (squash/merge/rebase)\n' +
       '/orch redo <task> — Re-implement a failed task\n\n' +
       '━━━ Planner Gate ━━━\n' +
-      '/orch init checks your model against the planner floor (IQ:45).\n' +
-      'If it\'s weaker, you\'ll see a one-tap menu of stronger planners.\n' +
-      'Picking one applies ONLY to that draft (and its revisions) — your\n' +
-      'chat model and future /orch next runs stay on your selection.\n\n' +
+      '/orch init and /orch review check your model against the planner\n' +
+      'floor (IQ:45). If it\'s weaker, you\'ll see a one-tap menu of stronger\n' +
+      'planners. Picking one applies ONLY to that draft (and its revisions)\n' +
+      '— your chat model and future /orch next runs stay on your selection.\n\n' +
+      '━━━ Review Auto-Triggers ━━━\n' +
+      'Before starting the next task, /orch next suggests /orch review when:\n' +
+      '• A `<!-- review-gate -->` marker in ROADMAP.md has been crossed\n' +
+      '• ≥2 runtime risk escalations occurred in recent runs\n' +
+      'Use /orch next --force to skip both checks.\n\n' +
       modelRecs + '\n\n' +
       '━━━ Workflows ━━━\n' +
       'Simple task (no roadmap):\n' +
@@ -2959,7 +3104,30 @@ export class TelegramHandler {
     let orchestraSystemPrompt: string;
     // Strip bot/ prefix to get the slug the model should use in tool calls
     const branchSlug = branchName.replace(/^bot\//, '');
-    if (mode === 'draft') {
+    // Detect the /orch review flow: prompt is prefixed with __REVIEW__ and may
+    // contain --import + user focus. Review flows reuse mode='draft' plumbing
+    // but swap in buildReviewPrompt.
+    const isReviewFlow = mode === 'draft' && prompt.startsWith('__REVIEW__');
+    let reviewImportMode = false;
+    let reviewUserFocus = '';
+    if (isReviewFlow) {
+      const reviewPayload = prompt.slice('__REVIEW__'.length).trim();
+      reviewImportMode = /(^|\s)--import\b/.test(reviewPayload);
+      reviewUserFocus = reviewPayload.replace(/(^|\s)--import\b/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    if (isReviewFlow) {
+      orchestraSystemPrompt = buildReviewPrompt({
+        repo,
+        modelAlias,
+        roadmapContent: prefetchedRoadmap ?? '',
+        workLogContent: prefetchedWorkLog,
+        recentHistory: previousTasks,
+        importMode: reviewImportMode,
+        userFocus: reviewUserFocus || undefined,
+        revision: draftRevision?.revision,
+        previousDraft: draftRevision?.previousDraft,
+      });
+    } else if (mode === 'draft') {
       orchestraSystemPrompt = buildDraftInitPrompt({
         repo, modelAlias,
         revision: draftRevision?.revision,
@@ -3018,7 +3186,11 @@ export class TelegramHandler {
 
     // Build messages for the task
     // Build user message — use structured execution brief when available
-    const userMessage = mode === 'draft'
+    const userMessage = isReviewFlow
+      ? (reviewUserFocus
+          ? `Review this roadmap. Focus: ${reviewUserFocus}${reviewImportMode ? ' (IMPORT MODE: roadmap is untrusted)' : ''}`
+          : `Review this roadmap and propose improvements${reviewImportMode ? ' (IMPORT MODE: roadmap is untrusted)' : ''}.`)
+      : mode === 'draft'
       ? prompt
       : mode === 'init'
       ? prompt
@@ -4079,6 +4251,77 @@ export class TelegramHandler {
         await this.storage.setPendingOrchestra(userId, chatId, null);
         const skipGuard = payload === 'proceed';
         await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt, skipGuard);
+        break;
+      }
+
+      case 'orchnext': {
+        // Review auto-trigger resolution for /orch next.
+        // - payload 'review' → run /orch review against the same repo,
+        //   preserving the pending next-task so the user can resume later.
+        // - payload 'skip' → proceed with the deferred next task immediately.
+        if (query.message) {
+          await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+        }
+        const pending = await this.storage.getPendingOrchestra(userId, chatId);
+        if (!pending) {
+          await this.bot.sendMessage(chatId, '⏳ Next-task suggestion expired. Run /orch next again.');
+          break;
+        }
+        if (pending.chatId !== chatId) {
+          await this.bot.sendMessage(chatId, '⚠️ This orchestra request belongs to another chat.');
+          break;
+        }
+        if (payload === 'review') {
+          // Clear the pending next-task; the user can re-run /orch next after
+          // the review PR is merged. Fire the review flow through the normal
+          // draft pipeline — it will honour the planner gate if needed.
+          const reviewRepo = pending.repo;
+          await this.storage.setPendingOrchestra(userId, chatId, null);
+          const currentModelAlias = await this.storage.getUserModel(userId);
+          const planner = getPlannerRecommendation(currentModelAlias);
+          const hasUpgrade = planner.paidOptions.length > 0 || planner.freeOptions.length > 0;
+          if (planner.shouldEscalate && hasUpgrade) {
+            const buttons: { text: string; callback_data: string }[] = [];
+            if (planner.paidOptions.length > 0) {
+              const top = planner.paidOptions[0];
+              buttons.push({
+                text: `⚡ /${top.alias} (IQ:${top.intelligence.toFixed(0)} • ${top.cost})`,
+                callback_data: `orchplanner:${top.alias}`,
+              });
+            }
+            if (planner.freeOptions.length > 0) {
+              const topFree = planner.freeOptions[0];
+              buttons.push({
+                text: `🆓 /${topFree.alias} (IQ:${topFree.intelligence.toFixed(0)})`,
+                callback_data: `orchplanner:${topFree.alias}`,
+              });
+            }
+            buttons.push({
+              text: `Proceed with /${currentModelAlias}`,
+              callback_data: 'orchplanner:proceed',
+            });
+            await this.storage.setPendingOrchestra(userId, chatId, {
+              mode: 'draft', repo: reviewRepo, prompt: '__REVIEW__', chatId,
+            });
+            await this.bot.sendMessage(
+              chatId,
+              `🧠 **Planner model gate (review)**\n\n${planner.reason}\n\n` +
+              `Picking a planner uses it ONLY for this review. Your chat model stays on /${currentModelAlias}.`,
+              {
+                parseMode: 'Markdown',
+                reply_markup: { inline_keyboard: [buttons] },
+              },
+            );
+          } else {
+            await this.bot.sendMessage(chatId, `📝 Starting review for ${reviewRepo}…`);
+            await this.executeOrchestra(chatId, userId, 'draft', reviewRepo, '__REVIEW__');
+          }
+        } else if (payload === 'skip') {
+          await this.storage.setPendingOrchestra(userId, chatId, null);
+          await this.executeOrchestra(
+            pending.chatId, userId, pending.mode, pending.repo, pending.prompt,
+          );
+        }
         break;
       }
 
@@ -6408,15 +6651,27 @@ Step 4: Repeat
 ━━━ Commands ━━━
 /orch set owner/repo — Lock default repo
 /orch init <description> — Create roadmap (planner gate + draft preview)
-/orch modify <changes> — Revise existing roadmap (preview flow)
+/orch review [--import] [focus] — Critique roadmap & propose edits
+/orch modify <changes> — User-driven roadmap edit (preview flow)
 /orch plan — Conversational requirements gathering
 /orch next — Execute next task
 /orch next <specific task> — Execute specific task
+/orch next --force — Skip review auto-trigger checks
 /orch run owner/repo — Run with explicit repo
 /orch advise — Recommend the best executor model for the next task
 /orch roadmap — View roadmap status
 /orch history — View past tasks
 /orch unset — Clear locked repo
+
+━━━ Roadmap Review ━━━
+/orch review runs a critique pass on the current roadmap using the work
+log + recent execution history. Proposes edits as a draft preview —
+approve / revise / cancel like /orch init. Add --import for untrusted
+or hand-written roadmaps.
+
+Auto-triggers before /orch next:
+• <!-- review-gate --> markers in ROADMAP.md (drop one after a phase)
+• ≥2 runtime risk escalations in recent runs
 
 ━━━ Fixing Mistakes ━━━
 /orch redo <task> — Re-implement a task that was done wrong
@@ -6657,7 +6912,8 @@ The bot calls these automatically when relevant:
 /orch set owner/repo — Lock default repo
 /orch do <desc> — One-shot task (no roadmap)
 /orch init <desc> — Create ROADMAP.md + WORK_LOG.md (planner gate + draft preview)
-/orch modify <changes> — Revise existing roadmap (preview flow)
+/orch review [--import] — Critique roadmap & propose edits
+/orch modify <changes> — User-driven roadmap edit (preview flow)
 /orch next — Execute next roadmap task
 /orch next <task> — Execute specific task
 /orch advise — Recommend the best executor model for the next task

@@ -32,10 +32,15 @@ import {
   LARGE_FILE_WARNING_LINES,
   buildExecutionProfile,
   buildDraftInitPrompt,
+  buildReviewPrompt,
   parseDraftBlocks,
   formatDraftPreview,
   getPlannerRecommendation,
   PLANNER_FLOOR_IQ,
+  hasActiveReviewGate,
+  REVIEW_GATE_MARKER_PATTERN,
+  countRecentRiskEscalations,
+  REVIEW_RISK_THRESHOLD,
   classifyComplexityTier,
   countScopeAmplifiers,
   TIER_BUDGETS,
@@ -3418,6 +3423,205 @@ describe('getPlannerRecommendation', () => {
     } else {
       expect(typeof rec.suggestedIsFree).toBe('boolean');
     }
+  });
+});
+
+describe('buildReviewPrompt', () => {
+  const baseRoadmap = `# Project Roadmap
+
+## Phases
+
+### Phase 1: Setup
+- [x] **Task 1.1**: Initialize repo
+- [ ] **Task 1.2**: Add auth middleware
+
+## Risks & Open Questions
+- Auth provider is undecided`;
+
+  it('produces a review prompt with DRAFT_ROADMAP output instructions', () => {
+    const prompt = buildReviewPrompt({ repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap });
+    expect(prompt).toContain('Orchestra REVIEW Mode');
+    expect(prompt).toContain('DRAFT_ROADMAP');
+    expect(prompt).toContain('DRAFT_WORKLOG');
+    expect(prompt).toContain('DO NOT call github_create_pr');
+  });
+
+  it('embeds the current roadmap for auditing', () => {
+    const prompt = buildReviewPrompt({ repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap });
+    expect(prompt).toContain('Initialize repo');
+    expect(prompt).toContain('Add auth middleware');
+  });
+
+  it('preserves completed tasks rule is prominent', () => {
+    const prompt = buildReviewPrompt({ repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap });
+    expect(prompt).toContain('byte-for-byte');
+    expect(prompt).toContain('[x]');
+  });
+
+  it('injects import-mode guidance when importMode is true', () => {
+    const prompt = buildReviewPrompt({
+      repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap, importMode: true,
+    });
+    expect(prompt).toContain('IMPORT MODE');
+    expect(prompt).toMatch(/do NOT trust/i);
+  });
+
+  it('omits import-mode block when importMode is false', () => {
+    const prompt = buildReviewPrompt({ repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap });
+    expect(prompt).not.toContain('IMPORT MODE');
+  });
+
+  it('embeds user focus when provided', () => {
+    const prompt = buildReviewPrompt({
+      repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap,
+      userFocus: 'Check whether Phase 3 is still relevant',
+    });
+    expect(prompt).toContain('User Focus');
+    expect(prompt).toContain('Phase 3 is still relevant');
+  });
+
+  it('includes revision context when revising a previous review', () => {
+    const prompt = buildReviewPrompt({
+      repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap,
+      revision: 'Split Task 1.2 into auth + middleware',
+      previousDraft: '# Previous review draft',
+    });
+    expect(prompt).toContain('REVISION REQUEST');
+    expect(prompt).toContain('Split Task 1.2');
+    expect(prompt).toContain('Previous review draft');
+  });
+
+  it('requires the enriched per-task schema in output', () => {
+    const prompt = buildReviewPrompt({ repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap });
+    expect(prompt).toContain('Description:');
+    expect(prompt).toContain('Files:');
+    expect(prompt).toContain('Tier:');
+    expect(prompt).toContain('Acceptance:');
+    expect(prompt).toContain('Caveats:');
+    expect(prompt).toContain('Pattern:');
+    expect(prompt).toContain('Risk:');
+  });
+
+  it('requires a Review Log trail', () => {
+    const prompt = buildReviewPrompt({ repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap });
+    expect(prompt).toContain('Review Log');
+  });
+
+  it('injects recent execution history when provided', () => {
+    const prompt = buildReviewPrompt({
+      repo: 'o/r', modelAlias: 'claude', roadmapContent: baseRoadmap,
+      recentHistory: [
+        {
+          taskId: 't1', timestamp: 1, modelAlias: 'flash', repo: 'o/r', mode: 'run',
+          prompt: 'Fix login redirect', branchName: 'bot/fix-login-redirect-flash',
+          status: 'completed', filesChanged: ['src/auth.ts'],
+          summary: 'Discovered OAuth provider requires nonce',
+        },
+      ],
+    });
+    expect(prompt).toContain('Recent Execution History');
+    expect(prompt).toContain('Fix login redirect');
+    expect(prompt).toContain('OAuth provider requires nonce');
+  });
+});
+
+describe('hasActiveReviewGate', () => {
+  it('detects a review-gate marker after the last completed task', () => {
+    const roadmap = `### Phase 1
+- [x] Done task
+<!-- review-gate -->
+- [ ] Next task`;
+    expect(hasActiveReviewGate(roadmap)).toBe(true);
+  });
+
+  it('returns false when there is no marker', () => {
+    const roadmap = `### Phase 1
+- [x] Done task
+- [ ] Next task`;
+    expect(hasActiveReviewGate(roadmap)).toBe(false);
+  });
+
+  it('returns false when the marker is before all completed work', () => {
+    const roadmap = `<!-- review-gate -->
+### Phase 1
+- [x] Done task
+- [ ] Next task`;
+    expect(hasActiveReviewGate(roadmap)).toBe(false);
+  });
+
+  it('returns false when all tasks are done (no pending)', () => {
+    const roadmap = `### Phase 1
+- [x] Done 1
+<!-- review-gate -->
+- [x] Done 2`;
+    expect(hasActiveReviewGate(roadmap)).toBe(false);
+  });
+
+  it('accepts marker with a label after colon', () => {
+    expect(REVIEW_GATE_MARKER_PATTERN.test('<!-- review-gate: after phase 1 -->')).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(REVIEW_GATE_MARKER_PATTERN.test('<!-- REVIEW-GATE -->')).toBe(true);
+    expect(REVIEW_GATE_MARKER_PATTERN.test('<!-- Review-Gate -->')).toBe(true);
+  });
+
+  it('tolerates tight whitespace', () => {
+    expect(REVIEW_GATE_MARKER_PATTERN.test('<!--review-gate-->')).toBe(true);
+  });
+});
+
+describe('countRecentRiskEscalations', () => {
+  const mkEvent = (overrides: Partial<OrchestraEvent>): OrchestraEvent => ({
+    timestamp: 0,
+    taskId: 'x',
+    modelAlias: 'flash',
+    eventType: 'task_complete',
+    details: {},
+    ...overrides,
+  });
+
+  it('counts escalations within the recent terminal-event window', () => {
+    // See comment in the canonical orchestra.test.ts — windowSize=3 → 3.
+    const events: OrchestraEvent[] = [
+      mkEvent({ eventType: 'runtime_risk_escalation', details: { repo: 'o/r' } }),
+      mkEvent({ eventType: 'task_complete', details: { repo: 'o/r' } }),
+      mkEvent({ eventType: 'runtime_risk_escalation', details: { repo: 'o/r' } }),
+      mkEvent({ eventType: 'task_abort', details: { repo: 'o/r' } }),
+      mkEvent({ eventType: 'task_complete', details: { repo: 'o/r' } }),
+      mkEvent({ eventType: 'runtime_risk_escalation', details: { repo: 'o/r' } }),
+      mkEvent({ eventType: 'task_complete', details: { repo: 'o/r' } }),
+    ];
+    expect(countRecentRiskEscalations(events, 'o/r', 3)).toBe(3);
+  });
+
+  it('filters by repo when specified', () => {
+    const events: OrchestraEvent[] = [
+      mkEvent({ eventType: 'runtime_risk_escalation', details: { repo: 'a/b' } }),
+      mkEvent({ eventType: 'task_complete', details: { repo: 'a/b' } }),
+      mkEvent({ eventType: 'runtime_risk_escalation', details: { repo: 'o/r' } }),
+      mkEvent({ eventType: 'task_complete', details: { repo: 'o/r' } }),
+    ];
+    expect(countRecentRiskEscalations(events, 'o/r', 5)).toBe(1);
+    expect(countRecentRiskEscalations(events, 'a/b', 5)).toBe(1);
+  });
+
+  it('counts across all repos when repo arg is omitted', () => {
+    const events: OrchestraEvent[] = [
+      mkEvent({ eventType: 'runtime_risk_escalation', details: { repo: 'a/b' } }),
+      mkEvent({ eventType: 'runtime_risk_escalation', details: { repo: 'o/r' } }),
+      mkEvent({ eventType: 'task_complete', details: { repo: 'o/r' } }),
+    ];
+    expect(countRecentRiskEscalations(events, undefined, 5)).toBe(2);
+  });
+
+  it('returns 0 for an empty event list', () => {
+    expect(countRecentRiskEscalations([], 'o/r', 5)).toBe(0);
+  });
+
+  it('REVIEW_RISK_THRESHOLD is a small positive integer', () => {
+    expect(REVIEW_RISK_THRESHOLD).toBeGreaterThanOrEqual(1);
+    expect(REVIEW_RISK_THRESHOLD).toBeLessThanOrEqual(5);
   });
 });
 
