@@ -2527,6 +2527,27 @@ describe('taskForStorage', () => {
     expect(result.isStreaming).toBe(true);
   });
 
+  it('preserves review-draft signals so auto-resume restores them', () => {
+    // Regression: a review draft that auto-resumed one or more times was
+    // losing its isReviewDraft/reviewImportMode/reviewUserFocus flags
+    // because they weren't part of the persisted task state.
+    // The DO would then tag the stored draft with mode: 'init'.
+    const task = {
+      taskId: 't', chatId: 1, userId: 'u', modelAlias: 'kimi26',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      isDraftInit: true,
+      isReviewDraft: true,
+      reviewImportMode: true,
+      reviewUserFocus: 'focus on phase 3',
+    };
+    const result = taskForStorage(task) as unknown as Record<string, unknown>;
+    expect(result.isDraftInit).toBe(true);
+    expect(result.isReviewDraft).toBe(true);
+    expect(result.reviewImportMode).toBe(true);
+    expect(result.reviewUserFocus).toBe('focus on phase 3');
+  });
+
   it('should use UTF-8 byte length, not char length, for size check', () => {
     // Each emoji is 4 bytes in UTF-8 but 2 chars in JS (surrogate pair)
     // 400 entries * 200 emoji = ~320KB bytes but only ~160K chars.

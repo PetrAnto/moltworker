@@ -349,6 +349,12 @@ interface TaskState {
   orchestraRoadmapPath?: string;
   // Draft init mode: DO stores roadmap draft in R2 + sends preview message with buttons
   isDraftInit?: boolean;
+  // Review-draft signals — must survive auto-resume so the DO tags the
+  // stored draft with mode: 'review' even when the task resumed one or
+  // more times before producing the DRAFT_ROADMAP block.
+  isReviewDraft?: boolean;
+  reviewImportMode?: boolean;
+  reviewUserFocus?: string;
   // 5.1: Multi-agent review — which model reviewed the work
   reviewerAlias?: string;
   // Run health signals — tracked across the task lifetime
@@ -1426,6 +1432,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         orchestraRoadmapPath: task.orchestraRoadmapPath,
         // Preserve execution profile across CPU yield resumes
         executionProfile: task.executionProfile,
+        // Preserve draft/review signals across CPU-yield resumes too, for
+        // the same reason as the auto-resume path below.
+        isDraftInit: task.isDraftInit,
+        isReviewDraft: task.isReviewDraft,
+        reviewImportMode: task.reviewImportMode,
+        reviewUserFocus: task.reviewUserFocus,
       };
 
       this.doState.waitUntil(this.processTask(taskRequest).catch(async (error) => {
@@ -1684,6 +1696,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         orchestraRoadmapPath: task.orchestraRoadmapPath,
         // Preserve execution profile across resumes so resume cap stays consistent
         executionProfile: task.executionProfile,
+        // Preserve draft/review signals so the final DRAFT_ROADMAP block
+        // (typically produced after 1-2 auto-resumes) still reaches the
+        // review-tagging path. Without these, mode-'review' drafts got
+        // downgraded to mode-'init' on every resume.
+        isDraftInit: task.isDraftInit,
+        isReviewDraft: task.isReviewDraft,
+        reviewImportMode: task.reviewImportMode,
+        reviewUserFocus: task.reviewUserFocus,
       };
 
       // Use waitUntil to trigger resume without blocking alarm
@@ -2360,6 +2380,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (request.orchestraRoadmapPath) {
       task.orchestraRoadmapPath = request.orchestraRoadmapPath;
     }
+    // Persist review-draft signals so they survive auto-resume → the DO
+    // can still tag the stored draft with mode: 'review' after N resumes.
+    if (request.isReviewDraft) task.isReviewDraft = true;
+    if (request.reviewImportMode) task.reviewImportMode = true;
+    if (request.reviewUserFocus) task.reviewUserFocus = request.reviewUserFocus;
+    // Also eagerly tag isDraftInit for review drafts: the system-prompt
+    // sniff below would catch it on first iteration, but on auto-resume
+    // the DO may exit the run loop before iteration 1, leaving the
+    // stored draft flow unreachable.
+    if (request.isReviewDraft || request.isDraftInit) task.isDraftInit = true;
     // F.20: Initialize runtime risk profile for second-stage classification
     if (!task.runtimeRisk) {
       const predictedSimple = request.executionProfile?.intent.isSimple ?? false;
@@ -5418,11 +5448,14 @@ If you already created the new file and just need to patch the original, call gi
                 }
               }
 
-              // Review flows are tagged via the typed request.isReviewDraft
-              // flag (the request.prompt string is a formatted display
-              // string like "[Orchestra Draft] repo: …" — not the raw
-              // prompt — so a substring check there is unreliable).
-              const isReviewDraft = request.isReviewDraft === true;
+              // Review flows are tagged via the typed isReviewDraft flag,
+              // persisted on `task` at setup time so it survives auto-resume.
+              // Falling back to `request.isReviewDraft` covers the non-resume
+              // path where the task state hasn't been flushed yet, but the
+              // authoritative source on resume is `task.*`.
+              const isReviewDraft = task.isReviewDraft === true || request.isReviewDraft === true;
+              const reviewImportMode = task.reviewImportMode ?? request.reviewImportMode;
+              const reviewUserFocus = task.reviewUserFocus ?? request.reviewUserFocus;
               await storage.setOrchestraDraft(request.userId, request.chatId, {
                 repo: task.orchestraRepo || '',
                 chatId: request.chatId,
@@ -5435,9 +5468,10 @@ If you already created the new file and just need to patch the original, call gi
                 status: 'draft',
                 baseSha,
                 mode: isReviewDraft ? 'review' : 'init',
-                // Preserve review intent for future Revise rounds.
-                reviewImportMode: isReviewDraft ? request.reviewImportMode : undefined,
-                reviewUserFocus: isReviewDraft ? request.reviewUserFocus : undefined,
+                // Preserve review intent for future Revise rounds. Source
+                // from task.* (auto-resume-durable) with request.* fallback.
+                reviewImportMode: isReviewDraft ? reviewImportMode : undefined,
+                reviewUserFocus: isReviewDraft ? reviewUserFocus : undefined,
               });
 
               const elapsed = Math.round((Date.now() - task.startTime) / 1000);
