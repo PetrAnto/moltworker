@@ -39,6 +39,7 @@ import {
   buildExecutionProfile,
   buildDraftInitPrompt,
   commitDraftRoadmap,
+  getPlannerRecommendation,
   type OrchestraExecutionProfile,
 } from '../orchestra/orchestra';
 import { loadScratchpad, formatScratchpadForPrompt } from '../orchestra/scratchpad';
@@ -2420,6 +2421,54 @@ export class TelegramHandler {
           return;
         }
       }
+
+      // Planner gate: planning quality caps downstream execution quality.
+      // If the user's current model is below the planner floor, offer to
+      // escalate to a stronger planner for this draft only — the user's
+      // active chat model is NOT persisted, so future /orch next and
+      // normal chat keep running on the user's selection.
+      //
+      // Gate skipped entirely when no qualifying upgrade exists — we don't
+      // surface candidates whose IQ is unverified or below the floor.
+      const currentModelAlias = await this.storage.getUserModel(userId);
+      const planner = getPlannerRecommendation(currentModelAlias);
+      const hasUpgrade = planner.paidOptions.length > 0 || planner.freeOptions.length > 0;
+      if (planner.shouldEscalate && hasUpgrade) {
+        const buttons: { text: string; callback_data: string }[] = [];
+        if (planner.paidOptions.length > 0) {
+          const top = planner.paidOptions[0];
+          buttons.push({
+            text: `⚡ /${top.alias} (IQ:${top.intelligence.toFixed(0)} • ${top.cost})`,
+            callback_data: `orchplanner:${top.alias}`,
+          });
+        }
+        if (planner.freeOptions.length > 0) {
+          const topFree = planner.freeOptions[0];
+          buttons.push({
+            text: `🆓 /${topFree.alias} (IQ:${topFree.intelligence.toFixed(0)})`,
+            callback_data: `orchplanner:${topFree.alias}`,
+          });
+        }
+        buttons.push({
+          text: `Proceed with /${currentModelAlias}`,
+          callback_data: 'orchplanner:proceed',
+        });
+
+        await this.storage.setPendingOrchestra(userId, chatId, { mode: 'draft', repo, prompt, chatId });
+        await this.bot.sendMessage(
+          chatId,
+          `🧠 **Planner model gate**\n\n${planner.reason}\n\n` +
+          `A stronger planner produces tasks with concrete files, testable acceptance criteria, and caveats — ` +
+          `weaker executors can then finish them.\n\n` +
+          `Picking a planner uses it ONLY for this draft. Your chat model stays on /${currentModelAlias}.`,
+          {
+            parseMode: 'Markdown',
+            reply_markup: { inline_keyboard: [buttons] },
+          },
+        );
+        return;
+      }
+
       // Use draft mode: model generates roadmap for preview, user approves before PR
       return this.executeOrchestra(chatId, userId, 'draft', repo, prompt);
     }
@@ -2612,6 +2661,8 @@ export class TelegramHandler {
       '━━━ Commands ━━━\n' +
       '/orch do <description> — Execute a task directly (no roadmap)\n' +
       '/orch init <description> — Plan: create roadmap (no code)\n' +
+      '/orch modify <changes> — Revise existing roadmap (preview flow)\n' +
+      '/orch plan — Conversational requirements gathering\n' +
       '/orch advise — Analyze next task & pick best model\n' +
       '/orch next [task] — Run next (or specific) task\n' +
       '/orch roadmap — View roadmap status\n' +
@@ -2620,6 +2671,11 @@ export class TelegramHandler {
       '/orch reset <task> — Uncheck for re-run\n' +
       '/orch merge <PR#> [method] — Merge a PR (squash/merge/rebase)\n' +
       '/orch redo <task> — Re-implement a failed task\n\n' +
+      '━━━ Planner Gate ━━━\n' +
+      '/orch init checks your model against the planner floor (IQ:45).\n' +
+      'If it\'s weaker, you\'ll see a one-tap menu of stronger planners.\n' +
+      'Picking one applies ONLY to that draft (and its revisions) — your\n' +
+      'chat model and future /orch next runs stay on your selection.\n\n' +
       modelRecs + '\n\n' +
       '━━━ Workflows ━━━\n' +
       'Simple task (no roadmap):\n' +
@@ -2627,9 +2683,10 @@ export class TelegramHandler {
       '2. /orch do Add dark mode toggle\n\n' +
       'Complex project (with roadmap):\n' +
       '1. /orch set PetrAnto/myapp\n' +
-      '2. /orch init Build a user auth system\n' +
-      '3. /orch advise → pick best model\n' +
-      '4. /orch next (repeat until done)',
+      '2. /orch init Build a user auth system  ← strong planner suggested\n' +
+      '3. Approve / Revise the draft preview\n' +
+      '4. /orch advise → pick executor model\n' +
+      '5. /orch next (repeat until done)',
       { reply_markup: { inline_keyboard: orchButtons } },
     );
   }
@@ -2650,6 +2707,12 @@ export class TelegramHandler {
   /**
    * Re-run draft generation with user revision feedback.
    * Uses buildDraftInitPrompt with the previous draft + revision text.
+   *
+   * Carries draft.modelAlias forward as the transient modelOverride so
+   * the whole draft session (initial generation + all revisions) stays
+   * on the same model — including when that model was a transient
+   * planner chosen from the /orch init gate that was never persisted to
+   * user storage.
    */
   private async executeOrchestraDraftRevision(
     chatId: number,
@@ -2657,13 +2720,20 @@ export class TelegramHandler {
     draft: OrchestraDraft,
     revisionText: string,
   ): Promise<void> {
-    await this.bot.sendMessage(chatId, `✏️ Revising roadmap (revision #${draft.revisionCount})...`);
-    // Route through the normal draft flow but with revision context
-    // The buildDraftInitPrompt will include the previous draft and revision text
-    return this.executeOrchestra(chatId, userId, 'draft', draft.repo, draft.userPrompt, false, {
-      revision: revisionText,
-      previousDraft: draft.roadmapContent,
-    });
+    const currentUserModel = await this.storage.getUserModel(userId);
+    const modelNote = currentUserModel !== draft.modelAlias
+      ? ` (planner: /${draft.modelAlias}; chat model /${currentUserModel} unchanged)`
+      : '';
+    await this.bot.sendMessage(chatId, `✏️ Revising roadmap (revision #${draft.revisionCount})${modelNote}...`);
+    // Route through the normal draft flow but with revision context.
+    // Pass draft.modelAlias as modelOverride so a transient-planner draft
+    // stays on that planner for subsequent revisions.
+    return this.executeOrchestra(
+      chatId, userId, 'draft', draft.repo, draft.userPrompt,
+      false,
+      { revision: revisionText, previousDraft: draft.roadmapContent },
+      draft.modelAlias,
+    );
   }
 
   /**
@@ -2678,6 +2748,12 @@ export class TelegramHandler {
     prompt: string,
     skipModelGuard: boolean = false,
     draftRevision?: { revision: string; previousDraft: string },
+    /**
+     * Transient model override for this run only. Used by the planner gate
+     * so the draft uses a stronger model without persisting the choice to
+     * user storage. The user's regular chat model stays unchanged.
+     */
+    modelOverride?: string,
   ): Promise<void> {
     // Clean up stale orchestra tasks before starting new work
     if (this.r2Bucket) {
@@ -2694,7 +2770,8 @@ export class TelegramHandler {
       return;
     }
 
-    let modelAlias = await this.storage.getUserModel(userId);
+    // Transient override takes precedence — does NOT write to user storage.
+    let modelAlias = modelOverride ?? await this.storage.getUserModel(userId);
     const modelInfo = getModel(modelAlias);
 
     if (!modelInfo?.supportsTools) {
@@ -4002,6 +4079,41 @@ export class TelegramHandler {
         await this.storage.setPendingOrchestra(userId, chatId, null);
         const skipGuard = payload === 'proceed';
         await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt, skipGuard);
+        break;
+      }
+
+      case 'orchplanner': {
+        // Planner gate for /orch init — TRANSIENT model selection.
+        // Unlike orchgo, this does NOT persist the model via /use: the
+        // chosen planner applies to this draft only. The user's active
+        // chat model is unchanged, so subsequent /orch next and regular
+        // chat keep using the user's original selection.
+        if (query.message) {
+          await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+        }
+        const pending = await this.storage.getPendingOrchestra(userId, chatId);
+        if (!pending) {
+          await this.bot.sendMessage(chatId, '⏳ Planner gate expired. Please run /orch init again.');
+          break;
+        }
+        if (pending.chatId !== chatId) {
+          await this.bot.sendMessage(chatId, '⚠️ This orchestra request belongs to another chat. Run /orch init again here.');
+          break;
+        }
+        await this.storage.setPendingOrchestra(userId, chatId, null);
+        // payload is either a model alias (transient override) or "proceed".
+        const plannerOverride = payload && payload !== 'proceed' ? payload : undefined;
+        if (plannerOverride) {
+          const currentAlias = await this.storage.getUserModel(userId);
+          await this.bot.sendMessage(
+            chatId,
+            `🧠 Using /${plannerOverride} as planner for this draft only. Chat model stays on /${currentAlias}.`,
+          );
+        }
+        await this.executeOrchestra(
+          pending.chatId, userId, pending.mode, pending.repo, pending.prompt,
+          false, undefined, plannerOverride,
+        );
         break;
       }
 
@@ -6278,7 +6390,12 @@ Step 1: Lock your repo
 
 Step 2: Create a roadmap
   /orch init Build a user auth system with JWT and OAuth
-  → Creates ROADMAP.md + WORK_LOG.md as a PR
+  → If your model is below the planner floor (IQ:45), a one-tap menu
+    suggests stronger planners — picked planner runs the draft only
+  → Generates a draft preview with an enriched task schema
+    (Description, Files, Depends on, Tier, Acceptance, Caveats,
+     Pattern, Risk) plus a Risks & Open Questions section
+  → Approve to commit ROADMAP.md + WORK_LOG.md as a PR
 
 Step 3: Execute tasks
   /orch next
@@ -6290,10 +6407,13 @@ Step 4: Repeat
 
 ━━━ Commands ━━━
 /orch set owner/repo — Lock default repo
-/orch init <description> — Create roadmap
+/orch init <description> — Create roadmap (planner gate + draft preview)
+/orch modify <changes> — Revise existing roadmap (preview flow)
+/orch plan — Conversational requirements gathering
 /orch next — Execute next task
 /orch next <specific task> — Execute specific task
 /orch run owner/repo — Run with explicit repo
+/orch advise — Recommend the best executor model for the next task
 /orch roadmap — View roadmap status
 /orch history — View past tasks
 /orch unset — Clear locked repo
@@ -6329,7 +6449,7 @@ Each /orch next picks up where the last one left off.`;
       research: '🔍 Usage: /research <query>\n\nExamples:\n/research What is the current state of WebGPU?\n/research --mode decision Should I use Rust or Go for my CLI?',
       dossier: '📑 Usage: /dossier <topic>\n\nExamples:\n/dossier Compare Cloudflare Workers vs AWS Lambda\n/dossier State of AI coding assistants in 2026',
       orchset: '🔒 Usage: /orch set <owner/repo>\n\nExample:\n/orch set PetrAnto/myapp',
-      orchinit: '📋 Usage: /orch init <project description>\n\nExample:\n/orch init Build a user auth system with JWT and OAuth',
+      orchinit: '📋 Usage: /orch init <project description>\n\nExample:\n/orch init Build a user auth system with JWT and OAuth\n\n💡 If your current model is below the planner floor (IQ:45), you\'ll get a one-tap menu of stronger planners. Picking one applies to this draft only — your chat model stays unchanged.',
       img: '🎨 Usage: /img <prompt>\n\nExamples:\n/img a cat astronaut floating in space\n/img fluxmax a photorealistic mountain landscape at sunset',
       video: '🎬 Usage: /video <prompt>\n\nExamples:\n/video a cat astronaut floating in space\n/video seedance2 drone shot over a neon city at night',
       cfsearch: '🔍 Usage: /cf search <query>\n\nExamples:\n/cf search workers\n/cf search dns records',
@@ -6536,9 +6656,11 @@ The bot calls these automatically when relevant:
 ━━━ Orchestra Mode ━━━
 /orch set owner/repo — Lock default repo
 /orch do <desc> — One-shot task (no roadmap)
-/orch init <desc> — Create ROADMAP.md + WORK_LOG.md
+/orch init <desc> — Create ROADMAP.md + WORK_LOG.md (planner gate + draft preview)
+/orch modify <changes> — Revise existing roadmap (preview flow)
 /orch next — Execute next roadmap task
 /orch next <task> — Execute specific task
+/orch advise — Recommend the best executor model for the next task
 /orch merge <PR#> [method] — Merge PR (squash/merge/rebase)
 /orch roadmap — View roadmap status
 /orch history — View past tasks

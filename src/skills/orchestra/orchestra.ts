@@ -15,7 +15,7 @@
  *   - Creates a PR with code changes + updated ROADMAP.md + WORK_LOG.md entry
  */
 
-import { getModel } from '../../openrouter/models';
+import { getModel, getRankedOrchestraModels } from '../../openrouter/models';
 import type { OrchestraDraft } from '../../openrouter/storage';
 
 // Orchestra task entry stored in R2
@@ -98,17 +98,18 @@ You are a PLANNER, not an implementer. Your ONLY job is to create ROADMAP.md and
 
 ## Workflow
 
-### Step 1: UNDERSTAND THE REPO (STRICT BUDGET: max 5 file reads total)
-**Be efficient — read only what you need, then move to Step 3 quickly.**
-**HARD LIMIT: You have a budget of 12 total tool calls for init. Plan accordingly: list_files → 2-3 read_file → create_pr.**
-- If the user asks to COPY or USE an existing roadmap, just find it and copy it — skip analysis.
-- Use \`github_list_files\` to scan the root and main source directory
-- Use \`github_read_file\` to read ONLY these key files:
+### Step 1: UNDERSTAND THE REPO (BUDGET: up to 10 file reads)
+**Planning is a one-time investment — spend the budget to produce a roadmap a weaker executor can follow.**
+**BUDGET: up to 18 total tool calls for init, up to 10 file reads. Plan: list_files → parallel read_file → create_pr.**
+- If the user asks to COPY or USE an existing roadmap, just find it and copy it — skip deep analysis and use a small budget.
+- Use \`github_list_files\` to scan the root and main source directories
+- Use \`github_read_file\` to read the files you need. Typical set:
   - README.md (project overview)
-  - package.json or equivalent (dependencies, scripts)
+  - package.json / pyproject.toml / Cargo.toml / go.mod (dependencies, scripts, entry points)
   - Any existing roadmap: ${ROADMAP_FILE_CANDIDATES.join(', ')}
-  - 1-2 main source files (entry point, main component)
-- Do NOT read every file — the listing gives you enough structure info
+  - Entry point(s) and 2-4 representative source files (routes, main components, schemas)
+  - 1-2 existing tests if the project has a test pattern — these anchor task acceptance criteria
+- Call multiple reads in parallel when possible
 - Do NOT re-read a file you already read — use the content from the first read
 
 ### Step 1.5: FLAG LARGE FILES (skip if user asked to copy existing roadmap)
@@ -124,7 +125,7 @@ You are a PLANNER, not an implementer. Your ONLY job is to create ROADMAP.md and
 - Order tasks by dependency (foundations first)
 
 ### Step 3: CREATE ROADMAP.md
-Write a \`ROADMAP.md\` file with this exact format:
+Write a \`ROADMAP.md\` file with this exact format. Each task MUST use the enriched template — downstream /orch next runs pass these tasks to smaller/cheaper executor models, so the richer the per-task spec, the higher the execution success rate.
 
 \`\`\`markdown
 # Project Roadmap
@@ -137,10 +138,15 @@ Write a \`ROADMAP.md\` file with this exact format:
 ## Phases
 
 ### Phase 1: {phase name}
-- [ ] **Task 1.1**: {task title}
-  - Description: {what needs to be done}
-  - Files: {likely files to create/modify}
-  - Depends on: {none or task IDs}
+- [ ] **Task 1.1**: {task title — specific, actionable, anchored on real identifiers/paths}
+  - Description: {1-3 sentences — what needs to be done and why}
+  - Files: {comma-separated real paths you verified exist, or explicit "new: path/to/new.ts"}
+  - Depends on: {none, or "Task X.Y" ids}
+  - Tier: {trivial|small|medium|large — predicted scope}
+  - Acceptance: {one testable criterion — grep, test name, command exit code, response shape}
+  - Caveats: {known gotchas — WORK_LOG.md is append-only, Workers has no fs, file imports from N modules, etc.}
+  - Pattern: {optional — path to an existing similar implementation to mirror, or "none"}
+  - Risk: {low|medium|high — what could go wrong}
 - [ ] **Task 1.2**: {task title}
   ...
 
@@ -148,16 +154,26 @@ Write a \`ROADMAP.md\` file with this exact format:
 - [ ] **Task 2.1**: {task title}
   ...
 
+## Risks & Open Questions
+- {assumption made and the question that would invalidate it}
+- {external dependency that could change (API, library, data shape)}
+- {area where scope is fuzzy — flagged so the user can tighten it or run /orch review mid-execution}
+
 ## Notes
-{any architectural decisions, risks, or open questions}
+{architectural decisions and cross-task context}
 \`\`\`
 
 Key rules for the roadmap:
 - Use \`- [ ]\` for pending tasks, \`- [x]\` for completed
-- Task titles should be specific enough to act on (e.g., "Add JWT auth middleware" not "Handle auth")
+- Task titles should be specific enough to act on (e.g., "Add JWT auth middleware in src/auth/jwt.ts" not "Handle auth")
+- Every task MUST include all template fields (Description, Files, Depends on, Tier, Acceptance, Caveats, Pattern, Risk). Use "none" or "-" when a field genuinely doesn't apply; do not omit the line.
+- **Acceptance must be testable** — a grep, a test name, a command exit code, a URL response shape. Something a weaker executor can verify without judgment calls.
+- **Caveats must surface bot-guardrail traps** when relevant: WORK_LOG.md append-only, ROADMAP.md can only flip tasks to \`[x]\`, destructive file rewrites blocked if >60% identifiers disappear, refactors must be atomic (create+import+delete+update-refs in ONE task).
+- **Tier prediction**: trivial = typo/bump, small = single-file bug fix, medium = new feature or single-file refactor, large = multi-file refactor / migration / test suite. If a task looks small but touches tests + configs + multiple files, bump to medium.
 - Include file hints so the next run knows where to work
 - Include dependency info so tasks execute in order. Always extract leaf modules first (modules that no other modules depend on) before extracting parent modules.
 - 3-6 phases is typical, each with 2-5 tasks
+- The "Risks & Open Questions" section is REQUIRED — even if it's "none known". This tells future /orch review runs where to focus.
 
 **CRITICAL — ATOMIC REFACTORING TASKS:**
 When a task involves moving code from one file to new module files, the ENTIRE move (create new file + add imports + DELETE from source) MUST be ONE task. NEVER split "create modules" and "update source file" into separate tasks.
@@ -219,7 +235,7 @@ The \`pr:\` field MUST be a real GitHub URL. If PR creation failed, set \`pr: FA
 
 ## Rules
 - **DO NOT ask for user confirmation or permission** — execute ALL steps immediately and autonomously
-- **Be FAST** — read only essential files (5-8 max), then create the PR. Do not exhaustively read every file.
+- **Be purposeful** — read the files you need for a concrete plan (up to 10), then create the PR. Skip files that won't change the roadmap.
 - Always create a PR — never just describe what should be done
 - If an existing roadmap exists, incorporate its content (don't discard previous work)
 - Keep phases realistic — avoid overplanning
@@ -267,22 +283,25 @@ Apply the user's feedback to produce an improved roadmap. Keep parts they didn't
   const repoReadingSteps = isRevision ? `
 ### Step 1: APPLY REVISION
 You already have the previous roadmap above. Apply the user's feedback to improve it.
-You may read 1-2 repo files if the revision requires new understanding, but prefer using existing knowledge.
+You may read 2-3 repo files if the revision requires new understanding, but prefer using existing knowledge.
 ` : `
-### Step 1: UNDERSTAND THE REPO (STRICT BUDGET: max 5 file reads total)
-**Be efficient — read only what you need, then move to Step 2 quickly.**
-**HARD LIMIT: You have a budget of 8 total tool calls for this draft.**
-- Use \`github_list_files\` to scan the root and main source directory
-- Use \`github_read_file\` to read ONLY these key files:
+### Step 1: UNDERSTAND THE REPO (BUDGET: up to 10 file reads)
+**Planning is a one-time investment — spend the budget to produce a high-quality roadmap that weaker downstream models can execute.**
+**BUDGET: up to 15 total tool calls, 10 file reads. Use them when they materially improve task specificity.**
+- Use \`github_list_files\` to scan the root and the main source directories
+- Use \`github_read_file\` to read the files you need. Typical set:
   - README.md (project overview)
-  - package.json or equivalent (dependencies, scripts)
+  - package.json / pyproject.toml / Cargo.toml / go.mod (dependencies, scripts, entry points)
   - Any existing roadmap: ${ROADMAP_FILE_CANDIDATES.join(', ')}
-  - 1-2 main source files (entry point, main component)
+  - Entry point(s) and 2-4 representative source files (routes, main components, schemas)
+  - 1-2 existing tests if the project has a test pattern — these anchor task acceptance criteria
+- Call multiple reads in parallel when possible. Stop reading once you have enough to write concrete tasks with real file hints, real identifier names, and testable acceptance criteria.
 
 ### Step 1.5: FLAG LARGE FILES
 - Note file sizes from the listing to flag large files (>${LARGE_FILE_THRESHOLD_LINES} lines or ~${LARGE_FILE_THRESHOLD_KB}KB)
 - Also flag files in the WARNING ZONE: ${LARGE_FILE_WARNING_LINES}-${LARGE_FILE_THRESHOLD_LINES} lines
 - Only check source code files — skip config, generated, and lock files
+- Large files become *extraction tasks* placed EARLY in the roadmap so later tasks can edit smaller modules
 `;
 
   return `# Orchestra DRAFT Mode — Roadmap Preview
@@ -310,6 +329,8 @@ ${repoReadingSteps}
 Output the roadmap in a DRAFT_ROADMAP block and the work log in a DRAFT_WORKLOG block.
 These will be shown to the user for review before committing.
 
+Each task MUST use the fully-enriched template below. Downstream runs pass tasks to smaller/cheaper models, so the richer the per-task spec, the higher the execution success rate.
+
 \`\`\`DRAFT_ROADMAP
 # Project Roadmap
 
@@ -321,14 +342,25 @@ These will be shown to the user for review before committing.
 ## Phases
 
 ### Phase 1: {phase name}
-- [ ] **Task 1.1**: {task title}
-  - Description: {what needs to be done}
-  - Files: {likely files to create/modify}
-  - Depends on: {none or task IDs}
-...
+- [ ] **Task 1.1**: {task title — specific, actionable, anchored on real identifiers/paths}
+  - Description: {1-3 sentences — what needs to be done and why}
+  - Files: {comma-separated real paths you verified exist, or explicit "new: path/to/new.ts"}
+  - Depends on: {none, or "Task X.Y" ids}
+  - Tier: {trivial|small|medium|large — predicted scope}
+  - Acceptance: {one testable criterion — e.g. "grep for \`oldFn\` in src/foo.ts returns 0", "npm test passes", "GET /api/x returns 200 with {id, name}"}
+  - Caveats: {known gotchas the executor MUST know — e.g. "WORK_LOG.md is append-only", "Cloudflare Workers has no fs access", "this file imports from 3 other modules — update them too", "timezone-sensitive"}
+  - Pattern: {optional — path to an existing similar implementation to mirror, or "none"}
+  - Risk: {low|medium|high — what could go wrong}
+- [ ] **Task 1.2**: {task title}
+  ...
+
+## Risks & Open Questions
+- {assumption you made and the question that would invalidate it}
+- {external dependency that could change (API, library, data shape)}
+- {area where scope is fuzzy — flagged so the user can tighten it or run /orch review mid-execution}
 
 ## Notes
-{any architectural decisions, risks, or open questions}
+{architectural decisions and cross-task context}
 \`\`\`
 
 \`\`\`DRAFT_WORKLOG
@@ -343,13 +375,17 @@ These will be shown to the user for review before committing.
 
 ## Roadmap Rules
 - Use \`- [ ]\` for pending tasks, \`- [x]\` for completed
-- Task titles should be specific enough to act on
-- Include file hints so the next run knows where to work
+- Task titles should be specific enough to act on — include a filename, identifier, or concrete outcome
+- Every task MUST include all template fields (Description, Files, Depends on, Tier, Acceptance, Caveats, Pattern, Risk). Use "none" or "-" when a field genuinely doesn't apply; do not omit the line.
+- **Acceptance must be testable.** A grep, a test name, a command exit code, a URL response shape — something a weaker executor can verify without judgment calls.
+- **Caveats should surface bot-guardrail traps** when relevant: WORK_LOG.md is append-only; ROADMAP.md can only mark tasks \`[x]\`; destructive file rewrites are blocked if >60% identifiers disappear; refactors must be atomic (create+import+delete+update-refs in ONE task).
+- **Tier predictions**: trivial = typo/bump, small = single-file bug fix, medium = new feature or single-file refactor, large = multi-file refactor / migration / test suite. If a task looks small but touches tests, configs, and multiple files, bump to medium.
 - Include dependency info so tasks execute in order
 - 3-6 phases is typical, each with 2-5 tasks
-- **ATOMIC REFACTORING**: create + import + DELETE in ONE task, never split
-- **Large files**: add extraction tasks EARLY if files >${LARGE_FILE_THRESHOLD_LINES} lines
+- **ATOMIC REFACTORING**: create + import + DELETE + update cross-file refs — all in ONE task, never split
+- **Large files**: add extraction tasks EARLY if files >${LARGE_FILE_THRESHOLD_LINES} lines, or in WARNING ZONE (${LARGE_FILE_WARNING_LINES}-${LARGE_FILE_THRESHOLD_LINES} lines)
 - **ABSOLUTELY NO SOURCE CODE** — plan only, no implementation
+- The "Risks & Open Questions" section is REQUIRED — even if it's "none known, all specs are explicit". This tells future /orch review runs where to focus.
 
 ## Output Rules
 - Output DRAFT_ROADMAP and DRAFT_WORKLOG blocks — these are REQUIRED
@@ -1455,6 +1491,140 @@ export interface ResolvedTask {
   ambiguity: 'none' | 'low' | 'high';
   /** Structured execution brief for the model */
   executionBrief: string;
+}
+
+// ============================================================
+// PLANNER RECOMMENDATION — pick a strong model for /orch init
+// ============================================================
+
+/** Intelligence threshold above which a model is strong enough to plan. */
+export const PLANNER_FLOOR_IQ = 45;
+
+/** A candidate model shown in the planner-gate button menu. */
+export interface PlannerCandidate {
+  alias: string;
+  intelligence: number;
+  cost: string;
+  isFree: boolean;
+}
+
+/** Planner recommendation result — drives the /orch init gate. */
+export interface PlannerRecommendation {
+  /** Current model the user has selected. */
+  currentAlias: string;
+  /** IQ of the current model (fallback default if unknown). */
+  currentIntelligence: number;
+  /**
+   * True when the current model is below the planner floor OR its IQ is
+   * unverified. Unverified models trigger the gate but may still get no
+   * qualifying alternatives (see freeOptions/paidOptions).
+   */
+  shouldEscalate: boolean;
+  /**
+   * Top suggested planner — prefers paid, falls back to top free.
+   * Only set when at least one candidate has verified IQ ≥ PLANNER_FLOOR_IQ.
+   */
+  suggestedAlias?: string;
+  /** True when the suggested model is free. */
+  suggestedIsFree?: boolean;
+  /** IQ of the suggested model (only set when suggestedAlias is set). */
+  suggestedIntelligence?: number;
+  /** Top free candidates for the button menu — each has verified IQ ≥ floor. */
+  freeOptions: PlannerCandidate[];
+  /** Top paid candidates for the button menu — each has verified IQ ≥ floor. */
+  paidOptions: PlannerCandidate[];
+  /** Human-readable reason for the recommendation. */
+  reason: string;
+}
+
+/**
+ * Evaluate whether the user's current model is strong enough for planning.
+ *
+ * Rationale: planning quality caps downstream execution success. A vague
+ * roadmap produced by a weak planner forces the run-mode loop into
+ * force-escalation, auto-resumes, and stall-aborts on every task. Paying
+ * for a strong model once up-front (or opting into a strong free model)
+ * pays back across all subsequent runs.
+ *
+ * Selection logic:
+ * - If current model's intelligenceIndex >= PLANNER_FLOOR_IQ → no escalation.
+ * - Otherwise, offer candidates that themselves meet the floor. Candidates
+ *   without verified intelligenceIndex data are excluded — we can't
+ *   guarantee they're an upgrade, so surfacing them would signal a
+ *   stronger upgrade than we actually enforce.
+ * - If no qualifying candidate exists, report that explicitly rather than
+ *   offering weaker-or-equal alternatives.
+ *
+ * @param currentAlias - User's currently selected model alias.
+ */
+export function getPlannerRecommendation(currentAlias: string): PlannerRecommendation {
+  const current = getModel(currentAlias);
+  // Fall back to safe defaults for models without enrichment data.
+  // Unknown-IQ models are treated as below-floor so we still offer the gate.
+  const currentIQ = current?.intelligenceIndex ?? (current?.isFree ? 20 : 40);
+  const hasVerifiedIQ = typeof current?.intelligenceIndex === 'number';
+  const shouldEscalate = !hasVerifiedIQ || currentIQ < PLANNER_FLOOR_IQ;
+
+  const ranked = getRankedOrchestraModels();
+
+  // Strict filter: candidate must have verified intelligenceIndex AND meet the floor.
+  // This keeps the gate's promise consistent — we never offer an "upgrade"
+  // whose IQ is unknown or below the floor we just used to flag the current model.
+  const meetsFloor = (alias: string): boolean => {
+    const m = getModel(alias);
+    return typeof m?.intelligenceIndex === 'number' && m.intelligenceIndex >= PLANNER_FLOOR_IQ;
+  };
+
+  const toCandidate = (alias: string, cost: string, isFree: boolean): PlannerCandidate => {
+    const m = getModel(alias);
+    // meetsFloor guarantees intelligenceIndex is a number here.
+    return { alias, intelligence: m!.intelligenceIndex!, cost, isFree };
+  };
+
+  const freeOptions: PlannerCandidate[] = ranked
+    .filter(r => r.isFree && r.alias !== currentAlias && meetsFloor(r.alias))
+    .slice(0, 3)
+    .map(r => toCandidate(r.alias, r.cost, true));
+
+  const paidOptions: PlannerCandidate[] = ranked
+    .filter(r => !r.isFree && r.alias !== currentAlias && meetsFloor(r.alias))
+    .slice(0, 3)
+    .map(r => toCandidate(r.alias, r.cost, false));
+
+  // Suggest the top paid candidate (prefer paid for planning reliability),
+  // falling back to the top free candidate.
+  let suggestedAlias: string | undefined;
+  let suggestedIsFree = false;
+  if (paidOptions.length > 0) {
+    suggestedAlias = paidOptions[0].alias;
+    suggestedIsFree = false;
+  } else if (freeOptions.length > 0) {
+    suggestedAlias = freeOptions[0].alias;
+    suggestedIsFree = true;
+  }
+  const suggested = suggestedAlias ? getModel(suggestedAlias) : undefined;
+
+  const hasQualifyingCandidate = !!suggestedAlias;
+  const currentIQLabel = hasVerifiedIQ
+    ? `IQ:${currentIQ.toFixed(0)}`
+    : 'IQ:unverified';
+  const reason = !shouldEscalate
+    ? `/${currentAlias} (${currentIQLabel}) is strong enough for planning.`
+    : hasQualifyingCandidate
+    ? `Planning quality depends on the planner. /${currentAlias} (${currentIQLabel}) is below the planner floor (IQ:${PLANNER_FLOOR_IQ}) — a stronger planner produces specific tasks that weaker executors can finish.`
+    : `/${currentAlias} (${currentIQLabel}) is below the planner floor (IQ:${PLANNER_FLOOR_IQ}), but no verified alternative at or above the floor is available. Proceed or pick one manually.`;
+
+  return {
+    currentAlias,
+    currentIntelligence: currentIQ,
+    shouldEscalate,
+    suggestedAlias,
+    suggestedIsFree: suggestedAlias ? suggestedIsFree : undefined,
+    suggestedIntelligence: suggested?.intelligenceIndex,
+    freeOptions,
+    paidOptions,
+    reason,
+  };
 }
 
 // ============================================================
