@@ -1512,19 +1512,26 @@ export interface PlannerCandidate {
 export interface PlannerRecommendation {
   /** Current model the user has selected. */
   currentAlias: string;
-  /** IQ of the current model (0 if unknown). */
+  /** IQ of the current model (fallback default if unknown). */
   currentIntelligence: number;
-  /** True when the current model is below the planner floor. */
+  /**
+   * True when the current model is below the planner floor OR its IQ is
+   * unverified. Unverified models trigger the gate but may still get no
+   * qualifying alternatives (see freeOptions/paidOptions).
+   */
   shouldEscalate: boolean;
-  /** Top suggested planner — prefers paid, falls back to top free. */
+  /**
+   * Top suggested planner — prefers paid, falls back to top free.
+   * Only set when at least one candidate has verified IQ ≥ PLANNER_FLOOR_IQ.
+   */
   suggestedAlias?: string;
   /** True when the suggested model is free. */
   suggestedIsFree?: boolean;
-  /** IQ of the suggested model (for display). */
+  /** IQ of the suggested model (only set when suggestedAlias is set). */
   suggestedIntelligence?: number;
-  /** Top free candidates for the button menu (up to 3). */
+  /** Top free candidates for the button menu — each has verified IQ ≥ floor. */
   freeOptions: PlannerCandidate[];
-  /** Top paid candidates for the button menu (up to 3). */
+  /** Top paid candidates for the button menu — each has verified IQ ≥ floor. */
   paidOptions: PlannerCandidate[];
   /** Human-readable reason for the recommendation. */
   reason: string;
@@ -1541,35 +1548,51 @@ export interface PlannerRecommendation {
  *
  * Selection logic:
  * - If current model's intelligenceIndex >= PLANNER_FLOOR_IQ → no escalation.
- * - Otherwise, suggest the top-ranked paid model, or top free if no paid
- *   is available. User can still override via the "Proceed" button.
+ * - Otherwise, offer candidates that themselves meet the floor. Candidates
+ *   without verified intelligenceIndex data are excluded — we can't
+ *   guarantee they're an upgrade, so surfacing them would signal a
+ *   stronger upgrade than we actually enforce.
+ * - If no qualifying candidate exists, report that explicitly rather than
+ *   offering weaker-or-equal alternatives.
  *
  * @param currentAlias - User's currently selected model alias.
  */
 export function getPlannerRecommendation(currentAlias: string): PlannerRecommendation {
   const current = getModel(currentAlias);
   // Fall back to safe defaults for models without enrichment data.
+  // Unknown-IQ models are treated as below-floor so we still offer the gate.
   const currentIQ = current?.intelligenceIndex ?? (current?.isFree ? 20 : 40);
-  const shouldEscalate = currentIQ < PLANNER_FLOOR_IQ;
+  const hasVerifiedIQ = typeof current?.intelligenceIndex === 'number';
+  const shouldEscalate = !hasVerifiedIQ || currentIQ < PLANNER_FLOOR_IQ;
 
   const ranked = getRankedOrchestraModels();
 
+  // Strict filter: candidate must have verified intelligenceIndex AND meet the floor.
+  // This keeps the gate's promise consistent — we never offer an "upgrade"
+  // whose IQ is unknown or below the floor we just used to flag the current model.
+  const meetsFloor = (alias: string): boolean => {
+    const m = getModel(alias);
+    return typeof m?.intelligenceIndex === 'number' && m.intelligenceIndex >= PLANNER_FLOOR_IQ;
+  };
+
   const toCandidate = (alias: string, cost: string, isFree: boolean): PlannerCandidate => {
     const m = getModel(alias);
-    return { alias, intelligence: m?.intelligenceIndex ?? 0, cost, isFree };
+    // meetsFloor guarantees intelligenceIndex is a number here.
+    return { alias, intelligence: m!.intelligenceIndex!, cost, isFree };
   };
 
   const freeOptions: PlannerCandidate[] = ranked
-    .filter(r => r.isFree && r.alias !== currentAlias)
+    .filter(r => r.isFree && r.alias !== currentAlias && meetsFloor(r.alias))
     .slice(0, 3)
     .map(r => toCandidate(r.alias, r.cost, true));
 
   const paidOptions: PlannerCandidate[] = ranked
-    .filter(r => !r.isFree && r.alias !== currentAlias)
+    .filter(r => !r.isFree && r.alias !== currentAlias && meetsFloor(r.alias))
     .slice(0, 3)
     .map(r => toCandidate(r.alias, r.cost, false));
 
-  // Suggest the top paid model when available; otherwise the top free.
+  // Suggest the top paid candidate (prefer paid for planning reliability),
+  // falling back to the top free candidate.
   let suggestedAlias: string | undefined;
   let suggestedIsFree = false;
   if (paidOptions.length > 0) {
@@ -1581,16 +1604,22 @@ export function getPlannerRecommendation(currentAlias: string): PlannerRecommend
   }
   const suggested = suggestedAlias ? getModel(suggestedAlias) : undefined;
 
-  const reason = shouldEscalate
-    ? `Planning quality depends on the planner. /${currentAlias} (IQ:${currentIQ.toFixed(0)}) is below the planner floor (IQ:${PLANNER_FLOOR_IQ}) — a stronger planner produces specific tasks that weaker executors can finish.`
-    : `/${currentAlias} (IQ:${currentIQ.toFixed(0)}) is strong enough for planning.`;
+  const hasQualifyingCandidate = !!suggestedAlias;
+  const currentIQLabel = hasVerifiedIQ
+    ? `IQ:${currentIQ.toFixed(0)}`
+    : 'IQ:unverified';
+  const reason = !shouldEscalate
+    ? `/${currentAlias} (${currentIQLabel}) is strong enough for planning.`
+    : hasQualifyingCandidate
+    ? `Planning quality depends on the planner. /${currentAlias} (${currentIQLabel}) is below the planner floor (IQ:${PLANNER_FLOOR_IQ}) — a stronger planner produces specific tasks that weaker executors can finish.`
+    : `/${currentAlias} (${currentIQLabel}) is below the planner floor (IQ:${PLANNER_FLOOR_IQ}), but no verified alternative at or above the floor is available. Proceed or pick one manually.`;
 
   return {
     currentAlias,
     currentIntelligence: currentIQ,
     shouldEscalate,
     suggestedAlias,
-    suggestedIsFree,
+    suggestedIsFree: suggestedAlias ? suggestedIsFree : undefined,
     suggestedIntelligence: suggested?.intelligenceIndex,
     freeOptions,
     paidOptions,

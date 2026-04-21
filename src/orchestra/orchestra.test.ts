@@ -3384,6 +3384,40 @@ describe('getPlannerRecommendation', () => {
     const rec = getPlannerRecommendation('nonexistent-model-xyz');
     expect(rec.shouldEscalate).toBe(true);
     expect(rec.currentIntelligence).toBeGreaterThan(0);
+    expect(rec.reason).toContain('unverified');
+  });
+
+  it('every candidate has verified IQ at or above the planner floor', () => {
+    const rec = getPlannerRecommendation('flash');
+    for (const c of [...rec.freeOptions, ...rec.paidOptions]) {
+      expect(c.intelligence).toBeGreaterThanOrEqual(PLANNER_FLOOR_IQ);
+    }
+  });
+
+  it('suggested planner has IQ ≥ floor when set', () => {
+    const rec = getPlannerRecommendation('flash');
+    if (rec.suggestedAlias) {
+      expect(rec.suggestedIntelligence).toBeDefined();
+      expect(rec.suggestedIntelligence!).toBeGreaterThanOrEqual(PLANNER_FLOOR_IQ);
+    }
+  });
+
+  it('does not escalate when current model already meets the floor', () => {
+    const rec1 = getPlannerRecommendation('flash');
+    if (!rec1.suggestedAlias) return;
+    const rec2 = getPlannerRecommendation(rec1.suggestedAlias);
+    expect(rec2.shouldEscalate).toBe(false);
+    expect(rec2.reason).toContain('strong enough');
+  });
+
+  it('suggestedIsFree is undefined when no candidate qualifies', () => {
+    const rec = getPlannerRecommendation('flash');
+    if (!rec.suggestedAlias) {
+      expect(rec.suggestedIsFree).toBeUndefined();
+      expect(rec.suggestedIntelligence).toBeUndefined();
+    } else {
+      expect(typeof rec.suggestedIsFree).toBe('boolean');
+    }
   });
 });
 

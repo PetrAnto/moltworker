@@ -2424,29 +2424,34 @@ export class TelegramHandler {
 
       // Planner gate: planning quality caps downstream execution quality.
       // If the user's current model is below the planner floor, offer to
-      // escalate to a stronger planner before spending the init budget.
-      // The user can still proceed with their current model via the button.
+      // escalate to a stronger planner for this draft only — the user's
+      // active chat model is NOT persisted, so future /orch next and
+      // normal chat keep running on the user's selection.
+      //
+      // Gate skipped entirely when no qualifying upgrade exists — we don't
+      // surface candidates whose IQ is unverified or below the floor.
       const currentModelAlias = await this.storage.getUserModel(userId);
       const planner = getPlannerRecommendation(currentModelAlias);
-      if (planner.shouldEscalate) {
+      const hasUpgrade = planner.paidOptions.length > 0 || planner.freeOptions.length > 0;
+      if (planner.shouldEscalate && hasUpgrade) {
         const buttons: { text: string; callback_data: string }[] = [];
         if (planner.paidOptions.length > 0) {
           const top = planner.paidOptions[0];
           buttons.push({
             text: `⚡ /${top.alias} (IQ:${top.intelligence.toFixed(0)} • ${top.cost})`,
-            callback_data: `orchgo:${top.alias}`,
+            callback_data: `orchplanner:${top.alias}`,
           });
         }
         if (planner.freeOptions.length > 0) {
           const topFree = planner.freeOptions[0];
           buttons.push({
             text: `🆓 /${topFree.alias} (IQ:${topFree.intelligence.toFixed(0)})`,
-            callback_data: `orchgo:${topFree.alias}`,
+            callback_data: `orchplanner:${topFree.alias}`,
           });
         }
         buttons.push({
           text: `Proceed with /${currentModelAlias}`,
-          callback_data: 'orchgo:proceed',
+          callback_data: 'orchplanner:proceed',
         });
 
         await this.storage.setPendingOrchestra(userId, chatId, { mode: 'draft', repo, prompt, chatId });
@@ -2454,8 +2459,8 @@ export class TelegramHandler {
           chatId,
           `🧠 **Planner model gate**\n\n${planner.reason}\n\n` +
           `A stronger planner produces tasks with concrete files, testable acceptance criteria, and caveats — ` +
-          `weaker executors can then finish them. Executor model stays on /${currentModelAlias}.\n\n` +
-          `Pick a planner or proceed anyway:`,
+          `weaker executors can then finish them.\n\n` +
+          `Picking a planner uses it ONLY for this draft. Your chat model stays on /${currentModelAlias}.`,
           {
             parseMode: 'Markdown',
             reply_markup: { inline_keyboard: [buttons] },
@@ -2722,6 +2727,12 @@ export class TelegramHandler {
     prompt: string,
     skipModelGuard: boolean = false,
     draftRevision?: { revision: string; previousDraft: string },
+    /**
+     * Transient model override for this run only. Used by the planner gate
+     * so the draft uses a stronger model without persisting the choice to
+     * user storage. The user's regular chat model stays unchanged.
+     */
+    modelOverride?: string,
   ): Promise<void> {
     // Clean up stale orchestra tasks before starting new work
     if (this.r2Bucket) {
@@ -2738,7 +2749,8 @@ export class TelegramHandler {
       return;
     }
 
-    let modelAlias = await this.storage.getUserModel(userId);
+    // Transient override takes precedence — does NOT write to user storage.
+    let modelAlias = modelOverride ?? await this.storage.getUserModel(userId);
     const modelInfo = getModel(modelAlias);
 
     if (!modelInfo?.supportsTools) {
@@ -4046,6 +4058,41 @@ export class TelegramHandler {
         await this.storage.setPendingOrchestra(userId, chatId, null);
         const skipGuard = payload === 'proceed';
         await this.executeOrchestra(pending.chatId, userId, pending.mode, pending.repo, pending.prompt, skipGuard);
+        break;
+      }
+
+      case 'orchplanner': {
+        // Planner gate for /orch init — TRANSIENT model selection.
+        // Unlike orchgo, this does NOT persist the model via /use: the
+        // chosen planner applies to this draft only. The user's active
+        // chat model is unchanged, so subsequent /orch next and regular
+        // chat keep using the user's original selection.
+        if (query.message) {
+          await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+        }
+        const pending = await this.storage.getPendingOrchestra(userId, chatId);
+        if (!pending) {
+          await this.bot.sendMessage(chatId, '⏳ Planner gate expired. Please run /orch init again.');
+          break;
+        }
+        if (pending.chatId !== chatId) {
+          await this.bot.sendMessage(chatId, '⚠️ This orchestra request belongs to another chat. Run /orch init again here.');
+          break;
+        }
+        await this.storage.setPendingOrchestra(userId, chatId, null);
+        // payload is either a model alias (transient override) or "proceed".
+        const plannerOverride = payload && payload !== 'proceed' ? payload : undefined;
+        if (plannerOverride) {
+          const currentAlias = await this.storage.getUserModel(userId);
+          await this.bot.sendMessage(
+            chatId,
+            `🧠 Using /${plannerOverride} as planner for this draft only. Chat model stays on /${currentAlias}.`,
+          );
+        }
+        await this.executeOrchestra(
+          pending.chatId, userId, pending.mode, pending.repo, pending.prompt,
+          false, undefined, plannerOverride,
+        );
         break;
       }
 

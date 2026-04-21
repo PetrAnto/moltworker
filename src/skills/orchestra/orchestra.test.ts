@@ -3386,9 +3386,49 @@ describe('getPlannerRecommendation', () => {
 
   it('handles unknown model aliases with safe defaults', () => {
     const rec = getPlannerRecommendation('nonexistent-model-xyz');
-    // Unknown model → falls back to paid default (IQ 40), still below floor
+    // Unverified → shouldEscalate is true regardless of the fallback IQ value
     expect(rec.shouldEscalate).toBe(true);
     expect(rec.currentIntelligence).toBeGreaterThan(0);
+    expect(rec.reason).toContain('unverified');
+  });
+
+  it('every candidate has verified IQ at or above the planner floor', () => {
+    const rec = getPlannerRecommendation('flash');
+    // Every option shown to the user must actually be stronger than the floor —
+    // no unverified-IQ models, no below-floor models sneaking in.
+    for (const c of [...rec.freeOptions, ...rec.paidOptions]) {
+      expect(c.intelligence).toBeGreaterThanOrEqual(PLANNER_FLOOR_IQ);
+    }
+  });
+
+  it('suggested planner has IQ ≥ floor when set', () => {
+    const rec = getPlannerRecommendation('flash');
+    if (rec.suggestedAlias) {
+      expect(rec.suggestedIntelligence).toBeDefined();
+      expect(rec.suggestedIntelligence!).toBeGreaterThanOrEqual(PLANNER_FLOOR_IQ);
+    }
+  });
+
+  it('does not escalate when current model already meets the floor', () => {
+    const rec1 = getPlannerRecommendation('flash');
+    if (!rec1.suggestedAlias) return; // no qualifying candidates — skip
+    // Feed a qualifying candidate back in as the "current" model.
+    // A verified-above-floor model should never be flagged for escalation.
+    const rec2 = getPlannerRecommendation(rec1.suggestedAlias);
+    expect(rec2.shouldEscalate).toBe(false);
+    expect(rec2.reason).toContain('strong enough');
+  });
+
+  it('suggestedIsFree is undefined when no candidate qualifies', () => {
+    // Structural invariant: either there's a suggestedAlias AND a boolean
+    // suggestedIsFree, or both are nullish. Never a half-set result.
+    const rec = getPlannerRecommendation('flash');
+    if (!rec.suggestedAlias) {
+      expect(rec.suggestedIsFree).toBeUndefined();
+      expect(rec.suggestedIntelligence).toBeUndefined();
+    } else {
+      expect(typeof rec.suggestedIsFree).toBe('boolean');
+    }
   });
 });
 
