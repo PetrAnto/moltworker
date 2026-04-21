@@ -401,6 +401,16 @@ describe('getOrchestraRecommendations', () => {
       expect(model!.supportsTools).toBe(true);
     }
   });
+
+  it('kimi26 ranks into the top paid recommendations', () => {
+    // Guard against future regressions where enrichment/benchmark wiring
+    // gets accidentally stripped from a flagship model. kimi26 has IQ:54,
+    // 80.2% SWE-Bench Verified, 89.6 LCB — it should outrank weaker
+    // alternatives and appear in the top-3 paid picks.
+    const recs = getOrchestraRecommendations();
+    const paidAliases = recs.paid.map(r => r.alias);
+    expect(paidAliases).toContain('kimi26');
+  });
 });
 
 describe('formatOrchestraModelRecs', () => {
