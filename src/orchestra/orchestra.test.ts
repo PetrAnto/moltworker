@@ -34,6 +34,8 @@ import {
   buildDraftInitPrompt,
   parseDraftBlocks,
   formatDraftPreview,
+  getPlannerRecommendation,
+  PLANNER_FLOOR_IQ,
   classifyComplexityTier,
   countScopeAmplifiers,
   TIER_BUDGETS,
@@ -752,9 +754,10 @@ describe('repo health check in buildInitPrompt', () => {
     expect(flagIdx).toBeLessThan(analyzeIdx);
   });
 
-  it('includes hard tool call limit for init', () => {
+  it('includes tool call budget for init', () => {
     const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
-    expect(prompt).toContain('budget of 12 total tool calls');
+    expect(prompt).toContain('18 total tool calls');
+    expect(prompt).toContain('10 file reads');
   });
 
   it('includes fast-path for copy tasks', () => {
@@ -3279,6 +3282,108 @@ describe('buildDraftInitPrompt', () => {
   it('skips revision block when not revising', () => {
     const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'flash' });
     expect(prompt).not.toContain('REVISION REQUEST');
+  });
+
+  it('advertises the enlarged planning budget', () => {
+    const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'claude' });
+    expect(prompt).toContain('15 total tool calls');
+    expect(prompt).toContain('10 file reads');
+  });
+
+  it('requires the enriched per-task template fields', () => {
+    const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'claude' });
+    expect(prompt).toContain('Description:');
+    expect(prompt).toContain('Files:');
+    expect(prompt).toContain('Depends on:');
+    expect(prompt).toContain('Tier:');
+    expect(prompt).toContain('Acceptance:');
+    expect(prompt).toContain('Caveats:');
+    expect(prompt).toContain('Pattern:');
+    expect(prompt).toContain('Risk:');
+  });
+
+  it('requires a Risks & Open Questions section', () => {
+    const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'claude' });
+    expect(prompt).toContain('Risks & Open Questions');
+    expect(prompt).toContain('REQUIRED');
+  });
+
+  it('explains why acceptance criteria must be testable', () => {
+    const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'claude' });
+    expect(prompt).toContain('Acceptance must be testable');
+  });
+
+  it('surfaces bot guardrail caveats to plan around', () => {
+    const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'claude' });
+    expect(prompt).toContain('WORK_LOG.md is append-only');
+  });
+
+  it('enumerates the tier prediction scale', () => {
+    const prompt = buildDraftInitPrompt({ repo: 'Owner/Repo', modelAlias: 'claude' });
+    expect(prompt).toContain('trivial');
+    expect(prompt).toContain('small');
+    expect(prompt).toContain('medium');
+    expect(prompt).toContain('large');
+  });
+});
+
+describe('buildInitPrompt (enriched schema)', () => {
+  it('advertises the enlarged planning budget', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('18 total tool calls');
+    expect(prompt).toContain('10 file reads');
+  });
+
+  it('requires the enriched per-task template fields', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('Description:');
+    expect(prompt).toContain('Files:');
+    expect(prompt).toContain('Depends on:');
+    expect(prompt).toContain('Tier:');
+    expect(prompt).toContain('Acceptance:');
+    expect(prompt).toContain('Caveats:');
+    expect(prompt).toContain('Pattern:');
+    expect(prompt).toContain('Risk:');
+  });
+
+  it('requires a Risks & Open Questions section', () => {
+    const prompt = buildInitPrompt({ repo: 'o/r', modelAlias: 'deep' });
+    expect(prompt).toContain('Risks & Open Questions');
+  });
+});
+
+describe('getPlannerRecommendation', () => {
+  it('flags a weak model for escalation', () => {
+    const rec = getPlannerRecommendation('flash');
+    expect(rec.currentAlias).toBe('flash');
+    if (rec.currentIntelligence < PLANNER_FLOOR_IQ) {
+      expect(rec.shouldEscalate).toBe(true);
+      expect(rec.reason).toContain('planner floor');
+    }
+  });
+
+  it('returns free and paid candidate lists for button menus', () => {
+    const rec = getPlannerRecommendation('flash');
+    expect(Array.isArray(rec.freeOptions)).toBe(true);
+    expect(Array.isArray(rec.paidOptions)).toBe(true);
+    expect(rec.freeOptions.length).toBeLessThanOrEqual(3);
+    expect(rec.paidOptions.length).toBeLessThanOrEqual(3);
+    expect(rec.freeOptions.every(c => c.alias !== 'flash')).toBe(true);
+    expect(rec.paidOptions.every(c => c.alias !== 'flash')).toBe(true);
+  });
+
+  it('prefers a paid model as the primary suggestion when available', () => {
+    const rec = getPlannerRecommendation('flash');
+    if (rec.paidOptions.length > 0) {
+      expect(rec.suggestedIsFree).toBe(false);
+      expect(rec.suggestedAlias).toBe(rec.paidOptions[0].alias);
+    }
+  });
+
+  it('handles unknown model aliases with safe defaults', () => {
+    const rec = getPlannerRecommendation('nonexistent-model-xyz');
+    expect(rec.shouldEscalate).toBe(true);
+    expect(rec.currentIntelligence).toBeGreaterThan(0);
   });
 });
 

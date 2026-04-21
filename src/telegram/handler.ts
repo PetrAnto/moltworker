@@ -39,6 +39,7 @@ import {
   buildExecutionProfile,
   buildDraftInitPrompt,
   commitDraftRoadmap,
+  getPlannerRecommendation,
   type OrchestraExecutionProfile,
 } from '../orchestra/orchestra';
 import { loadScratchpad, formatScratchpadForPrompt } from '../orchestra/scratchpad';
@@ -2420,6 +2421,49 @@ export class TelegramHandler {
           return;
         }
       }
+
+      // Planner gate: planning quality caps downstream execution quality.
+      // If the user's current model is below the planner floor, offer to
+      // escalate to a stronger planner before spending the init budget.
+      // The user can still proceed with their current model via the button.
+      const currentModelAlias = await this.storage.getUserModel(userId);
+      const planner = getPlannerRecommendation(currentModelAlias);
+      if (planner.shouldEscalate) {
+        const buttons: { text: string; callback_data: string }[] = [];
+        if (planner.paidOptions.length > 0) {
+          const top = planner.paidOptions[0];
+          buttons.push({
+            text: `⚡ /${top.alias} (IQ:${top.intelligence.toFixed(0)} • ${top.cost})`,
+            callback_data: `orchgo:${top.alias}`,
+          });
+        }
+        if (planner.freeOptions.length > 0) {
+          const topFree = planner.freeOptions[0];
+          buttons.push({
+            text: `🆓 /${topFree.alias} (IQ:${topFree.intelligence.toFixed(0)})`,
+            callback_data: `orchgo:${topFree.alias}`,
+          });
+        }
+        buttons.push({
+          text: `Proceed with /${currentModelAlias}`,
+          callback_data: 'orchgo:proceed',
+        });
+
+        await this.storage.setPendingOrchestra(userId, chatId, { mode: 'draft', repo, prompt, chatId });
+        await this.bot.sendMessage(
+          chatId,
+          `🧠 **Planner model gate**\n\n${planner.reason}\n\n` +
+          `A stronger planner produces tasks with concrete files, testable acceptance criteria, and caveats — ` +
+          `weaker executors can then finish them. Executor model stays on /${currentModelAlias}.\n\n` +
+          `Pick a planner or proceed anyway:`,
+          {
+            parseMode: 'Markdown',
+            reply_markup: { inline_keyboard: [buttons] },
+          },
+        );
+        return;
+      }
+
       // Use draft mode: model generates roadmap for preview, user approves before PR
       return this.executeOrchestra(chatId, userId, 'draft', repo, prompt);
     }
