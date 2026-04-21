@@ -2661,6 +2661,8 @@ export class TelegramHandler {
       '━━━ Commands ━━━\n' +
       '/orch do <description> — Execute a task directly (no roadmap)\n' +
       '/orch init <description> — Plan: create roadmap (no code)\n' +
+      '/orch modify <changes> — Revise existing roadmap (preview flow)\n' +
+      '/orch plan — Conversational requirements gathering\n' +
       '/orch advise — Analyze next task & pick best model\n' +
       '/orch next [task] — Run next (or specific) task\n' +
       '/orch roadmap — View roadmap status\n' +
@@ -2669,6 +2671,11 @@ export class TelegramHandler {
       '/orch reset <task> — Uncheck for re-run\n' +
       '/orch merge <PR#> [method] — Merge a PR (squash/merge/rebase)\n' +
       '/orch redo <task> — Re-implement a failed task\n\n' +
+      '━━━ Planner Gate ━━━\n' +
+      '/orch init checks your model against the planner floor (IQ:45).\n' +
+      'If it\'s weaker, you\'ll see a one-tap menu of stronger planners.\n' +
+      'Picking one applies ONLY to that draft (and its revisions) — your\n' +
+      'chat model and future /orch next runs stay on your selection.\n\n' +
       modelRecs + '\n\n' +
       '━━━ Workflows ━━━\n' +
       'Simple task (no roadmap):\n' +
@@ -2676,9 +2683,10 @@ export class TelegramHandler {
       '2. /orch do Add dark mode toggle\n\n' +
       'Complex project (with roadmap):\n' +
       '1. /orch set PetrAnto/myapp\n' +
-      '2. /orch init Build a user auth system\n' +
-      '3. /orch advise → pick best model\n' +
-      '4. /orch next (repeat until done)',
+      '2. /orch init Build a user auth system  ← strong planner suggested\n' +
+      '3. Approve / Revise the draft preview\n' +
+      '4. /orch advise → pick executor model\n' +
+      '5. /orch next (repeat until done)',
       { reply_markup: { inline_keyboard: orchButtons } },
     );
   }
@@ -6382,7 +6390,12 @@ Step 1: Lock your repo
 
 Step 2: Create a roadmap
   /orch init Build a user auth system with JWT and OAuth
-  → Creates ROADMAP.md + WORK_LOG.md as a PR
+  → If your model is below the planner floor (IQ:45), a one-tap menu
+    suggests stronger planners — picked planner runs the draft only
+  → Generates a draft preview with an enriched task schema
+    (Description, Files, Depends on, Tier, Acceptance, Caveats,
+     Pattern, Risk) plus a Risks & Open Questions section
+  → Approve to commit ROADMAP.md + WORK_LOG.md as a PR
 
 Step 3: Execute tasks
   /orch next
@@ -6394,10 +6407,13 @@ Step 4: Repeat
 
 ━━━ Commands ━━━
 /orch set owner/repo — Lock default repo
-/orch init <description> — Create roadmap
+/orch init <description> — Create roadmap (planner gate + draft preview)
+/orch modify <changes> — Revise existing roadmap (preview flow)
+/orch plan — Conversational requirements gathering
 /orch next — Execute next task
 /orch next <specific task> — Execute specific task
 /orch run owner/repo — Run with explicit repo
+/orch advise — Recommend the best executor model for the next task
 /orch roadmap — View roadmap status
 /orch history — View past tasks
 /orch unset — Clear locked repo
@@ -6433,7 +6449,7 @@ Each /orch next picks up where the last one left off.`;
       research: '🔍 Usage: /research <query>\n\nExamples:\n/research What is the current state of WebGPU?\n/research --mode decision Should I use Rust or Go for my CLI?',
       dossier: '📑 Usage: /dossier <topic>\n\nExamples:\n/dossier Compare Cloudflare Workers vs AWS Lambda\n/dossier State of AI coding assistants in 2026',
       orchset: '🔒 Usage: /orch set <owner/repo>\n\nExample:\n/orch set PetrAnto/myapp',
-      orchinit: '📋 Usage: /orch init <project description>\n\nExample:\n/orch init Build a user auth system with JWT and OAuth',
+      orchinit: '📋 Usage: /orch init <project description>\n\nExample:\n/orch init Build a user auth system with JWT and OAuth\n\n💡 If your current model is below the planner floor (IQ:45), you\'ll get a one-tap menu of stronger planners. Picking one applies to this draft only — your chat model stays unchanged.',
       img: '🎨 Usage: /img <prompt>\n\nExamples:\n/img a cat astronaut floating in space\n/img fluxmax a photorealistic mountain landscape at sunset',
       video: '🎬 Usage: /video <prompt>\n\nExamples:\n/video a cat astronaut floating in space\n/video seedance2 drone shot over a neon city at night',
       cfsearch: '🔍 Usage: /cf search <query>\n\nExamples:\n/cf search workers\n/cf search dns records',
@@ -6640,9 +6656,11 @@ The bot calls these automatically when relevant:
 ━━━ Orchestra Mode ━━━
 /orch set owner/repo — Lock default repo
 /orch do <desc> — One-shot task (no roadmap)
-/orch init <desc> — Create ROADMAP.md + WORK_LOG.md
+/orch init <desc> — Create ROADMAP.md + WORK_LOG.md (planner gate + draft preview)
+/orch modify <changes> — Revise existing roadmap (preview flow)
 /orch next — Execute next roadmap task
 /orch next <task> — Execute specific task
+/orch advise — Recommend the best executor model for the next task
 /orch merge <PR#> [method] — Merge PR (squash/merge/rebase)
 /orch roadmap — View roadmap status
 /orch history — View past tasks
