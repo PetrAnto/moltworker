@@ -2548,6 +2548,20 @@ describe('taskForStorage', () => {
     expect(result.reviewUserFocus).toBe('focus on phase 3');
   });
 
+  it('preserves the display prompt across resume reconstructions', () => {
+    // Regression: task.prompt wasn't stored, so drafts finalized after
+    // auto-resume landed with userPrompt === '' in OrchestraDraft.
+    // Revise rounds and history UX both depend on this field.
+    const task = {
+      taskId: 't', chatId: 1, userId: 'u', modelAlias: 'kimi26',
+      messages: [], status: 'processing' as const,
+      toolsUsed: [], iterations: 1, startTime: Date.now(), lastUpdate: Date.now(),
+      prompt: '[Orchestra Draft] owner/repo: Build a user auth system',
+    };
+    const result = taskForStorage(task) as unknown as Record<string, unknown>;
+    expect(result.prompt).toBe('[Orchestra Draft] owner/repo: Build a user auth system');
+  });
+
   it('should use UTF-8 byte length, not char length, for size check', () => {
     // Each emoji is 4 bytes in UTF-8 but 2 chars in JS (surrogate pair)
     // 400 entries * 200 emoji = ~320KB bytes but only ~160K chars.

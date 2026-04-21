@@ -349,6 +349,11 @@ interface TaskState {
   orchestraRoadmapPath?: string;
   // Draft init mode: DO stores roadmap draft in R2 + sends preview message with buttons
   isDraftInit?: boolean;
+  // Original display prompt from the HTTP request — persisted so the DO
+  // can still store it in the OrchestraDraft.userPrompt field after a
+  // resume. Without this, drafts finalized post-resume landed with
+  // userPrompt === '' which degraded Revise and history UX.
+  prompt?: string;
   // Review-draft signals — must survive auto-resume so the DO tags the
   // stored draft with mode: 'review' even when the task resumed one or
   // more times before producing the DRAFT_ROADMAP block.
@@ -1438,6 +1443,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         isReviewDraft: task.isReviewDraft,
         reviewImportMode: task.reviewImportMode,
         reviewUserFocus: task.reviewUserFocus,
+        // Keep the display prompt across CPU-yield resumes.
+        prompt: task.prompt,
       };
 
       this.doState.waitUntil(this.processTask(taskRequest).catch(async (error) => {
@@ -1704,6 +1711,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         isReviewDraft: task.isReviewDraft,
         reviewImportMode: task.reviewImportMode,
         reviewUserFocus: task.reviewUserFocus,
+        // Keep the display prompt across resumes — used as the draft's
+        // userPrompt on finalize and in Revise-round rehydration.
+        prompt: task.prompt,
       };
 
       // Use waitUntil to trigger resume without blocking alarm
@@ -2385,6 +2395,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (request.isReviewDraft) task.isReviewDraft = true;
     if (request.reviewImportMode) task.reviewImportMode = true;
     if (request.reviewUserFocus) task.reviewUserFocus = request.reviewUserFocus;
+    // Persist the display prompt so draft-storage retains a real value
+    // for OrchestraDraft.userPrompt even when the draft is finalized
+    // after one or more auto-resumes (previously lost → empty string).
+    if (request.prompt) task.prompt = request.prompt;
     // Also eagerly tag isDraftInit for review drafts: the system-prompt
     // sniff below would catch it on first iteration, but on auto-resume
     // the DO may exit the run loop before iteration 1, leaving the
@@ -5456,11 +5470,16 @@ If you already created the new file and just need to patch the original, call gi
               const isReviewDraft = task.isReviewDraft === true || request.isReviewDraft === true;
               const reviewImportMode = task.reviewImportMode ?? request.reviewImportMode;
               const reviewUserFocus = task.reviewUserFocus ?? request.reviewUserFocus;
+              // userPrompt: source from task.prompt (resume-durable) then
+                // fall back to request.prompt for the first-pass case.
+                // Without this fallback order, drafts finalized post-resume
+                // landed with userPrompt === '' (since resumed request.prompt
+                // was undefined before this patch).
               await storage.setOrchestraDraft(request.userId, request.chatId, {
                 repo: task.orchestraRepo || '',
                 chatId: request.chatId,
                 modelAlias: task.modelAlias,
-                userPrompt: request.prompt || '',
+                userPrompt: task.prompt || request.prompt || '',
                 roadmapContent: draftBlocks.roadmap,
                 workLogContent: draftBlocks.workLog,
                 revisions: [],
