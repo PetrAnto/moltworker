@@ -2699,6 +2699,12 @@ export class TelegramHandler {
   /**
    * Re-run draft generation with user revision feedback.
    * Uses buildDraftInitPrompt with the previous draft + revision text.
+   *
+   * Carries draft.modelAlias forward as the transient modelOverride so
+   * the whole draft session (initial generation + all revisions) stays
+   * on the same model — including when that model was a transient
+   * planner chosen from the /orch init gate that was never persisted to
+   * user storage.
    */
   private async executeOrchestraDraftRevision(
     chatId: number,
@@ -2706,13 +2712,20 @@ export class TelegramHandler {
     draft: OrchestraDraft,
     revisionText: string,
   ): Promise<void> {
-    await this.bot.sendMessage(chatId, `✏️ Revising roadmap (revision #${draft.revisionCount})...`);
-    // Route through the normal draft flow but with revision context
-    // The buildDraftInitPrompt will include the previous draft and revision text
-    return this.executeOrchestra(chatId, userId, 'draft', draft.repo, draft.userPrompt, false, {
-      revision: revisionText,
-      previousDraft: draft.roadmapContent,
-    });
+    const currentUserModel = await this.storage.getUserModel(userId);
+    const modelNote = currentUserModel !== draft.modelAlias
+      ? ` (planner: /${draft.modelAlias}; chat model /${currentUserModel} unchanged)`
+      : '';
+    await this.bot.sendMessage(chatId, `✏️ Revising roadmap (revision #${draft.revisionCount})${modelNote}...`);
+    // Route through the normal draft flow but with revision context.
+    // Pass draft.modelAlias as modelOverride so a transient-planner draft
+    // stays on that planner for subsequent revisions.
+    return this.executeOrchestra(
+      chatId, userId, 'draft', draft.repo, draft.userPrompt,
+      false,
+      { revision: revisionText, previousDraft: draft.roadmapContent },
+      draft.modelAlias,
+    );
   }
 
   /**
