@@ -3436,8 +3436,22 @@ export async function commitDraftRoadmap(params: {
   r2?: R2Bucket;
 }): Promise<string> {
   const { githubToken, draft, userId, r2 } = params;
-  const [owner, repoName] = draft.repo.split('/');
-  if (!owner || !repoName) throw new Error(`Invalid repo format: ${draft.repo}`);
+  // Repo fallback chain: prefer the draft's own repo (set by the DO at
+  // draft-storage time), then try the user's locked orchestra repo in R2
+  // as a recovery path for drafts whose task state lost orchestraRepo
+  // mid-flight. This prevents "Invalid repo format:" on approve when the
+  // draft was stored with repo='' due to an upstream bug.
+  let repo = draft.repo?.trim() ?? '';
+  if (!repo && r2) {
+    try {
+      const { UserStorage } = await import('../../openrouter/storage');
+      const storage = new UserStorage(r2);
+      const locked = await storage.getOrchestraRepo(userId);
+      if (locked) repo = locked;
+    } catch { /* best-effort fallback */ }
+  }
+  const [owner, repoName] = repo.split('/');
+  if (!owner || !repoName) throw new Error(`Invalid repo format: ${repo}`);
 
   const GITHUB_API = 'https://api.github.com';
   const headers = {
@@ -3555,7 +3569,9 @@ export async function commitDraftRoadmap(params: {
       taskId: `orch-${userId}-${Date.now()}`,
       timestamp: Date.now(),
       modelAlias: draft.modelAlias,
-      repo: draft.repo,
+      // Use the resolved repo (may come from fallback) so history stays
+      // consistent with the branch/PR that was actually created.
+      repo,
       // Match the mode to the actual flow: review drafts produce 'review'
       // history entries, init drafts produce 'init'. Keeps /orch history +
       // downstream model-stats aggregation labelled correctly.

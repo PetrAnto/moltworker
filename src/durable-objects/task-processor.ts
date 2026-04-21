@@ -1609,9 +1609,17 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Orchestra-specific stall: if we've used 3+ resumes but never called
       // github_create_pr, the model is stuck in a read/discover loop.
       // Abort early to prevent runaway token burn.
+      //
+      // IMPORTANT: Skip this check for draft/review tasks (/orch init,
+      // /orch review, /orch modify). They output a DRAFT_ROADMAP block
+      // that the DO parses and stores in R2 — github_create_pr only
+      // fires on user approval, much later. Firing this stall on a
+      // draft task misreports progress and abandons a valid roadmap
+      // mid-generation.
       if (task.isOrchestraTask && resumeCount >= 3
           && !task.toolsUsed.includes('github_create_pr')
-          && !wasStreamingWhenEvicted) {
+          && !wasStreamingWhenEvicted
+          && !task.isDraftInit) {
         const orchStallReason = `Orchestra stall: ${resumeCount} resumes with ${toolCountNow} tools but no PR attempted`;
         console.log(`[TaskProcessor] ${orchStallReason}`);
         task.status = 'failed';
@@ -5470,13 +5478,41 @@ If you already created the new file and just need to patch the original, call gi
               const isReviewDraft = task.isReviewDraft === true || request.isReviewDraft === true;
               const reviewImportMode = task.reviewImportMode ?? request.reviewImportMode;
               const reviewUserFocus = task.reviewUserFocus ?? request.reviewUserFocus;
+
+              // Resolve the repo: prefer task.orchestraRepo (set at setup),
+              // fall back to the user's locked orchestra repo in R2 so a
+              // task that lost context across a resume chain still produces
+              // a usable draft. Refuse to store a repoless draft — it would
+              // fail at PR-creation time with "Invalid repo format:".
+              let draftRepo = task.orchestraRepo || '';
+              if (!draftRepo) {
+                try {
+                  const locked = await storage.getOrchestraRepo(request.userId);
+                  if (locked) draftRepo = locked;
+                } catch { /* best-effort fallback */ }
+              }
+              if (!draftRepo) {
+                console.error('[TaskProcessor] Cannot store draft: no repo available (task.orchestraRepo empty, user has no locked orchestra repo)');
+                if (task.telegramToken) {
+                  await this.sendTelegramMessage(
+                    task.telegramToken,
+                    task.chatId,
+                    '⚠️ Could not store draft: no repo associated with this task.\n\nRun `/orch set owner/repo` then re-run `/orch review` or `/orch init`.',
+                  );
+                }
+                // Clean up and exit the draft branch without storing.
+                if (this.r2 && task.orchestraRepo) {
+                  releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+                }
+                return;
+              }
               // userPrompt: source from task.prompt (resume-durable) then
                 // fall back to request.prompt for the first-pass case.
                 // Without this fallback order, drafts finalized post-resume
                 // landed with userPrompt === '' (since resumed request.prompt
                 // was undefined before this patch).
               await storage.setOrchestraDraft(request.userId, request.chatId, {
-                repo: task.orchestraRepo || '',
+                repo: draftRepo,
                 chatId: request.chatId,
                 modelAlias: task.modelAlias,
                 userPrompt: task.prompt || request.prompt || '',
