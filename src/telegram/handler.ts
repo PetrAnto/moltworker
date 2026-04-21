@@ -2878,8 +2878,15 @@ export class TelegramHandler {
     // Route through the normal draft flow but with revision context.
     // Pass draft.modelAlias as modelOverride so a transient-planner draft
     // stays on that planner for subsequent revisions.
+    //
+    // For review drafts, rehydrate the __REVIEW__ prefix so executeOrchestra's
+    // isReviewFlow detection routes to buildReviewPrompt again. draft.mode is
+    // the source-of-truth — we can't rely on draft.userPrompt.startsWith
+    // because the stored prompt is the wrapped "[Orchestra Draft] …" display
+    // string rather than the raw user input.
+    const effectivePrompt = draft.mode === 'review' ? '__REVIEW__' : draft.userPrompt;
     return this.executeOrchestra(
-      chatId, userId, 'draft', draft.repo, draft.userPrompt,
+      chatId, userId, 'draft', draft.repo, effectivePrompt,
       false,
       { revision: revisionText, previousDraft: draft.roadmapContent },
       draft.modelAlias,
@@ -3294,6 +3301,10 @@ export class TelegramHandler {
       orchestraRepo: repo,
       orchestraRoadmapPath: prefetchedRoadmapPath,
       isDraftInit: mode === 'draft',
+      // Detect review-flow drafts BEFORE the prompt is wrapped in the
+      // "[Orchestra <label>] …" display string below: the DO needs the raw
+      // signal to tag the stored draft with mode='review'.
+      isReviewDraft: mode === 'draft' && prompt.startsWith('__REVIEW__'),
     };
 
     const doId = this.taskProcessor.idFromName(userId);
