@@ -2049,6 +2049,57 @@ describe('parseRoadmapPhases hierarchy', () => {
     expect(phases[0].tasks[1].kind).toBe('numbered-checkbox');
     expect(phases[0].tasks[2].kind).toBe('numbered-plain');
   });
+
+  it('does NOT count indented Acceptance-list bullets as separate tasks', () => {
+    // Regression: /orch roadmap was showing "(0/6)" for a phase with a
+    // single top-level task because the 5 numbered Acceptance bullets
+    // nested under it were parsed as separate numbered-plain tasks.
+    const content = `### Phase 3: PortfolioOverview Per-Wallet Breakdown
+- [ ] **Task 3.1**: Add per-wallet breakdown bar and legend
+  - Description: extend overviewData…
+  - Files: src/pages/Portfolio.tsx
+  - Acceptance:
+    1. overviewData useMemo includes walletBreakdown
+    2. PortfolioOverview accepts the new prop
+    3. Wallet Distribution section renders below Chain Distribution
+    4. Existing chain distribution unchanged
+    5. Component compiles without TS errors
+  - Risk: Low`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    // Should be just ONE task (Task 3.1), not 6 (Task 3.1 + 5 acceptance)
+    expect(phases[0].topLevelTasks).toHaveLength(1);
+    expect(phases[0].topLevelTasks[0].title).toContain('Add per-wallet breakdown');
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('still accepts flat numbered-plain lists when no checkbox tasks exist', () => {
+    // A roadmap written as a pure numbered list (no checkboxes) should
+    // still work — numbered-plain at indent=0 in a phase with no
+    // checkbox tasks is a legit task list.
+    const content = `### Phase 1: MVP
+1. First task
+2. Second task
+3. Third task`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(3);
+    expect(phases[0].topLevelTasks).toHaveLength(3);
+  });
+
+  it('accepts top-level (indent=0) numbered-plain even when checkboxes exist', () => {
+    // Edge case: mixed checkbox + top-level numbered-plain in same phase.
+    // The numbered-plain items at indent=0 should still count as tasks.
+    const content = `### Phase 1: Mixed
+- [x] A checkbox task
+1. A top-level numbered task`;
+
+    const phases = parseRoadmapPhases(content);
+    // 2 tasks total: the checkbox and the indent=0 numbered-plain
+    expect(phases[0].tasks).toHaveLength(2);
+    expect(phases[0].tasks[1].kind).toBe('numbered-plain');
+  });
 });
 
 // --- scoreTaskConcreteness ---
@@ -2090,6 +2141,33 @@ describe('scoreTaskConcreteness', () => {
 
   it('does not penalize update existing tasks (removed broad penalty)', () => {
     expect(scoreTaskConcreteness('Update existing destination data with current tax rates and costs')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('recognises PascalCase identifiers as strong concreteness anchors', () => {
+    // Regression: "Add per-wallet breakdown bar and legend to PortfolioOverview"
+    // was scored 0 → ambiguity=high → /orch advise warned "Task title is
+    // generic". The PortfolioOverview identifier is a concrete anchor that
+    // should push the score into the non-ambiguous range.
+    expect(scoreTaskConcreteness('Add per-wallet breakdown bar and legend to PortfolioOverview'))
+      .toBeGreaterThanOrEqual(3);
+    expect(scoreTaskConcreteness('Refactor TokenTable to support NFT rows'))
+      .toBeGreaterThanOrEqual(3);
+    expect(scoreTaskConcreteness('Extract FlatToken type into its own module'))
+      .toBeGreaterThanOrEqual(3);
+  });
+
+  it('does not mistake a sentence-initial Capitalized word for a PascalCase identifier', () => {
+    // "Add a new button" starts with a capital but has no PascalCase token.
+    // Should NOT receive the PascalCase bonus.
+    expect(scoreTaskConcreteness('Add a new button')).toBeLessThan(3);
+  });
+
+  it('recognises common UI primitive nouns (bar, legend, chart, table)', () => {
+    // These appear frequently in concrete UI tasks. The old list only had
+    // engineering-layer nouns (component, service, handler) — UI words
+    // were missing so "Add progress bar" scored zero even though it's specific.
+    expect(scoreTaskConcreteness('Add progress bar and legend to the dashboard'))
+      .toBeGreaterThanOrEqual(2);
   });
 });
 

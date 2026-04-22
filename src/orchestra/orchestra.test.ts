@@ -2049,6 +2049,47 @@ describe('parseRoadmapPhases hierarchy', () => {
     expect(phases[0].tasks[1].kind).toBe('numbered-checkbox');
     expect(phases[0].tasks[2].kind).toBe('numbered-plain');
   });
+
+  it('does NOT count indented Acceptance-list bullets as separate tasks', () => {
+    const content = `### Phase 3: PortfolioOverview Per-Wallet Breakdown
+- [ ] **Task 3.1**: Add per-wallet breakdown bar and legend
+  - Description: extend overviewData…
+  - Files: src/pages/Portfolio.tsx
+  - Acceptance:
+    1. overviewData useMemo includes walletBreakdown
+    2. PortfolioOverview accepts the new prop
+    3. Wallet Distribution section renders below Chain Distribution
+    4. Existing chain distribution unchanged
+    5. Component compiles without TS errors
+  - Risk: Low`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].topLevelTasks).toHaveLength(1);
+    expect(phases[0].topLevelTasks[0].title).toContain('Add per-wallet breakdown');
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('still accepts flat numbered-plain lists when no checkbox tasks exist', () => {
+    const content = `### Phase 1: MVP
+1. First task
+2. Second task
+3. Third task`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(3);
+    expect(phases[0].topLevelTasks).toHaveLength(3);
+  });
+
+  it('accepts top-level (indent=0) numbered-plain even when checkboxes exist', () => {
+    const content = `### Phase 1: Mixed
+- [x] A checkbox task
+1. A top-level numbered task`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(2);
+    expect(phases[0].tasks[1].kind).toBe('numbered-plain');
+  });
 });
 
 // --- scoreTaskConcreteness ---
@@ -2090,6 +2131,24 @@ describe('scoreTaskConcreteness', () => {
 
   it('does not penalize update existing tasks (removed broad penalty)', () => {
     expect(scoreTaskConcreteness('Update existing destination data with current tax rates and costs')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('recognises PascalCase identifiers as strong concreteness anchors', () => {
+    expect(scoreTaskConcreteness('Add per-wallet breakdown bar and legend to PortfolioOverview'))
+      .toBeGreaterThanOrEqual(3);
+    expect(scoreTaskConcreteness('Refactor TokenTable to support NFT rows'))
+      .toBeGreaterThanOrEqual(3);
+    expect(scoreTaskConcreteness('Extract FlatToken type into its own module'))
+      .toBeGreaterThanOrEqual(3);
+  });
+
+  it('does not mistake a sentence-initial Capitalized word for a PascalCase identifier', () => {
+    expect(scoreTaskConcreteness('Add a new button')).toBeLessThan(3);
+  });
+
+  it('recognises common UI primitive nouns (bar, legend, chart, table)', () => {
+    expect(scoreTaskConcreteness('Add progress bar and legend to the dashboard'))
+      .toBeGreaterThanOrEqual(2);
   });
 });
 

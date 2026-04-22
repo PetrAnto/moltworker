@@ -2442,10 +2442,15 @@ export function scoreTaskConcreteness(title: string): number {
   if (/\b(src\/|app\/|components\/|pages\/|lib\/|\.tsx?|\.jsx?|\.css|\.json|\.vue|\.svelte|\.py|\.go|\.rs|\.java|\.rb|\.php|\.sql|\.proto|\.yaml|\.yml|\.toml|\.sh)\b/.test(title)) score += 3;
   // Backtick-quoted identifiers (function names, components, etc.)
   if (/`[^`]+`/.test(title)) score += 3;
+  // PascalCase identifiers (components, classes, types) — strong anchor
+  // Examples that should match: PortfolioOverview, TokenTable, FlatToken,
+  // MyAPIClient. Requires at least one lowercase-to-uppercase transition
+  // to avoid false-positives on a sentence-initial Capitalized word.
+  if (/\b[A-Z][a-z]+[A-Z]\w*\b/.test(title)) score += 3;
   // Numbered step labels like "Step 7", "Task 2.1"
   if (/\b(?:step|task|phase)\s+\d+(?:\.\d+)?\b/i.test(title)) score += 2;
-  // Domain-specific nouns (component, hook, function, etc.)
-  if (/\b(component|hook|function|class|schema|route|import|export|module|endpoint|middleware|model|controller|service|handler|migration|fixture|template|view)\b/i.test(title)) score += 2;
+  // Domain-specific nouns (component, hook, function, UI primitives…)
+  if (/\b(component|hook|function|class|schema|route|import|export|module|endpoint|middleware|model|controller|service|handler|migration|fixture|template|view|table|legend|chart|sidebar|modal|dropdown|toggle|badge|interface|prop|useMemo|useState|useEffect)\b/i.test(title)) score += 2;
   // Longer titles tend to be more descriptive
   if (title.length > 80) score += 1;
 
@@ -2563,8 +2568,19 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
         .replace(/\*\*/g, '')
         .trim();
-      // Skip lines that look like sub-descriptions (start with lowercase, very short)
-      if (title.length > 5) {
+      // Exclude indented numbered-plain lines that appear INSIDE a
+      // checkbox-task block. These are almost always sub-bullets
+      // (Acceptance: lists, step breakdowns, inline enumerations) and
+      // would otherwise inflate the task count + pollute the
+      // "next task" resolver. Only accept numbered-plain when either:
+      //  - it's at the phase root (indent=0), or
+      //  - the phase has no checkbox tasks yet (flat numbered-list roadmap).
+      const hasCheckboxTasks = current.flatTasks.some(
+        t => t.kind === 'checkbox' || t.kind === 'numbered-checkbox',
+      );
+      const isIndentedSubBullet = rawIndent > 0 && hasCheckboxTasks;
+      // Skip lines that look like sub-descriptions (too short to be a task)
+      if (title.length > 5 && !isIndentedSubBullet) {
         const task: RoadmapTask = { title, done: false, indent: rawIndent, children: [], kind: 'numbered-plain', lineIndex: lineIdx };
         current.flatTasks.push(task);
         current.topLevel.push(task);
