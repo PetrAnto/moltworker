@@ -2495,20 +2495,28 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
   // then the top of the stack is the parent (or empty = top-level).
   let indentStack: { indent: number; task: RoadmapTask }[] = [];
 
-  // Track open "attribute lists" — bullet lines of the form
-  //   "  - Acceptance:" / "  - Description:" / "  - **Files**:"
-  // whose payload follows on subsequent, more-indented lines. Numbered
-  // items found while inside an attribute list belong to the attribute
-  // (e.g. Acceptance criteria), NOT to the phase's task list.
+  // Stack of open attribute-list label indents. Outermost scope at
+  // position 0, innermost at the top. Opened by any bullet whose visible
+  // text ends in ":" with no value on the same line (regardless of case
+  // or punctuation). Closed when indentation returns to or below the
+  // label line. Using a stack (not a single indent) means nested
+  // attribute lists restore their outer scope correctly: closing the
+  // inner scope doesn't lose track of the outer one.
   //
   // This is a structural signal — it does not depend on the phase
-  // already having checkbox tasks. So imported roadmaps, mixed-format
-  // phases, and hand-written lists are all handled uniformly.
+  // already having checkbox tasks. Imported roadmaps, mixed-format
+  // phases, hand-written lists, and labels with lowercase /
+  // non-alphanumeric characters are all handled uniformly.
   //
-  // The scope is active for every line whose indent is STRICTLY GREATER
-  // than the attribute label's indent. We close the scope as soon as
-  // the indent drops back to (or below) the label line's indent.
-  let attrListLabelIndent = -1;
+  // Example of nesting this handles:
+  //   - Details:              (outer scope opens at indent=2)
+  //     - Acceptance:         (inner scope opens at indent=4)
+  //       1. foo              (inside inner; ignored)
+  //       2. bar              (inside inner; ignored)
+  //     - extra notes         (inner closes, back in outer)
+  //       1. still prose      (inside outer; ignored)
+  //   - Files: src/foo.ts     (both scopes closed, fresh line)
+  let attrListLabelStack: number[] = [];
 
   const lines = content.split('\n');
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
@@ -2525,6 +2533,8 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
       current = { name: phaseMatch[1].trim(), flatTasks: [], topLevel: [] };
       accums.push(current);
       indentStack = [];
+      // A new phase resets all attribute scopes — they can't span phases.
+      attrListLabelStack = [];
       continue;
     }
 
@@ -2532,26 +2542,42 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
     const indentMatch = line.match(/^(\t| +)/);
     const rawIndent = indentMatch ? (indentMatch[1] === '\t' ? 4 : indentMatch[1].length) : 0;
 
-    // Close an open attribute list as soon as we dedent back to (or above)
-    // the label's indent — anything at that level is no longer payload.
-    // Blank lines are kept inside the scope (common in multi-line payloads).
-    if (attrListLabelIndent >= 0 && line.trim() !== '' && rawIndent <= attrListLabelIndent) {
-      attrListLabelIndent = -1;
+    // Close any attribute scopes we've dedented out of. Walk from innermost
+    // (top of stack) outward, popping every scope whose label indent is >=
+    // the current line's indent. Blank lines are skipped — they're common
+    // inside multi-line payloads and shouldn't close a scope.
+    if (line.trim() !== '') {
+      while (
+        attrListLabelStack.length > 0 &&
+        rawIndent <= attrListLabelStack[attrListLabelStack.length - 1]
+      ) {
+        attrListLabelStack.pop();
+      }
     }
 
     // Detect an attribute-list label opener: a dash/star bullet whose
-    // visible text is a Title-Case key followed by a colon, with no
-    // value on the same line (value lives on subsequent indented lines).
-    // Examples:
-    //   - Acceptance:
-    //   - **Files**:
-    //   - Caveats:
-    // Matches labels that contain letters, spaces, or `&` (for "Risks & …").
-    const attrLabelMatch = line.match(/^[\t ]*[-*]\s+(?:\*\*\s*)?([A-Z][A-Za-z &]*?)(?:\s*\*\*)?\s*:\s*$/);
-    if (attrLabelMatch) {
-      attrListLabelIndent = rawIndent;
+    // visible text ends in ":" with no value on the same line. The value
+    // lives on subsequent indented lines. Permissive on the label text —
+    // accepts lowercase, punctuation, slashes, parentheses, etc. We
+    // intentionally don't restrict to Title-Case keys: imported roadmaps
+    // use any convention, and the false-positive cost (a task-looking
+    // line that happens to end in ":" with nothing below) is zero since
+    // an empty scope captures nothing.
+    //
+    // Checkbox-task lines never reach this check because they include
+    // "[x]" / "[ ]" before the text (guarded explicitly below).
+    const attrLabelMatch = line.match(/^[\t ]*[-*]\s+(?:\*\*\s*)?([^\n:]+?)(?:\s*\*\*)?\s*:\s*$/);
+    const looksLikeCheckbox = /^[\t ]*[-*]\s+\[[ xX]\]/.test(line);
+    if (attrLabelMatch && !looksLikeCheckbox) {
+      // Siblings at this indent were already popped by the scope-close
+      // walk above, so we simply push the new scope.
+      attrListLabelStack.push(rawIndent);
     }
-    const inAttrList = attrListLabelIndent >= 0 && rawIndent > attrListLabelIndent;
+    // "Inside an attribute list" = current indent is strictly deeper than
+    // the innermost open label. The stack enforces this naturally.
+    const inAttrList =
+      attrListLabelStack.length > 0 &&
+      rawIndent > attrListLabelStack[attrListLabelStack.length - 1];
 
     // Match task lines: "- [x] Task", "* [ ] Task", "  - [x] Task", "\t- [ ] Task"
     const taskMatch = line.match(/^[\t ]{0,8}[-*]\s+\[([ xX])\]\s+(.+)/);

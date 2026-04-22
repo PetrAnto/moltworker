@@ -2144,6 +2144,47 @@ describe('parseRoadmapPhases hierarchy', () => {
     const phases = parseRoadmapPhases(content);
     expect(phases[0].tasks).toHaveLength(1);
   });
+
+  it('recognises lowercase and punctuation-rich labels', () => {
+    const content = `### Phase 1
+- [ ] Task
+  - acceptance:
+    1. lowercase label
+  - files/paths:
+    1. slash in label
+  - depends on (direct):
+    1. parentheses in label`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('restores the outer scope when an inner attribute list closes', () => {
+    const content = `### Phase 1
+- [ ] Task
+  - details:
+    - acceptance:
+      1. inner-nested prose
+      2. still inner-nested prose
+    1. back in outer Details payload — still prose`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('correctly handles sibling labels at the same indent', () => {
+    const content = `### Phase 1
+- [ ] Task
+  - acceptance:
+    1. first criterion
+  - caveats:
+    1. first caveat
+- [ ] Another task`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks.filter(t => t.kind === 'checkbox')).toHaveLength(2);
+    expect(phases[0].tasks.filter(t => t.kind === 'numbered-plain')).toHaveLength(0);
+  });
 });
 
 // --- scoreTaskConcreteness ---

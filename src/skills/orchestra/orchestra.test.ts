@@ -2167,6 +2167,56 @@ describe('parseRoadmapPhases hierarchy', () => {
     const phases = parseRoadmapPhases(content);
     expect(phases[0].tasks).toHaveLength(1);
   });
+
+  it('recognises lowercase and punctuation-rich labels', () => {
+    // Imported roadmaps use any convention. The parser must not care
+    // whether the label is Title-Case or has special characters.
+    const content = `### Phase 1
+- [ ] Task
+  - acceptance:
+    1. lowercase label — should open scope
+  - files/paths:
+    1. slash in label
+  - depends on (direct):
+    1. parentheses in label`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('restores the outer scope when an inner attribute list closes', () => {
+    // Nested attribute scopes: Details wraps Acceptance, and after
+    // Acceptance ends, lines at Details' payload indent should still
+    // be treated as Details' prose — not as tasks.
+    const content = `### Phase 1
+- [ ] Task
+  - details:
+    - acceptance:
+      1. inner-nested prose
+      2. still inner-nested prose
+    1. back in outer Details payload — still prose`;
+
+    const phases = parseRoadmapPhases(content);
+    // Only the top-level checkbox task should be counted.
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('correctly handles sibling labels at the same indent', () => {
+    // Two Acceptance-like labels at the same indent are siblings, not
+    // nested. The second should replace the first's scope, not push.
+    const content = `### Phase 1
+- [ ] Task
+  - acceptance:
+    1. first criterion
+  - caveats:
+    1. first caveat
+- [ ] Another task`;
+
+    const phases = parseRoadmapPhases(content);
+    // 2 top-level checkbox tasks, no numbered-plain ghosts
+    expect(phases[0].tasks.filter(t => t.kind === 'checkbox')).toHaveLength(2);
+    expect(phases[0].tasks.filter(t => t.kind === 'numbered-plain')).toHaveLength(0);
+  });
 });
 
 // --- scoreTaskConcreteness ---
