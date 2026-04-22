@@ -6662,7 +6662,7 @@ Example: /video drone shot over a neon city at night
       case 'tools':
         return `🔧 Tools & Live Data
 
-I have 21 tools that run automatically — just ask naturally:
+I have 26 tools that run automatically — just ask naturally:
 
 📊 Data:
 • "What's the weather in Prague?"
@@ -6697,7 +6697,8 @@ What I can do:
 How to use:
 • Send a photo → I describe what I see
 • Send a photo + caption → I follow your instructions
-• Works with: /gpt, /sonnet, /opus, /haiku, /flash, /geminipro, /grok, /kimi, /kimidirect, /kimi26, /kimi26or
+• Top picks: /kimi26, /grok, /sonnet, /opus, /geminipro, /gpt, /flash, /haiku
+• See the full list: /pick vision
 
 Try it: Send a screenshot and ask "What's in this image?"`;
 
@@ -7057,7 +7058,7 @@ Available: wan27 (Alibaba Wan 2.7), seedance2 (ByteDance Seedance 2.0)
 /cloudflare execute <code> — Run TypeScript against CF SDK
 /cf — Shortcut alias
 
-━━━ Live Tools (21) ━━━
+━━━ Live Tools (26) ━━━
 The bot calls these automatically when relevant:
 Data & Web:
  • web_search — Tavily/Brave web search
@@ -7081,8 +7082,14 @@ Workspace (staged commits, avoids streaming timeouts):
  • workspace_write_file — Stage a file locally
  • workspace_delete_file — Stage a file removal
  • workspace_commit — Push all staged files as one commit
+Files (R2-backed user storage):
+ • save_file — Save content to your file store
+ • read_saved_file — Read a saved file back
+ • list_saved_files — List everything you've saved
+ • delete_saved_file — Delete a saved file
 Compute:
- • sandbox_exec — Run commands in sandbox container
+ • run_code — Execute JS/TS/Python in a sandbox
+ • sandbox_exec — Run shell commands in sandbox container
  • cloudflare_api — Full Cloudflare API via Code Mode MCP
 
 ━━━ Lyra — Content Creator ━━━
@@ -7135,7 +7142,8 @@ Both work together: think:high json: analyze X
 ━━━ Vision ━━━
 Send a photo with a caption — the bot analyzes the image and can call tools based on what it sees (e.g. identify a city, then look up its weather).
 Send a photo without caption — defaults to "What is in this image?"
-Models with vision: gpt, sonnet, haiku, opus, flash, geminipro, grok, kimi, kimidirect, kimi26, kimi26or`;
+Top picks: kimi26, grok, sonnet, opus, geminipro, gpt, flash, haiku.
+See the full list: /pick vision`;
   }
 
   /**
