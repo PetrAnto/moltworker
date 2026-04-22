@@ -5443,11 +5443,69 @@ If you already created the new file and just need to patch the original, call gi
             try {
               const storage = new UserStorage(this.r2);
 
-              // Fetch current HEAD SHA for freshness check on approve
-              let baseSha: string | undefined;
-              if (task.githubToken && task.orchestraRepo) {
+              // Review flows are tagged via the typed isReviewDraft flag,
+              // persisted on `task` at setup time so it survives auto-resume.
+              // Falling back to `request.isReviewDraft` covers the non-resume
+              // path where the task state hasn't been flushed yet, but the
+              // authoritative source on resume is `task.*`.
+              const isReviewDraft = task.isReviewDraft === true || request.isReviewDraft === true;
+              const reviewImportMode = task.reviewImportMode ?? request.reviewImportMode;
+              const reviewUserFocus = task.reviewUserFocus ?? request.reviewUserFocus;
+
+              // ── Step 1: resolve the draft's target repo FIRST ──
+              // Prefer task.orchestraRepo (set at setup). Fall back to the
+              // user's locked orchestra repo in R2 so a task that lost
+              // context across a resume chain still produces a usable
+              // draft. Must happen BEFORE the baseSha fetch so recovered
+              // drafts still get freshness data.
+              let draftRepo = task.orchestraRepo || '';
+              if (!draftRepo) {
                 try {
-                  const [owner, repoName] = task.orchestraRepo.split('/');
+                  const locked = await storage.getOrchestraRepo(request.userId);
+                  if (locked) draftRepo = locked;
+                } catch { /* best-effort fallback */ }
+              }
+              if (!draftRepo) {
+                console.error('[TaskProcessor] Cannot store draft: no repo available (task.orchestraRepo empty, user has no locked orchestra repo)');
+                if (task.telegramToken) {
+                  await this.sendTelegramMessage(
+                    task.telegramToken,
+                    task.chatId,
+                    '⚠️ Could not store draft: no repo associated with this task.\n\nRun `/orch set owner/repo` then re-run `/orch review` or `/orch init`.',
+                  );
+                }
+                // Best-effort lock release (may be a no-op if no repo was
+                // actually locked — the lock is keyed by repo, so an empty
+                // task.orchestraRepo means nothing to release).
+                if (this.r2 && task.orchestraRepo) {
+                  releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+                }
+                return;
+              }
+
+              // ── Step 2: realign task.orchestraRepo to the resolved repo ──
+              // Downstream lock releases and any subsequent resume rebuilds
+              // key off task.orchestraRepo. When we recovered via fallback,
+              // the persisted task state still holds ''; patching it here
+              // ensures the lock-release path at the end of processTask
+              // targets the right repo, and any follow-up resume includes
+              // it in the reconstructed TaskRequest. Flush to storage so
+              // the alarm handler / resume paths see the resolved value.
+              if (task.orchestraRepo !== draftRepo) {
+                task.orchestraRepo = draftRepo;
+                try {
+                  await this.doState.storage.put('task', taskForStorage(task));
+                } catch { /* best-effort — draft storage proceeds regardless */ }
+              }
+
+              // ── Step 3: fetch the baseSha freshness marker ──
+              // Keyed off the NOW-resolved draftRepo (not the possibly-empty
+              // task.orchestraRepo from before the fallback), so recovered
+              // drafts get the same stale-repo protection as normal ones.
+              let baseSha: string | undefined;
+              if (task.githubToken) {
+                try {
+                  const [owner, repoName] = draftRepo.split('/');
                   const ghHeaders = {
                     Authorization: `Bearer ${task.githubToken}`,
                     Accept: 'application/vnd.github.v3+json',
@@ -5470,42 +5528,6 @@ If you already created the new file and just need to patch the original, call gi
                 }
               }
 
-              // Review flows are tagged via the typed isReviewDraft flag,
-              // persisted on `task` at setup time so it survives auto-resume.
-              // Falling back to `request.isReviewDraft` covers the non-resume
-              // path where the task state hasn't been flushed yet, but the
-              // authoritative source on resume is `task.*`.
-              const isReviewDraft = task.isReviewDraft === true || request.isReviewDraft === true;
-              const reviewImportMode = task.reviewImportMode ?? request.reviewImportMode;
-              const reviewUserFocus = task.reviewUserFocus ?? request.reviewUserFocus;
-
-              // Resolve the repo: prefer task.orchestraRepo (set at setup),
-              // fall back to the user's locked orchestra repo in R2 so a
-              // task that lost context across a resume chain still produces
-              // a usable draft. Refuse to store a repoless draft — it would
-              // fail at PR-creation time with "Invalid repo format:".
-              let draftRepo = task.orchestraRepo || '';
-              if (!draftRepo) {
-                try {
-                  const locked = await storage.getOrchestraRepo(request.userId);
-                  if (locked) draftRepo = locked;
-                } catch { /* best-effort fallback */ }
-              }
-              if (!draftRepo) {
-                console.error('[TaskProcessor] Cannot store draft: no repo available (task.orchestraRepo empty, user has no locked orchestra repo)');
-                if (task.telegramToken) {
-                  await this.sendTelegramMessage(
-                    task.telegramToken,
-                    task.chatId,
-                    '⚠️ Could not store draft: no repo associated with this task.\n\nRun `/orch set owner/repo` then re-run `/orch review` or `/orch init`.',
-                  );
-                }
-                // Clean up and exit the draft branch without storing.
-                if (this.r2 && task.orchestraRepo) {
-                  releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
-                }
-                return;
-              }
               // userPrompt: source from task.prompt (resume-durable) then
                 // fall back to request.prompt for the first-pass case.
                 // Without this fallback order, drafts finalized post-resume
