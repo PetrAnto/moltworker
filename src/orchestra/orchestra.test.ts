@@ -2090,6 +2090,60 @@ describe('parseRoadmapPhases hierarchy', () => {
     expect(phases[0].tasks).toHaveLength(2);
     expect(phases[0].tasks[1].kind).toBe('numbered-plain');
   });
+
+  it('skips numbered items in an Acceptance list even in a checkbox-free phase', () => {
+    const content = `### Phase A: Imported Roadmap
+1. Add per-wallet breakdown bar and legend to PortfolioOverview
+  - Acceptance:
+    1. overviewData useMemo includes walletBreakdown
+    2. PortfolioOverview accepts the new prop
+    3. Component compiles without TS errors
+  - Files: src/pages/Portfolio.tsx`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+    expect(phases[0].tasks[0].title).toContain('Add per-wallet breakdown');
+  });
+
+  it('skips numbered items under Description/Caveats labels', () => {
+    const content = `### Phase 1
+- [ ] **Task 1.1**: Do the thing
+  - Description:
+    1. First point about the thing
+    2. Second point
+  - Caveats:
+    1. Beware of X
+    2. Beware of Y`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+    expect(phases[0].tasks[0].title).toContain('Do the thing');
+  });
+
+  it('closes the attribute-list scope when indent returns to the label level', () => {
+    const content = `### Phase 1
+- [ ] Parent task
+  - Acceptance:
+    1. foo
+    2. bar
+  - [ ] Nested checkbox task
+- [ ] Another top-level task`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks.filter(t => t.kind === 'checkbox')).toHaveLength(3);
+    expect(phases[0].tasks.every(t => !/^foo$|^bar$/.test(t.title))).toBe(true);
+  });
+
+  it('recognises **Label**: markdown bold as an attribute opener', () => {
+    const content = `### Phase 1
+- [ ] Task
+  - **Files**:
+    1. this line should NOT be parsed as a task
+    2. neither this one`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+  });
 });
 
 // --- scoreTaskConcreteness ---

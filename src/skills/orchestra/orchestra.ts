@@ -2495,6 +2495,21 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
   // then the top of the stack is the parent (or empty = top-level).
   let indentStack: { indent: number; task: RoadmapTask }[] = [];
 
+  // Track open "attribute lists" — bullet lines of the form
+  //   "  - Acceptance:" / "  - Description:" / "  - **Files**:"
+  // whose payload follows on subsequent, more-indented lines. Numbered
+  // items found while inside an attribute list belong to the attribute
+  // (e.g. Acceptance criteria), NOT to the phase's task list.
+  //
+  // This is a structural signal — it does not depend on the phase
+  // already having checkbox tasks. So imported roadmaps, mixed-format
+  // phases, and hand-written lists are all handled uniformly.
+  //
+  // The scope is active for every line whose indent is STRICTLY GREATER
+  // than the attribute label's indent. We close the scope as soon as
+  // the indent drops back to (or below) the label line's indent.
+  let attrListLabelIndent = -1;
+
   const lines = content.split('\n');
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const line = lines[lineIdx];
@@ -2516,6 +2531,27 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
     // Measure leading whitespace to determine nesting
     const indentMatch = line.match(/^(\t| +)/);
     const rawIndent = indentMatch ? (indentMatch[1] === '\t' ? 4 : indentMatch[1].length) : 0;
+
+    // Close an open attribute list as soon as we dedent back to (or above)
+    // the label's indent — anything at that level is no longer payload.
+    // Blank lines are kept inside the scope (common in multi-line payloads).
+    if (attrListLabelIndent >= 0 && line.trim() !== '' && rawIndent <= attrListLabelIndent) {
+      attrListLabelIndent = -1;
+    }
+
+    // Detect an attribute-list label opener: a dash/star bullet whose
+    // visible text is a Title-Case key followed by a colon, with no
+    // value on the same line (value lives on subsequent indented lines).
+    // Examples:
+    //   - Acceptance:
+    //   - **Files**:
+    //   - Caveats:
+    // Matches labels that contain letters, spaces, or `&` (for "Risks & …").
+    const attrLabelMatch = line.match(/^[\t ]*[-*]\s+(?:\*\*\s*)?([A-Z][A-Za-z &]*?)(?:\s*\*\*)?\s*:\s*$/);
+    if (attrLabelMatch) {
+      attrListLabelIndent = rawIndent;
+    }
+    const inAttrList = attrListLabelIndent >= 0 && rawIndent > attrListLabelIndent;
 
     // Match task lines: "- [x] Task", "* [ ] Task", "  - [x] Task", "\t- [ ] Task"
     const taskMatch = line.match(/^[\t ]{0,8}[-*]\s+\[([ xX])\]\s+(.+)/);
@@ -2568,19 +2604,13 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
         .replace(/\*\*/g, '')
         .trim();
-      // Exclude indented numbered-plain lines that appear INSIDE a
-      // checkbox-task block. These are almost always sub-bullets
-      // (Acceptance: lists, step breakdowns, inline enumerations) and
-      // would otherwise inflate the task count + pollute the
-      // "next task" resolver. Only accept numbered-plain when either:
-      //  - it's at the phase root (indent=0), or
-      //  - the phase has no checkbox tasks yet (flat numbered-list roadmap).
-      const hasCheckboxTasks = current.flatTasks.some(
-        t => t.kind === 'checkbox' || t.kind === 'numbered-checkbox',
-      );
-      const isIndentedSubBullet = rawIndent > 0 && hasCheckboxTasks;
-      // Skip lines that look like sub-descriptions (too short to be a task)
-      if (title.length > 5 && !isIndentedSubBullet) {
+      // Skip:
+      // (1) payload of an open attribute list (- Acceptance:, - Files:, …).
+      //     This is the primary defense — works regardless of whether the
+      //     phase has seen checkbox tasks yet, so imported and mixed-format
+      //     roadmaps behave consistently.
+      // (2) lines too short to be a meaningful task title.
+      if (title.length > 5 && !inAttrList) {
         const task: RoadmapTask = { title, done: false, indent: rawIndent, children: [], kind: 'numbered-plain', lineIndex: lineIdx };
         current.flatTasks.push(task);
         current.topLevel.push(task);
