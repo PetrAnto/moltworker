@@ -2049,6 +2049,174 @@ describe('parseRoadmapPhases hierarchy', () => {
     expect(phases[0].tasks[1].kind).toBe('numbered-checkbox');
     expect(phases[0].tasks[2].kind).toBe('numbered-plain');
   });
+
+  it('does NOT count indented Acceptance-list bullets as separate tasks', () => {
+    // Regression: /orch roadmap was showing "(0/6)" for a phase with a
+    // single top-level task because the 5 numbered Acceptance bullets
+    // nested under it were parsed as separate numbered-plain tasks.
+    const content = `### Phase 3: PortfolioOverview Per-Wallet Breakdown
+- [ ] **Task 3.1**: Add per-wallet breakdown bar and legend
+  - Description: extend overviewData…
+  - Files: src/pages/Portfolio.tsx
+  - Acceptance:
+    1. overviewData useMemo includes walletBreakdown
+    2. PortfolioOverview accepts the new prop
+    3. Wallet Distribution section renders below Chain Distribution
+    4. Existing chain distribution unchanged
+    5. Component compiles without TS errors
+  - Risk: Low`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases).toHaveLength(1);
+    // Should be just ONE task (Task 3.1), not 6 (Task 3.1 + 5 acceptance)
+    expect(phases[0].topLevelTasks).toHaveLength(1);
+    expect(phases[0].topLevelTasks[0].title).toContain('Add per-wallet breakdown');
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('still accepts flat numbered-plain lists when no checkbox tasks exist', () => {
+    // A roadmap written as a pure numbered list (no checkboxes) should
+    // still work — numbered-plain at indent=0 in a phase with no
+    // checkbox tasks is a legit task list.
+    const content = `### Phase 1: MVP
+1. First task
+2. Second task
+3. Third task`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(3);
+    expect(phases[0].topLevelTasks).toHaveLength(3);
+  });
+
+  it('accepts top-level (indent=0) numbered-plain even when checkboxes exist', () => {
+    // Edge case: mixed checkbox + top-level numbered-plain in same phase.
+    // The numbered-plain items at indent=0 should still count as tasks.
+    const content = `### Phase 1: Mixed
+- [x] A checkbox task
+1. A top-level numbered task`;
+
+    const phases = parseRoadmapPhases(content);
+    // 2 tasks total: the checkbox and the indent=0 numbered-plain
+    expect(phases[0].tasks).toHaveLength(2);
+    expect(phases[0].tasks[1].kind).toBe('numbered-plain');
+  });
+
+  it('skips numbered items in an Acceptance list even in a checkbox-free phase', () => {
+    // Stress case for imported / hand-written roadmaps: a phase whose
+    // only visible task is a numbered-plain entry, followed by an
+    // Acceptance block with its own numbered list. The structural
+    // attribute-list detector must ignore the Acceptance payload
+    // regardless of what task kind came before it.
+    const content = `### Phase A: Imported Roadmap
+1. Add per-wallet breakdown bar and legend to PortfolioOverview
+  - Acceptance:
+    1. overviewData useMemo includes walletBreakdown
+    2. PortfolioOverview accepts the new prop
+    3. Component compiles without TS errors
+  - Files: src/pages/Portfolio.tsx`;
+
+    const phases = parseRoadmapPhases(content);
+    // Only the single top-level numbered task should be counted.
+    expect(phases[0].tasks).toHaveLength(1);
+    expect(phases[0].tasks[0].title).toContain('Add per-wallet breakdown');
+  });
+
+  it('skips numbered items under Description/Caveats labels', () => {
+    // Multiple attribute labels with nested numbered payloads — all
+    // should be ignored, not just Acceptance.
+    const content = `### Phase 1
+- [ ] **Task 1.1**: Do the thing
+  - Description:
+    1. First point about the thing
+    2. Second point
+  - Caveats:
+    1. Beware of X
+    2. Beware of Y`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+    expect(phases[0].tasks[0].title).toContain('Do the thing');
+  });
+
+  it('closes the attribute-list scope when indent returns to the label level', () => {
+    // Important invariant: once we dedent past an attribute label,
+    // subsequent indented numbered items should NOT be swallowed as
+    // payload. Otherwise sibling attribute labels could mask real tasks.
+    const content = `### Phase 1
+- [ ] Parent task
+  - Acceptance:
+    1. foo
+    2. bar
+  - [ ] Nested checkbox task
+- [ ] Another top-level task`;
+
+    const phases = parseRoadmapPhases(content);
+    // 3 checkbox tasks total: Parent, Nested, Another
+    expect(phases[0].tasks.filter(t => t.kind === 'checkbox')).toHaveLength(3);
+    // The Acceptance numbered items should not appear.
+    expect(phases[0].tasks.every(t => !/^foo$|^bar$/.test(t.title))).toBe(true);
+  });
+
+  it('recognises **Label**: markdown bold as an attribute opener', () => {
+    const content = `### Phase 1
+- [ ] Task
+  - **Files**:
+    1. this line should NOT be parsed as a task
+    2. neither this one`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('recognises lowercase and punctuation-rich labels', () => {
+    // Imported roadmaps use any convention. The parser must not care
+    // whether the label is Title-Case or has special characters.
+    const content = `### Phase 1
+- [ ] Task
+  - acceptance:
+    1. lowercase label — should open scope
+  - files/paths:
+    1. slash in label
+  - depends on (direct):
+    1. parentheses in label`;
+
+    const phases = parseRoadmapPhases(content);
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('restores the outer scope when an inner attribute list closes', () => {
+    // Nested attribute scopes: Details wraps Acceptance, and after
+    // Acceptance ends, lines at Details' payload indent should still
+    // be treated as Details' prose — not as tasks.
+    const content = `### Phase 1
+- [ ] Task
+  - details:
+    - acceptance:
+      1. inner-nested prose
+      2. still inner-nested prose
+    1. back in outer Details payload — still prose`;
+
+    const phases = parseRoadmapPhases(content);
+    // Only the top-level checkbox task should be counted.
+    expect(phases[0].tasks).toHaveLength(1);
+  });
+
+  it('correctly handles sibling labels at the same indent', () => {
+    // Two Acceptance-like labels at the same indent are siblings, not
+    // nested. The second should replace the first's scope, not push.
+    const content = `### Phase 1
+- [ ] Task
+  - acceptance:
+    1. first criterion
+  - caveats:
+    1. first caveat
+- [ ] Another task`;
+
+    const phases = parseRoadmapPhases(content);
+    // 2 top-level checkbox tasks, no numbered-plain ghosts
+    expect(phases[0].tasks.filter(t => t.kind === 'checkbox')).toHaveLength(2);
+    expect(phases[0].tasks.filter(t => t.kind === 'numbered-plain')).toHaveLength(0);
+  });
 });
 
 // --- scoreTaskConcreteness ---
@@ -2090,6 +2258,33 @@ describe('scoreTaskConcreteness', () => {
 
   it('does not penalize update existing tasks (removed broad penalty)', () => {
     expect(scoreTaskConcreteness('Update existing destination data with current tax rates and costs')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('recognises PascalCase identifiers as strong concreteness anchors', () => {
+    // Regression: "Add per-wallet breakdown bar and legend to PortfolioOverview"
+    // was scored 0 → ambiguity=high → /orch advise warned "Task title is
+    // generic". The PortfolioOverview identifier is a concrete anchor that
+    // should push the score into the non-ambiguous range.
+    expect(scoreTaskConcreteness('Add per-wallet breakdown bar and legend to PortfolioOverview'))
+      .toBeGreaterThanOrEqual(3);
+    expect(scoreTaskConcreteness('Refactor TokenTable to support NFT rows'))
+      .toBeGreaterThanOrEqual(3);
+    expect(scoreTaskConcreteness('Extract FlatToken type into its own module'))
+      .toBeGreaterThanOrEqual(3);
+  });
+
+  it('does not mistake a sentence-initial Capitalized word for a PascalCase identifier', () => {
+    // "Add a new button" starts with a capital but has no PascalCase token.
+    // Should NOT receive the PascalCase bonus.
+    expect(scoreTaskConcreteness('Add a new button')).toBeLessThan(3);
+  });
+
+  it('recognises common UI primitive nouns (bar, legend, chart, table)', () => {
+    // These appear frequently in concrete UI tasks. The old list only had
+    // engineering-layer nouns (component, service, handler) — UI words
+    // were missing so "Add progress bar" scored zero even though it's specific.
+    expect(scoreTaskConcreteness('Add progress bar and legend to the dashboard'))
+      .toBeGreaterThanOrEqual(2);
   });
 });
 

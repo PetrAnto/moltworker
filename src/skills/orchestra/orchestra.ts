@@ -2442,10 +2442,15 @@ export function scoreTaskConcreteness(title: string): number {
   if (/\b(src\/|app\/|components\/|pages\/|lib\/|\.tsx?|\.jsx?|\.css|\.json|\.vue|\.svelte|\.py|\.go|\.rs|\.java|\.rb|\.php|\.sql|\.proto|\.yaml|\.yml|\.toml|\.sh)\b/.test(title)) score += 3;
   // Backtick-quoted identifiers (function names, components, etc.)
   if (/`[^`]+`/.test(title)) score += 3;
+  // PascalCase identifiers (components, classes, types) — strong anchor
+  // Examples that should match: PortfolioOverview, TokenTable, FlatToken,
+  // MyAPIClient. Requires at least one lowercase-to-uppercase transition
+  // to avoid false-positives on a sentence-initial Capitalized word.
+  if (/\b[A-Z][a-z]+[A-Z]\w*\b/.test(title)) score += 3;
   // Numbered step labels like "Step 7", "Task 2.1"
   if (/\b(?:step|task|phase)\s+\d+(?:\.\d+)?\b/i.test(title)) score += 2;
-  // Domain-specific nouns (component, hook, function, etc.)
-  if (/\b(component|hook|function|class|schema|route|import|export|module|endpoint|middleware|model|controller|service|handler|migration|fixture|template|view)\b/i.test(title)) score += 2;
+  // Domain-specific nouns (component, hook, function, UI primitives…)
+  if (/\b(component|hook|function|class|schema|route|import|export|module|endpoint|middleware|model|controller|service|handler|migration|fixture|template|view|table|legend|chart|sidebar|modal|dropdown|toggle|badge|interface|prop|useMemo|useState|useEffect)\b/i.test(title)) score += 2;
   // Longer titles tend to be more descriptive
   if (title.length > 80) score += 1;
 
@@ -2490,6 +2495,29 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
   // then the top of the stack is the parent (or empty = top-level).
   let indentStack: { indent: number; task: RoadmapTask }[] = [];
 
+  // Stack of open attribute-list label indents. Outermost scope at
+  // position 0, innermost at the top. Opened by any bullet whose visible
+  // text ends in ":" with no value on the same line (regardless of case
+  // or punctuation). Closed when indentation returns to or below the
+  // label line. Using a stack (not a single indent) means nested
+  // attribute lists restore their outer scope correctly: closing the
+  // inner scope doesn't lose track of the outer one.
+  //
+  // This is a structural signal — it does not depend on the phase
+  // already having checkbox tasks. Imported roadmaps, mixed-format
+  // phases, hand-written lists, and labels with lowercase /
+  // non-alphanumeric characters are all handled uniformly.
+  //
+  // Example of nesting this handles:
+  //   - Details:              (outer scope opens at indent=2)
+  //     - Acceptance:         (inner scope opens at indent=4)
+  //       1. foo              (inside inner; ignored)
+  //       2. bar              (inside inner; ignored)
+  //     - extra notes         (inner closes, back in outer)
+  //       1. still prose      (inside outer; ignored)
+  //   - Files: src/foo.ts     (both scopes closed, fresh line)
+  let attrListLabelStack: number[] = [];
+
   const lines = content.split('\n');
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const line = lines[lineIdx];
@@ -2505,12 +2533,51 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
       current = { name: phaseMatch[1].trim(), flatTasks: [], topLevel: [] };
       accums.push(current);
       indentStack = [];
+      // A new phase resets all attribute scopes — they can't span phases.
+      attrListLabelStack = [];
       continue;
     }
 
     // Measure leading whitespace to determine nesting
     const indentMatch = line.match(/^(\t| +)/);
     const rawIndent = indentMatch ? (indentMatch[1] === '\t' ? 4 : indentMatch[1].length) : 0;
+
+    // Close any attribute scopes we've dedented out of. Walk from innermost
+    // (top of stack) outward, popping every scope whose label indent is >=
+    // the current line's indent. Blank lines are skipped — they're common
+    // inside multi-line payloads and shouldn't close a scope.
+    if (line.trim() !== '') {
+      while (
+        attrListLabelStack.length > 0 &&
+        rawIndent <= attrListLabelStack[attrListLabelStack.length - 1]
+      ) {
+        attrListLabelStack.pop();
+      }
+    }
+
+    // Detect an attribute-list label opener: a dash/star bullet whose
+    // visible text ends in ":" with no value on the same line. The value
+    // lives on subsequent indented lines. Permissive on the label text —
+    // accepts lowercase, punctuation, slashes, parentheses, etc. We
+    // intentionally don't restrict to Title-Case keys: imported roadmaps
+    // use any convention, and the false-positive cost (a task-looking
+    // line that happens to end in ":" with nothing below) is zero since
+    // an empty scope captures nothing.
+    //
+    // Checkbox-task lines never reach this check because they include
+    // "[x]" / "[ ]" before the text (guarded explicitly below).
+    const attrLabelMatch = line.match(/^[\t ]*[-*]\s+(?:\*\*\s*)?([^\n:]+?)(?:\s*\*\*)?\s*:\s*$/);
+    const looksLikeCheckbox = /^[\t ]*[-*]\s+\[[ xX]\]/.test(line);
+    if (attrLabelMatch && !looksLikeCheckbox) {
+      // Siblings at this indent were already popped by the scope-close
+      // walk above, so we simply push the new scope.
+      attrListLabelStack.push(rawIndent);
+    }
+    // "Inside an attribute list" = current indent is strictly deeper than
+    // the innermost open label. The stack enforces this naturally.
+    const inAttrList =
+      attrListLabelStack.length > 0 &&
+      rawIndent > attrListLabelStack[attrListLabelStack.length - 1];
 
     // Match task lines: "- [x] Task", "* [ ] Task", "  - [x] Task", "\t- [ ] Task"
     const taskMatch = line.match(/^[\t ]{0,8}[-*]\s+\[([ xX])\]\s+(.+)/);
@@ -2563,8 +2630,13 @@ export function parseRoadmapPhases(content: string): RoadmapPhase[] {
         .replace(/^\*\*(?:Task\s+[\d.]+)?\*\*:?\s*/, '')
         .replace(/\*\*/g, '')
         .trim();
-      // Skip lines that look like sub-descriptions (start with lowercase, very short)
-      if (title.length > 5) {
+      // Skip:
+      // (1) payload of an open attribute list (- Acceptance:, - Files:, …).
+      //     This is the primary defense — works regardless of whether the
+      //     phase has seen checkbox tasks yet, so imported and mixed-format
+      //     roadmaps behave consistently.
+      // (2) lines too short to be a meaningful task title.
+      if (title.length > 5 && !inAttrList) {
         const task: RoadmapTask = { title, done: false, indent: rawIndent, children: [], kind: 'numbered-plain', lineIndex: lineIdx };
         current.flatTasks.push(task);
         current.topLevel.push(task);
