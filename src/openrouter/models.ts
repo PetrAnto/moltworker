@@ -1006,22 +1006,23 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 262144,
   },
   glm5nv: {
-    id: 'z-ai/glm5',
+    // GLM-5.1 replaced GLM-5 on NIM around April 2026 (GLM-5 was deprecated 2026-04-20).
+    id: 'z-ai/glm-5.1',
     alias: 'glm5nv',
-    name: 'GLM-5 (NIM, Deprecated)',
-    specialty: 'NVIDIA NIM — Zhipu GLM-5 (deprecation: 2026-04-20; z-ai/glm-5.1 not yet on NIM)',
-    score: '128K ctx, free',
+    name: 'GLM-5.1 (NIM)',
+    specialty: 'NVIDIA NIM — Zhipu GLM-5.1 flagship agentic/reasoning hosted free',
+    score: 'GLM-5.1, 128K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
     provider: 'nvidia',
     maxContext: 131072,
   },
   kiminv: {
-    id: 'moonshotai/kimi-k2-instruct',
+    id: 'moonshotai/kimi-k2.5',
     alias: 'kiminv',
-    name: 'Kimi K2 Instruct (NIM)',
-    specialty: 'NVIDIA NIM — Kimi K2 hosted free',
-    score: 'Kimi K2 via NIM, 256K ctx, free — capabilities unverified',
+    name: 'Kimi K2.5 (NIM)',
+    specialty: 'NVIDIA NIM — Kimi K2.5 hosted free',
+    score: 'Kimi K2.5 via NIM, 256K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
     supportsTools: false, // TODO: validate (Kimi K2 supports tools on direct API)
@@ -1055,7 +1056,8 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 1048576,
   },
   minimaxnv: {
-    id: 'minimax/minimax-m2.7',
+    // NIM lists MiniMax under the "minimaxai" HF org prefix, not "minimax".
+    id: 'minimaxai/minimax-m2.7',
     alias: 'minimaxnv',
     name: 'MiniMax M2.7 (NIM)',
     specialty: 'NVIDIA NIM — MiniMax flagship agentic/coding hosted free',
@@ -1090,6 +1092,53 @@ export const MODELS: Record<string, ModelInfo> = {
     supportsVision: true,
     supportsTools: false, // TODO: validate
     provider: 'nvidia',
+    maxContext: 262144,
+  },
+
+  // --- NIM: DeepSeek R1 (reasoning) ---
+  dsr1nv: {
+    id: 'deepseek-ai/deepseek-r1',
+    alias: 'dsr1nv',
+    name: 'DeepSeek R1 (NIM)',
+    specialty: 'NVIDIA NIM — DeepSeek R1 reasoning hosted free',
+    score: 'DeepSeek R1 via NIM, 128K ctx, free — capabilities unverified',
+    cost: 'FREE',
+    isFree: true,
+    supportsTools: false, // TODO: validate via /simulate
+    provider: 'nvidia',
+    reasoning: 'mandatory',
+    maxContext: 131072,
+  },
+
+  // --- NIM: GPT-OSS 120B (OpenAI open-source, hosted on NIM) ---
+  // Distinct from /gptoss which routes through OpenRouter's free tier;
+  // /gptossnv uses NVIDIA's infrastructure directly.
+  gptossnv: {
+    id: 'openai/gpt-oss-120b',
+    alias: 'gptossnv',
+    name: 'GPT-OSS 120B (NIM)',
+    specialty: 'NVIDIA NIM — OpenAI open-source 120B hosted free',
+    score: '117B MoE (5.1B active), native tool use, 128K ctx — capabilities unverified',
+    cost: 'FREE',
+    isFree: true,
+    supportsTools: false, // TODO: validate via /simulate (OpenRouter variant supports tools)
+    provider: 'nvidia',
+    maxContext: 131072,
+  },
+
+  // --- NIM: Kimi K2 Thinking (reasoning variant) ---
+  // Distinct from /kimithink (direct Moonshot API); this is the NIM-hosted copy.
+  kimithinknv: {
+    id: 'moonshotai/kimi-k2-thinking',
+    alias: 'kimithinknv',
+    name: 'Kimi K2 Thinking (NIM)',
+    specialty: 'NVIDIA NIM — Kimi K2 reasoning variant hosted free',
+    score: 'Kimi K2 with extended thinking, 256K ctx — capabilities unverified',
+    cost: 'FREE',
+    isFree: true,
+    supportsTools: false, // TODO: validate via /simulate
+    provider: 'nvidia',
+    reasoning: 'mandatory',
     maxContext: 262144,
   },
 
