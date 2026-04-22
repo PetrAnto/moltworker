@@ -126,23 +126,30 @@ telegram.get('/setup', async (c) => {
   const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
   const success = await bot.setWebhook(webhookUrl);
 
-  // Register bot menu commands
+  // Register bot menu commands.
+  //
+  // Telegram renders this list in the `/` autocomplete menu, so it's the
+  // first-contact surface for most users. Keep it focused on high-signal
+  // top-level entry points — not every implemented command. The full
+  // reference lives in /help; power-user commands (syncall, curate,
+  // test, etc.) stay out of the menu to avoid noise.
   const commandsSet = await bot.setMyCommands([
     { command: 'start', description: 'Welcome & feature overview' },
     { command: 'help', description: 'Full command reference' },
-    { command: 'pick', description: 'Choose a model (buttons)' },
-    { command: 'models', description: 'All models with prices' },
-    { command: 'new', description: 'Clear conversation' },
+    { command: 'orch', description: 'Orchestra: plan & build projects as PRs' },
+    { command: 'write', description: 'Lyra: draft content' },
+    { command: 'research', description: 'Nexus: multi-source research' },
+    { command: 'save', description: 'Spark: capture ideas to your inbox' },
+    { command: 'cf', description: 'Cloudflare API search / execute' },
+    { command: 'pick', description: 'Choose a model by intent' },
+    { command: 'models', description: 'Browse models with prices' },
     { command: 'img', description: 'Generate an image' },
-    { command: 'video', description: 'Generate a video (Wan 2.7 / Seedance 2.0)' },
-    { command: 'briefing', description: 'Daily briefing (weather+news)' },
+    { command: 'video', description: 'Generate a video' },
+    { command: 'briefing', description: 'Daily briefing (weather + news)' },
+    { command: 'new', description: 'Reset conversation' },
+    { command: 'resume', description: 'Resume the last task' },
     { command: 'costs', description: 'Token usage summary' },
     { command: 'status', description: 'Bot status & info' },
-    { command: 'saves', description: 'List saved checkpoints' },
-    { command: 'ar', description: 'Toggle auto-resume' },
-    { command: 'resume', description: 'Resume task with optional model override' },
-    { command: 'credits', description: 'OpenRouter balance' },
-    { command: 'syncall', description: 'Sync full model catalog from OpenRouter' },
   ]);
 
   if (success) {

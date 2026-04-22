@@ -2799,24 +2799,33 @@ export class TelegramHandler {
       '🎼 Orchestra Mode — AI-Driven Project Execution\n\n' +
       repoLine +
       '━━━ Quick Start ━━━\n' +
-      '/orch set owner/repo — Lock your repo\n' +
-      '/orch do <description> — One-shot task (no roadmap)\n' +
-      '/orch init <description> — Create roadmap + work log\n' +
-      '/orch next — Execute next roadmap task\n\n' +
+      '1. /orch set owner/repo  — Lock your repo\n' +
+      '2. /orch init <description>  — Create roadmap (or /orch do for one-shot)\n' +
+      '3. /orch next  — Execute the next task\n\n' +
       '━━━ Commands ━━━\n' +
-      '/orch do <description> — Execute a task directly (no roadmap)\n' +
+      'Setup:\n' +
+      '/orch set owner/repo — Lock default repo\n' +
+      '/orch unset — Clear locked repo\n' +
+      '\n' +
+      'Roadmap authoring:\n' +
       '/orch init <description> — Plan: create roadmap (no code)\n' +
-      '/orch review [--import] [focus] — Critique roadmap & propose edits\n' +
-      '/orch modify <changes> — User-driven roadmap edit (preview flow)\n' +
       '/orch plan — Conversational requirements gathering\n' +
-      '/orch advise — Analyze next task & pick best model\n' +
-      '/orch next [task] [--force] — Run next (or specific) task\n' +
+      '/orch review [--import] [focus] — Critique roadmap & propose edits\n' +
+      '/orch modify <changes> — User-driven roadmap edit\n' +
       '/orch roadmap — View roadmap status\n' +
+      '\n' +
+      'Execution:\n' +
+      '/orch do <description> — One-shot task (no roadmap)\n' +
+      '/orch next [task] [--force] — Run next (or specific) task\n' +
+      '/orch run owner/repo — Run with explicit repo\n' +
+      '/orch advise — Analyze next task & pick best model\n' +
+      '/orch merge <PR#> [method] — Merge PR (squash/merge/rebase)\n' +
+      '\n' +
+      'Recovery & observability:\n' +
+      '/orch redo <task> — Re-implement a failed task\n' +
+      '/orch reset <task> — Uncheck task(s) for re-run\n' +
       '/orch history — View past tasks\n' +
-      '/orch stats [model] — Event metrics (stalls, aborts)\n' +
-      '/orch reset <task> — Uncheck for re-run\n' +
-      '/orch merge <PR#> [method] — Merge a PR (squash/merge/rebase)\n' +
-      '/orch redo <task> — Re-implement a failed task\n\n' +
+      '/orch stats [model] — Event metrics (stalls, aborts)\n\n' +
       '━━━ Planner Gate ━━━\n' +
       '/orch init and /orch review check your model against the planner\n' +
       'floor (IQ:45). If it\'s weaker, you\'ll see a one-tap menu of stronger\n' +
@@ -6607,6 +6616,8 @@ What I can do:
 /gptoss — GPT-OSS 120B 🔧 (128K ctx)
 
 💰 Best paid models for coding:
+/kimi26 — Kimi K2.6 🔧👁️ ($0.95/M, 80.2% SWE-Bench)
+/kimi26or — Kimi K2.6 via OpenRouter 🔧👁️ ($0.60/M)
 /deep — DeepSeek V3.2 🔧 ($0.25/M)
 /grok — Grok 4.1 🔧 (#1 agentic)
 /sonnet — Claude Sonnet 4.5 🔧👁️
@@ -6651,7 +6662,7 @@ Example: /video drone shot over a neon city at night
       case 'tools':
         return `🔧 Tools & Live Data
 
-I have 14 tools that run automatically — just ask naturally:
+I have 26 tools that run automatically — just ask naturally:
 
 📊 Data:
 • "What's the weather in Prague?"
@@ -6686,7 +6697,8 @@ What I can do:
 How to use:
 • Send a photo → I describe what I see
 • Send a photo + caption → I follow your instructions
-• Works with: /gpt, /flash, /haiku, /sonnet, /kimi
+• Top picks: /kimi26, /grok, /sonnet, /opus, /geminipro, /gpt, /flash, /haiku
+• See the full list: /pick vision
 
 Try it: Send a screenshot and ask "What's in this image?"`;
 
@@ -6705,6 +6717,9 @@ Also works with JSON: "think:high json: Analyze these metrics..."
 Best reasoning models:
 /deep — Great value, configurable thinking
 /flash — Strong reasoning + 1M context
+/geminipro — Frontier reasoning, 1M context
+/grok — #1 agentic, strong reasoning
+/sonnet — Balanced agentic + reasoning
 /opus — Maximum quality`;
 
       case 'lyra':
@@ -6811,19 +6826,27 @@ Step 4: Repeat
   /orch next  (keep going until done)
 
 ━━━ Commands ━━━
+Setup:
 /orch set owner/repo — Lock default repo
-/orch init <description> — Create roadmap (planner gate + draft preview)
-/orch review [--import] [focus] — Critique roadmap & propose edits
-/orch modify <changes> — User-driven roadmap edit (preview flow)
-/orch plan — Conversational requirements gathering
-/orch next — Execute next task
-/orch next <specific task> — Execute specific task
-/orch next --force — Skip review auto-trigger checks
-/orch run owner/repo — Run with explicit repo
-/orch advise — Recommend the best executor model for the next task
-/orch roadmap — View roadmap status
-/orch history — View past tasks
 /orch unset — Clear locked repo
+
+Roadmap authoring:
+/orch init <description> — Plan: create roadmap (planner gate + preview)
+/orch plan — Conversational requirements gathering
+/orch review [--import] [focus] — Critique roadmap & propose edits
+/orch modify <changes> — User-driven roadmap edit
+/orch roadmap — View roadmap status
+
+Execution:
+/orch do <description> — One-shot task (no roadmap)
+/orch next [task] [--force] — Run next (or specific) task
+/orch run owner/repo — Run with explicit repo
+/orch advise — Recommend best executor model for the next task
+/orch merge <PR#> [method] — Merge a PR (squash/merge/rebase)
+
+Observability:
+/orch history — View past tasks
+/orch stats [model] — Event metrics (stalls, aborts)
 
 ━━━ Roadmap Review ━━━
 /orch review runs a critique pass on the current roadmap using the work
@@ -6987,7 +7010,7 @@ Each /orch next picks up where the last one left off.`;
 /curate <id> <alias> — Add model from OpenRouter with clean alias
 /pingmodels — Health check all models (latency + failures)
 /model — Hub · /model sonnet — Details · /model use deep — Switch
-Quick switch: /deep /grok /sonnet /flash /opus etc.
+Quick switch: /kimi26 /grok /sonnet /deep /flash /geminipro /opus etc.
 
 ━━━ Costs & Credits ━━━
 /credits — OpenRouter balance
@@ -7035,22 +7058,38 @@ Available: wan27 (Alibaba Wan 2.7), seedance2 (ByteDance Seedance 2.0)
 /cloudflare execute <code> — Run TypeScript against CF SDK
 /cf — Shortcut alias
 
-━━━ 15 Live Tools ━━━
+━━━ Live Tools (26) ━━━
 The bot calls these automatically when relevant:
- • get_weather — Current conditions + 7-day forecast
- • get_crypto — Coin price, top N, DEX pairs
- • convert_currency — Live exchange rates
- • fetch_news — HackerNews, Reddit, arXiv
+Data & Web:
+ • web_search — Tavily/Brave web search
  • fetch_url — Read any web page
  • browse_url — JS-rendered pages, screenshots, PDFs
  • url_metadata — Page title/description/image
- • generate_chart — Chart.js image via QuickChart
+ • fetch_news — HackerNews, Reddit, arXiv
+ • get_weather — Current conditions + 7-day forecast
+ • get_crypto — Coin price, top N, DEX pairs
+ • convert_currency — Live exchange rates
  • geolocate_ip — IP to city/country/timezone
+ • generate_chart — Chart.js image via QuickChart
+GitHub:
  • github_read_file — Read file from any repo
  • github_list_files — List repo directory
  • github_api — Full GitHub API access
  • github_create_pr — Create PR with file changes
- • sandbox_exec — Run commands in sandbox container
+ • github_push_files — Batch-push files to a branch
+ • github_merge_pr — Merge a PR (squash/merge/rebase)
+Workspace (staged commits, avoids streaming timeouts):
+ • workspace_write_file — Stage a file locally
+ • workspace_delete_file — Stage a file removal
+ • workspace_commit — Push all staged files as one commit
+Files (R2-backed user storage):
+ • save_file — Save content to your file store
+ • read_saved_file — Read a saved file back
+ • list_saved_files — List everything you've saved
+ • delete_saved_file — Delete a saved file
+Compute:
+ • run_code — Execute JS/TS/Python in a sandbox
+ • sandbox_exec — Run shell commands in sandbox container
  • cloudflare_api — Full Cloudflare API via Code Mode MCP
 
 ━━━ Lyra — Content Creator ━━━
@@ -7072,18 +7111,28 @@ The bot calls these automatically when relevant:
 
 ━━━ Orchestra Mode ━━━
 /orch set owner/repo — Lock default repo
+/orch unset — Clear locked repo
 /orch do <desc> — One-shot task (no roadmap)
 /orch init <desc> — Create ROADMAP.md + WORK_LOG.md (planner gate + draft preview)
-/orch review [--import] — Critique roadmap & propose edits
+/orch review [--import] [focus] — Critique roadmap & propose edits
 /orch modify <changes> — User-driven roadmap edit (preview flow)
-/orch next — Execute next roadmap task
-/orch next <task> — Execute specific task
+/orch plan — Conversational requirements gathering
+/orch next [task] [--force] — Execute next (or specific) task
+/orch run owner/repo — Run with explicit repo
 /orch advise — Recommend the best executor model for the next task
 /orch merge <PR#> [method] — Merge PR (squash/merge/rebase)
 /orch roadmap — View roadmap status
 /orch history — View past tasks
+/orch stats [model] — Event metrics (stalls, aborts)
 /orch redo <task> — Re-implement a failed task
 /orch reset <task> — Uncheck task(s) for re-run
+
+• Planner gate: /orch init and /orch review check your model against
+  the planner floor (IQ:45). Transient planner override is per-draft
+  only — chat model stays on your selection.
+• Review auto-triggers before /orch next: <!-- review-gate --> markers
+  in ROADMAP.md or ≥2 runtime risk escalations in recent runs.
+  Bypass with /orch next --force.
 
 ━━━ Special Prefixes ━━━
 think:high <msg> — Deep reasoning (also: low, medium, off)
@@ -7093,7 +7142,8 @@ Both work together: think:high json: analyze X
 ━━━ Vision ━━━
 Send a photo with a caption — the bot analyzes the image and can call tools based on what it sees (e.g. identify a city, then look up its weather).
 Send a photo without caption — defaults to "What is in this image?"
-Models with vision: gpt, sonnet, haiku, flash, geminipro, kimi, kimidirect`;
+Top picks: kimi26, grok, sonnet, opus, geminipro, gpt, flash, haiku.
+See the full list: /pick vision`;
   }
 
   /**
