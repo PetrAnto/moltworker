@@ -907,7 +907,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '253B dense, 128K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate tool calling via /simulate
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 131072,
   },
@@ -919,7 +919,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '49B dense, 128K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 131072,
   },
@@ -931,7 +931,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '120B MoE, 128K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 131072,
   },
@@ -954,6 +954,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '9B params, 128K ctx, free',
     cost: 'FREE',
     isFree: true,
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 131072,
   },
@@ -977,7 +978,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '122B MoE, 128K ctx, free',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 131072,
   },
@@ -989,7 +990,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '480B MoE, 256K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate (Qwen3 Coder likely supports tools)
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 262144,
   },
@@ -1001,7 +1002,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '397B MoE, 256K ctx, free',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 262144,
   },
@@ -1011,9 +1012,10 @@ export const MODELS: Record<string, ModelInfo> = {
     alias: 'glm5nv',
     name: 'GLM-5.1 (NIM)',
     specialty: 'NVIDIA NIM — Zhipu GLM-5.1 flagship agentic/reasoning hosted free',
-    score: 'GLM-5.1, 128K ctx, free — capabilities unverified',
+    score: 'GLM-5.1, 128K ctx, free',
     cost: 'FREE',
     isFree: true,
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 131072,
   },
@@ -1025,7 +1027,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: 'Kimi K2.5 via NIM, 256K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate (Kimi K2 supports tools on direct API)
+    supportsTools: true, // Validated via /simulate/nim-tools-check (2026-04-23): Kimi K2.5 emits get_weather tool_calls on NIM.
     provider: 'nvidia',
     maxContext: 262144,
   },
@@ -1037,7 +1039,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '123B params, 128K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate (Devstral likely supports tools)
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 131072,
   },
@@ -1061,10 +1063,14 @@ export const MODELS: Record<string, ModelInfo> = {
     alias: 'minimaxnv',
     name: 'MiniMax M2.7 (NIM)',
     specialty: 'NVIDIA NIM — MiniMax flagship agentic/coding hosted free',
-    score: 'MiniMax M2.7, 196K ctx — capabilities unverified',
+    score: 'MiniMax M2.7, 196K ctx',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate via /simulate
+    // 2026-04-23: /simulate/nim-tools-check returned HTTP 524 (Cloudflare
+    // timeout from NIM upstream — model overloaded or cold-start). Retry
+    // the check later; other Kimi/OpenAI NIM variants passed the same
+    // day so NIM-wide tool support is likely in place.
+    supportsTools: false,
     provider: 'nvidia',
     maxContext: 196608,
   },
@@ -1096,15 +1102,20 @@ export const MODELS: Record<string, ModelInfo> = {
   },
 
   // --- NIM: DeepSeek R1 (reasoning) ---
+  // 2026-04-23: /simulate/nim-tools-check returned HTTP 410 Gone for
+  // this model id. NIM has retired `deepseek-ai/deepseek-r1` — the
+  // replacement likely uses a dated suffix (e.g. deepseek-r1-0528) or
+  // has moved under a different slug. Run /simulate/nim-models-list to
+  // discover the current id, then update this entry.
   dsr1nv: {
     id: 'deepseek-ai/deepseek-r1',
     alias: 'dsr1nv',
-    name: 'DeepSeek R1 (NIM)',
-    specialty: 'NVIDIA NIM — DeepSeek R1 reasoning hosted free',
-    score: 'DeepSeek R1 via NIM, 128K ctx, free — capabilities unverified',
+    name: 'DeepSeek R1 (NIM) — retired id',
+    specialty: 'NVIDIA NIM — DeepSeek R1 reasoning (id HTTP 410, pending refresh)',
+    score: 'DeepSeek R1 via NIM — original id gone from catalog',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate via /simulate
+    supportsTools: false, // Pending: rediscover correct NIM id via /simulate/nim-models-list
     provider: 'nvidia',
     reasoning: 'mandatory',
     maxContext: 131072,
@@ -1121,7 +1132,7 @@ export const MODELS: Record<string, ModelInfo> = {
     score: '117B MoE (5.1B active), native tool use, 128K ctx — capabilities unverified',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate via /simulate (OpenRouter variant supports tools)
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     maxContext: 131072,
   },
@@ -1133,10 +1144,10 @@ export const MODELS: Record<string, ModelInfo> = {
     alias: 'kimithinknv',
     name: 'Kimi K2 Thinking (NIM)',
     specialty: 'NVIDIA NIM — Kimi K2 reasoning variant hosted free',
-    score: 'Kimi K2 with extended thinking, 256K ctx — capabilities unverified',
+    score: 'Kimi K2 with extended thinking, 256K ctx',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // TODO: validate via /simulate
+    supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
     provider: 'nvidia',
     reasoning: 'mandatory',
     maxContext: 262144,
