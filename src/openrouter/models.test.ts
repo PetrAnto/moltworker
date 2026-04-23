@@ -373,6 +373,19 @@ describe('getModel deprecated alias migration', () => {
     expect(getModel('DSR1NV')).toEqual(direct);
   });
 
+  it('strips a leading slash before resolving (so /dsr1nv also migrates)', () => {
+    // GPT review flagged that callers who pass the raw Telegram command
+    // token (e.g. "/kimivlnv") would miss the deprecation map because
+    // the map keys are bare aliases. getModel() now normalises by
+    // stripping a leading "/", so slash-prefixed and bare forms behave
+    // identically at every lookup step.
+    const bare = getModel('dsv31nv');
+    expect(bare).toBeDefined();
+    expect(getModel('/dsr1nv')).toEqual(bare);
+    expect(getModel('/kimivlnv')).toEqual(getModel('kiminv'));
+    expect(getModel('//qwenvlnv')).toEqual(getModel('qwen35nv'));
+  });
+
   it('returns undefined for unknown aliases not in the deprecation map', () => {
     expect(getModel('this-alias-does-not-exist-anywhere-xyz123')).toBeUndefined();
   });

@@ -1587,7 +1587,10 @@ export function getAllModels(): Record<string, ModelInfo> {
  * Falls back to fuzzy matching when exact match fails (strips hyphens/dots, tries suffix/prefix).
  */
 export function getModel(alias: string): ModelInfo | undefined {
-  const lower = alias.toLowerCase();
+  // Defensive normalisation: strip a leading "/" (some callers pass the
+  // raw Telegram command token e.g. "/kimi") and lowercase. Without this,
+  // deprecation/alias/id lookups all miss when a slash sneaks in.
+  const lower = alias.replace(/^\/+/, '').toLowerCase();
   if (BLOCKED_ALIASES.has(lower)) return undefined;
 
   // Deprecated alias migration: when a removed/renamed alias is requested,

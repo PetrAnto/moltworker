@@ -517,29 +517,33 @@ simulate.get('/sandbox-test', async (c) => {
 });
 
 /**
- * GET /simulate/nim-tools-check?model=<alias-or-id>
+ * GET /simulate/nim-tools-check?model=<alias-or-id>[&image=<url>]
  *
- * Verify whether a NVIDIA NIM-hosted model actually supports
- * tool-calling, WITHOUT flipping supportsTools in the catalog and
- * redeploying. The check runs server-side using the Worker's
- * NVIDIA_NIM_API_KEY secret, so no local env export is needed.
+ * Validate NVIDIA NIM capabilities server-side using the Worker's
+ * NVIDIA_NIM_API_KEY secret (no local env export needed).
  *
- * How it works:
- *   1. Resolve the input to a NIM model id.
- *      - If `model` matches an alias with provider='nvidia', use its id.
- *      - Otherwise treat the input as a raw NIM id.
- *   2. POST to https://integrate.api.nvidia.com/v1/chat/completions
- *      with a synthetic single-tool definition (get_weather) and a
- *      prompt that obviously needs it.
- *   3. Return a structured verdict:
- *        { alias, modelId, toolsFired: boolean, toolName?, toolArgs?,
- *          content?, httpStatus, error? }
+ * Default mode (no image): tool-calling check.
+ *   - POSTs a synthetic get_weather tools array + "weather in Paris?"
+ *   - Returns { toolsFired, toolName, toolArgs, content, httpStatus, error }
+ *   - Promote `supportsTools: true` in the catalog when toolsFired === true.
+ *
+ * Vision mode (?image=<url>): native multimodality check.
+ *   - POSTs an OpenAI-style content-block message with text + image_url
+ *   - No tools array — isolates vision reasoning from tool-calling.
+ *   - Returns { visionResponded, content, httpStatus, error }
+ *     visionResponded is true when the model produces non-empty content
+ *     that isn't a generic "I can't see images" disclaimer.
+ *   - Promote `supportsVision: true` in the catalog when the content
+ *     actually describes the image (eyeball check; the heuristic flag
+ *     is a best-effort guide, not a guarantee).
  *
  * Usage:
- *   curl -s "https://<worker>/simulate/nim-tools-check?model=kiminv" \
- *     -H "Authorization: Bearer $DEBUG_API_KEY" | jq
+ *   # Tools
+ *   curl -s "…/nim-tools-check?model=kiminv" -H "Authorization: Bearer $KEY"
  *
- * Promote supportsTools: true on the alias when toolsFired === true.
+ *   # Vision — pass any public image URL (Wikimedia test images work well)
+ *   curl -s "…/nim-tools-check?model=kiminv&image=https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png" \
+ *     -H "Authorization: Bearer $KEY"
  */
 simulate.get('/nim-tools-check', async (c) => {
   const env = c.env;
@@ -575,27 +579,47 @@ simulate.get('/nim-tools-check', async (c) => {
     }, 400);
   }
 
-  // Synthetic tools payload. get_weather is simple and unambiguous —
-  // a tool-capable model will call it, a tool-blind one will reply
-  // with a disclaimer about real-time data.
-  const body = {
-    model: modelId,
-    messages: [{ role: 'user', content: 'What is the current weather in Paris right now?' }],
-    tools: [{
-      type: 'function',
-      function: {
-        name: 'get_weather',
-        description: 'Get current weather conditions for a city.',
-        parameters: {
-          type: 'object',
-          properties: { city: { type: 'string', description: 'City name' } },
-          required: ['city'],
-        },
-      },
-    }],
-    tool_choice: 'auto',
-    max_tokens: 200,
-  };
+  // Vision mode is opt-in via ?image=<url>. When present, drop the tools
+  // array and use an OpenAI-style content-block message so we isolate
+  // native multimodality from tool-calling.
+  const imageUrl = (c.req.query('image') || '').trim();
+  const isVisionMode = imageUrl.length > 0;
+
+  // Synthetic tools payload for the default (tool-check) mode. get_weather
+  // is simple and unambiguous — a tool-capable model will call it, a
+  // tool-blind one will reply with a disclaimer about real-time data.
+  const body: Record<string, unknown> = isVisionMode
+    ? {
+        model: modelId,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Describe this image in one concise sentence.' },
+            { type: 'image_url', image_url: { url: imageUrl } },
+          ],
+        }],
+        max_tokens: 200,
+      }
+    : {
+        model: modelId,
+        messages: [{ role: 'user', content: 'What is the current weather in Paris right now?' }],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            description: 'Get current weather conditions for a city.',
+            parameters: {
+              type: 'object',
+              properties: { city: { type: 'string', description: 'City name' } },
+              required: ['city'],
+            },
+          },
+        }],
+        tool_choice: 'auto',
+        max_tokens: 200,
+      };
+
+  const mode = isVisionMode ? 'vision' : 'tools';
 
   let httpStatus = 0;
   let rawText = '';
@@ -612,7 +636,7 @@ simulate.get('/nim-tools-check', async (c) => {
     rawText = await resp.text();
   } catch (err) {
     return c.json({
-      alias, modelId, toolsFired: false, httpStatus: 0,
+      mode, alias, modelId, toolsFired: false, visionResponded: false, httpStatus: 0,
       error: `fetch failed: ${err instanceof Error ? err.message : String(err)}`,
     }, 200);
   }
@@ -626,14 +650,14 @@ simulate.get('/nim-tools-check', async (c) => {
     parsed = JSON.parse(rawText);
   } catch {
     return c.json({
-      alias, modelId, toolsFired: false, httpStatus,
+      mode, alias, modelId, toolsFired: false, visionResponded: false, httpStatus,
       error: `non-JSON response from NIM: ${rawText.slice(0, 200)}`,
     }, 200);
   }
 
   if (parsed.error) {
     return c.json({
-      alias, modelId, toolsFired: false, httpStatus,
+      mode, alias, modelId, toolsFired: false, visionResponded: false, httpStatus,
       error: parsed.error.message || 'NIM returned an error',
     }, 200);
   }
@@ -641,14 +665,26 @@ simulate.get('/nim-tools-check', async (c) => {
   const msg = parsed.choices?.[0]?.message;
   const toolCalls = msg?.tool_calls ?? [];
   const firstCall = toolCalls[0]?.function;
+  const content = typeof msg?.content === 'string' ? msg.content : null;
+
+  // Heuristic: vision worked if the model produced non-empty content that
+  // doesn't read as a canned "I can't see images" disclaimer. The final
+  // promote decision still needs an eyeball check on the content field.
+  const looksLikeDisclaimer = content
+    ? /\b(can't|cannot|unable to)\s+(see|view|process|analyze)\s+(the\s+)?(image|photo|picture)\b/i.test(content)
+      || /\bi\s+don't\s+(have\s+(the\s+)?ability|see)\b/i.test(content)
+    : false;
+
   return c.json({
+    mode,
     alias,
     modelId,
     httpStatus,
     toolsFired: toolCalls.length > 0,
     toolName: firstCall?.name,
     toolArgs: firstCall?.arguments,
-    content: typeof msg?.content === 'string' ? msg.content.slice(0, 200) : null,
+    visionResponded: isVisionMode && !!content && !looksLikeDisclaimer,
+    content: content ? content.slice(0, 400) : null,
   });
 });
 
