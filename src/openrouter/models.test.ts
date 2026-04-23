@@ -354,6 +354,30 @@ describe('getModel fuzzy matching', () => {
   });
 });
 
+// --- getModel deprecated alias migration ---
+
+describe('getModel deprecated alias migration', () => {
+  it('redirects /dsr1nv to /dsv31nv (the documented successor)', () => {
+    // dsr1nv was a speculative NIM alias removed when we confirmed
+    // NVIDIA's free tier doesn't serve DeepSeek R1. External consumers
+    // (saved scripts, docs, prompts) using /dsr1nv must keep working
+    // — they get the closest-available DeepSeek on NIM (V3.1 Terminus).
+    const successor = getModel('dsv31nv');
+    expect(successor).toBeDefined();
+    expect(getModel('dsr1nv')).toEqual(successor);
+  });
+
+  it('migration is case-insensitive', () => {
+    const direct = getModel('dsv31nv');
+    expect(getModel('DsR1Nv')).toEqual(direct);
+    expect(getModel('DSR1NV')).toEqual(direct);
+  });
+
+  it('returns undefined for unknown aliases not in the deprecation map', () => {
+    expect(getModel('this-alias-does-not-exist-anywhere-xyz123')).toBeUndefined();
+  });
+});
+
 // --- getOrchestraRecommendations ---
 
 describe('getOrchestraRecommendations', () => {
