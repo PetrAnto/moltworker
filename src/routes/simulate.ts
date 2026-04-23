@@ -711,11 +711,17 @@ simulate.get('/nim-tools-check', async (c) => {
   // message.content can be either a string OR an array of content blocks
   // (OpenAI-compatible multimodal output: [{type:'text', text:'…'}, …]).
   // Both shapes must be handled or multimodal replies get silently dropped.
+  //
+  // Kimi K2.5 / DeepSeek-style thinking-mode models may return the visible
+  // answer inside a non-standard `reasoning_content` sibling field while
+  // leaving `content` null. Extract it too or these models appear to
+  // "respond with nothing" even when they answered correctly.
   type ContentBlock = { type?: string; text?: string };
   let parsed: {
     choices?: Array<{
       message?: {
         content?: string | ContentBlock[] | null;
+        reasoning_content?: string | null;
         tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>;
       };
     }>;
@@ -762,7 +768,7 @@ simulate.get('/nim-tools-check', async (c) => {
   // etc.) are ignored — we only care about what the model said back.
   const rawContent = msg?.content;
   let content: string | null = null;
-  if (typeof rawContent === 'string') {
+  if (typeof rawContent === 'string' && rawContent.length > 0) {
     content = rawContent;
   } else if (Array.isArray(rawContent)) {
     const texts = rawContent
@@ -770,6 +776,12 @@ simulate.get('/nim-tools-check', async (c) => {
       .map(b => (b.type === 'text' && typeof b.text === 'string') ? b.text : '')
       .filter(s => s.length > 0);
     content = texts.length > 0 ? texts.join(' ') : null;
+  }
+  // Fallback: Kimi K2.5 / DeepSeek thinking-mode responses sometimes
+  // leave `content` null and put the visible answer in
+  // `reasoning_content`. Use it when the primary field is empty.
+  if (!content && typeof msg?.reasoning_content === 'string' && msg.reasoning_content.length > 0) {
+    content = msg.reasoning_content;
   }
 
   // Heuristic: vision worked if the model produced non-empty text that
