@@ -652,4 +652,60 @@ simulate.get('/nim-tools-check', async (c) => {
   });
 });
 
+/**
+ * GET /simulate/nim-models-list?filter=<substr>
+ *
+ * List the NIM catalog from the Worker side using its stored
+ * NVIDIA_NIM_API_KEY. Useful for discovering the current id of a
+ * model when /simulate/nim-tools-check returned HTTP 410/404 on a
+ * stale alias (e.g. `deepseek-ai/deepseek-r1` was retired — the
+ * current id might be `deepseek-ai/deepseek-r1-0528` or similar).
+ *
+ * The optional `filter` substring is matched case-insensitively
+ * against each id; omit it to return every id in the catalog.
+ *
+ * Usage:
+ *   curl -s "https://<worker>/simulate/nim-models-list?filter=deepseek" \
+ *     -H "Authorization: Bearer $DEBUG_API_KEY" | jq '.ids'
+ */
+simulate.get('/nim-models-list', async (c) => {
+  const env = c.env;
+  const nimKey = env.NVIDIA_NIM_API_KEY;
+  if (!nimKey) {
+    return c.json({ error: 'NVIDIA_NIM_API_KEY secret not configured on this Worker' }, 503);
+  }
+
+  const filter = (c.req.query('filter') || '').toLowerCase().trim();
+
+  let resp: Response;
+  try {
+    resp = await fetch('https://integrate.api.nvidia.com/v1/models', {
+      headers: { 'Authorization': `Bearer ${nimKey}` },
+    });
+  } catch (err) {
+    return c.json({
+      error: `fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+    }, 502);
+  }
+  const rawText = await resp.text();
+  let parsed: { data?: Array<{ id: string }>; error?: { message?: string } };
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    return c.json({
+      error: `non-JSON response from NIM (httpStatus=${resp.status}): ${rawText.slice(0, 200)}`,
+      httpStatus: resp.status,
+    }, 502);
+  }
+  if (parsed.error) {
+    // Surface upstream errors as 502 Bad Gateway — actual NIM status is
+    // kept in the body so callers can diagnose (e.g. 401 auth, 429 rate).
+    return c.json({ error: parsed.error.message, httpStatus: resp.status }, 502);
+  }
+
+  const allIds = (parsed.data || []).map(m => m.id).sort();
+  const ids = filter ? allIds.filter(id => id.toLowerCase().includes(filter)) : allIds;
+  return c.json({ total: allIds.length, matched: ids.length, filter: filter || null, ids });
+});
+
 export { simulate };
