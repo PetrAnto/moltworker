@@ -1074,42 +1074,13 @@ export const MODELS: Record<string, ModelInfo> = {
     provider: 'nvidia',
     maxContext: 196608,
   },
-  // 2026-04-23: id moonshotai/kimi-k2.5-vl returned HTTP 404 from NIM —
-  // not in the catalog under that slug. Run the discovery query to find
-  // the live VL id (likely under a different name like kimi-vl-a3b-*):
-  //   /simulate/nim-models-list?filter=kimi
-  // then update id + remove this comment. Until then the alias is hidden
-  // from /pick vision via supportsVision: false to prevent broken picks.
-  kimivlnv: {
-    id: 'moonshotai/kimi-k2.5-vl',
-    alias: 'kimivlnv',
-    name: 'Kimi K2.5 VL (NIM) — id 404, pending refresh',
-    specialty: 'NVIDIA NIM — Kimi VL (id mismatch, see comment)',
-    score: 'Vision id 404 from NIM — pending rediscovery',
-    cost: 'FREE',
-    isFree: true,
-    supportsVision: false, // 404 — don't surface in /pick vision until id is fixed
-    supportsTools: false,
-    provider: 'nvidia',
-    maxContext: 262144,
-  },
-  // 2026-04-23: id qwen/qwen3.5-vl-400b returned HTTP 404 from NIM —
-  // catalog likely uses a different slug (qwen3-vl-* or qwen3.5-vl-*).
-  // Discover via: /simulate/nim-models-list?filter=qwen
-  // and filter for "vl"; update id + restore supportsVision when fixed.
-  qwenvlnv: {
-    id: 'qwen/qwen3.5-vl-400b',
-    alias: 'qwenvlnv',
-    name: 'Qwen 3.5 VLM 400B (NIM) — id 404, pending refresh',
-    specialty: 'NVIDIA NIM — Qwen VL (id mismatch, see comment)',
-    score: 'Vision id 404 from NIM — pending rediscovery',
-    cost: 'FREE',
-    isFree: true,
-    supportsVision: false, // 404 — don't surface in /pick vision until id is fixed
-    supportsTools: false,
-    provider: 'nvidia',
-    maxContext: 262144,
-  },
+  // 2026-04-23: NIM doesn't serve separate *-vl SKUs — vision lives on
+  // the base model ids (kimi-k2.5 is natively multimodal, qwen3.5 too).
+  // The /kimivlnv and /qwenvlnv entries (which pointed at non-existent
+  // *-vl slugs and 404'd) have been removed; their DEPRECATED_ALIASES
+  // entries redirect to the NIM base siblings /kiminv and /qwen35nv
+  // so users stay on the free tier. Promoting supportsVision on those
+  // base NIM entries is a separate step pending a content-block test.
 
   // --- NIM: DeepSeek V3.1 Terminus (stable V3 release kept alongside V3.2) ---
   // 2026-04-23: the NIM catalog lists only three DeepSeek ids —
@@ -1422,6 +1393,16 @@ const DEPRECATED_ALIASES: Record<string, string> = {
   // tier. /dsr1nv was a speculative entry; redirect to the closest
   // available DeepSeek on NIM (V3.1 Terminus, the stable V3 build).
   dsr1nv: 'dsv31nv',
+  // 2026-04-23: NIM's free catalog has no vision-capable Kimi or Qwen
+  // under separate *-vl SKUs. The ids moonshotai/kimi-k2.5-vl and
+  // qwen/qwen3.5-vl-400b both returned HTTP 404. The VL capability
+  // lives on the BASE model ids (kimi-k2.5 is natively multimodal via
+  // MoonViT; qwen3.5-397b-a17b is multimodal chat), so redirect to
+  // the NIM base siblings (/kiminv and /qwen35nv) to keep users on
+  // the free tier. supportsVision on the NIM entries is still false
+  // pending a dedicated vision content-block validation.
+  kimivlnv: 'kiminv',
+  qwenvlnv: 'qwen35nv',
 };
 
 /** Aliases we've already logged a deprecation warning for (per-process dedup). */
@@ -1606,7 +1587,10 @@ export function getAllModels(): Record<string, ModelInfo> {
  * Falls back to fuzzy matching when exact match fails (strips hyphens/dots, tries suffix/prefix).
  */
 export function getModel(alias: string): ModelInfo | undefined {
-  const lower = alias.toLowerCase();
+  // Defensive normalisation: strip a leading "/" (some callers pass the
+  // raw Telegram command token e.g. "/kimi") and lowercase. Without this,
+  // deprecation/alias/id lookups all miss when a slash sneaks in.
+  const lower = alias.replace(/^\/+/, '').toLowerCase();
   if (BLOCKED_ALIASES.has(lower)) return undefined;
 
   // Deprecated alias migration: when a removed/renamed alias is requested,

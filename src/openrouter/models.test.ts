@@ -373,8 +373,38 @@ describe('getModel deprecated alias migration', () => {
     expect(getModel('DSR1NV')).toEqual(direct);
   });
 
+  it('strips a leading slash before resolving (so /dsr1nv also migrates)', () => {
+    // GPT review flagged that callers who pass the raw Telegram command
+    // token (e.g. "/kimivlnv") would miss the deprecation map because
+    // the map keys are bare aliases. getModel() now normalises by
+    // stripping a leading "/", so slash-prefixed and bare forms behave
+    // identically at every lookup step.
+    const bare = getModel('dsv31nv');
+    expect(bare).toBeDefined();
+    expect(getModel('/dsr1nv')).toEqual(bare);
+    expect(getModel('/kimivlnv')).toEqual(getModel('kiminv'));
+    expect(getModel('//qwenvlnv')).toEqual(getModel('qwen35nv'));
+  });
+
   it('returns undefined for unknown aliases not in the deprecation map', () => {
     expect(getModel('this-alias-does-not-exist-anywhere-xyz123')).toBeUndefined();
+  });
+
+  it('redirects /kimivlnv to the NIM base sibling /kiminv (free tier)', () => {
+    // NIM doesn't serve moonshotai/kimi-k2.5-vl as a separate SKU
+    // (returns 404). Vision lives on the base id moonshotai/kimi-k2.5,
+    // so /kimivlnv routes to /kiminv — keeping users on the free tier.
+    const successor = getModel('kiminv');
+    expect(successor).toBeDefined();
+    expect(successor!.provider).toBe('nvidia');
+    expect(getModel('kimivlnv')).toEqual(successor);
+  });
+
+  it('redirects /qwenvlnv to the NIM base sibling /qwen35nv (free tier)', () => {
+    const successor = getModel('qwen35nv');
+    expect(successor).toBeDefined();
+    expect(successor!.provider).toBe('nvidia');
+    expect(getModel('qwenvlnv')).toEqual(successor);
   });
 });
 
