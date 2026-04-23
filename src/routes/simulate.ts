@@ -549,6 +549,12 @@ simulate.get('/sandbox-test', async (c) => {
  *   Vision mode
  *     - POSTs an OpenAI-style content-block message [text, image_url]
  *     - No tools array — isolates vision reasoning from tool-calling.
+ *     - Image delivery: the Worker fetches the URL itself (Cloudflare
+ *       edge is usually permitted where NIM's backend is blocked) and
+ *       re-packs it as a base64 data URI that travels inline in the
+ *       request. This sidesteps the 403s NIM hits when fetching from
+ *       hosts like Wikimedia. `data:` URIs passed directly are used
+ *       as-is, so callers can pre-encode locally if they prefer.
  *     - Handles both string content and array content blocks in the
  *       NIM response (multimodal replies sometimes come back as
  *       [{type:'text', text:'…'}, …] rather than a flat string).
@@ -602,8 +608,48 @@ simulate.get('/nim-tools-check', async (c) => {
   // Vision mode is opt-in via ?image=<url>. When present, drop the tools
   // array and use an OpenAI-style content-block message so we isolate
   // native multimodality from tool-calling.
-  const imageUrl = (c.req.query('image') || '').trim();
-  const isVisionMode = imageUrl.length > 0;
+  const rawImageInput = (c.req.query('image') || '').trim();
+  const isVisionMode = rawImageInput.length > 0;
+
+  // Resolve the image content to something NIM's fetcher will accept.
+  // NIM's backend is locked down and gets 403s from many public hosts
+  // (Wikimedia, GitHub occasionally, etc.). Solution: fetch the image
+  // from the Worker (Cloudflare edge has fewer host-policy issues) and
+  // re-pack it as a base64 data URI that travels inline — NIM never
+  // needs to reach out. `data:` URIs passed directly are used as-is,
+  // letting callers pre-encode locally if they prefer.
+  let resolvedImageUrl = rawImageInput;
+  if (isVisionMode && !rawImageInput.startsWith('data:')) {
+    try {
+      const fetched = await fetch(rawImageInput, {
+        // Claim a mainstream UA so hosts that block "null"/"unknown"
+        // UAs (e.g. Wikimedia) return the image.
+        headers: { 'User-Agent': 'moltworker-simulate/1.0 (Cloudflare-Workers)' },
+      });
+      if (!fetched.ok) {
+        return c.json({
+          mode: 'vision', alias, modelId,
+          httpStatus: fetched.status,
+          error: `Worker-side image fetch failed: ${fetched.status} ${fetched.statusText} for ${rawImageInput.slice(0, 120)}`,
+        }, 200);
+      }
+      const mime = fetched.headers.get('content-type')?.split(';')[0].trim() || 'image/png';
+      const buf = await fetched.arrayBuffer();
+      // Base64-encode (Workers runtime exposes btoa on a binary string).
+      // Bounded-size image fetches keep this cheap; large images (>4MB)
+      // will still work but push request size.
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const b64 = btoa(binary);
+      resolvedImageUrl = `data:${mime};base64,${b64}`;
+    } catch (err) {
+      return c.json({
+        mode: 'vision', alias, modelId, httpStatus: 0,
+        error: `Worker-side image fetch threw: ${err instanceof Error ? err.message : String(err)}`,
+      }, 200);
+    }
+  }
 
   // Synthetic tools payload for the default (tool-check) mode. get_weather
   // is simple and unambiguous — a tool-capable model will call it, a
@@ -615,7 +661,7 @@ simulate.get('/nim-tools-check', async (c) => {
           role: 'user',
           content: [
             { type: 'text', text: 'Describe this image in one concise sentence.' },
-            { type: 'image_url', image_url: { url: imageUrl } },
+            { type: 'image_url', image_url: { url: resolvedImageUrl } },
           ],
         }],
         max_tokens: 200,
