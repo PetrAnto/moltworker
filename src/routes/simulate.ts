@@ -691,6 +691,21 @@ simulate.get('/nim-tools-check', async (c) => {
     }, 200);
   }
 
+  // Surface non-2xx upstream statuses as errors even when the body parsed
+  // as JSON without a top-level .error key. NIM sometimes returns 500 with
+  // {detail: "..."}, {}, or a choices array where message.content is null
+  // — previously we fell through and returned content: null, making it
+  // impossible to tell "model rejected the request" from "model returned
+  // empty text". Surface the raw body snippet so callers can diagnose
+  // (malformed image_url shape, unsupported content block, etc.).
+  if (httpStatus < 200 || httpStatus >= 300) {
+    const detail = (parsed as { detail?: string }).detail;
+    return c.json({
+      mode, alias, modelId, httpStatus,
+      error: detail || `upstream ${httpStatus}: ${rawText.slice(0, 300)}`,
+    }, 200);
+  }
+
   const msg = parsed.choices?.[0]?.message;
   const toolCalls = msg?.tool_calls ?? [];
   const firstCall = toolCalls[0]?.function;
