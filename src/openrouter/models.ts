@@ -1101,23 +1101,22 @@ export const MODELS: Record<string, ModelInfo> = {
     maxContext: 262144,
   },
 
-  // --- NIM: DeepSeek R1 (reasoning) ---
-  // 2026-04-23: /simulate/nim-tools-check returned HTTP 410 Gone for
-  // this model id. NIM has retired `deepseek-ai/deepseek-r1` — the
-  // replacement likely uses a dated suffix (e.g. deepseek-r1-0528) or
-  // has moved under a different slug. Run /simulate/nim-models-list to
-  // discover the current id, then update this entry.
-  dsr1nv: {
-    id: 'deepseek-ai/deepseek-r1',
-    alias: 'dsr1nv',
-    name: 'DeepSeek R1 (NIM) — retired id',
-    specialty: 'NVIDIA NIM — DeepSeek R1 reasoning (id HTTP 410, pending refresh)',
-    score: 'DeepSeek R1 via NIM — original id gone from catalog',
+  // --- NIM: DeepSeek V3.1 Terminus (stable V3 release kept alongside V3.2) ---
+  // 2026-04-23: the NIM catalog lists only three DeepSeek ids —
+  // v3.2 (already = /dsnv), v3.1-terminus, and coder-6.7b-instruct.
+  // R1 is NOT on NIM's free tier despite being on other providers.
+  // V3.1 Terminus is the hardened final V3.1 release, useful when
+  // v3.2 exhibits instability on a given workload.
+  dsv31nv: {
+    id: 'deepseek-ai/deepseek-v3.1-terminus',
+    alias: 'dsv31nv',
+    name: 'DeepSeek V3.1 Terminus (NIM)',
+    specialty: 'NVIDIA NIM — DeepSeek V3.1 stable release hosted free',
+    score: 'DeepSeek V3.1 Terminus, 128K ctx, free — capabilities unverified',
     cost: 'FREE',
     isFree: true,
-    supportsTools: false, // Pending: rediscover correct NIM id via /simulate/nim-models-list
+    supportsTools: false, // TODO: validate via /simulate/nim-tools-check
     provider: 'nvidia',
-    reasoning: 'mandatory',
     maxContext: 131072,
   },
 
