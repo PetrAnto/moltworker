@@ -522,20 +522,40 @@ simulate.get('/sandbox-test', async (c) => {
  * Validate NVIDIA NIM capabilities server-side using the Worker's
  * NVIDIA_NIM_API_KEY secret (no local env export needed).
  *
- * Default mode (no image): tool-calling check.
- *   - POSTs a synthetic get_weather tools array + "weather in Paris?"
- *   - Returns { toolsFired, toolName, toolArgs, content, httpStatus, error }
- *   - Promote `supportsTools: true` in the catalog when toolsFired === true.
+ * The response shape is ALWAYS discriminated by `mode`:
  *
- * Vision mode (?image=<url>): native multimodality check.
- *   - POSTs an OpenAI-style content-block message with text + image_url
- *   - No tools array — isolates vision reasoning from tool-calling.
- *   - Returns { visionResponded, content, httpStatus, error }
- *     visionResponded is true when the model produces non-empty content
- *     that isn't a generic "I can't see images" disclaimer.
- *   - Promote `supportsVision: true` in the catalog when the content
- *     actually describes the image (eyeball check; the heuristic flag
- *     is a best-effort guide, not a guarantee).
+ *   Shared prelude (every response):
+ *     mode: 'tools' | 'vision'
+ *     alias?: string        // set iff the input resolved to a catalog entry
+ *     modelId: string       // raw NIM id used in the request
+ *     httpStatus: number    // 0 when the fetch itself failed
+ *     content: string | null // first 400 chars of model's text reply
+ *     error?: string        // populated on fetch / parse / upstream errors
+ *
+ *   Tools mode (no ?image=): appends
+ *     toolsFired: boolean
+ *     toolName?: string
+ *     toolArgs?: string     // raw JSON string of arguments
+ *
+ *   Vision mode (?image=<url>): appends
+ *     visionResponded: boolean
+ *
+ * Behaviour:
+ *
+ *   Tools mode
+ *     - POSTs a synthetic get_weather tools array + "weather in Paris?"
+ *     - Promote `supportsTools: true` when toolsFired === true.
+ *
+ *   Vision mode
+ *     - POSTs an OpenAI-style content-block message [text, image_url]
+ *     - No tools array — isolates vision reasoning from tool-calling.
+ *     - Handles both string content and array content blocks in the
+ *       NIM response (multimodal replies sometimes come back as
+ *       [{type:'text', text:'…'}, …] rather than a flat string).
+ *     - visionResponded is a heuristic flag: true when the model
+ *       produced non-empty text that doesn't read as "I can't see
+ *       images". Final promote decision still needs an eyeball on
+ *       .content.
  *
  * Usage:
  *   # Tools
@@ -636,55 +656,105 @@ simulate.get('/nim-tools-check', async (c) => {
     rawText = await resp.text();
   } catch (err) {
     return c.json({
-      mode, alias, modelId, toolsFired: false, visionResponded: false, httpStatus: 0,
+      mode, alias, modelId, httpStatus: 0,
       error: `fetch failed: ${err instanceof Error ? err.message : String(err)}`,
     }, 200);
   }
 
   // Parse JSON; some error responses come back as HTML or plain text.
+  // message.content can be either a string OR an array of content blocks
+  // (OpenAI-compatible multimodal output: [{type:'text', text:'…'}, …]).
+  // Both shapes must be handled or multimodal replies get silently dropped.
+  type ContentBlock = { type?: string; text?: string };
   let parsed: {
-    choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
+    choices?: Array<{
+      message?: {
+        content?: string | ContentBlock[] | null;
+        tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>;
+      };
+    }>;
     error?: { message?: string };
   };
   try {
     parsed = JSON.parse(rawText);
   } catch {
     return c.json({
-      mode, alias, modelId, toolsFired: false, visionResponded: false, httpStatus,
+      mode, alias, modelId, httpStatus,
       error: `non-JSON response from NIM: ${rawText.slice(0, 200)}`,
     }, 200);
   }
 
   if (parsed.error) {
     return c.json({
-      mode, alias, modelId, toolsFired: false, visionResponded: false, httpStatus,
+      mode, alias, modelId, httpStatus,
       error: parsed.error.message || 'NIM returned an error',
+    }, 200);
+  }
+
+  // Surface non-2xx upstream statuses as errors even when the body parsed
+  // as JSON without a top-level .error key. NIM sometimes returns 500 with
+  // {detail: "..."}, {}, or a choices array where message.content is null
+  // — previously we fell through and returned content: null, making it
+  // impossible to tell "model rejected the request" from "model returned
+  // empty text". Surface the raw body snippet so callers can diagnose
+  // (malformed image_url shape, unsupported content block, etc.).
+  if (httpStatus < 200 || httpStatus >= 300) {
+    const detail = (parsed as { detail?: string }).detail;
+    return c.json({
+      mode, alias, modelId, httpStatus,
+      error: detail || `upstream ${httpStatus}: ${rawText.slice(0, 300)}`,
     }, 200);
   }
 
   const msg = parsed.choices?.[0]?.message;
   const toolCalls = msg?.tool_calls ?? [];
   const firstCall = toolCalls[0]?.function;
-  const content = typeof msg?.content === 'string' ? msg.content : null;
 
-  // Heuristic: vision worked if the model produced non-empty content that
-  // doesn't read as a canned "I can't see images" disclaimer. The final
-  // promote decision still needs an eyeball check on the content field.
+  // Extract a human-readable text string from either a raw string content
+  // or a list of OpenAI content blocks. Any block of type 'text' with a
+  // string .text contributes; non-text blocks (image_url, video_url,
+  // etc.) are ignored — we only care about what the model said back.
+  const rawContent = msg?.content;
+  let content: string | null = null;
+  if (typeof rawContent === 'string') {
+    content = rawContent;
+  } else if (Array.isArray(rawContent)) {
+    const texts = rawContent
+      .filter((b): b is ContentBlock => typeof b === 'object' && b !== null)
+      .map(b => (b.type === 'text' && typeof b.text === 'string') ? b.text : '')
+      .filter(s => s.length > 0);
+    content = texts.length > 0 ? texts.join(' ') : null;
+  }
+
+  // Heuristic: vision worked if the model produced non-empty text that
+  // doesn't read as a canned "I can't see images" disclaimer. Final
+  // promote decision still needs an eyeball check on .content.
   const looksLikeDisclaimer = content
     ? /\b(can't|cannot|unable to)\s+(see|view|process|analyze)\s+(the\s+)?(image|photo|picture)\b/i.test(content)
       || /\bi\s+don't\s+(have\s+(the\s+)?ability|see)\b/i.test(content)
     : false;
 
-  return c.json({
+  // Mode-specific response shape — avoid leaking tools fields into
+  // vision responses and vice versa. A shared prelude (mode/alias/
+  // modelId/httpStatus/content) keeps callers simple.
+  const prelude = {
     mode,
     alias,
     modelId,
     httpStatus,
+    content: content ? content.slice(0, 400) : null,
+  };
+  if (isVisionMode) {
+    return c.json({
+      ...prelude,
+      visionResponded: !!content && !looksLikeDisclaimer,
+    });
+  }
+  return c.json({
+    ...prelude,
     toolsFired: toolCalls.length > 0,
     toolName: firstCall?.name,
     toolArgs: firstCall?.arguments,
-    visionResponded: isVisionMode && !!content && !looksLikeDisclaimer,
-    content: content ? content.slice(0, 400) : null,
   });
 });
 
