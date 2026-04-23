@@ -1074,29 +1074,39 @@ export const MODELS: Record<string, ModelInfo> = {
     provider: 'nvidia',
     maxContext: 196608,
   },
+  // 2026-04-23: id moonshotai/kimi-k2.5-vl returned HTTP 404 from NIM —
+  // not in the catalog under that slug. Run the discovery query to find
+  // the live VL id (likely under a different name like kimi-vl-a3b-*):
+  //   /simulate/nim-models-list?filter=kimi
+  // then update id + remove this comment. Until then the alias is hidden
+  // from /pick vision via supportsVision: false to prevent broken picks.
   kimivlnv: {
     id: 'moonshotai/kimi-k2.5-vl',
     alias: 'kimivlnv',
-    name: 'Kimi K2.5 VL (NIM)',
-    specialty: 'NVIDIA NIM — Kimi K2.5 Vision-Language hosted free',
-    score: '1T MoE with vision, 256K ctx — capabilities unverified',
+    name: 'Kimi K2.5 VL (NIM) — id 404, pending refresh',
+    specialty: 'NVIDIA NIM — Kimi VL (id mismatch, see comment)',
+    score: 'Vision id 404 from NIM — pending rediscovery',
     cost: 'FREE',
     isFree: true,
-    supportsVision: true,
-    supportsTools: false, // TODO: validate
+    supportsVision: false, // 404 — don't surface in /pick vision until id is fixed
+    supportsTools: false,
     provider: 'nvidia',
     maxContext: 262144,
   },
+  // 2026-04-23: id qwen/qwen3.5-vl-400b returned HTTP 404 from NIM —
+  // catalog likely uses a different slug (qwen3-vl-* or qwen3.5-vl-*).
+  // Discover via: /simulate/nim-models-list?filter=qwen
+  // and filter for "vl"; update id + restore supportsVision when fixed.
   qwenvlnv: {
     id: 'qwen/qwen3.5-vl-400b',
     alias: 'qwenvlnv',
-    name: 'Qwen 3.5 VLM 400B (NIM)',
-    specialty: 'NVIDIA NIM — Qwen3.5 Vision-Language MoE 400B',
-    score: '400B MoE vision+chat+RAG+agents, 256K ctx — capabilities unverified',
+    name: 'Qwen 3.5 VLM 400B (NIM) — id 404, pending refresh',
+    specialty: 'NVIDIA NIM — Qwen VL (id mismatch, see comment)',
+    score: 'Vision id 404 from NIM — pending rediscovery',
     cost: 'FREE',
     isFree: true,
-    supportsVision: true,
-    supportsTools: false, // TODO: validate
+    supportsVision: false, // 404 — don't surface in /pick vision until id is fixed
+    supportsTools: false,
     provider: 'nvidia',
     maxContext: 262144,
   },
@@ -1396,6 +1406,28 @@ const AUTO_SYNCED_MODELS: Record<string, ModelInfo> = {};
 const BLOCKED_ALIASES: Set<string> = new Set();
 
 /**
+ * Deprecated alias → successor mapping.
+ *
+ * When an alias previously shipped in the catalog is removed or renamed,
+ * add an entry here so external consumers (saved scripts, user prompts,
+ * docs) keep working transparently instead of getting "Unknown model".
+ * The first lookup of each deprecated alias logs a one-time warning to
+ * encourage migration; the resolution itself is silent.
+ *
+ * Keep this map small and explicit. Drop entries only after a long grace
+ * period and a release-note announcement.
+ */
+const DEPRECATED_ALIASES: Record<string, string> = {
+  // 2026-04-23: NIM never served deepseek-ai/deepseek-r1 on the free
+  // tier. /dsr1nv was a speculative entry; redirect to the closest
+  // available DeepSeek on NIM (V3.1 Terminus, the stable V3 build).
+  dsr1nv: 'dsv31nv',
+};
+
+/** Aliases we've already logged a deprecation warning for (per-process dedup). */
+const _warnedDeprecated: Set<string> = new Set();
+
+/**
  * Register dynamically discovered models (from R2 or API sync).
  * These take priority over the static MODELS catalog.
  */
@@ -1576,6 +1608,21 @@ export function getAllModels(): Record<string, ModelInfo> {
 export function getModel(alias: string): ModelInfo | undefined {
   const lower = alias.toLowerCase();
   if (BLOCKED_ALIASES.has(lower)) return undefined;
+
+  // Deprecated alias migration: when a removed/renamed alias is requested,
+  // transparently resolve to its documented successor instead of failing
+  // silently. This protects external consumers (saved scripts, prompts,
+  // user docs) from contract breaks when we retire an alias from the
+  // catalog. The mapping is kept tiny and explicit — only add entries when
+  // a previously-shipped alias is removed or replaced.
+  const successor = DEPRECATED_ALIASES[lower];
+  if (successor) {
+    if (!_warnedDeprecated.has(lower)) {
+      console.warn(`[models] Deprecated alias /${lower} → /${successor}. Update your scripts; the old alias will be removed in a future release.`);
+      _warnedDeprecated.add(lower);
+    }
+    return getModel(successor);
+  }
 
   // Exact match by alias (highest priority)
   const exact = DYNAMIC_MODELS[lower] || MODELS[lower] || AUTO_SYNCED_MODELS[lower];
