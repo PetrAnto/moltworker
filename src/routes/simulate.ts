@@ -516,4 +516,140 @@ simulate.get('/sandbox-test', async (c) => {
   });
 });
 
+/**
+ * GET /simulate/nim-tools-check?model=<alias-or-id>
+ *
+ * Verify whether a NVIDIA NIM-hosted model actually supports
+ * tool-calling, WITHOUT flipping supportsTools in the catalog and
+ * redeploying. The check runs server-side using the Worker's
+ * NVIDIA_NIM_API_KEY secret, so no local env export is needed.
+ *
+ * How it works:
+ *   1. Resolve the input to a NIM model id.
+ *      - If `model` matches an alias with provider='nvidia', use its id.
+ *      - Otherwise treat the input as a raw NIM id.
+ *   2. POST to https://integrate.api.nvidia.com/v1/chat/completions
+ *      with a synthetic single-tool definition (get_weather) and a
+ *      prompt that obviously needs it.
+ *   3. Return a structured verdict:
+ *        { alias, modelId, toolsFired: boolean, toolName?, toolArgs?,
+ *          content?, httpStatus, error? }
+ *
+ * Usage:
+ *   curl -s "https://<worker>/simulate/nim-tools-check?model=kiminv" \
+ *     -H "Authorization: Bearer $DEBUG_API_KEY" | jq
+ *
+ * Promote supportsTools: true on the alias when toolsFired === true.
+ */
+simulate.get('/nim-tools-check', async (c) => {
+  const env = c.env;
+  const nimKey = env.NVIDIA_NIM_API_KEY;
+  if (!nimKey) {
+    return c.json({ error: 'NVIDIA_NIM_API_KEY secret not configured on this Worker' }, 503);
+  }
+
+  const input = (c.req.query('model') || '').trim();
+  if (!input) {
+    return c.json({ error: 'Missing ?model=<alias-or-id> query parameter' }, 400);
+  }
+
+  // Resolve alias → raw NIM id. Accept raw ids too (must contain a slash).
+  const { getModel } = await import('../openrouter/models');
+  let alias: string | undefined;
+  let modelId = input;
+  const resolved = getModel(input);
+  if (resolved) {
+    alias = resolved.alias;
+    modelId = resolved.id;
+    if (resolved.provider !== 'nvidia') {
+      return c.json({
+        error: `Alias /${alias} is not an NVIDIA NIM model (provider=${resolved.provider ?? 'openrouter'})`,
+        alias,
+        modelId,
+      }, 400);
+    }
+  }
+  if (!modelId.includes('/')) {
+    return c.json({
+      error: `"${input}" doesn't look like a NIM model id (expected provider/name)`,
+    }, 400);
+  }
+
+  // Synthetic tools payload. get_weather is simple and unambiguous —
+  // a tool-capable model will call it, a tool-blind one will reply
+  // with a disclaimer about real-time data.
+  const body = {
+    model: modelId,
+    messages: [{ role: 'user', content: 'What is the current weather in Paris right now?' }],
+    tools: [{
+      type: 'function',
+      function: {
+        name: 'get_weather',
+        description: 'Get current weather conditions for a city.',
+        parameters: {
+          type: 'object',
+          properties: { city: { type: 'string', description: 'City name' } },
+          required: ['city'],
+        },
+      },
+    }],
+    tool_choice: 'auto',
+    max_tokens: 200,
+  };
+
+  let httpStatus = 0;
+  let rawText = '';
+  try {
+    const resp = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${nimKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    httpStatus = resp.status;
+    rawText = await resp.text();
+  } catch (err) {
+    return c.json({
+      alias, modelId, toolsFired: false, httpStatus: 0,
+      error: `fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+    }, 200);
+  }
+
+  // Parse JSON; some error responses come back as HTML or plain text.
+  let parsed: {
+    choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
+    error?: { message?: string };
+  };
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    return c.json({
+      alias, modelId, toolsFired: false, httpStatus,
+      error: `non-JSON response from NIM: ${rawText.slice(0, 200)}`,
+    }, 200);
+  }
+
+  if (parsed.error) {
+    return c.json({
+      alias, modelId, toolsFired: false, httpStatus,
+      error: parsed.error.message || 'NIM returned an error',
+    }, 200);
+  }
+
+  const msg = parsed.choices?.[0]?.message;
+  const toolCalls = msg?.tool_calls ?? [];
+  const firstCall = toolCalls[0]?.function;
+  return c.json({
+    alias,
+    modelId,
+    httpStatus,
+    toolsFired: toolCalls.length > 0,
+    toolName: firstCall?.name,
+    toolArgs: firstCall?.arguments,
+    content: typeof msg?.content === 'string' ? msg.content.slice(0, 200) : null,
+  });
+});
+
 export { simulate };
