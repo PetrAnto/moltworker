@@ -203,6 +203,13 @@ export interface ModelInfo {
   structuredOutput?: boolean;    // Supports response_format JSON schema
   reasoning?: ReasoningCapability; // Reasoning control capability
   maxContext?: number;           // Context window in tokens
+  /**
+   * Per-model max_tokens ceiling. Takes precedence over the
+   * provider-wide cap in `clampMaxTokens()` so that, e.g., DeepSeek V4
+   * (384K output) and DeepSeek Reasoner (64K output) don't get clamped
+   * to V3.2-chat's 8K limit just because they share a provider.
+   */
+  maxOutput?: number;
   fixedTemperature?: number;    // Model requires this exact temperature (e.g. Kimi K2.5 = 1)
   // Benchmark & quality data (from Artificial Analysis)
   intelligenceIndex?: number;  // AA Intelligence Index (0-100 composite score)
@@ -666,6 +673,7 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     reasoning: 'configurable',
     maxContext: 1048576,
+    maxOutput: 384000, // V4's actual max output — overrides the provider's legacy 8K cap.
     benchmarks: {
       // AA hasn't ingested V4 yet (2026-04-24 release). LiveCodeBench
       // published directly by DeepSeek — populating so the ranker
@@ -688,6 +696,7 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     reasoning: 'configurable',
     maxContext: 1048576,
+    maxOutput: 384000,
     benchmarks: {
       livecodebench: 91.6,
     },
@@ -913,6 +922,7 @@ export const MODELS: Record<string, ModelInfo> = {
     provider: 'deepseek',
     reasoning: 'fixed',
     maxContext: 131072,
+    maxOutput: 65536, // V3.2 reasoner supports 64K output; override legacy 8K provider cap.
   },
 
   // --- Direct DeepSeek API: V4 family (2026-04-24 preview) ---
@@ -931,6 +941,7 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     reasoning: 'configurable',
     maxContext: 1048576,
+    maxOutput: 384000,
     benchmarks: {
       livecodebench: 93.5,
     },
@@ -948,6 +959,7 @@ export const MODELS: Record<string, ModelInfo> = {
     structuredOutput: true,
     reasoning: 'configurable',
     maxContext: 1048576,
+    maxOutput: 384000,
     benchmarks: {
       livecodebench: 91.6,
     },
@@ -1842,13 +1854,29 @@ export function isDirectApi(alias: string): boolean {
 }
 
 /**
- * Clamp max_tokens to the provider's ceiling.
- * Some APIs (e.g. DeepSeek: 8192) reject requests exceeding their limit.
+ * Clamp max_tokens to the tightest applicable ceiling.
+ *
+ * Resolution order:
+ *   1. `model.maxOutput`           — per-model override (DeepSeek V4 = 384K,
+ *                                     DeepSeek Reasoner = 64K, …)
+ *   2. `providerConfig.maxOutputTokens` — provider-wide fallback
+ *                                         (DeepSeek/NIM legacy 8K safety).
+ *   3. The caller's requested value (no clamping needed).
+ *
+ * This lets heterogeneous families share a provider without one model's
+ * limit punishing another (V3.2 chat's 8K once blocked V4 users).
  */
 export function clampMaxTokens(alias: string, requested: number): number {
-  const config = getProviderConfig(alias);
-  if (config.maxOutputTokens && requested > config.maxOutputTokens) {
-    return config.maxOutputTokens;
+  const model = getModel(alias);
+  if (model?.maxOutput && requested > model.maxOutput) {
+    return model.maxOutput;
+  }
+  // Fall back to provider cap only if the model didn't specify its own.
+  if (!model?.maxOutput) {
+    const config = getProviderConfig(alias);
+    if (config.maxOutputTokens && requested > config.maxOutputTokens) {
+      return config.maxOutputTokens;
+    }
   }
   return requested;
 }

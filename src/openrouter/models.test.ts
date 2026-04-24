@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, registerAutoSyncedModels, formatModelInfoCard, formatModelHub, formatModelRanking, getTopModelPicks, type RouterCheckpointMeta, type ModelInfo } from './models';
+import { detectToolIntent, getModel, getFreeToolModels, categorizeModel, getOrchestraRecommendations, formatOrchestraModelRecs, resolveTaskModel, detectTaskIntent, registerAutoSyncedModels, formatModelInfoCard, formatModelHub, formatModelRanking, getTopModelPicks, clampMaxTokens, type RouterCheckpointMeta, type ModelInfo } from './models';
 
 // --- detectToolIntent ---
 
@@ -783,5 +783,49 @@ describe('formatModelRanking', () => {
   it('includes star ratings', () => {
     const rank = formatModelRanking();
     expect(rank).toMatch(/★★★|★★☆|★☆☆|☆☆☆/);
+  });
+});
+
+// --- clampMaxTokens ---
+
+describe('clampMaxTokens', () => {
+  it('returns the requested value when below both model and provider caps', () => {
+    // Arbitrary small number — no clamping ever kicks in.
+    expect(clampMaxTokens('deep4', 500)).toBe(500);
+    expect(clampMaxTokens('dcode', 500)).toBe(500);
+  });
+
+  it('clamps to the per-model maxOutput when the model has one', () => {
+    // /deep4 declares maxOutput: 384000. A 500000-token request clamps there,
+    // NOT to the provider-wide 8192 fallback.
+    expect(clampMaxTokens('deep4', 500_000)).toBe(384_000);
+    expect(clampMaxTokens('deep4fast', 500_000)).toBe(384_000);
+  });
+
+  it('per-model maxOutput beats the provider-wide cap (regression)', () => {
+    // Regression: V4 users were getting clamped to 8192 because V3.2's
+    // conservative provider cap leaked to every deepseek-provider model.
+    // A request well above the provider cap must land at the model cap.
+    const v4 = clampMaxTokens('deep4direct', 100_000);
+    expect(v4).toBe(100_000); // Still under V4's 384K max, no clamp needed.
+    const large = clampMaxTokens('deep4direct', 500_000);
+    expect(large).toBe(384_000); // Clamped at model's max, not provider's 8K.
+  });
+
+  it('dreason (V3.2 reasoner) honours its 64K model override', () => {
+    expect(clampMaxTokens('dreason', 32_000)).toBe(32_000);
+    expect(clampMaxTokens('dreason', 128_000)).toBe(65_536);
+  });
+
+  it('falls back to provider cap when the model lacks maxOutput', () => {
+    // /dcode is deepseek-chat with no maxOutput override → uses the
+    // provider-wide 8192 safety cap, preserving historical behaviour.
+    expect(clampMaxTokens('dcode', 32_000)).toBe(8192);
+  });
+
+  it('returns the requested value for models with no provider cap either', () => {
+    // OpenRouter-routed models (no provider override) have no cap — the
+    // caller's value is passed through.
+    expect(clampMaxTokens('grok', 50_000)).toBe(50_000);
   });
 });
