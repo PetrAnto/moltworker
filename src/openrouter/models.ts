@@ -1003,6 +1003,7 @@ export const MODELS: Record<string, ModelInfo> = {
     cost: 'FREE',
     isFree: true,
     supportsTools: true, // Validated 2026-04-23 via /simulate/nim-tools-check — NIM exposes tool-calling.
+    supportsVision: true, // Validated 2026-04-23 via /simulate/nim-tools-check?image= — correctly described a test PNG (dice mid-tumble).
     provider: 'nvidia',
     maxContext: 262144,
   },
@@ -1119,6 +1120,13 @@ export const MODELS: Record<string, ModelInfo> = {
 
   // --- NIM: Kimi K2 Thinking (reasoning variant) ---
   // Distinct from /kimithink (direct Moonshot API); this is the NIM-hosted copy.
+  //
+  // 2026-04-23: /simulate/nim-tools-check?image= returned HTTP 500 with
+  // "name 'jinja2' is not defined" — a Python NameError inside NIM's
+  // serving layer for this model. Vision is therefore unusable on NIM
+  // right now; tool-calling still works (validated separately). Leave
+  // supportsVision off until NIM fixes the template-engine import;
+  // retry periodically via the same endpoint.
   kimithinknv: {
     id: 'moonshotai/kimi-k2-thinking',
     alias: 'kimithinknv',
