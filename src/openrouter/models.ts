@@ -646,6 +646,56 @@ export const MODELS: Record<string, ModelInfo> = {
     reasoning: 'configurable',
     maxContext: 163840,
   },
+
+  // --- DeepSeek V4 family (released 2026-04-24, preview) ---
+  // Hybrid CSA+HCA+DSA attention enables 1M context at ~27% of V3.2's
+  // FLOPs / 10% KV cache. Both variants support tools + configurable
+  // reasoning + structured output. No vision. Not on NIM free tier yet.
+  //
+  // /deep4      — V4-Pro, flagship (1.6T MoE / 49B active)
+  // /deep4fast  — V4-Flash, latency-optimized (284B MoE / 13B active)
+  deep4: {
+    id: 'deepseek/deepseek-v4-pro',
+    alias: 'deep4',
+    name: 'DeepSeek V4 Pro (preview)',
+    specialty: 'Paid Flagship Agentic/Reasoning/Coding',
+    // SWE-Bench percentage in score text feeds the ranker's SWE regex (+25 pts).
+    score: '1.6T MoE (49B active), 1M ctx, 80.6% SWE-Bench Verified, 93.5 LiveCodeBench, 67.9 Terminal-Bench, hybrid CSA+HCA+DSA attention',
+    cost: '$1.74/$3.48',
+    supportsTools: true,
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 1048576,
+    benchmarks: {
+      // AA hasn't ingested V4 yet (2026-04-24 release). LiveCodeBench
+      // published directly by DeepSeek — populating so the ranker
+      // picks up the coding signal in the meantime.
+      livecodebench: 93.5,
+    },
+    // Validated tools + SOTA SWE-Bench / LCB → eligible for orchestra
+    // top-picks and planner gate immediately. Bump once AA publishes
+    // an intelligenceIndex.
+    orchestraReady: true,
+  },
+  deep4fast: {
+    id: 'deepseek/deepseek-v4-flash',
+    alias: 'deep4fast',
+    name: 'DeepSeek V4 Flash (preview)',
+    specialty: 'Paid Fast/Agentic (cost-optimized V4)',
+    score: '284B MoE (13B active), 1M ctx, 79.0% SWE-Bench Verified, 91.6 LiveCodeBench, hybrid CSA+HCA+DSA attention',
+    cost: '$0.14/$0.28',
+    supportsTools: true,
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 1048576,
+    benchmarks: {
+      livecodebench: 91.6,
+    },
+    // Same orchestra-readiness signals as V4-Pro at ~8% of the cost —
+    // strong default for the planner gate's "top-value" row.
+    orchestraReady: true,
+  },
+
   deepreason: {
     id: 'deepseek/deepseek-r1-0528',
     alias: 'deepreason',
@@ -864,6 +914,46 @@ export const MODELS: Record<string, ModelInfo> = {
     reasoning: 'fixed',
     maxContext: 131072,
   },
+
+  // --- Direct DeepSeek API: V4 family (2026-04-24 preview) ---
+  // Versioned ids (vs. dcode/dreason which follow "latest" aliases).
+  // Use these when you want to pin to V4 specifically; use dcode if
+  // you want DeepSeek's "latest non-reasoning" pointer to auto-upgrade.
+  deep4direct: {
+    id: 'deepseek-v4-pro',
+    alias: 'deep4direct',
+    name: 'DeepSeek V4 Pro (Direct)',
+    specialty: 'Direct DeepSeek API - Flagship Agentic/Reasoning/Coding',
+    score: '1.6T MoE (49B active), 1M ctx, 80.6% SWE-Bench Verified, 93.5 LiveCodeBench, 67.9 Terminal-Bench, cache hits $0.145/M',
+    cost: '$1.74/$3.48',
+    supportsTools: true,
+    provider: 'deepseek',
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 1048576,
+    benchmarks: {
+      livecodebench: 93.5,
+    },
+    orchestraReady: true,
+  },
+  deep4fastdirect: {
+    id: 'deepseek-v4-flash',
+    alias: 'deep4fastdirect',
+    name: 'DeepSeek V4 Flash (Direct)',
+    specialty: 'Direct DeepSeek API - Fast/Agentic (cost-optimized V4)',
+    score: '284B MoE (13B active), 1M ctx, 79.0% SWE-Bench Verified, 91.6 LiveCodeBench, cache hits $0.028/M',
+    cost: '$0.14/$0.28',
+    supportsTools: true,
+    provider: 'deepseek',
+    structuredOutput: true,
+    reasoning: 'configurable',
+    maxContext: 1048576,
+    benchmarks: {
+      livecodebench: 91.6,
+    },
+    orchestraReady: true,
+  },
+
   q3coder: {
     id: 'qwen3-coder-plus',
     alias: 'q3coder',
