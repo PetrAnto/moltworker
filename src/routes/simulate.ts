@@ -687,6 +687,13 @@ simulate.get('/nim-tools-check', async (c) => {
 
   const mode = isVisionMode ? 'vision' : 'tools';
 
+  // Opt-in raw-response debug: when ?debug=1 is set, the endpoint also
+  // returns the full parsed NIM response under `debugRaw` so callers
+  // can diagnose empty-content cases (some models stash the answer in
+  // non-standard fields we haven't mapped yet). Bounded to 4000 chars
+  // to keep response bodies sane.
+  const isDebug = c.req.query('debug') === '1';
+
   let httpStatus = 0;
   let rawText = '';
   try {
@@ -794,13 +801,18 @@ simulate.get('/nim-tools-check', async (c) => {
 
   // Mode-specific response shape — avoid leaking tools fields into
   // vision responses and vice versa. A shared prelude (mode/alias/
-  // modelId/httpStatus/content) keeps callers simple.
+  // modelId/httpStatus/content) keeps callers simple. When
+  // ?debug=1 is set, attach the raw NIM response body (truncated) so
+  // callers can see non-standard fields (reasoning_content, chunks, …)
+  // that would otherwise require guessing at the extraction logic.
+  const debugRaw = isDebug ? rawText.slice(0, 4000) : undefined;
   const prelude = {
     mode,
     alias,
     modelId,
     httpStatus,
     content: content ? content.slice(0, 400) : null,
+    ...(debugRaw ? { debugRaw } : {}),
   };
   if (isVisionMode) {
     return c.json({
