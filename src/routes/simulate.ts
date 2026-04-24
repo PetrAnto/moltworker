@@ -664,7 +664,11 @@ simulate.get('/nim-tools-check', async (c) => {
             { type: 'image_url', image_url: { url: resolvedImageUrl } },
           ],
         }],
-        max_tokens: 200,
+        // 800 accommodates thinking-mode vision models (e.g. Kimi K2.5
+        // on NIM uses ~150-200 tokens "thinking" before emitting the
+        // user-visible answer in a reasoning field). With 200 they
+        // hit finish_reason='length' before producing content.
+        max_tokens: 800,
       }
     : {
         model: modelId,
@@ -719,18 +723,22 @@ simulate.get('/nim-tools-check', async (c) => {
   // (OpenAI-compatible multimodal output: [{type:'text', text:'…'}, …]).
   // Both shapes must be handled or multimodal replies get silently dropped.
   //
-  // Kimi K2.5 / DeepSeek-style thinking-mode models may return the visible
-  // answer inside a non-standard `reasoning_content` sibling field while
-  // leaving `content` null. Extract it too or these models appear to
-  // "respond with nothing" even when they answered correctly.
+  // Thinking-mode models may stash the visible answer in NON-STANDARD
+  // sibling fields while leaving `content` null:
+  //   - DeepSeek-style: `message.reasoning_content` (string)
+  //   - Kimi K2.5 on NIM: `message.reasoning` (string)
+  // We try both; the caller still gets something readable instead of
+  // "the model answered with nothing".
   type ContentBlock = { type?: string; text?: string };
   let parsed: {
     choices?: Array<{
       message?: {
         content?: string | ContentBlock[] | null;
         reasoning_content?: string | null;
+        reasoning?: string | null;
         tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>;
       };
+      finish_reason?: string;
     }>;
     error?: { message?: string };
   };
@@ -784,11 +792,15 @@ simulate.get('/nim-tools-check', async (c) => {
       .filter(s => s.length > 0);
     content = texts.length > 0 ? texts.join(' ') : null;
   }
-  // Fallback: Kimi K2.5 / DeepSeek thinking-mode responses sometimes
-  // leave `content` null and put the visible answer in
-  // `reasoning_content`. Use it when the primary field is empty.
+  // Fallback chain for thinking-mode models that leave `content` null:
+  //   1. `reasoning_content` (DeepSeek-style)
+  //   2. `reasoning`          (Kimi K2.5 on NIM)
+  // Both are plain strings when present.
   if (!content && typeof msg?.reasoning_content === 'string' && msg.reasoning_content.length > 0) {
     content = msg.reasoning_content;
+  }
+  if (!content && typeof msg?.reasoning === 'string' && msg.reasoning.length > 0) {
+    content = msg.reasoning;
   }
 
   // Heuristic: vision worked if the model produced non-empty text that

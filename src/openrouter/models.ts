@@ -1024,11 +1024,15 @@ export const MODELS: Record<string, ModelInfo> = {
     id: 'moonshotai/kimi-k2.5',
     alias: 'kiminv',
     name: 'Kimi K2.5 (NIM)',
-    specialty: 'NVIDIA NIM — Kimi K2.5 hosted free',
-    score: 'Kimi K2.5 via NIM, 256K ctx, free — capabilities unverified',
+    specialty: 'NVIDIA NIM — Kimi K2.5 multimodal agentic/coding hosted free',
+    score: 'Kimi K2.5 via NIM, 256K ctx, free',
     cost: 'FREE',
     isFree: true,
     supportsTools: true, // Validated via /simulate/nim-tools-check (2026-04-23): Kimi K2.5 emits get_weather tool_calls on NIM.
+    // Validated 2026-04-23 via /simulate/nim-tools-check?image=&debug=1:
+    // model described a PNG accurately in message.reasoning (thinking-mode
+    // field). K2.5 is natively multimodal via MoonViT; no separate -vl SKU.
+    supportsVision: true,
     provider: 'nvidia',
     maxContext: 262144,
   },
