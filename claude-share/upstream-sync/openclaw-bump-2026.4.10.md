@@ -1,10 +1,13 @@
-# Upstream OpenClaw Bump — 2026.4.10 (planned)
+# Upstream OpenClaw Bump — 2026.4.14 (staged for deploy)
 
 **Date opened**: 2026-04-11
-**Status**: Scaffolded, version bump deferred
+**Last updated**: 2026-04-16
+**Status**: Stage 3 staged on `claude/openclaw-bump-2026.4.14` at commit `60735b9`, rebased onto current `main` (`2a23d0f`). Ready for staging validation; Stage 3 PR not yet opened.
 **Current pin**: `openclaw@2026.3.23-2` (Dockerfile:44)
-**Target pin**: `openclaw@2026.4.10` (or latest `2026.4.10-N` patch)
-**Releases skipped**: 2026.3.28, 2026.4.5, 2026.4.9, 2026.4.10
+**Target pin**: `openclaw@2026.4.14` + `@openai/codex@0.121.0` (exact pin; see Stage 3 notes below)
+**Releases reviewed (skipped by 2026.3.23-2)**: 2026.3.28, 2026.4.5, 2026.4.9, 2026.4.10 — their fixes inherit into Stage 3 via 2026.4.14. 2026.4.15 is a beta and is explicitly skipped.
+
+> **Filename note**: this file is `openclaw-bump-2026.4.10.md` by design — it is referenced by path in the Stage 2 and Stage 3 commit messages, so renaming it would break that cross-reference. The content tracks the actual target version (2026.4.14) rather than the filename.
 
 ## Why this doc exists
 
@@ -82,20 +85,28 @@ PR 3 (the OpenClaw version bump) installs the binary, which physically flips the
 
 **No OpenClaw version bump.** No `@openai/codex` install. **Strict no-op in production** because `command -v codex` returns false — every new code path short-circuits. The gate is physical, not operator-discipline. Setting `CODEX_AUTH_JSON_BOOTSTRAP` today is safely ignored (logged, not applied).
 
-### Stage 3 (separate future PR) — `chore(deps): bump openclaw to 2026.4.10 + install @openai/codex`
-- Bump `Dockerfile:44` from `openclaw@2026.3.23-2` → `openclaw@2026.4.10`
-- Add `@openai/codex` to the same global install
-- Bump cache-bust comment
-- Zero code changes — all wiring already in place from Stage 2
+### Stage 3 (staged on `claude/openclaw-bump-2026.4.14` @ `60735b9`) — `chore(deps): bump openclaw to 2026.4.14 + install @openai/codex@0.121.0`
+
+The branch is rebased onto current `main` (`2a23d0f`, which includes the `fix(gateway): backport late-March cloudflare/moltworker reliability fixes` in `a41571f` — HTML containerFetch/body timeouts, `killGateway` port poll, `/api/status` TCP probe). Deploying from this tip ships the reliability fixes and the OpenClaw/Codex bump together.
+
+- Bump `Dockerfile:44` from `openclaw@2026.3.23-2` → `openclaw@2026.4.14` (latest stable — 2026.4.10/4.14 landed while scaffolding was in review; 2026.4.15 is a beta)
+- Pin `@openai/codex@0.121.0` exactly on the same global install. OpenClaw 2026.4.14 does not declare `@openai/codex` as a peer dependency, so there is no upstream compatibility range to defer to. Re-verify this pin is still npm `latest` the day the PR opens.
+- Add build-time `codex --version` assertion — catches a missing/broken Codex install at image build rather than at first container boot.
+- Refresh the `# Build cache bust:` comment (redundant with the install-line change, kept for consistency).
+- Zero code changes — all wiring already in place from Stage 2 (PR #473 `0682b29`, PR #475 `2fab562`). `CODEX_STAGE_ACTIVE` in `start-openclaw.sh:47-54` flips from 0 to 1 the moment `command -v codex` succeeds.
 - Deploy to staging, run smoke tests:
   - `/debug/env` shows `has_codex_bootstrap_secret: true`
   - `/debug/processes` shows `codex app-server` running under the OpenClaw gateway
   - `/debug/container-config` shows `agents.defaults.model.primary = "codex/gpt-5.4"`
   - Anthropic/OpenRouter fallback path still works via `/simulate/chat`
   - Token rotation: force a refresh via `codex refresh` (or wait past `expires`), verify `r2:${R2_BUCKET}/codex/auth.json` mtime advances within seconds
-- Merge only after a clean burn-in on staging + any OpenClaw 2026.4.10-N patch has landed
+- Merge only after a clean burn-in on staging + any OpenClaw 2026.4.14-N patch has landed.
 
-**Timing**: wait 48h after 2026.4.10 ships (per reviewer consensus — hurried release notes in the tag correlate with rapid patch follow-ups). Earliest Stage 3 open date: 2026-04-13.
+**Independence from main**: The Stage 3 diff is `Dockerfile`-only; the reliability fixes in `a41571f` touch only `src/`. No rebase conflicts. Either merge order is safe — rollback stories differ (worker-layer reliability fixes roll back in ~30s; container-layer bump rolls back in ~5min), so separate PRs.
+
+**Validation without the secret**: Operators can deploy this image without setting `CODEX_AUTH_JSON_BOOTSTRAP` to validate the version pin in isolation — the bootstrap pre-seed and the `codex/*` primary-model override (line 562 of `start-openclaw.sh`) both require the secret in addition to `CODEX_STAGE_ACTIVE`. Bot keeps using OpenRouter Auto until the secret lands.
+
+**Timing**: no known 2026.4.14-N patch at time of staging (2026-04-15). Re-check before the PR opens — the earlier reviewer note about "hurried release notes correlate with rapid patch follow-ups" still applies.
 
 ## Out of scope (future follow-ups)
 
@@ -107,7 +118,8 @@ PR 3 (the OpenClaw version bump) installs the binary, which physically flips the
 
 ## References
 
-- [OpenClaw v2026.4.10 release](https://github.com/openclaw/openclaw/releases/tag/v2026.4.10)
+- [OpenClaw v2026.4.14 release](https://github.com/openclaw/openclaw/releases/tag/v2026.4.14) — target version for Stage 3
+- [OpenClaw v2026.4.10 release](https://github.com/openclaw/openclaw/releases/tag/v2026.4.10) — first release with the bundled Codex provider
 - [OpenClaw v2026.4.9 release](https://github.com/openclaw/openclaw/releases/tag/v2026.4.9)
 - [OpenClaw v2026.4.5 release](https://github.com/openclaw/openclaw/releases/tag/v2026.4.5)
 - [OpenClaw v2026.3.28 release](https://github.com/openclaw/openclaw/releases/tag/v2026.3.28)
@@ -115,3 +127,4 @@ PR 3 (the OpenClaw version bump) installs the binary, which physically flips the
 - `openclaw/openclaw#29418` — OAuth identity-scope-only bug (fixed in 4.10)
 - `openclaw/openclaw#52037`, `#53317` — Token refresh races (moot after 4.10 bundled provider)
 - `pwrdrvr/openclaw-codex-app-server` — pre-bundled reference implementation
+- PR #477 (`claude/review-upstream-updates-l3PcZ`) — late-March reliability backport that Stage 3 rebased onto
