@@ -53,8 +53,13 @@ export async function handleNexus(request: SkillRequest): Promise<SkillResult> {
 async function dispatchOrInline(request: SkillRequest): Promise<SkillResult> {
   const taskProcessor = request.env.TASK_PROCESSOR as DurableObjectNamespace<TaskProcessor> | undefined;
 
-  // Fallback: run inline when DO is unavailable or transport is not Telegram
-  if (!taskProcessor || request.transport !== 'telegram') {
+  // Fallback: run inline when DO is unavailable or transport is not Telegram.
+  // We also verify `idFromName` is a real function — bindings don't survive JSON
+  // serialization, so a TASK_PROCESSOR that crossed a `fetch()` boundary arrives
+  // as a plain object (truthy but missing methods). Treat that as "unavailable".
+  const hasUsableBinding = typeof taskProcessor?.idFromName === 'function'
+    && typeof taskProcessor?.get === 'function';
+  if (!hasUsableBinding || request.transport !== 'telegram') {
     return executeResearch(request, 'full');
   }
 

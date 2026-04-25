@@ -2101,6 +2101,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
       // Build a fresh env with secrets from the DO request + bindings from DO env.
       // This avoids mutating the original request object.
+      // TASK_PROCESSOR is intentionally cleared: bindings don't survive JSON
+      // serialization (a DurableObjectNamespace arrives as `{}` over the wire,
+      // which would crash skills that call `.idFromName()`). We're already
+      // executing inside the TaskProcessor, so any skill that wanted to
+      // dispatch to the DO should fall back to inline execution here.
       const skillEnv: SkillRequest['env'] = {
         ...request.skillRequest.env,
         OPENROUTER_API_KEY: request.openrouterKey,
@@ -2111,6 +2116,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // DO-level bindings (available in the DO's own env)
         MOLTBOT_BUCKET: this.doEnv.MOLTBOT_BUCKET,
         NEXUS_KV: this.doEnv.NEXUS_KV,
+        TASK_PROCESSOR: undefined,
       } as SkillRequest['env'];
       const enrichedRequest: SkillRequest = {
         ...request.skillRequest,
