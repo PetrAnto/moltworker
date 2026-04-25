@@ -79,13 +79,21 @@ async function dispatchOrInline(request: SkillRequest): Promise<SkillResult> {
   const doId = taskProcessor.idFromName(`nexus-${request.userId}-${taskId}`);
   const stub = taskProcessor.get(doId);
 
+  // Strip `env` from the wire payload — Workers bindings (R2/KV/DO/Fetcher)
+  // do NOT survive JSON serialization. The DO authoritatively rebuilds env
+  // from its own bindings + the explicit secrets below. Sending a sentinel
+  // makes any accidental DO-side use of `request.skillRequest.env` crash
+  // loudly with "cannot read X of undefined" instead of silently calling
+  // methods on `{}` (the source of "idFromName is not a function").
+  const wireSkillRequest = { ...request, env: undefined as unknown as SkillRequest['env'] };
+
   const skillTaskRequest: SkillTaskRequest = {
     kind: 'skill',
     taskId,
     chatId,
     userId: request.userId,
     telegramToken,
-    skillRequest: request,
+    skillRequest: wireSkillRequest,
     openrouterKey: request.env.OPENROUTER_API_KEY,
     githubToken: request.env.GITHUB_TOKEN,
     braveSearchKey: request.env.BRAVE_SEARCH_KEY,
