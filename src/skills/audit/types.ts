@@ -271,11 +271,18 @@ export interface RuntimeManifestEntry {
   uploadedAt: string;
 }
 
-/** Maximum WASM size the loader will accept. Hard guard against accidental
- *  oversized uploads (a malicious or buggy upload could blow CPU budgets
- *  during compile). 5 MiB covers the largest production grammar (TSX at
- *  ~2.4 MiB) with comfortable headroom. */
+/** Maximum grammar WASM size the loader will accept. Hard guard against
+ *  accidental oversized uploads (a malicious or buggy upload could blow
+ *  CPU budgets during compile). 5 MiB covers the largest production
+ *  grammar (TSX at ~2.4 MiB) with comfortable headroom. */
 export const MAX_GRAMMAR_BYTES = 5 * 1024 * 1024;
+
+/** Maximum web-tree-sitter runtime WASM size. The shipped runtime is
+ *  ~192 KiB; 1 MiB is a generous cap that catches accidental uploads
+ *  of the wrong file (e.g. a grammar masquerading as the runtime).
+ *  Distinct from MAX_GRAMMAR_BYTES so alerts read "runtime too large"
+ *  not "grammar too large". */
+export const MAX_TREE_SITTER_RUNTIME_BYTES = 1 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Extractor output (zero-LLM AST snippets passed to the Analyst)
