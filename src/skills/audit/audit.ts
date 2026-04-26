@@ -32,6 +32,7 @@ import {
 } from './cache';
 import { extractSnippets } from './extractor/extractor';
 import { loadGrammar, loadRuntimeWasm } from './grammars/loader';
+import { getBundledRuntimeWasm } from './extractor/runtime';
 import { analyzeWithLens } from './analyst/analyst';
 import type { SkillTaskRequest, TaskProcessor } from '../../durable-objects/task-processor';
 
@@ -314,18 +315,30 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   }
 
   // Worker-bootstrap gate: --analyze needs the web-tree-sitter runtime WASM.
-  // Without it Parser.init fails inside the Worker. We fetch the runtime
-  // bytes from R2 (pushed by scripts/upload-audit-grammars.mjs) before any
-  // Extractor work happens; if absent, surface a clear "not enabled" message.
+  // Two-tier resolution (closes design-doc slice 5 / cold-start
+  // resilience):
+  //   1. R2 first — `npm run audit:upload-grammars` writes a manifest +
+  //      runtime entry. Allows hot-uploading a new web-tree-sitter
+  //      version without a Worker redeploy.
+  //   2. Bundled fallback — `npm run audit:sync-runtime` regenerates
+  //      a base64-encoded copy committed in source. No hard dependency
+  //      on R2 being warm at cold-start; the runtime is always
+  //      available as long as the deploy succeeded.
+  // Both paths SHA-verify the bytes before use.
   let runtimeWasmBytes: Uint8Array | null = null;
+  let runtimeSource: 'r2' | 'bundled' | null = null;
   if (request.env.MOLTBOT_BUCKET) {
-    const runtime = await loadRuntimeWasm({ MOLTBOT_BUCKET: request.env.MOLTBOT_BUCKET });
-    runtimeWasmBytes = runtime?.bytes ?? null;
+    const r2 = await loadRuntimeWasm({ MOLTBOT_BUCKET: request.env.MOLTBOT_BUCKET });
+    if (r2) { runtimeWasmBytes = r2.bytes; runtimeSource = 'r2'; }
+  }
+  if (!runtimeWasmBytes) {
+    const bundled = await getBundledRuntimeWasm();
+    if (bundled) { runtimeWasmBytes = bundled.bytes; runtimeSource = 'bundled'; }
   }
   if (!runtimeWasmBytes && !isNodeTestEnv()) {
     return errorResult(
-      'Audit analysis is not enabled in this build: tree-sitter runtime WASM is not present in MOLTBOT_BUCKET. ' +
-      'Run `npm run audit:upload-grammars` to push it, then retry.',
+      'Audit analysis is not enabled in this build: tree-sitter runtime WASM is not present in either MOLTBOT_BUCKET or the bundled fallback. ' +
+      'Run `npm run audit:sync-runtime && npm run audit:upload-grammars` to populate both.',
     );
   }
 
@@ -474,6 +487,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       missingGrammars,
       suppressedDropped,
       suppressionReadError: suppression.error,
+      runtimeSource,
     }),
     data: run,
     telemetry: {
@@ -620,12 +634,18 @@ interface FormatRunCounts {
    *  re-appearing in this run rather than the report silently fail-
    *  opening. Closes GPT slice-4c review (PR 511) follow-up. */
   suppressionReadError?: string | null;
+  /** Which path supplied the tree-sitter runtime WASM:
+   *    'r2'      — hot-uploaded version from MOLTBOT_BUCKET (preferred)
+   *    'bundled' — committed-into-source fallback (cold-start resilient)
+   *    null      — neither available (Node-test mode auto-resolves) */
+  runtimeSource?: 'r2' | 'bundled' | null;
 }
 
 function formatRun(run: AuditRun, c: FormatRunCounts): string {
   const lines: string[] = [];
   lines.push(`Audit report: ${run.repo.owner}/${run.repo.name}@${run.repo.sha.slice(0, 7)}`);
-  lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${c.snippetCount} snippets analyzed`);
+  const runtimeNote = c.runtimeSource ? ` • runtime: ${c.runtimeSource}` : '';
+  lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${c.snippetCount} snippets analyzed${runtimeNote}`);
   if (c.missingGrammars.size > 0) {
     const langs = [...c.missingGrammars].sort().join(', ');
     lines.push(`⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — run \`npm run audit:upload-grammars\` to enable.`);
