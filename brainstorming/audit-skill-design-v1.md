@@ -1,8 +1,8 @@
 # `/audit` Skill — Design v1 (Synthesis)
 
-**Status:** Design proposal, pre-implementation
-**Date:** 2026-04-26
-**Provenance:** Synthesis of Grok / GPT / Gemini research outputs against the prompt in conversation. Every external claim below is tagged `[verified]` (URL fetched and cross-checked) or `[needs-verify]` (plausible but not yet confirmed). No `[hallucination-risk]` claims survived to this draft.
+**Status:** Design proposal — feasibility spikes R1 + R2 resolved; ready for implementation pending sign-off
+**Date:** 2026-04-26 (updated with spike results)
+**Provenance:** Synthesis of Grok / GPT / Gemini research outputs against the prompt in conversation, with two feasibility spikes run end-to-end. Every external claim below is tagged `[verified]` (URL fetched and cross-checked), `[measured]` (own benchmark, see §13), or `[needs-verify]` (plausible but not yet confirmed). No `[hallucination-risk]` claims survived to this draft.
 
 ---
 
@@ -318,20 +318,64 @@ CONTROL:  Propose ONE preventive control from {ci, lint, semgrep, ast-grep,
 
 ---
 
-## 13. Open risks + feasibility spikes needed before MVP build
+## 13. Open risks + feasibility spikes
 
-| # | Risk | Why it matters | Spike |
+### Spike R1 — WASM grammar bundle size **[RESOLVED 2026-04-26]**
+
+Measured with `tree-sitter-wasms@0.1.13` (prebuilt grammars) + `web-tree-sitter@0.20.8` runtime:
+
+| Component | Size |
+|---|---|
+| `web-tree-sitter` runtime WASM | 192 KiB |
+| `tree-sitter-typescript.wasm` | **2.29 MiB** |
+| `tree-sitter-tsx.wasm` | **2.35 MiB** |
+| `tree-sitter-javascript.wasm` | 632 KiB |
+| `tree-sitter-python.wasm` | 465 KiB |
+| `tree-sitter-go.wasm` | 230 KiB |
+| **MVP set total** | **6.02 MiB** |
+
+**Verdict: bundle-only path FAILS.** 6 MiB of grammars + ~2 MiB of existing Worker code blows Workers Free (3 MiB cap) and is too tight on Workers Paid (10 MiB cap). TS + TSX alone (4.6 MiB) exceeds the original 2 MiB design target.
+
+**Fix (replaces §3 / §7 plumbing):** ship grammars in **R2** (`MOLTBOT_BUCKET`) under `audit/grammars/<name>.wasm`. Lazy-load on first use per language with `WebAssembly.compileStreaming((await env.MOLTBOT_BUCKET.get(key)).body)`. Cache the compiled module in a module-scope `Map<lang, WebAssembly.Module>` so subsequent parses in the same isolate are zero-cost.
+
+**Worker bundle delta**: only the runtime wrapper (~200 KiB), not 6 MiB. Cold-start cost: ~5–10 ms per language (R2 fetch is colocated with the Worker). Pre-warm by triggering on `/audit` start; per-language fetch is parallelizable.
+
+### Spike R2 — WASM parse CPU cost **[RESOLVED 2026-04-26]**
+
+Sample: 25 of our largest source TS files (561 KiB total, including `task-processor.ts` ~70 KiB and `models.ts` ~109 KiB). Bench script in `/tmp/wasm-spike/bench.mjs`. Node v22, single-threaded.
+
+| Phase | Time |
+|---|---|
+| Init runtime | 8 ms |
+| Load TS grammar | 8 ms |
+| **Cold parse pass (25 files)** | **147 ms total (5.9 ms/file)** |
+| Warm parse pass (25 files) | 98 ms total (3.9 ms/file) |
+| Throughput (cold) | 3.8 MiB/sec |
+| Slowest single file | 25 ms for 109 KiB |
+
+**Verdict: PASS comfortably (29% of the 500 ms budget).**
+
+The Worker has a 30 s CPU cap per request and a 50 ms CPU cap per *non-streaming* event before throttling kicks in. For per-request audits exceeding 50 ms CPU, we route through the DO (which has 30 s CPU per event) — same pattern we use for `/dossier`. Parsing scales linearly: a deep audit (~200 files) at 6 ms/file is ~1.2 s — fits one DO event.
+
+### Combined decision
+
+**Adopt the WASM Extractor.** Architecture update:
+- **Grammars**: stored in R2 at `audit/grammars/<lang>.wasm`, lazy-fetched + WASM-compiled on first use, isolate-scoped module cache.
+- **Runtime**: `web-tree-sitter@0.20.x` bundled with the Worker (~200 KiB).
+- **Routing**: Extractor runs in the DO for `--depth standard|deep`; can run inline in the Worker for `--depth quick` if file count ≤ 25.
+- Cost target ($0.50 / $2) survives.
+
+### Remaining open risks
+
+| # | Risk | Why it matters | Mitigation |
 |---|---|---|---|
-| R1 | tree-sitter WASM bundle size in Worker | Each grammar is 100–500 KB; Workers free is 3 MiB, paid 10 MiB. `[verified]` | Lazy-load grammars per lens; measure bundle delta with TS+JS+Python+Go grammars. Hard cap: ≤2 MiB total across grammars. |
-| R2 | tree-sitter WASM CPU cost | Worker has 30s CPU per request; DO has 30s per event. Parsing 25 files in a Worker request must fit. | Benchmark: parse 25 typical TS files end-to-end, target <500 ms wall-clock. If it exceeds, push Extractor into the DO. |
-| R3 | GitHub Code Scanning Alerts coverage | Free signal but only if Code Scanning is enabled. Many target repos won't have it. | Treat as optional input; degrade gracefully. |
-| R4 | Path hallucination despite enum guard | Models occasionally bypass schema constraints. | Add a post-LLM validator that rejects findings whose `path` isn't in the tree array. |
-| R5 | Cost overrun on monorepos | 200-file cap is arbitrary; some monorepos have 200 files in a single package. | Add `--scope <subpath>` flag; sample-mode for repos > 5000 files. |
-| R6 | Reproducibility under model non-determinism | Same SHA + same prompt may yield different findings across runs. | Set `temperature=0` for Analyst; cache findings by (sha, lens, model). |
-| R7 | Private repo auth | Currently we have a single `GITHUB_TOKEN`. Per-user OAuth is out of scope. | MVP: only audit repos visible to our PAT. Document the limitation. |
-| R8 | Citation hygiene in this very doc | I tagged claims `[verified]` / `[needs-verify]`; some `[needs-verify]` items (Semgrep multimodal blog, Greptile graph specifics) need their URLs fetched before the design freezes. | Resolve before MVP build kicks off. |
-
-**R1 + R2 are blocking.** If WASM doesn't fit, the Extractor collapses into a small LLM call (cheap-model AST extraction prompt) and the cost target shifts to ~$0.80 small / ~$3 medium. Worth knowing before we commit.
+| R3 | GitHub Code Scanning Alerts coverage | Free signal but only if Code Scanning is enabled. Many target repos won't have it. | Optional input; degrade gracefully. |
+| R4 | Path hallucination despite enum guard | Models occasionally bypass schema constraints. | Post-LLM validator rejects findings with paths not in the tree array. |
+| R5 | Cost overrun on monorepos | 200-file cap is arbitrary; some monorepos have 200 files in a single package. | `--scope <subpath>` flag; sample-mode for repos > 5000 files. |
+| R6 | Reproducibility under model non-determinism | Same SHA + same prompt may yield different findings across runs. | `temperature=0` for Analyst; cache findings by (sha, lens, model). |
+| R7 | Private repo auth | Single shared `GITHUB_TOKEN`. Per-user OAuth out of scope for MVP. | Document the limitation; MVP audits only repos visible to our PAT. |
+| R8 | tree-sitter-wasms ABI lock-in | `tree-sitter-wasms@0.1.13` ABI ties us to `web-tree-sitter@0.20.x`. Newer 0.26.x runtime has a different API. | Pin both versions in `package.json`. Re-evaluate when `tree-sitter-wasms` ships ABI-26 grammars. |
+| R9 | `[needs-verify]` citations | Semgrep multimodal blog, Greptile graph specifics, Snyk PR-fix flow, Continue.dev source-controlled checks — inherited from reviewers, not yet verified. | Fetch primary URLs before MVP build kicks off. |
 
 ---
 
@@ -339,14 +383,15 @@ CONTROL:  Propose ONE preventive control from {ci, lint, semgrep, ast-grep,
 
 | Day | Deliverable |
 |---|---|
-| 1 | Feasibility spikes R1 + R2 (tree-sitter WASM bundle + CPU). Decision: WASM Extractor vs LLM Extractor. |
-| 2 | Skill skeleton (`src/skills/audit/`) following the Gecko skills pattern: handler, types, tests. Wire into command-map and skill-tools allowlist. |
-| 2 | Scout: GitHub tree + manifests + Code Scanning Alerts collector + NEXUS_KV cache. |
-| 3 | Extractor (per R1/R2 outcome): WASM AST extraction for TS/JS/Python OR a cheap-model AST prompt. |
-| 4 | Analyst: DMAIC scaffold + `AuditFinding` schema + path-enum guard + 3 lenses live (security, deps, deadcode). |
-| 5 | Distiller + Telegram renderer + inline keyboards. |
-| 6 | DO dispatch path (mirror `/dossier`): async run + checkpointing. |
-| 7 | End-to-end on 3 real repos (small/medium/monorepo), token + cost benchmarks, write the actual cost-vs-quality numbers back into this doc as v1.1. |
+| 1 | ~~Feasibility spikes R1 + R2~~ **Done.** Skill skeleton (`src/skills/audit/`) following the Gecko skills pattern: handler, types, tests. Wire into command-map and skill-tools allowlist. |
+| 1 | Scout: GitHub tree + manifests + Code Scanning Alerts collector + NEXUS_KV cache. |
+| 2 | Grammar uploader script: bundle the 5 MVP WASM grammars + push to R2 at `audit/grammars/`. Idempotent — only re-uploads on hash change. |
+| 2–3 | Extractor: `web-tree-sitter@0.20.x` runtime + R2 grammar lazy-loader + isolate-scoped module cache. |
+| 3 | Analyst: DMAIC scaffold + `AuditFinding` schema + path-enum guard + 3 lenses live (security, deps, deadcode). |
+| 4 | Distiller + Telegram renderer + inline keyboards. |
+| 5 | DO dispatch path (mirror `/dossier`): async run + checkpointing. |
+| 6 | End-to-end on 3 real repos (small/medium/monorepo), token + cost benchmarks, write actual numbers back into this doc as v1.1. |
+| 7 | Buffer / harden / add 4th lens (perf or types) if budget allows. |
 
 **Cut lines if behind schedule:** drop the inline keyboard (text-only commands), drop deadcode lens, drop monorepo testing. Keep: security + deps + WASM extraction (or its fallback) + DMAIC scaffold + orchestra hand-off.
 
