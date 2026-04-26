@@ -265,8 +265,13 @@ function buildAuditRunKeyboard(run: AuditRun | undefined): ChunkButton[][] | und
     //   audit:sup:<36-char-uuid>:<finding-id> ≤ 64 bytes for finding-ids
     //   up to ~16 chars (the validator's `${lens}-${hash}` shape comes in
     //   well under that). Button labels remain human-readable.
+    //
+    // Note: "Prepare fix" (not "Fix") because the click PREPARES a
+    // confirmation dialog — actually dispatching to orchestra requires a
+    // second tap on ✅ Dispatch fix. Closes GPT slice-4d review finding 4
+    // (button text shouldn't promise immediate mutation).
     rows.push([
-      { text: `🔧 Fix #${shortId(f.id)}`, callback_data: `audit:fix:${run.runId}:${f.id}` },
+      { text: `🔧 Prepare fix #${shortId(f.id)}`, callback_data: `audit:fix:${run.runId}:${f.id}` },
       { text: `🔇 Suppress #${shortId(f.id)}`, callback_data: `audit:sup:${run.runId}:${f.id}` },
     ]);
   }

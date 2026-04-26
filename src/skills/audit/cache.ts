@@ -134,13 +134,28 @@ export function suppressionKey(
   return `${suppressionRepoPrefix(userId, owner, repo)}${findingId}`;
 }
 
+/**
+ * Result of reading the per-repo suppression set.
+ *
+ * `error` is non-null when the underlying KV read failed (network, quota,
+ * malformed list response, etc.) so the caller can surface a clear
+ * warning to the user. The earlier `Promise<Set>` shape silently
+ * returned an empty set on failure, which made previously-suppressed
+ * findings re-surface without any signal that the suppression list
+ * could not be read. Closes GPT slice-4c review (PR 511) follow-up.
+ */
+export interface SuppressionReadResult {
+  ids: ReadonlySet<string>;
+  error: string | null;
+}
+
 export async function getSuppressedIds(
   kv: KVNamespace | undefined,
   userId: string,
   owner: string,
   repo: string,
-): Promise<ReadonlySet<string>> {
-  if (!kv) return new Set();
+): Promise<SuppressionReadResult> {
+  if (!kv) return { ids: new Set(), error: null };
   try {
     const prefix = suppressionRepoPrefix(userId, owner, repo);
     const ids = new Set<string>();
@@ -158,9 +173,11 @@ export async function getSuppressedIds(
       cursor = page.cursor;
       if (!cursor) break;
     }
-    return ids;
-  } catch {
-    return new Set();
+    return { ids, error: null };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[Audit] suppression list read failed for ${userId}@${owner}/${repo}: ${msg}`);
+    return { ids: new Set(), error: msg };
   }
 }
 
@@ -183,7 +200,7 @@ export async function addSuppression(
   // mutation logic, so it's not in the RMW critical path.
   const existing = await kv.get(key);
   await kv.put(key, JSON.stringify({ at: new Date().toISOString() }));
-  const total = (await getSuppressedIds(kv, userId, owner, repo)).size;
+  const total = (await getSuppressedIds(kv, userId, owner, repo)).ids.size;
   return { added: existing === null, total };
 }
 
@@ -200,6 +217,6 @@ export async function removeSuppression(
   if (existing !== null) {
     await kv.delete(key);
   }
-  const total = (await getSuppressedIds(kv, userId, owner, repo)).size;
+  const total = (await getSuppressedIds(kv, userId, owner, repo)).ids.size;
   return { removed: existing !== null, total };
 }

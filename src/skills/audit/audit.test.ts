@@ -14,7 +14,7 @@ vi.mock('../llm', () => ({
   selectSkillModel: vi.fn((req: string | undefined, def: string) => req ?? def),
 }));
 
-import { handleAudit, audit_do_key, buildOrchestraTask, resolveFix } from './audit';
+import { handleAudit, audit_do_key, buildOrchestraTask, buildFixSummary, resolveFix } from './audit';
 import { parseRepoCoords, encodeRepoPath } from './scout';
 import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
@@ -1465,7 +1465,9 @@ describe('audit_run renderer: inline keyboard', () => {
     // Per-finding rows: two buttons each (Fix + Suppress)
     for (let i = 0; i < 3; i++) {
       expect(rows[i]).toHaveLength(2);
-      expect(rows[i][0].text).toMatch(/🔧 Fix/);
+      // "Prepare fix" not "Fix" — button preps a confirmation dialog, no
+      // immediate orchestra dispatch. Slice-4d safety fix.
+      expect(rows[i][0].text).toMatch(/🔧 Prepare fix/);
       expect(rows[i][1].text).toMatch(/🔇 Suppress/);
       expect(rows[i][0].callback_data).toBe(`audit:fix:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`);
       expect(rows[i][1].callback_data).toBe(`audit:sup:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`);
@@ -1884,6 +1886,84 @@ describe('buildOrchestraTask', () => {
       expect(line.length).toBeLessThanOrEqual(220);
     }
   });
+
+  it('emits a Constraints block telling orchestra to branch+PR, not refactor, cite ids, etc.', () => {
+    // Closes GPT slice-4d review finding 3. The audit hand-off must
+    // explicitly bound orchestra's behavior — without these constraints
+    // the upstream LLM may helpfully refactor neighboring files or push
+    // straight to main.
+    const text = buildOrchestraTask(runFixture(), fixture());
+    expect(text).toContain('Constraints:');
+    expect(text).toMatch(/branch and open a PR/i);
+    expect(text).toMatch(/never push directly to main/i);
+    expect(text).toMatch(/minimal and scoped/i);
+    expect(text).toMatch(/Do not refactor unrelated code/i);
+    expect(text).toMatch(/preventive action/i);
+    expect(text).toMatch(/Cite this audit run id and finding id in the PR/i);
+    expect(text).toMatch(/STOP and reply/i);
+  });
+});
+
+describe('buildFixSummary (Prepare → Confirm UX)', () => {
+  function f(): AuditFinding {
+    return {
+      id: 'security-abc', lens: 'security', severity: 'high', confidence: 0.75,
+      evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+      symptom: 'Hardcoded API token in login()',
+      rootCause: 'r', correctiveAction: 'Move TOKEN to env var',
+      preventiveAction: { kind: 'ci', detail: 'gitleaks step\nplus more lines' },
+    };
+  }
+  function r(): AuditRun {
+    return {
+      runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+      lenses: ['security'], depth: 'quick', findings: [f()],
+      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+    };
+  }
+
+  it('shows symptom + corrective + preventive kind+first-line + confirm/cancel hint', () => {
+    const text = buildFixSummary(r(), f());
+    expect(text).toContain('Hardcoded API token in login()');
+    expect(text).toContain('Move TOKEN to env var');
+    expect(text).toContain('[ci]');
+    expect(text).toContain('gitleaks step');
+    expect(text).toMatch(/Dispatch fix/);
+    expect(text).toMatch(/Cancel/);
+    // The summary is INFO only — does not include the full orchestra task
+    // body or the Constraints block (those land at orchestra on confirm).
+    expect(text).not.toMatch(/Constraints:/);
+  });
+
+  it('escapes HTML special characters in user-controlled fields', () => {
+    const finding = { ...f(), symptom: 'XSS via <script>alert(1)</script>' };
+    const run = { ...r(), findings: [finding], repo: { owner: '<owner>', name: '<repo>', sha: 'a'.repeat(40) } };
+    const text = buildFixSummary(run, finding);
+    expect(text).not.toContain('<script>'); // raw < must not appear
+    expect(text).toContain('&lt;script&gt;');
+    expect(text).toContain('&lt;owner&gt;');
+  });
+});
+
+describe('audit inline keyboard: prepare→confirm callback shape', () => {
+  it('keeps audit:go and audit:no callback_data within the 64-byte cap (MVP-lens worst case)', () => {
+    // Slice-4d adds two more callback verbs (`go`, `no`). Same cap-discipline
+    // test as the existing keyboard suite — pinned via TextEncoder UTF-8
+    // bytes so a future runId/finding-id schema bump that pushes over fails
+    // here, not silently in Telegram.
+    //
+    // Worst-case shape with the current MVP lens set: longest lens name is
+    // "security" / "deadcode" (8 chars), validator's djb2 hash is uint32 ⇒
+    // base36 up to 7 chars. Worst-case finding-id is 16 chars
+    // (`security-zzzzzzz`); plus 36-char UUID + verb + colons.
+    const runId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'; // 36 chars
+    const findingId = 'security-zzzzzzz';                  // 16 chars (MVP worst case)
+    for (const verb of ['fix', 'go', 'no', 'sup']) {
+      const data = `audit:${verb}:${runId}:${findingId}`;
+      expect(new TextEncoder().encode(data).length).toBeLessThanOrEqual(64);
+    }
+  });
 });
 
 describe('resolveFix', () => {
@@ -2183,6 +2263,99 @@ describe('/audit suppress + /audit unsuppress', () => {
     }));
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/not part of run/i);
+  });
+});
+
+describe('--analyze: surfaces suppression-read failures (fails LOUD, not silent)', () => {
+  it('warns the user when KV.list throws so previously-suppressed findings re-appearing is visible', async () => {
+    // Closes GPT slice-4c (PR 511) review follow-up: getSuppressedIds()
+    // used to return {} on any KV failure, silently re-surfacing
+    // previously-suppressed findings. The new contract returns
+    // { ids, error } so the handler can warn the user.
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [{
+          lens: 'security', severity: 'high', confidence: 0.75,
+          symptom: 'Some defect', rootCause: 'r', correctiveAction: 'c',
+          preventiveAction: { kind: 'lint', detail: 'rule' },
+          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'x' }],
+        }],
+      }),
+    });
+
+    // KV that throws on .list() — simulates a network blip / quota error
+    // mid-audit. Critical: the audit MUST still complete (suppression is
+    // best-effort), but MUST surface a warning so the user knows the
+    // suppression list wasn't applied.
+    const kv = {
+      get: vi.fn(async () => null),
+      put: vi.fn(),
+      delete: vi.fn(),
+      list: vi.fn(async () => { throw new Error('KV unavailable'); }),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+      userId: 'user-1',
+      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    // Audit completes — finding is in the run as normal (no false drop).
+    const run = result.data as AuditRun;
+    expect(run.findings).toHaveLength(1);
+    expect(run.findings[0].suppressed).toBeUndefined();
+    // The user-visible body MUST include the warning so they know
+    // previously-suppressed findings may be re-appearing.
+    expect(result.body).toMatch(/Suppression list could not be read/);
+    expect(result.body).toMatch(/KV unavailable/);
+  });
+
+  it('does NOT show the warning on a normal run (no KV error)', async () => {
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+
+    // KV that works normally (empty suppression list).
+    const kv = {
+      get: vi.fn(async () => null),
+      put: vi.fn(),
+      delete: vi.fn(),
+      list: vi.fn(async () => ({ keys: [], list_complete: true, cursor: undefined })),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+      userId: 'user-1',
+      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    // No warning on the happy path.
+    expect(result.body).not.toMatch(/Suppression list could not be read/);
   });
 });
 
