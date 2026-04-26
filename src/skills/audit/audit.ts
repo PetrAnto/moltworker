@@ -779,6 +779,19 @@ export function buildOrchestraTask(run: AuditRun, finding: AuditFinding): string
     lines.push('Additional context:');
     lines.push(`  ${finding.orchestraPatchBrief}`);
   }
+  // Conservative scope guard. Without these explicit constraints the
+  // orchestra LLM may helpfully refactor neighboring code, force-push to
+  // main, or merge silently — none of which are appropriate for an
+  // automated audit hand-off where the source finding came from another
+  // LLM upstream. Closes GPT slice-4d review finding 3.
+  lines.push('');
+  lines.push('Constraints:');
+  lines.push('  - Work on a fresh branch and open a PR; never push directly to main / default branch.');
+  lines.push('  - Keep the patch minimal and scoped strictly to this finding.');
+  lines.push('  - Do not refactor unrelated code, reformat unaffected files, or change public APIs unless the corrective action explicitly requires it.');
+  lines.push('  - Add or update tests / CI controls for the preventive action above; do not skip the preventive half.');
+  lines.push('  - Cite this audit run id and finding id in the PR description so a follow-up audit can mark the finding fixed.');
+  lines.push('  - If the corrective action turns out to be wrong (root cause was misdiagnosed), STOP and reply with what you found instead of pushing speculative fixes.');
   lines.push('');
   lines.push(`Audit run: ${run.runId}, finding id: ${finding.id} (cite both in the PR description so /audit can mark this finding fixed on the next run).`);
   return lines.join('\n');
@@ -824,6 +837,32 @@ export async function resolveFix(
     };
   }
   return { ok: true, run, finding, taskText: buildOrchestraTask(run, finding) };
+}
+
+/**
+ * Short user-facing summary of a pending fix dispatch — what the inline
+ * "Prepare fix" callback shows above the Confirm/Cancel keyboard. Keeps
+ * the message tight (Telegram quotes the full /orch run … prompt would
+ * be both noisy and easy to misread before tapping Confirm). The full
+ * task text still lands at orchestra; this is just the human review.
+ */
+export function buildFixSummary(run: AuditRun, finding: AuditFinding): string {
+  const lines: string[] = [];
+  lines.push(`🔧 <b>Orchestra fix prepared</b>`);
+  lines.push('');
+  lines.push(`<b>Repo:</b> ${escapeHtmlSafe(run.repo.owner)}/${escapeHtmlSafe(run.repo.name)}@${run.repo.sha.slice(0, 7)}`);
+  lines.push(`<b>Severity:</b> ${finding.severity.toUpperCase()} • <b>Lens:</b> ${finding.lens} • <b>Confidence:</b> ${finding.confidence}`);
+  lines.push(`<b>Symptom:</b> ${escapeHtmlSafe(finding.symptom)}`);
+  lines.push(`<b>Fix:</b> ${escapeHtmlSafe(finding.correctiveAction)}`);
+  lines.push(`<b>Preventive:</b> [${finding.preventiveAction.kind}] ${escapeHtmlSafe(finding.preventiveAction.detail.split('\n').find(l => l.trim().length > 0)?.trim().slice(0, 160) ?? '')}`);
+  lines.push('');
+  lines.push(`Tap <b>✅ Dispatch fix</b> to send this to orchestra (it will open a PR; the task includes a "do not refactor unrelated code" constraint).`);
+  lines.push(`Tap <b>❌ Cancel</b> to dismiss without dispatching.`);
+  return lines.join('\n');
+}
+
+function escapeHtmlSafe(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 async function handleFix(request: SkillRequest, start: number): Promise<SkillResult> {

@@ -14,7 +14,7 @@ vi.mock('../llm', () => ({
   selectSkillModel: vi.fn((req: string | undefined, def: string) => req ?? def),
 }));
 
-import { handleAudit, audit_do_key, buildOrchestraTask, resolveFix } from './audit';
+import { handleAudit, audit_do_key, buildOrchestraTask, buildFixSummary, resolveFix } from './audit';
 import { parseRepoCoords, encodeRepoPath } from './scout';
 import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
@@ -1465,7 +1465,9 @@ describe('audit_run renderer: inline keyboard', () => {
     // Per-finding rows: two buttons each (Fix + Suppress)
     for (let i = 0; i < 3; i++) {
       expect(rows[i]).toHaveLength(2);
-      expect(rows[i][0].text).toMatch(/🔧 Fix/);
+      // "Prepare fix" not "Fix" — button preps a confirmation dialog, no
+      // immediate orchestra dispatch. Slice-4d safety fix.
+      expect(rows[i][0].text).toMatch(/🔧 Prepare fix/);
       expect(rows[i][1].text).toMatch(/🔇 Suppress/);
       expect(rows[i][0].callback_data).toBe(`audit:fix:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`);
       expect(rows[i][1].callback_data).toBe(`audit:sup:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`);
@@ -1882,6 +1884,84 @@ describe('buildOrchestraTask', () => {
     const lines = text.split('\n');
     for (const line of lines) {
       expect(line.length).toBeLessThanOrEqual(220);
+    }
+  });
+
+  it('emits a Constraints block telling orchestra to branch+PR, not refactor, cite ids, etc.', () => {
+    // Closes GPT slice-4d review finding 3. The audit hand-off must
+    // explicitly bound orchestra's behavior — without these constraints
+    // the upstream LLM may helpfully refactor neighboring files or push
+    // straight to main.
+    const text = buildOrchestraTask(runFixture(), fixture());
+    expect(text).toContain('Constraints:');
+    expect(text).toMatch(/branch and open a PR/i);
+    expect(text).toMatch(/never push directly to main/i);
+    expect(text).toMatch(/minimal and scoped/i);
+    expect(text).toMatch(/Do not refactor unrelated code/i);
+    expect(text).toMatch(/preventive action/i);
+    expect(text).toMatch(/Cite this audit run id and finding id in the PR/i);
+    expect(text).toMatch(/STOP and reply/i);
+  });
+});
+
+describe('buildFixSummary (Prepare → Confirm UX)', () => {
+  function f(): AuditFinding {
+    return {
+      id: 'security-abc', lens: 'security', severity: 'high', confidence: 0.75,
+      evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+      symptom: 'Hardcoded API token in login()',
+      rootCause: 'r', correctiveAction: 'Move TOKEN to env var',
+      preventiveAction: { kind: 'ci', detail: 'gitleaks step\nplus more lines' },
+    };
+  }
+  function r(): AuditRun {
+    return {
+      runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+      lenses: ['security'], depth: 'quick', findings: [f()],
+      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+    };
+  }
+
+  it('shows symptom + corrective + preventive kind+first-line + confirm/cancel hint', () => {
+    const text = buildFixSummary(r(), f());
+    expect(text).toContain('Hardcoded API token in login()');
+    expect(text).toContain('Move TOKEN to env var');
+    expect(text).toContain('[ci]');
+    expect(text).toContain('gitleaks step');
+    expect(text).toMatch(/Dispatch fix/);
+    expect(text).toMatch(/Cancel/);
+    // The summary is INFO only — does not include the full orchestra task
+    // body or the Constraints block (those land at orchestra on confirm).
+    expect(text).not.toMatch(/Constraints:/);
+  });
+
+  it('escapes HTML special characters in user-controlled fields', () => {
+    const finding = { ...f(), symptom: 'XSS via <script>alert(1)</script>' };
+    const run = { ...r(), findings: [finding], repo: { owner: '<owner>', name: '<repo>', sha: 'a'.repeat(40) } };
+    const text = buildFixSummary(run, finding);
+    expect(text).not.toContain('<script>'); // raw < must not appear
+    expect(text).toContain('&lt;script&gt;');
+    expect(text).toContain('&lt;owner&gt;');
+  });
+});
+
+describe('audit inline keyboard: prepare→confirm callback shape', () => {
+  it('keeps audit:go and audit:no callback_data within the 64-byte cap (MVP-lens worst case)', () => {
+    // Slice-4d adds two more callback verbs (`go`, `no`). Same cap-discipline
+    // test as the existing keyboard suite — pinned via TextEncoder UTF-8
+    // bytes so a future runId/finding-id schema bump that pushes over fails
+    // here, not silently in Telegram.
+    //
+    // Worst-case shape with the current MVP lens set: longest lens name is
+    // "security" / "deadcode" (8 chars), validator's djb2 hash is uint32 ⇒
+    // base36 up to 7 chars. Worst-case finding-id is 16 chars
+    // (`security-zzzzzzz`); plus 36-char UUID + verb + colons.
+    const runId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'; // 36 chars
+    const findingId = 'security-zzzzzzz';                  // 16 chars (MVP worst case)
+    for (const verb of ['fix', 'go', 'no', 'sup']) {
+      const data = `audit:${verb}:${runId}:${findingId}`;
+      expect(new TextEncoder().encode(data).length).toBeLessThanOrEqual(64);
     }
   });
 });

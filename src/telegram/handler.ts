@@ -887,6 +887,51 @@ export class TelegramHandler {
   }
 
   /**
+   * Dispatch a pre-built orchestra task to runSkill directly, without
+   * going through the slash-command parser. This is the safe path for
+   * audit:go callbacks: orchestra task text is multi-line, contains
+   * YAML / paths / shell snippets, and may include `--`-prefixed
+   * substrings that parseFlags() would otherwise misinterpret as flag
+   * tokens. Routing through a structured SkillRequest keeps the task
+   * opaque to the parser. Mirrors the chunks-loop in handleCommand.
+   */
+  private async dispatchOrchestraTask(chatId: number, userId: string, taskText: string): Promise<void> {
+    initializeSkills();
+    const skillEnv = {
+      MOLTBOT_BUCKET: this.r2Bucket,
+      OPENROUTER_API_KEY: this.openrouterKey,
+      GITHUB_TOKEN: this.githubToken,
+      BRAVE_SEARCH_KEY: this.braveSearchKey,
+      TASK_PROCESSOR: this.taskProcessor,
+      NEXUS_KV: this.nexusKv,
+    } as import('../types').MoltbotEnv;
+    const skillRequest: SkillRequest = {
+      skillId: 'orchestra',
+      subcommand: 'run',
+      text: taskText,
+      flags: {},
+      transport: 'telegram',
+      userId,
+      chatId,
+      modelAlias: await this.storage.getUserModel(userId),
+      env: skillEnv,
+      context: { telegramToken: this.telegramToken },
+    };
+    const result = await runSkill(skillRequest);
+    const chunks = renderForTelegram(result);
+    for (const chunk of chunks) {
+      if (chunk.replyMarkup && chunk.replyMarkup.length > 0) {
+        await this.bot.sendMessageWithButtons(
+          chatId, chunk.text, chunk.replyMarkup,
+          chunk.parseMode ? { parseMode: chunk.parseMode } : undefined,
+        );
+      } else {
+        await this.bot.sendMessage(chatId, chunk.text, chunk.parseMode ? { parseMode: chunk.parseMode } : undefined);
+      }
+    }
+  }
+
+  /**
    * Handle commands
    */
   private async handleCommand(message: TelegramMessage, text: string): Promise<void> {
@@ -4373,39 +4418,62 @@ export class TelegramHandler {
         // Audit-skill inline keyboard. Short verb codes keep callback_data
         // within Telegram's 64-byte cap. Payload shapes:
         //   audit:export:<runId>           → re-runs /audit export
-        //   audit:fix:<runId>:<findingId>  → orchestra hand-off (not enabled yet)
+        //   audit:fix:<runId>:<findingId>  → PREPARE: build summary +
+        //                                     show ✅ Dispatch / ❌ Cancel
+        //   audit:go:<runId>:<findingId>   → CONFIRM: dispatch orchestra
+        //   audit:no:<runId>:<findingId>   → CANCEL: dismiss keyboard
         //   audit:sup:<runId>:<findingId>  → suppression list (live)
+        // Two-step "Prepare → Confirm" gate on the orchestra hand-off
+        // closes GPT slice-4d review finding 1 — orchestra opens PRs and
+        // can modify repos, so a single button tap MUST NOT auto-mutate.
         // Defensive parse: if anything looks malformed, ack + ignore so a
         // stale or hand-crafted callback doesn't crash the handler.
         const sub = parts[1] ?? '';
         const runId = parts[2] ?? '';
         const findingId = parts[3] ?? '';
         if (sub === 'export' && runId) {
-          // Re-route through the same skill runtime the slash command uses
-          // so the user-scoped KV path + UUID validation stay centralized
-          // in handleAudit.
           await this.handleCommand(query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never, `/audit export ${runId}`);
         } else if (sub === 'fix' && runId && findingId) {
-          // Auto-dispatch path: resolve the finding (validation + run
-          // lookup live in resolveFix so the /audit fix slash command and
-          // this callback share one source of truth) and route the
-          // orchestra task through handleCommand('/orch run …'). The
-          // user gets one acknowledgement message + whatever orchestra
-          // streams back as it runs.
+          // PREPARE: validate + build summary + attach Confirm/Cancel.
+          // The orchestra task itself is rebuilt deterministically on
+          // confirm (resolveFix is pure given the same KV state), so we
+          // don't need to stash the prepared task between clicks.
+          const { resolveFix, buildFixSummary } = await import('../skills/audit/audit');
+          const r = await resolveFix(this.nexusKv, userId, runId, findingId);
+          if (!r.ok) { await this.bot.sendMessage(chatId, r.error); break; }
+          await this.bot.sendMessageWithButtons(
+            chatId,
+            buildFixSummary(r.run, r.finding),
+            [[
+              { text: '✅ Dispatch fix', callback_data: `audit:go:${runId}:${findingId}` },
+              { text: '❌ Cancel',       callback_data: `audit:no:${runId}:${findingId}` },
+            ]],
+            { parseMode: 'HTML' },
+          );
+        } else if (sub === 'go' && runId && findingId) {
+          // CONFIRM: rebuild + dispatch via runSkill, NOT handleCommand.
+          // /orch run <multiline-task-with-flags-and-yaml> would re-enter
+          // the slash parser and parseFlags() would happily eat any
+          // `--foo bar` substring inside the orchestra prompt. Going
+          // through runSkill with a structured SkillRequest keeps the
+          // taskText opaque to the parser. Closes GPT slice-4d review
+          // finding 2.
           const { resolveFix } = await import('../skills/audit/audit');
           const r = await resolveFix(this.nexusKv, userId, runId, findingId);
-          if (!r.ok) {
-            await this.bot.sendMessage(chatId, r.error);
-            break;
-          }
+          if (!r.ok) { await this.bot.sendMessage(chatId, r.error); break; }
+          // Remove the Confirm/Cancel keyboard from the prepared message
+          // so the user can't double-click into a duplicate dispatch.
+          if (query.message) await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
           await this.bot.sendMessage(
             chatId,
             `🔧 Dispatching to orchestra: fix ${r.finding.severity} ${r.finding.lens} defect (${r.finding.id}) in ${r.run.repo.owner}/${r.run.repo.name}…`,
           );
-          await this.handleCommand(
-            query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never,
-            `/orch run ${r.taskText}`,
-          );
+          await this.dispatchOrchestraTask(chatId, userId, r.taskText);
+        } else if (sub === 'no' && runId && findingId) {
+          // CANCEL: just dismiss the keyboard. We don't write anything to
+          // KV — the user simply chose not to dispatch this time.
+          if (query.message) await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+          await this.bot.sendMessage(chatId, '❌ Fix cancelled. Re-run /audit on this repo or tap 🔧 Prepare fix again to retry.');
         } else if (sub === 'sup' && runId && findingId) {
           // Re-route through the slash command so the user-scoped KV path,
           // the UUID + finding-id validation, and the run-existence check
