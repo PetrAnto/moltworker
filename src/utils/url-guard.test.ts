@@ -114,3 +114,27 @@ describe('isPublicUrl', () => {
     expect(isPublicUrl('not a url')).toBe(false);
   });
 });
+
+// V8 (and the WHATWG URL spec it implements) canonicalizes alternative
+// IPv4 forms — decimal-as-integer, hex, octal, short-form — to dotted
+// quad before exposing url.hostname. So `assertPublicUrl` already catches
+// `http://2130706433/` etc. via its existing dotted-quad check. These
+// regressions lock that behavior in: if a future runtime ever stops
+// canonicalizing, we want the test suite to scream rather than silently
+// open a bypass.
+describe('non-canonical IPv4 forms (regression)', () => {
+  const bypassAttempts = [
+    'http://2130706433/admin', // 127.0.0.1 as 32-bit decimal
+    'http://0x7f000001/admin', // 127.0.0.1 as hex int
+    'http://017700000001/admin', // 127.0.0.1 as octal int
+    'http://127.1/admin', // dotted-octet short form
+    'http://0x7f.0.0.1/admin', // mixed hex octet
+    'http://0177.0.0.1/admin', // mixed octal octet
+  ];
+
+  for (const url of bypassAttempts) {
+    it(`rejects ${url}`, () => {
+      expect(() => assertPublicUrl(url)).toThrow(/private\/internal/);
+    });
+  }
+});
