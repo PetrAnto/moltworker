@@ -6,6 +6,7 @@ import { getModel } from './models';
 import { cloudflareApi } from './tools-cloudflare';
 import type { AcontextClient, SandboxLanguage } from '../acontext/client';
 import { checkBracketBalance } from '../guardrails/extraction-verifier';
+import { assertPublicUrl } from '../utils/url-guard';
 
 /** Decode base64 GitHub content to proper UTF-8 string (atob alone mangles multi-byte chars). */
 function decodeBase64Utf8(base64: string): string {
@@ -1110,9 +1111,18 @@ export async function executeTool(toolCall: ToolCall, context?: ToolContext): Pr
 }
 
 /**
- * Fetch content from a URL
+ * Fetch content from a URL.
+ *
+ * Inputs come from the model, so the URL is treated as untrusted: we
+ * reject non-http(s) schemes and any host that resolves textually to a
+ * private/internal address (loopback, RFC1918, link-local, cloud
+ * metadata). See src/utils/url-guard.ts for the full ruleset.
  */
 async function fetchUrl(url: string): Promise<string> {
+  // Throws if scheme is not http(s) or host is private. The thrown
+  // message becomes the tool result, which is what the model should see.
+  assertPublicUrl(url);
+
   const response = await fetch(url, {
     headers: {
       'User-Agent': 'MoltworkerBot/1.0',
