@@ -37,6 +37,7 @@ export interface MoltbotEnv {
   DEBUG_ROUTES?: string; // Set to 'true' to enable /debug/* routes
   SANDBOX_SLEEP_AFTER?: string; // How long before sandbox sleeps: 'never' (default), or duration like '10m', '1h'
   TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_WEBHOOK_SECRET?: string; // Optional. When set, /webhook/:token also validates the X-Telegram-Bot-Api-Secret-Token header (Telegram's recommended webhook auth). Configure via setWebhook(secret_token=...).
   TELEGRAM_ALLOWED_USERS?: string; // Comma-separated list of allowed Telegram user IDs
   TELEGRAM_DM_POLICY?: string;
   TELEGRAM_DM_ALLOW_FROM?: string; // Comma-separated user IDs for allowlist DM policy

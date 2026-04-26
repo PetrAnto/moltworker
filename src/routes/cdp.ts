@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import type { AppEnv, MoltbotEnv } from '../types';
 import puppeteer, { type Browser, type Page } from '@cloudflare/puppeteer';
+import { timingSafeEqual } from '../utils/timing-safe-equal';
+import { assertPublicUrl } from '../utils/url-guard';
 
 /**
  * CDP (Chrome DevTools Protocol) WebSocket shim
@@ -516,10 +518,14 @@ async function handleTarget(
       const url = (params.url as string) || 'about:blank';
       const page = await session.browser.newPage();
       const targetId = crypto.randomUUID();
-      
+
       session.pages.set(targetId, page);
-      
+
       if (url !== 'about:blank') {
+        // Block CDP-driven navigation to private/internal addresses.
+        // page.goto via Browser Rendering can reach Cloudflare-internal
+        // ranges that the Workers fetch sandbox does not.
+        assertPublicUrl(url);
         await page.goto(url);
       }
       
@@ -589,7 +595,10 @@ async function handlePage(
     case 'navigate': {
       const url = params.url as string;
       if (!url) throw new Error('url is required');
-      
+
+      // SSRF guard: see comment in createTarget above.
+      assertPublicUrl(url);
+
       const response = await page.goto(url, {
         waitUntil: 'load',
       });
@@ -1836,21 +1845,6 @@ function sendError(ws: WebSocket, id: number, code: number, message: string): vo
 function sendEvent(ws: WebSocket, method: string, params?: Record<string, unknown>): void {
   const event: CDPEvent = { method, params };
   ws.send(JSON.stringify(event));
-}
-
-/**
- * Constant-time string comparison to prevent timing attacks
- */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
 }
 
 export { cdp };

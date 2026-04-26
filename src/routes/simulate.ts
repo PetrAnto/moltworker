@@ -22,6 +22,7 @@ import { fetchDOWithRetry } from '../utils/do-retry';
 import { createTelegramHandler } from '../telegram/handler';
 import { CapturingBot } from '../telegram/capturing-bot';
 import type { SandboxLike } from '../openrouter/tools';
+import { timingSafeEqual } from '../utils/timing-safe-equal';
 
 const simulate = new Hono<AppEnv>();
 
@@ -34,7 +35,8 @@ simulate.use('*', async (c, next) => {
   }
 
   const authHeader = c.req.header('Authorization');
-  if (!authHeader || authHeader !== `Bearer ${apiKey}`) {
+  const expected = `Bearer ${apiKey}`;
+  if (!authHeader || !timingSafeEqual(authHeader, expected)) {
     return c.json({ error: 'Invalid or missing Authorization header' }, 401);
   }
 

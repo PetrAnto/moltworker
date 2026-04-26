@@ -421,13 +421,22 @@ export class TelegramBot {
   }
 
   /**
-   * Set webhook URL
+   * Set webhook URL.
+   *
+   * When `secretToken` is supplied, Telegram will echo it back on every
+   * webhook request via the X-Telegram-Bot-Api-Secret-Token header. The
+   * route handler validates this header against TELEGRAM_WEBHOOK_SECRET,
+   * which prevents replay if the path-segment token ever leaks (logs,
+   * referers, server-side error reports).
    */
-  async setWebhook(url: string): Promise<boolean> {
+  async setWebhook(url: string, secretToken?: string): Promise<boolean> {
+    const body: Record<string, unknown> = { url };
+    if (secretToken) body.secret_token = secretToken;
+
     const response = await fetch(`${this.baseUrl}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify(body),
     });
 
     const result = await response.json() as { ok: boolean; description?: string };
