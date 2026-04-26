@@ -1426,6 +1426,95 @@ describe('--analyze: persists AuditRun to NEXUS_KV after completion (DO path)', 
   });
 });
 
+// ---------------------------------------------------------------------------
+// Slice 4b — inline keyboard shape (Fix / Suppress / Full report)
+// ---------------------------------------------------------------------------
+
+describe('audit_run renderer: inline keyboard', () => {
+  function runWithFindings(n: number): AuditRun {
+    return {
+      runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+      lenses: ['security'],
+      depth: 'quick',
+      findings: Array.from({ length: n }, (_, i) => ({
+        id: `security-fhash${i}`,
+        lens: 'security',
+        severity: 'high',
+        confidence: 0.75,
+        evidence: [{ path: 'src/x.ts', source: 'llm' as const }],
+        symptom: `s${i}`, rootCause: 'r', correctiveAction: 'c',
+        preventiveAction: { kind: 'lint', detail: 'rule body' },
+      })),
+      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+    };
+  }
+
+  it('emits one Fix/Suppress row per top-3 finding + a final Full report row', async () => {
+    const { renderForTelegram } = await import('../renderers/telegram');
+    const chunks = renderForTelegram({
+      skillId: 'audit', kind: 'audit_run',
+      body: 'short body',
+      data: runWithFindings(5), // top-3 capped — test verifies the cap holds
+      telemetry: { durationMs: 1, model: 'flash', llmCalls: 1, toolCalls: 1 },
+    });
+    const last = chunks.at(-1)!;
+    const rows = last.replyMarkup!;
+    // 3 finding rows + 1 export row = 4 total
+    expect(rows).toHaveLength(4);
+    // Per-finding rows: two buttons each (Fix + Suppress)
+    for (let i = 0; i < 3; i++) {
+      expect(rows[i]).toHaveLength(2);
+      expect(rows[i][0].text).toMatch(/🔧 Fix/);
+      expect(rows[i][1].text).toMatch(/🔇 Suppress/);
+      expect(rows[i][0].callback_data).toBe(`audit:fix:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`);
+      expect(rows[i][1].callback_data).toBe(`audit:sup:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`);
+    }
+    // Final Full report row
+    expect(rows[3]).toHaveLength(1);
+    expect(rows[3][0].text).toMatch(/📄 Full report/);
+    expect(rows[3][0].callback_data).toBe('audit:export:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+  });
+
+  it('omits the keyboard when there are no findings', async () => {
+    const { renderForTelegram } = await import('../renderers/telegram');
+    const chunks = renderForTelegram({
+      skillId: 'audit', kind: 'audit_run',
+      body: 'no defects', data: runWithFindings(0),
+      telemetry: { durationMs: 1, model: 'flash', llmCalls: 1, toolCalls: 1 },
+    });
+    expect(chunks[0].replyMarkup).toBeUndefined();
+  });
+
+  it('keeps every callback_data within Telegram\'s 64-byte hard cap', async () => {
+    const { renderForTelegram } = await import('../renderers/telegram');
+    const chunks = renderForTelegram({
+      skillId: 'audit', kind: 'audit_run',
+      body: 'x', data: runWithFindings(3),
+      telemetry: { durationMs: 1, model: 'flash', llmCalls: 1, toolCalls: 1 },
+    });
+    const rows = chunks[0].replyMarkup!;
+    for (const row of rows) {
+      for (const btn of row) {
+        // Telegram rejects callback_data > 64 bytes. We assert the actual
+        // UTF-8 byte length (TextEncoder), not string.length.
+        const bytes = new TextEncoder().encode(btn.callback_data!).length;
+        expect(bytes).toBeLessThanOrEqual(64);
+      }
+    }
+  });
+
+  it('omits keyboard on audit_plan results (only audit_run gets controls)', async () => {
+    const { renderForTelegram } = await import('../renderers/telegram');
+    const chunks = renderForTelegram({
+      skillId: 'audit', kind: 'audit_plan',
+      body: 'plan body', data: { foo: 'bar' },
+      telemetry: { durationMs: 1, model: 'none', llmCalls: 0, toolCalls: 0 },
+    });
+    expect(chunks[0].replyMarkup).toBeUndefined();
+  });
+});
+
 describe('/audit export', () => {
   function kvWithRun(userId: string, run: AuditRun) {
     const store = new Map<string, string>();
@@ -1571,6 +1660,43 @@ describe('/audit export', () => {
     const parsed = JSON.parse(result.body);
     expect(parsed.runId).toBe(run.runId);
     expect(parsed.findings[0].id).toBe('security-abc');
+  });
+
+  it('attaches the inline keyboard ONLY to the last chunk (not duplicated)', async () => {
+    // Multi-chunk export with findings → keyboard appears once, on the
+    // final chunk. Telegram shows the keyboard with the message it's
+    // attached to; duplicating across chunks would render a confusing
+    // ladder of identical button rows.
+    const run = makeRun({
+      findings: Array.from({ length: 5 }, (_, i) => ({
+        id: `security-fhash${i}`,
+        lens: 'security' as const,
+        severity: 'high' as const,
+        confidence: 0.75 as const,
+        evidence: [{ path: 'src/auth.ts', lines: '1-1', source: 'llm' as const, snippet: 'tok' }],
+        symptom: `Defect ${i}`,
+        rootCause: 'Cause',
+        correctiveAction: 'Fix',
+        preventiveAction: { kind: 'ci' as const, detail: 'workflow yaml '.repeat(200) },
+      })),
+    });
+    const kv = kvWithRun('user-1', run);
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: run.runId,
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.body.length).toBeGreaterThan(4096);
+
+    const { renderForTelegram } = await import('../renderers/telegram');
+    const chunks = renderForTelegram(result);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Only the LAST chunk carries the keyboard.
+    for (let i = 0; i < chunks.length - 1; i++) {
+      expect(chunks[i].replyMarkup).toBeUndefined();
+    }
+    expect(chunks.at(-1)!.replyMarkup).toBeDefined();
   });
 
   it('renders into Telegram-safe chunks when the export body exceeds 4 KiB', async () => {
