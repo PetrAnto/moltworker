@@ -408,12 +408,12 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   // prior suppression decisions hid), but mark the suppressed ones with
   // `suppressed: true`. The default inline view + the keyboard's top-3
   // filter out suppressed; the export's "Suppressed" section shows them.
-  const suppressedIds = await getSuppressedIds(
+  const suppression = await getSuppressedIds(
     request.env.NEXUS_KV, request.userId, profile.owner, profile.repo,
   );
   const annotated = findings
     .filter(f => f.confidence >= 0.5)
-    .map(f => suppressedIds.has(f.id) ? { ...f, suppressed: true } : f);
+    .map(f => suppression.ids.has(f.id) ? { ...f, suppressed: true } : f);
   const suppressedDropped = annotated.filter(f => f.suppressed).length;
 
   // Sort by priority (severity × confidence). Suppressed findings rank
@@ -473,6 +473,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       shaMismatches,
       missingGrammars,
       suppressedDropped,
+      suppressionReadError: suppression.error,
     }),
     data: run,
     telemetry: {
@@ -614,6 +615,11 @@ interface FormatRunCounts {
    *  suppression list. Surfaced so users see "5 of 8 findings shown
    *  (3 suppressed)" rather than the report silently shrinking. */
   suppressedDropped?: number;
+  /** Non-null when the suppression-list KV read failed. Surfaced as a
+   *  warning so users know previously-suppressed findings may be
+   *  re-appearing in this run rather than the report silently fail-
+   *  opening. Closes GPT slice-4c review (PR 511) follow-up. */
+  suppressionReadError?: string | null;
 }
 
 function formatRun(run: AuditRun, c: FormatRunCounts): string {
@@ -628,6 +634,9 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
   if (c.shaMismatches > 0) lines.push(`⚠️ ${c.shaMismatches} file(s) skipped: fetched SHA disagreed with tree SHA`);
   if (c.suppressedDropped && c.suppressedDropped > 0) {
     lines.push(`🔇 ${c.suppressedDropped} finding(s) suppressed by prior /audit suppress decisions for this repo.`);
+  }
+  if (c.suppressionReadError) {
+    lines.push(`⚠️ Suppression list could not be read (${c.suppressionReadError.slice(0, 120)}); previously suppressed findings may appear in this report. Retry to re-apply your suppressions.`);
   }
   lines.push('');
 

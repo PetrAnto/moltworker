@@ -2266,6 +2266,99 @@ describe('/audit suppress + /audit unsuppress', () => {
   });
 });
 
+describe('--analyze: surfaces suppression-read failures (fails LOUD, not silent)', () => {
+  it('warns the user when KV.list throws so previously-suppressed findings re-appearing is visible', async () => {
+    // Closes GPT slice-4c (PR 511) review follow-up: getSuppressedIds()
+    // used to return {} on any KV failure, silently re-surfacing
+    // previously-suppressed findings. The new contract returns
+    // { ids, error } so the handler can warn the user.
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [{
+          lens: 'security', severity: 'high', confidence: 0.75,
+          symptom: 'Some defect', rootCause: 'r', correctiveAction: 'c',
+          preventiveAction: { kind: 'lint', detail: 'rule' },
+          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'x' }],
+        }],
+      }),
+    });
+
+    // KV that throws on .list() — simulates a network blip / quota error
+    // mid-audit. Critical: the audit MUST still complete (suppression is
+    // best-effort), but MUST surface a warning so the user knows the
+    // suppression list wasn't applied.
+    const kv = {
+      get: vi.fn(async () => null),
+      put: vi.fn(),
+      delete: vi.fn(),
+      list: vi.fn(async () => { throw new Error('KV unavailable'); }),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+      userId: 'user-1',
+      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    // Audit completes — finding is in the run as normal (no false drop).
+    const run = result.data as AuditRun;
+    expect(run.findings).toHaveLength(1);
+    expect(run.findings[0].suppressed).toBeUndefined();
+    // The user-visible body MUST include the warning so they know
+    // previously-suppressed findings may be re-appearing.
+    expect(result.body).toMatch(/Suppression list could not be read/);
+    expect(result.body).toMatch(/KV unavailable/);
+  });
+
+  it('does NOT show the warning on a normal run (no KV error)', async () => {
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+
+    // KV that works normally (empty suppression list).
+    const kv = {
+      get: vi.fn(async () => null),
+      put: vi.fn(),
+      delete: vi.fn(),
+      list: vi.fn(async () => ({ keys: [], list_complete: true, cursor: undefined })),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+      userId: 'user-1',
+      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    // No warning on the happy path.
+    expect(result.body).not.toMatch(/Suppression list could not be read/);
+  });
+});
+
 describe('--analyze: applies per-repo suppression list before persist+display', () => {
   it('persists suppressed findings with suppressed:true (transparent for export) but excludes them from the inline view', async () => {
     const tree = [
