@@ -49,6 +49,7 @@ import {
 } from '../orchestra/orchestra';
 import { loadScratchpad, formatScratchpadForPrompt } from '../orchestra/scratchpad';
 import type { OrchestraDraft, OrchestraPlanState } from '../openrouter/storage';
+import type { MoltbotEnv } from '../types';
 import type { TaskProcessor, TaskRequest } from '../durable-objects/task-processor';
 import { fetchDOWithRetry } from '../utils/do-retry';
 import { acquireRepoLock, forceReleaseRepoLock } from '../concurrency/branch-lock';
@@ -887,6 +888,41 @@ export class TelegramHandler {
   }
 
   /**
+   * Build the env passed to skill handlers via runSkill / SkillRequest.env.
+   *
+   * Single source of truth so the inline-skill path, the
+   * dispatchOrchestraTask path, and the simulate path can't drift.
+   * Closes GPT slice-4d follow-up note on env helper drift.
+   *
+   * Includes every binding/secret the handler holds — skills that don't
+   * need a field simply won't read it. Adding a new provider key to the
+   * handler's instance state means a one-line edit here, not three.
+   */
+  private buildSkillEnv(): MoltbotEnv {
+    return {
+      // Bindings
+      MOLTBOT_BUCKET: this.r2Bucket,
+      NEXUS_KV: this.nexusKv,
+      TASK_PROCESSOR: this.taskProcessor,
+      BROWSER: this.browser,
+      // Provider secrets
+      OPENROUTER_API_KEY: this.openrouterKey,
+      GITHUB_TOKEN: this.githubToken,
+      BRAVE_SEARCH_KEY: this.braveSearchKey,
+      TAVILY_API_KEY: this.tavilyKey,
+      DASHSCOPE_API_KEY: this.dashscopeKey,
+      MOONSHOT_API_KEY: this.moonshotKey,
+      DEEPSEEK_API_KEY: this.deepseekKey,
+      ANTHROPIC_API_KEY: this.anthropicKey,
+      NVIDIA_NIM_API_KEY: this.nvidiaKey,
+      CLOUDFLARE_API_TOKEN: this.cloudflareApiToken,
+      ACONTEXT_API_KEY: this.acontextKey,
+      ACONTEXT_BASE_URL: this.acontextBaseUrl,
+      ARTIFICIAL_ANALYSIS_KEY: this.aaKey,
+    } as MoltbotEnv;
+  }
+
+  /**
    * Dispatch a pre-built orchestra task to runSkill directly, without
    * going through the slash-command parser. This is the safe path for
    * audit:go callbacks: orchestra task text is multi-line, contains
@@ -897,14 +933,6 @@ export class TelegramHandler {
    */
   private async dispatchOrchestraTask(chatId: number, userId: string, taskText: string): Promise<void> {
     initializeSkills();
-    const skillEnv = {
-      MOLTBOT_BUCKET: this.r2Bucket,
-      OPENROUTER_API_KEY: this.openrouterKey,
-      GITHUB_TOKEN: this.githubToken,
-      BRAVE_SEARCH_KEY: this.braveSearchKey,
-      TASK_PROCESSOR: this.taskProcessor,
-      NEXUS_KV: this.nexusKv,
-    } as import('../types').MoltbotEnv;
     const skillRequest: SkillRequest = {
       skillId: 'orchestra',
       subcommand: 'run',
@@ -914,7 +942,7 @@ export class TelegramHandler {
       userId,
       chatId,
       modelAlias: await this.storage.getUserModel(userId),
-      env: skillEnv,
+      env: this.buildSkillEnv(),
       context: { telegramToken: this.telegramToken },
     };
     const result = await runSkill(skillRequest);
@@ -947,14 +975,7 @@ export class TelegramHandler {
     initializeSkills();
     const skillParsed = parseCommandMessage(text);
     if (skillParsed && skillParsed.mapping.skillId !== 'orchestra' && isSkillRegistered(skillParsed.mapping.skillId)) {
-      const skillEnv = {
-        MOLTBOT_BUCKET: this.r2Bucket,
-        OPENROUTER_API_KEY: this.openrouterKey,
-        GITHUB_TOKEN: this.githubToken,
-        BRAVE_SEARCH_KEY: this.braveSearchKey,
-        TASK_PROCESSOR: this.taskProcessor,
-        NEXUS_KV: this.nexusKv,
-      } as import('../types').MoltbotEnv;
+      const skillEnv = this.buildSkillEnv();
       const skillRequest: SkillRequest = {
         skillId: skillParsed.mapping.skillId,
         subcommand: skillParsed.subcommand,
@@ -5366,14 +5387,7 @@ export class TelegramHandler {
     initializeSkills();
     const skillParsed = parseCommandMessage(commandText);
     if (skillParsed && isSkillRegistered(skillParsed.mapping.skillId)) {
-      const skillEnv = {
-        MOLTBOT_BUCKET: this.r2Bucket,
-        OPENROUTER_API_KEY: this.openrouterKey,
-        GITHUB_TOKEN: this.githubToken,
-        BRAVE_SEARCH_KEY: this.braveSearchKey,
-        TASK_PROCESSOR: this.taskProcessor,
-        NEXUS_KV: this.nexusKv,
-      } as import('../types').MoltbotEnv;
+      const skillEnv = this.buildSkillEnv();
       const skillRequest: SkillRequest = {
         skillId: skillParsed.mapping.skillId,
         subcommand: skillParsed.subcommand,
