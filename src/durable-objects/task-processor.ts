@@ -2176,6 +2176,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       const enrichedRequest: SkillRequest = {
         ...request.skillRequest,
         env: skillEnv,
+        // Mark this run as DO-side. Skills that have inline-budget guards
+        // (e.g. audit) use this to know they can take longer than the
+        // Worker's 10s wall-clock — DO events get 30s of CPU + auto-resume.
+        context: {
+          ...request.skillRequest.context,
+          telegramToken: request.telegramToken,
+          runningInDO: true,
+        },
       };
 
       // Run the skill

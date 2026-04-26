@@ -7,13 +7,17 @@
  *   /audit <repo> --analyze                → full Scout + Extractor + Analyst,
  *                                            returns AuditFinding[]
  *
+ * --analyze routing:
+ *   - Inline-safe (depth=quick + ≤25 files): runs in the Worker.
+ *   - Otherwise + TASK_PROCESSOR available + transport=telegram: dispatches
+ *     to the DO (mirrors /dossier). Worker returns "🔍 Audit started…" right
+ *     away; the DO sends the finished report later.
+ *   - Otherwise: returns a clear "audit too large" error.
+ *
  * Other flags:
  *   --lens <lens>            narrow to a single lens
  *   --depth quick|standard|deep
  *   --branch <name>
- *
- * For now the full-pipeline mode runs INLINE in the worker. The DO async
- * dispatch path (mirroring /dossier) lands in the next slice.
  */
 
 import type { SkillRequest, SkillResult, SkillMeta } from '../types';
@@ -25,6 +29,7 @@ import { getCachedProfile, cacheProfile } from './cache';
 import { extractSnippets } from './extractor/extractor';
 import { loadGrammar, loadRuntimeWasm } from './grammars/loader';
 import { analyzeWithLens } from './analyst/analyst';
+import type { SkillTaskRequest, TaskProcessor } from '../../durable-objects/task-processor';
 
 /** Hard inline-execution budget. Beyond this we refuse with a clear message
  *  rather than burn the Worker's 10s wall-clock on a doomed audit. The DO
@@ -118,8 +123,13 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
     };
   }
 
-  // 4b. Full pipeline: fetch selected files → Extract → Analyze → render.
-  return runFullAudit({ plan, request, apiCallsSoFar: apiCalls, cachedProfile: !!cachedFromSha, start });
+  // 4b. --analyze: decide inline vs DO vs refuse.
+  //
+  // Inside the DO, runningInDO=true short-circuits the dispatcher and lets
+  // us fall through to runFullAudit with the inline budget guard relaxed.
+  // From the worker, we either run inline (cheap audits) or dispatch to
+  // the DO (long audits) — same pattern as /dossier.
+  return dispatchOrInline({ plan, request, apiCallsSoFar: apiCalls, cachedProfile: !!cachedFromSha, start });
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +144,109 @@ interface RunFullAuditCtx {
   start: number;
 }
 
+/**
+ * Decide whether an --analyze request runs inline (Worker), gets dispatched
+ * to the TaskProcessor DO, or is refused. Mirrors the /dossier pattern.
+ */
+async function dispatchOrInline(ctx: RunFullAuditCtx): Promise<SkillResult> {
+  const { plan, request } = ctx;
+
+  // Compute selected-paths size up-front; used by both the inline-safe check
+  // and the DO payload (so the DO doesn't have to re-derive selections).
+  const selectedPaths = new Set<string>();
+  for (const lens of plan.lenses) {
+    for (const p of plan.selections[lens]) selectedPaths.add(p);
+  }
+
+  const inlineSafe = plan.depth === 'quick' && selectedPaths.size <= INLINE_MAX_FILES;
+  const insideDO = request.context?.runningInDO === true;
+
+  // Already in the DO, or the audit is small — run inline.
+  if (insideDO || inlineSafe) {
+    return runFullAudit(ctx);
+  }
+
+  // Worker side, audit is too big for inline. Try DO dispatch.
+  const taskProcessor = request.env.TASK_PROCESSOR as
+    | DurableObjectNamespace<TaskProcessor>
+    | undefined;
+  const hasUsableDO = typeof taskProcessor?.idFromName === 'function'
+    && typeof taskProcessor?.get === 'function';
+
+  const telegramToken = request.context?.telegramToken;
+  const chatId = request.chatId;
+  const canDispatch = hasUsableDO && request.transport === 'telegram' && !!telegramToken && !!chatId;
+
+  if (!canDispatch) {
+    return errorResult(
+      `Audit too large for inline execution: depth=${plan.depth}, ${selectedPaths.size} files selected (max inline: depth=quick + ${INLINE_MAX_FILES} files).\n` +
+      `Larger audits need the TaskProcessor DO + Telegram transport. Use --depth quick + --lens <single-lens> for the inline envelope.`,
+    );
+  }
+
+  // Dispatch — fire-and-forget; the DO sends the report when ready.
+  return dispatchToDO(ctx, taskProcessor!, telegramToken!, chatId!);
+}
+
+async function dispatchToDO(
+  ctx: RunFullAuditCtx,
+  taskProcessor: DurableObjectNamespace<TaskProcessor>,
+  telegramToken: string,
+  chatId: number,
+): Promise<SkillResult> {
+  const { plan, request, start } = ctx;
+  const taskId = crypto.randomUUID();
+  const doId = taskProcessor.idFromName(`audit-${request.userId}-${taskId}`);
+  const stub = taskProcessor.get(doId);
+
+  // Strip env from the wire payload — Workers bindings (R2/KV/DO/Fetcher)
+  // don't survive JSON serialization. The DO authoritatively rebuilds env
+  // from this.doEnv. Sending undefined makes any accidental DO-side use
+  // crash loudly instead of silently calling methods on `{}`. (Same lesson
+  // we already learned for nexus dispatch.)
+  const wireSkillRequest = { ...request, env: undefined as unknown as SkillRequest['env'] };
+
+  const skillTaskRequest: SkillTaskRequest = {
+    kind: 'skill',
+    taskId,
+    chatId,
+    userId: request.userId,
+    telegramToken,
+    skillRequest: wireSkillRequest,
+    openrouterKey: request.env.OPENROUTER_API_KEY,
+    githubToken: request.env.GITHUB_TOKEN,
+    braveSearchKey: request.env.BRAVE_SEARCH_KEY,
+    tavilyKey: request.env.TAVILY_API_KEY,
+    cloudflareApiToken: request.env.CLOUDFLARE_API_TOKEN,
+  };
+
+  try {
+    await stub.fetch('https://do/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(skillTaskRequest),
+    });
+  } catch (err) {
+    console.error('[Audit] DO dispatch failed:', err instanceof Error ? err.message : err);
+    return errorResult(`Audit dispatch failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+  }
+
+  const { profile } = plan;
+  const lensSummary = plan.lenses.length === 1 ? plan.lenses[0] : `${plan.lenses.length} lenses`;
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body: `🔍 Audit started for ${profile.owner}/${profile.repo}@${profile.sha.slice(0, 7)} (${lensSummary}, ${plan.depth}).\n\nResults will arrive in this chat when the analysis completes.`,
+    data: { taskId, async: true },
+    telemetry: {
+      durationMs: Date.now() - start,
+      model: request.modelAlias ?? AUDIT_META.defaultModel,
+      llmCalls: 0,
+      toolCalls: ctx.apiCallsSoFar,
+    },
+  };
+}
+
 async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   const { plan, request } = ctx;
   const profile = plan.profile;
@@ -144,16 +257,16 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     for (const p of plan.selections[lens]) selectedPaths.add(p);
   }
 
-  // Inline-budget guard: until the DO dispatch path lands (slice 3), refuse
-  // audits that would exceed our Worker wall-clock (10s) or Telegram webhook
-  // expectations. Per GPT's slice-2 review, the safe inline envelope is:
-  //   - depth=quick (small per-lens caps)
-  //   - selectedPaths <= INLINE_MAX_FILES
-  // Anything beyond that needs the DO dispatch path.
-  if (plan.depth !== 'quick' || selectedPaths.size > INLINE_MAX_FILES) {
+  // Defensive backstop on the inline-budget guard. The dispatcher above
+  // should already have routed oversize audits to the DO; we hit this branch
+  // only for inline-safe runs (Worker) or runningInDO=true runs (DO event,
+  // which has 30s of CPU + auto-resume — guard relaxed). If neither holds,
+  // refuse rather than burn budget.
+  const insideDO = request.context?.runningInDO === true;
+  if (!insideDO && (plan.depth !== 'quick' || selectedPaths.size > INLINE_MAX_FILES)) {
     return errorResult(
       `Audit too large for inline execution: depth=${plan.depth}, ${selectedPaths.size} files selected (max inline: depth=quick + ${INLINE_MAX_FILES} files).\n` +
-      `Use --depth quick + --lens <single-lens>, or wait for the DO async dispatch path.`,
+      `Use --depth quick + --lens <single-lens>, or rely on the DO dispatch path.`,
     );
   }
 

@@ -913,6 +913,225 @@ describe('--analyze: surfaces missing-grammar coverage warning', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Slice 3 — DO async dispatch (mirrors /dossier)
+// ---------------------------------------------------------------------------
+
+describe('--analyze: DO dispatch routing', () => {
+  /** Build a tree large enough to exceed the inline envelope. */
+  function bigTree() {
+    return Array.from({ length: 60 }, (_, i) => ({
+      path: `src/auth/h${i}.ts`, type: 'blob' as const, sha: `s${i}`, size: 100,
+    }));
+  }
+
+  function installBigRepoFetchMock() {
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree: bigTree() } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+  }
+
+  it('dispatches an oversize audit to the DO when TASK_PROCESSOR + telegram are available', async () => {
+    installBigRepoFetchMock();
+    const stub = { fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started' }))) };
+    const taskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(stub),
+    };
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'telegram',
+      chatId: 12345,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: taskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Worker returns "started" immediately; the DO is what eventually
+    // sends the report.
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/Audit started/i);
+    expect((result.data as Record<string, unknown>).async).toBe(true);
+
+    // DO was dispatched.
+    expect(taskProcessor.idFromName).toHaveBeenCalled();
+    expect(stub.fetch).toHaveBeenCalledWith(
+      'https://do/process',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    // LLM never called from the worker side — that's the DO's job now.
+    expect(mockLLM).not.toHaveBeenCalled();
+  });
+
+  it('strips env from the wire payload (no live bindings serialized)', async () => {
+    installBigRepoFetchMock();
+    const stub = { fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started' }))) };
+    const taskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(stub),
+    };
+
+    await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'telegram',
+      chatId: 12345,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: taskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+
+    const init = stub.fetch.mock.calls[0][1] as RequestInit;
+    const payload = JSON.parse(init.body as string);
+    // Wire contract: skillRequest.env MUST NOT carry bindings across the
+    // boundary (they wouldn't survive JSON anyway, but sending undefined
+    // makes any DO-side use crash loudly instead of silently using {}).
+    expect(payload.skillRequest.env).toBeUndefined();
+    // Secrets are passed explicitly so the DO can rebuild env on the other side.
+    expect(payload.openrouterKey).toBe('k');
+    expect(payload.githubToken).toBe('tok');
+    // Full payload JSON-roundtrips cleanly (no functions, no Symbols).
+    expect(() => JSON.parse(JSON.stringify(payload))).not.toThrow();
+  });
+
+  it('refuses oversize audits with no DO available (clear error)', async () => {
+    installBigRepoFetchMock();
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'telegram',
+      chatId: 12345,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        // No TASK_PROCESSOR
+      } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/too large for inline/i);
+    expect(mockLLM).not.toHaveBeenCalled();
+  });
+
+  it('refuses oversize audits when transport is not telegram (no DO target)', async () => {
+    installBigRepoFetchMock();
+    const stub = { fetch: vi.fn() };
+    const taskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(stub),
+    };
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'api', // not telegram → can't dispatch
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: taskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(stub.fetch).not.toHaveBeenCalled();
+  });
+
+  it('falls back to inline (no dispatch) when audit fits the inline envelope', async () => {
+    // Small repo + depth=quick → inline path. DO is available but should
+    // not be used.
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+
+    const stub = { fetch: vi.fn() };
+    const taskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(stub),
+    };
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'quick' },
+      transport: 'telegram',
+      chatId: 12345,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: taskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Inline path used: result is an audit_run, not the "started" text.
+    expect(result.kind).toBe('audit_run');
+    // DO was NEVER dispatched.
+    expect(stub.fetch).not.toHaveBeenCalled();
+  });
+
+  it('runs inline (no re-dispatch loop) when context.runningInDO=true', async () => {
+    // Simulates the DO-side invocation: runningInDO=true should bypass
+    // both the dispatcher and the inline budget guard, going straight
+    // to runFullAudit.
+    installBigRepoFetchMock();
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+
+    // Even though TASK_PROCESSOR is set, the DO context flag MUST take
+    // precedence and run inline (otherwise we'd recurse forever).
+    const stub = { fetch: vi.fn() };
+    const taskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(stub),
+    };
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'telegram',
+      chatId: 12345,
+      context: { telegramToken: 'tg-token', runningInDO: true },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: taskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Inline path executed (audit_run kind, not "started" text).
+    expect(result.kind).toBe('audit_run');
+    // Critical: NO re-dispatch attempt.
+    expect(stub.fetch).not.toHaveBeenCalled();
+  });
+
+  it('falls back to inline when TASK_PROCESSOR is a hollow object (post-JSON binding)', async () => {
+    // Defense in depth: if some path forwarded a dehydrated env (binding
+    // arrived as {} after JSON serialization), audit must detect the
+    // missing methods and refuse rather than crashing on .idFromName().
+    installBigRepoFetchMock();
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'telegram',
+      chatId: 12345,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: {} as unknown, // hollow (post-JSON binding)
+      } as unknown as MoltbotEnv,
+    }));
+    // No DO available → refuse with clear message; never throws.
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/too large for inline/i);
+  });
+});
+
 describe('nested manifest discovery (monorepo support)', () => {
   it('discovers package.json and other manifests in subdirectories', async () => {
     const monorepoTree = [
