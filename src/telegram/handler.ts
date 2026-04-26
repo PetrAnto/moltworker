@@ -444,6 +444,39 @@ export class TelegramBot {
   }
 
   /**
+   * Read the webhook configuration Telegram has on file for this bot.
+   *
+   * Note: Telegram does NOT echo `secret_token` back through this endpoint
+   * for security reasons, so we can only confirm that *some* webhook is
+   * registered and surface its URL + last-error info. To verify that the
+   * secret-token is actually wired up end-to-end, set
+   * TELEGRAM_WEBHOOK_SECRET, hit /telegram/setup, then send a real test
+   * message — a successful delivery means the header check passed.
+   */
+  async getWebhookInfo(): Promise<{
+    url: string;
+    pending_update_count: number;
+    last_error_date?: number;
+    last_error_message?: string;
+  } | null> {
+    try {
+      const response = await fetch(`${this.baseUrl}/getWebhookInfo`);
+      const result = (await response.json()) as {
+        ok: boolean;
+        result?: {
+          url: string;
+          pending_update_count: number;
+          last_error_date?: number;
+          last_error_message?: string;
+        };
+      };
+      return result.ok && result.result ? result.result : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Set bot menu commands visible in Telegram UI
    */
   async setMyCommands(commands: { command: string; description: string }[]): Promise<boolean> {
