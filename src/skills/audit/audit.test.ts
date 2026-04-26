@@ -14,7 +14,7 @@ vi.mock('../llm', () => ({
   selectSkillModel: vi.fn((req: string | undefined, def: string) => req ?? def),
 }));
 
-import { handleAudit, audit_do_key } from './audit';
+import { handleAudit, audit_do_key, buildOrchestraTask, resolveFix } from './audit';
 import { parseRepoCoords, encodeRepoPath } from './scout';
 import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
@@ -1806,6 +1806,237 @@ describe('/audit export', () => {
 // ---------------------------------------------------------------------------
 // Slice 4c — per-repo suppression list
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Slice 4d — Orchestra hand-off (buildOrchestraTask + resolveFix + /audit fix)
+// ---------------------------------------------------------------------------
+
+describe('buildOrchestraTask', () => {
+  function fixture(overrides: Partial<AuditFinding> = {}): AuditFinding {
+    return {
+      id: 'security-abc',
+      lens: 'security', severity: 'high', confidence: 0.75,
+      evidence: [
+        { path: 'src/auth.ts', lines: '10-12', source: 'llm',
+          snippet: "const TOKEN = 'sk_live_…';\nreturn TOKEN;", sha: 'a1' },
+      ],
+      symptom: 'Hardcoded API token in login()',
+      rootCause: 'No pre-commit secret scan; TOKEN literal committed',
+      correctiveAction: 'Move TOKEN to env var; rotate the leaked secret',
+      preventiveAction: {
+        kind: 'ci',
+        detail: 'name: secret-scan\non: [push]\njobs:\n  scan:\n    runs-on: ubuntu-latest',
+      },
+      ...overrides,
+    };
+  }
+  function runFixture(): AuditRun {
+    return {
+      runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+      lenses: ['security'], depth: 'quick',
+      findings: [fixture()],
+      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+    };
+  }
+
+  it('produces a self-contained orchestra task with repo coords + corrective + preventive + evidence', () => {
+    const text = buildOrchestraTask(runFixture(), fixture());
+    expect(text).toContain('Fix audit finding in octocat/demo@aaaaaaa');
+    expect(text).toContain('Severity: high');
+    expect(text).toContain('Lens: security');
+    expect(text).toContain('Symptom: Hardcoded API token in login()');
+    expect(text).toContain('Root cause:');
+    expect(text).toContain('Required corrective action:');
+    expect(text).toContain('Move TOKEN to env var');
+    expect(text).toContain('Preventive control to add (ci):');
+    expect(text).toContain('name: secret-scan'); // preventive artifact body preserved
+    expect(text).toContain('runs-on: ubuntu-latest'); // multi-line preserved
+    expect(text).toContain('src/auth.ts:10-12');
+    expect(text).toContain('aaaaaaa'); // evidence sha (short)
+    // Run + finding id are cited so a follow-up audit can mark this fixed.
+    expect(text).toContain('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+    expect(text).toContain('security-abc');
+  });
+
+  it('is deterministic for the same inputs (reproducibility)', () => {
+    const a = buildOrchestraTask(runFixture(), fixture());
+    const b = buildOrchestraTask(runFixture(), fixture());
+    expect(a).toBe(b);
+  });
+
+  it('appends orchestraPatchBrief when present', () => {
+    const f = fixture({ orchestraPatchBrief: 'Touch only src/auth.ts; do not refactor neighboring files.' });
+    const text = buildOrchestraTask(runFixture(), f);
+    expect(text).toContain('Additional context:');
+    expect(text).toContain('Touch only src/auth.ts');
+  });
+
+  it('truncates very long evidence-snippet first lines (keeps the prompt tight)', () => {
+    const f = fixture({
+      evidence: [{ path: 'src/x.ts', source: 'llm', snippet: 'x'.repeat(500) }],
+    });
+    const text = buildOrchestraTask(runFixture(), f);
+    // Snippet line is bounded — we don't dump the whole 500-char run into the
+    // orchestra prompt.
+    const lines = text.split('\n');
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(220);
+    }
+  });
+});
+
+describe('resolveFix', () => {
+  function makeKVWith(run: AuditRun, userId = 'user-1') {
+    const store = new Map<string, string>();
+    store.set(`audit:run:${userId}:${run.runId}`, JSON.stringify(run));
+    return {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = store.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(),
+    } as unknown as KVNamespace;
+  }
+  const run: AuditRun = {
+    runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+    lenses: ['security'], depth: 'quick',
+    findings: [{
+      id: 'security-abc',
+      lens: 'security', severity: 'high', confidence: 0.75,
+      evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+      symptom: 's', rootCause: 'r', correctiveAction: 'c',
+      preventiveAction: { kind: 'lint', detail: 'rule' },
+    }],
+    telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+  };
+
+  it('returns ok:true with run+finding+taskText for a valid lookup', async () => {
+    const kv = makeKVWith(run);
+    const r = await resolveFix(kv, 'user-1', run.runId, 'security-abc');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.run.runId).toBe(run.runId);
+    expect(r.finding.id).toBe('security-abc');
+    expect(r.taskText).toContain('octocat/demo');
+    expect(r.taskText).toContain('security-abc');
+  });
+
+  it('returns ok:false on malformed runId', async () => {
+    const kv = makeKVWith(run);
+    const r = await resolveFix(kv, 'user-1', 'not-a-uuid', 'security-abc');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/not a valid run id/i);
+    expect(kv.get).not.toHaveBeenCalled();
+  });
+
+  it('returns ok:false on malformed findingId', async () => {
+    const kv = makeKVWith(run);
+    const r = await resolveFix(kv, 'user-1', run.runId, 'NOT_A_REAL_FINDING_ID');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/not a valid finding id/i);
+    expect(kv.get).not.toHaveBeenCalled();
+  });
+
+  it('returns ok:false when the run is not found (cross-user attempt)', async () => {
+    const kv = makeKVWith(run, 'user-1');
+    const r = await resolveFix(kv, 'user-2', run.runId, 'security-abc');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/no audit run found/i);
+  });
+
+  it('returns ok:false when the findingId is not part of the run', async () => {
+    const kv = makeKVWith(run);
+    const r = await resolveFix(kv, 'user-1', run.runId, 'security-bogus');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/not part of run/i);
+  });
+});
+
+describe('/audit fix (slash command)', () => {
+  function kvWithRun(run: AuditRun) {
+    const store = new Map<string, string>();
+    store.set(`audit:run:user-1:${run.runId}`, JSON.stringify(run));
+    return {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = store.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(),
+    } as unknown as KVNamespace;
+  }
+  const run: AuditRun = {
+    runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+    lenses: ['security'], depth: 'quick',
+    findings: [{
+      id: 'security-abc',
+      lens: 'security', severity: 'high', confidence: 0.75,
+      evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+      symptom: 'Hardcoded token', rootCause: 'No pre-commit scan',
+      correctiveAction: 'Move to env',
+      preventiveAction: { kind: 'ci', detail: 'gitleaks step' },
+    }],
+    telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+  };
+
+  it('returns the orchestra dispatch command in the body for manual run', async () => {
+    const result = await handleAudit(makeRequest({
+      subcommand: 'fix',
+      text: `${run.runId} security-abc`,
+      userId: 'user-1',
+      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/Orchestra task ready/i);
+    expect(result.body).toContain('/orch run');
+    expect(result.body).toContain('Hardcoded token'); // symptom
+    expect(result.body).toContain('Move to env'); // corrective
+    expect(result.body).toContain('gitleaks step'); // preventive
+    // Structured data exposes the parts a programmatic caller (or the
+    // inline-keyboard auto-dispatch path) needs.
+    const data = result.data as { runId: string; findingId: string; taskText: string };
+    expect(data.runId).toBe(run.runId);
+    expect(data.findingId).toBe('security-abc');
+    expect(typeof data.taskText).toBe('string');
+    expect(data.taskText.length).toBeGreaterThan(50);
+  });
+
+  it('rejects empty args with a usage hint', async () => {
+    const result = await handleAudit(makeRequest({
+      subcommand: 'fix', text: '', userId: 'user-1',
+      env: { NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/usage/i);
+  });
+
+  it('surfaces resolveFix errors as audit error results', async () => {
+    const result = await handleAudit(makeRequest({
+      subcommand: 'fix',
+      text: `${run.runId} security-bogus`,
+      userId: 'user-1',
+      env: { NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/not part of run/i);
+  });
+});
+
+describe('command-map: /audit fix subcommand', () => {
+  it('parses /audit fix <runId> <findingId> as subcommand=fix', () => {
+    const r = parseCommandMessage('/audit fix aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee security-abc');
+    expect(r!.subcommand).toBe('fix');
+    expect(r!.text).toBe('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee security-abc');
+  });
+});
 
 describe('/audit suppress + /audit unsuppress', () => {
   function makeKV() {
