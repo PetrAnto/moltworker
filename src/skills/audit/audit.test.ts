@@ -1765,6 +1765,217 @@ describe('/audit export', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Slice 4c — per-repo suppression list
+// ---------------------------------------------------------------------------
+
+describe('/audit suppress + /audit unsuppress', () => {
+  function makeKV() {
+    const store = new Map<string, string>();
+    const kv = {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = store.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+      delete: vi.fn(async (key: string) => { store.delete(key); }),
+    } as unknown as KVNamespace;
+    return { kv, store };
+  }
+
+  function seedRun(store: Map<string, string>, userId: string) {
+    const runId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const findingId = 'security-fhash0';
+    const run: AuditRun = {
+      runId,
+      repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+      lenses: ['security'],
+      depth: 'quick',
+      findings: [{
+        id: findingId,
+        lens: 'security', severity: 'high', confidence: 0.75,
+        evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+        symptom: 's', rootCause: 'r', correctiveAction: 'c',
+        preventiveAction: { kind: 'lint', detail: 'rule' },
+      }],
+      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+    };
+    store.set(`audit:run:${userId}:${runId}`, JSON.stringify(run));
+    return { runId, findingId, run };
+  }
+
+  it('writes the finding-id to the per-repo suppression list and confirms', async () => {
+    const { kv, store } = makeKV();
+    const { runId, findingId } = seedRun(store, 'user-1');
+
+    const result = await handleAudit(makeRequest({
+      subcommand: 'suppress', text: `${runId} ${findingId}`, userId: 'user-1',
+      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/Suppressed/);
+    expect(result.body).toContain(findingId);
+    expect(result.body).toContain('octocat/demo');
+
+    // Persisted under the right key
+    const supKey = 'audit:suppressed:user-1:octocat/demo';
+    const persisted = JSON.parse(store.get(supKey)!);
+    expect(persisted.ids).toEqual([findingId]);
+    expect(persisted.updatedAt).toEqual(expect.any(String));
+  });
+
+  it('is idempotent — second suppress of same id does not duplicate', async () => {
+    const { kv, store } = makeKV();
+    const { runId, findingId } = seedRun(store, 'user-1');
+    await handleAudit(makeRequest({
+      subcommand: 'suppress', text: `${runId} ${findingId}`, userId: 'user-1',
+      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    const second = await handleAudit(makeRequest({
+      subcommand: 'suppress', text: `${runId} ${findingId}`, userId: 'user-1',
+      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(second.body).toMatch(/already on the suppression list/);
+    const persisted = JSON.parse(store.get('audit:suppressed:user-1:octocat/demo')!);
+    expect(persisted.ids).toEqual([findingId]); // length 1 still
+  });
+
+  it('unsuppress removes the id; second unsuppress is a no-op', async () => {
+    const { kv, store } = makeKV();
+    const { runId, findingId } = seedRun(store, 'user-1');
+    await handleAudit(makeRequest({
+      subcommand: 'suppress', text: `${runId} ${findingId}`, userId: 'user-1',
+      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    const removed = await handleAudit(makeRequest({
+      subcommand: 'unsuppress', text: `${runId} ${findingId}`, userId: 'user-1',
+      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(removed.body).toMatch(/Un-suppressed/);
+    // Empty set deletes the key entirely (no zombie entries).
+    expect(store.get('audit:suppressed:user-1:octocat/demo')).toBeUndefined();
+
+    // Second unsuppress: nothing to remove.
+    const noop = await handleAudit(makeRequest({
+      subcommand: 'unsuppress', text: `${runId} ${findingId}`, userId: 'user-1',
+      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(noop.body).toMatch(/wasn't on the suppression list/);
+  });
+
+  it('rejects malformed runId / findingId without hitting KV', async () => {
+    const { kv } = makeKV();
+    const r1 = await handleAudit(makeRequest({
+      subcommand: 'suppress', text: 'not-a-uuid security-x', userId: 'u',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(r1.kind).toBe('error');
+    expect(r1.body).toMatch(/not a valid run id/i);
+
+    const r2 = await handleAudit(makeRequest({
+      subcommand: 'suppress',
+      text: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee NOT_A_REAL_FINDING_ID',
+      userId: 'u', env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(r2.kind).toBe('error');
+    expect(r2.body).toMatch(/not a valid finding id/i);
+    expect(kv.get).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the run is not found (cross-user attempt)', async () => {
+    const { kv, store } = makeKV();
+    const { runId, findingId } = seedRun(store, 'user-1');
+    const result = await handleAudit(makeRequest({
+      subcommand: 'suppress', text: `${runId} ${findingId}`,
+      userId: 'user-2', // mismatched
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/no audit run found/i);
+  });
+
+  it('rejects when the findingId is not part of the run', async () => {
+    const { kv, store } = makeKV();
+    const { runId } = seedRun(store, 'user-1');
+    const result = await handleAudit(makeRequest({
+      subcommand: 'suppress', text: `${runId} security-bogus`, userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/not part of run/i);
+  });
+});
+
+describe('--analyze: applies per-repo suppression list before persist+display', () => {
+  it('drops findings whose id is on the suppression list and shows a count', async () => {
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    // Compute the finding-id deterministically (the validator hashes
+    // (lens, path, symptom)); we'll mirror the LLM response so the
+    // resulting id matches what we pre-suppress.
+    const symptom = 'Hardcoded TOKEN literal';
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [
+          { lens: 'security', severity: 'high', confidence: 0.75,
+            symptom, rootCause: 'r', correctiveAction: 'c',
+            preventiveAction: { kind: 'lint', detail: 'rule' },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'TOKEN' }] },
+        ],
+      }),
+    });
+
+    // Pre-seed suppression for the id this finding will get. The id is
+    // computed from (lens, evidence[0].path, symptom) — we replicate the
+    // validator's djb2 hash here so the test's expectation is deterministic
+    // without coupling to private internals.
+    const seed = `security|src/auth.ts|${symptom}`;
+    let h = 5381 >>> 0;
+    for (let i = 0; i < seed.length; i++) h = ((h * 33) ^ seed.charCodeAt(i)) >>> 0;
+    const expectedId = `security-${h.toString(36)}`;
+
+    const kvStore = new Map<string, string>();
+    kvStore.set('audit:suppressed:user-1:octocat/hello-world', JSON.stringify({
+      ids: [expectedId], updatedAt: 'now',
+    }));
+    const kv = {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = kvStore.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(async (key: string, value: string) => { kvStore.set(key, value); }),
+      delete: vi.fn(),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+      userId: 'user-1',
+      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    const run = result.data as AuditRun;
+
+    // Critical: the suppressed finding does NOT appear in the displayed
+    // run, and the user-visible body announces the suppression count.
+    expect(run.findings).toEqual([]);
+    expect(result.body).toMatch(/1 finding\(s\) suppressed/);
+  });
+});
+
 describe('nested manifest discovery (monorepo support)', () => {
   it('discovers package.json and other manifests in subdirectories', async () => {
     const monorepoTree = [

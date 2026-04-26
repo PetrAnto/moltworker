@@ -97,3 +97,96 @@ export async function getCachedAuditRun(
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Suppression list (per-user-per-repo)
+// ---------------------------------------------------------------------------
+
+/**
+ * Stored shape: { ids: string[], updatedAt: ISO }. Array (not Set) so the
+ * JSON roundtrips cleanly through KV. The set semantic is enforced at the
+ * helper boundary — duplicates are deduped on add.
+ */
+interface SuppressionList {
+  ids: string[];
+  updatedAt: string;
+}
+
+/** No TTL on suppressions — they're explicit user choices and shouldn't
+ *  silently re-surface. The user un-suppresses or the bucket is cleared. */
+const SUPPRESS_PREFIX = 'audit:suppressed:';
+
+/** Repo-scoped suppression key. Lowercased + trimmed for case stability;
+ *  scoped per-user so two users can hold independent suppression sets
+ *  on the same repo. */
+export function suppressionKey(userId: string, owner: string, repo: string): string {
+  return `${SUPPRESS_PREFIX}${userId}:${owner.toLowerCase()}/${repo.toLowerCase()}`;
+}
+
+export async function getSuppressedIds(
+  kv: KVNamespace | undefined,
+  userId: string,
+  owner: string,
+  repo: string,
+): Promise<ReadonlySet<string>> {
+  if (!kv) return new Set();
+  try {
+    const data = (await kv.get(suppressionKey(userId, owner, repo), 'json')) as SuppressionList | null;
+    return new Set(data?.ids ?? []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Add a finding-id to the per-repo suppression list. Returns the size of
+ * the list after the write (1 means newly suppressed; unchanged size
+ * means it was already there).
+ */
+export async function addSuppression(
+  kv: KVNamespace | undefined,
+  userId: string,
+  owner: string,
+  repo: string,
+  findingId: string,
+): Promise<{ added: boolean; total: number }> {
+  if (!kv) return { added: false, total: 0 };
+  const key = suppressionKey(userId, owner, repo);
+  const before = (await kv.get(key, 'json')) as SuppressionList | null;
+  const set = new Set(before?.ids ?? []);
+  const wasAlreadyThere = set.has(findingId);
+  set.add(findingId);
+  const list: SuppressionList = {
+    ids: [...set].sort(), // sorted so the JSON diffs cleanly run-over-run
+    updatedAt: new Date().toISOString(),
+  };
+  await kv.put(key, JSON.stringify(list));
+  return { added: !wasAlreadyThere, total: list.ids.length };
+}
+
+export async function removeSuppression(
+  kv: KVNamespace | undefined,
+  userId: string,
+  owner: string,
+  repo: string,
+  findingId: string,
+): Promise<{ removed: boolean; total: number }> {
+  if (!kv) return { removed: false, total: 0 };
+  const key = suppressionKey(userId, owner, repo);
+  const before = (await kv.get(key, 'json')) as SuppressionList | null;
+  if (!before) return { removed: false, total: 0 };
+  const set = new Set(before.ids);
+  const wasThere = set.delete(findingId);
+  // Empty set → delete the key entirely so the listing doesn't accumulate
+  // empty entries over time.
+  if (set.size === 0) {
+    await kv.delete(key);
+    return { removed: wasThere, total: 0 };
+  }
+  const list: SuppressionList = {
+    ids: [...set].sort(),
+    updatedAt: new Date().toISOString(),
+  };
+  await kv.put(key, JSON.stringify(list));
+  return { removed: wasThere, total: list.ids.length };
+}

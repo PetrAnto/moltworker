@@ -4391,9 +4391,12 @@ export class TelegramHandler {
             `🔧 Orchestra hand-off for finding ${findingId} on run ${runId.slice(0, 8)}… lands in slice 4c. The corrective + preventive details are already in /audit export ${runId}.`,
           );
         } else if (sub === 'sup' && runId && findingId) {
-          await this.bot.sendMessage(
-            chatId,
-            `🔇 Suppression list lands in slice 4c. For now, finding ${findingId} stays in your run; ignore it via --lens narrowing on the next /audit, or inspect via /audit export ${runId}.`,
+          // Re-route through the slash command so the user-scoped KV path,
+          // the UUID + finding-id validation, and the run-existence check
+          // all stay centralized in handleAudit.
+          await this.handleCommand(
+            query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never,
+            `/audit suppress ${runId} ${findingId}`,
           );
         } else {
           console.warn('[Telegram] Unrecognized audit callback:', callbackData);

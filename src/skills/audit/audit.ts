@@ -25,7 +25,11 @@ import type { AuditFinding, AuditPlan, AuditRun, Depth, Lens, RepoProfile } from
 import { MVP_LENSES, findingPriority, isLens, isDepth } from './types';
 import { scout, fetchFileContents, parseRepoCoords } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
-import { getCachedProfile, cacheProfile, cacheAuditRun, getCachedAuditRun } from './cache';
+import {
+  getCachedProfile, cacheProfile,
+  cacheAuditRun, getCachedAuditRun,
+  getSuppressedIds, addSuppression, removeSuppression,
+} from './cache';
 import { extractSnippets } from './extractor/extractor';
 import { loadGrammar, loadRuntimeWasm } from './grammars/loader';
 import { analyzeWithLens } from './analyst/analyst';
@@ -51,10 +55,13 @@ export const AUDIT_META: SkillMeta = {
 export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   const start = Date.now();
 
-  // 0. /audit export <runId> — short-circuit before the repo-arg parsing
-  // because the text is a runId, not a repo coords string.
+  // 0. Subcommands that don't take a repo arg — short-circuit before the
+  // repo-arg parsing because the text is a runId / runId+findingId.
   if (request.subcommand === 'export') {
     return handleExport(request, start);
+  }
+  if (request.subcommand === 'suppress' || request.subcommand === 'unsuppress') {
+    return handleSuppress(request, start, request.subcommand === 'unsuppress');
   }
 
   // 1. Parse args
@@ -393,9 +400,20 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     findings.push(...result.findings);
   }
 
+  // Apply per-repo suppressions before ranking. Suppressed findings are
+  // explicit user choices (via the 🔇 button or /audit suppress) and stay
+  // dropped across audit reruns until the user un-suppresses. Counted
+  // separately so the report can say "N defects suppressed by your prior
+  // /audit suppress decisions" rather than silently shrinking the list.
+  const suppressedIds = await getSuppressedIds(
+    request.env.NEXUS_KV, request.userId, profile.owner, profile.repo,
+  );
+  const suppressedDropped = findings.filter(f => suppressedIds.has(f.id)).length;
+
   // Sort by priority (severity × confidence) and drop low-confidence noise.
   const ranked = findings
     .filter(f => f.confidence >= 0.5)
+    .filter(f => !suppressedIds.has(f.id))
     .sort((a, b) => findingPriority(b) - findingPriority(a));
 
   const run: AuditRun = {
@@ -446,6 +464,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       otherParseErrors,
       shaMismatches,
       missingGrammars,
+      suppressedDropped,
     }),
     data: run,
     telemetry: {
@@ -583,6 +602,10 @@ interface FormatRunCounts {
   otherParseErrors: number;
   shaMismatches: number;
   missingGrammars: Set<string>;
+  /** How many findings were dropped because they're on the per-repo
+   *  suppression list. Surfaced so users see "5 of 8 findings shown
+   *  (3 suppressed)" rather than the report silently shrinking. */
+  suppressedDropped?: number;
 }
 
 function formatRun(run: AuditRun, c: FormatRunCounts): string {
@@ -595,6 +618,9 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
   }
   if (c.otherParseErrors > 0) lines.push(`⚠️ ${c.otherParseErrors} file(s) had parse issues`);
   if (c.shaMismatches > 0) lines.push(`⚠️ ${c.shaMismatches} file(s) skipped: fetched SHA disagreed with tree SHA`);
+  if (c.suppressedDropped && c.suppressedDropped > 0) {
+    lines.push(`🔇 ${c.suppressedDropped} finding(s) suppressed by prior /audit suppress decisions for this repo.`);
+  }
   lines.push('');
 
   if (run.findings.length === 0) {
@@ -697,6 +723,71 @@ async function handleExport(request: SkillRequest, start: number): Promise<Skill
       llmCalls: 0,
       toolCalls: 0,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// /audit suppress <runId> <findingId>  +  /audit unsuppress <runId> <findingId>
+// ---------------------------------------------------------------------------
+
+async function handleSuppress(
+  request: SkillRequest,
+  start: number,
+  unsuppress: boolean,
+): Promise<SkillResult> {
+  const verb = unsuppress ? 'unsuppress' : 'suppress';
+  const tokens = request.text.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) {
+    return errorResult(`Usage: /audit ${verb} <runId> <findingId>`);
+  }
+  const [runId, findingId] = tokens;
+  if (!UUID_RE.test(runId)) {
+    return errorResult(`Not a valid run id: "${runId.slice(0, 80)}"`);
+  }
+  // findingId shape comes from validator.ts: `${lens}-${rolling-hash-base36}`.
+  // Tight pattern below — rejects anything that doesn't look like one of our
+  // own ids (defense against stale/forged callbacks).
+  if (!/^[a-z]+-[a-z0-9]+$/.test(findingId)) {
+    return errorResult(`Not a valid finding id: "${findingId.slice(0, 80)}"`);
+  }
+
+  // Resolve the runId → (owner, repo). The user-scoped KV lookup naturally
+  // rejects cross-user attempts (different userId means different key).
+  const run = await getCachedAuditRun(request.env.NEXUS_KV, request.userId, runId);
+  if (!run) {
+    return errorResult(`No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`);
+  }
+  // Sanity: the finding must actually exist in this run. Stale callbacks
+  // from a re-run pointing at an id that's no longer in the report still
+  // succeed (we still record the suppression for future runs), but if the
+  // id was never in this run we reject.
+  const findingExisted = run.findings.some(f => f.id === findingId);
+  if (!findingExisted && !unsuppress) {
+    return errorResult(`Finding ${findingId} is not part of run ${runId.slice(0, 8)}…. Use /audit export ${runId} to list this run's findings.`);
+  }
+
+  if (unsuppress) {
+    const r = await removeSuppression(request.env.NEXUS_KV, request.userId, run.repo.owner, run.repo.name, findingId);
+    return {
+      skillId: 'audit',
+      kind: 'text',
+      body: r.removed
+        ? `🔊 Un-suppressed ${findingId} in ${run.repo.owner}/${run.repo.name}. Future /audit runs on this repo will surface it again. Suppressions remaining for this repo: ${r.total}.`
+        : `${findingId} wasn't on the suppression list for ${run.repo.owner}/${run.repo.name}.`,
+      data: { removed: r.removed, totalRemaining: r.total },
+      telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
+    };
+  }
+
+  const r = await addSuppression(request.env.NEXUS_KV, request.userId, run.repo.owner, run.repo.name, findingId);
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body: r.added
+      ? `🔇 Suppressed ${findingId} in ${run.repo.owner}/${run.repo.name}. Future /audit runs on this repo will skip it (until /audit unsuppress ${runId} ${findingId}). Total suppressed for this repo: ${r.total}.`
+      : `${findingId} was already on the suppression list for ${run.repo.owner}/${run.repo.name}. Total suppressed: ${r.total}.`,
+    data: { added: r.added, totalSuppressed: r.total },
+    telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
   };
 }
 
