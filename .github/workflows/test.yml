@@ -32,6 +32,13 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Bundled tree-sitter runtime is in sync
+        # Closes GPT slice-5 follow-up: this is the preventive control
+        # for the "operator bumped web-tree-sitter but forgot to run
+        # audit:sync-runtime" footgun. Exits non-zero if the committed
+        # generated file doesn't match the installed package.
+        run: npm run audit:sync-runtime:check
+
       - name: Run tests
         run: npm test
 
