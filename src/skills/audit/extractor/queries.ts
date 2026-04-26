@@ -31,7 +31,10 @@ const TS: NodeTypeMap = {
     'type_alias_declaration',
     'enum_declaration',
   ]),
-  import: new Set(['import_statement', 'import_clause']),
+  // Only `import_statement` (the top-level node). `import_clause` is its
+  // child; selecting both made `descendantsOfType` emit overlapping snippets
+  // for every import line, doubling the token cost for no extra signal.
+  import: new Set(['import_statement']),
   export: new Set(['export_statement']),
 };
 
@@ -57,7 +60,9 @@ const JS: NodeTypeMap = {
     'function_expression',
   ]),
   class: new Set(['class_declaration']),
-  import: new Set(['import_statement', 'import_clause']),
+  // See TS comment above — `import_clause` is intentionally omitted to avoid
+  // overlapping snippets.
+  import: new Set(['import_statement']),
   export: new Set(['export_statement']),
 };
 
