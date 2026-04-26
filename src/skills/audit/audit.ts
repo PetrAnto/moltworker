@@ -271,10 +271,29 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     },
   };
 
+  // Distinguish grammar-unavailable parse errors (R2 missing the grammar
+  // for a language we tried to extract) from other parse failures. The
+  // former implies "audit coverage was partial — operator should run the
+  // grammars uploader"; the latter is a per-file noise event. Surface
+  // the missing-grammar set explicitly so users don't read "no defects"
+  // as "the code is fine" when the truth is "we couldn't even look".
+  const missingGrammars = new Set<string>();
+  let otherParseErrors = 0;
+  for (const e of extracted.parseErrors) {
+    const m = /grammar "(\w+)" unavailable/.exec(e.reason);
+    if (m) missingGrammars.add(m[1]);
+    else otherParseErrors++;
+  }
+
   return {
     skillId: 'audit',
     kind: 'audit_run',
-    body: formatRun(run, extracted.snippets.length, extracted.parseErrors.length, shaMismatches),
+    body: formatRun(run, {
+      snippetCount: extracted.snippets.length,
+      otherParseErrors,
+      shaMismatches,
+      missingGrammars,
+    }),
     data: run,
     telemetry: {
       durationMs: run.telemetry.durationMs,
@@ -287,13 +306,18 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
 }
 
 /**
- * Heuristic: are we running under vitest/Node? Used only by the inline
- * --analyze path to permit the parserBootstrap-less code path that
- * web-tree-sitter auto-resolves at unit-test time. Production Workers
- * never have these globals.
+ * True iff we're running under Vitest (or another explicitly-test runtime).
+ *
+ * We use this in exactly one place: to permit the inline --analyze path to
+ * fall through web-tree-sitter's auto-resolution when MOLTBOT_BUCKET hasn't
+ * been populated with the runtime WASM. Production Workers never have these
+ * env vars set; this is much narrower than "any Node runtime" — a CLI
+ * harness or local Node-based emulator without R2 will now correctly hit
+ * the feature gate instead of silently bypassing it.
  */
 function isNodeTestEnv(): boolean {
-  return typeof process !== 'undefined' && process.versions?.node !== undefined;
+  if (typeof process === 'undefined' || !process.env) return false;
+  return Boolean(process.env.VITEST) || process.env.NODE_ENV === 'test';
 }
 
 // ---------------------------------------------------------------------------
@@ -401,17 +425,23 @@ function formatPlan(plan: AuditPlan, ctx: { cached: boolean; apiCalls: number })
 // Run formatting
 // ---------------------------------------------------------------------------
 
-function formatRun(
-  run: AuditRun,
-  snippetCount: number,
-  parseErrorCount: number,
-  shaMismatches: number,
-): string {
+interface FormatRunCounts {
+  snippetCount: number;
+  otherParseErrors: number;
+  shaMismatches: number;
+  missingGrammars: Set<string>;
+}
+
+function formatRun(run: AuditRun, c: FormatRunCounts): string {
   const lines: string[] = [];
   lines.push(`Audit report: ${run.repo.owner}/${run.repo.name}@${run.repo.sha.slice(0, 7)}`);
-  lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${snippetCount} snippets analyzed`);
-  if (parseErrorCount > 0) lines.push(`⚠️ ${parseErrorCount} file(s) had parse issues`);
-  if (shaMismatches > 0) lines.push(`⚠️ ${shaMismatches} file(s) skipped: fetched SHA disagreed with tree SHA`);
+  lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${c.snippetCount} snippets analyzed`);
+  if (c.missingGrammars.size > 0) {
+    const langs = [...c.missingGrammars].sort().join(', ');
+    lines.push(`⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — run \`npm run audit:upload-grammars\` to enable.`);
+  }
+  if (c.otherParseErrors > 0) lines.push(`⚠️ ${c.otherParseErrors} file(s) had parse issues`);
+  if (c.shaMismatches > 0) lines.push(`⚠️ ${c.shaMismatches} file(s) skipped: fetched SHA disagreed with tree SHA`);
   lines.push('');
 
   if (run.findings.length === 0) {

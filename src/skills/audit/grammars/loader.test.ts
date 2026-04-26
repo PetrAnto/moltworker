@@ -8,8 +8,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { loadGrammar, preloadGrammars, _resetGrammarCachesForTesting } from './loader';
-import { MAX_GRAMMAR_BYTES, type GrammarManifest, type GrammarManifestEntry } from '../types';
+import { loadGrammar, loadRuntimeWasm, preloadGrammars, _resetGrammarCachesForTesting } from './loader';
+import { MAX_GRAMMAR_BYTES, MAX_TREE_SITTER_RUNTIME_BYTES, type GrammarManifest, type GrammarManifestEntry, type RuntimeManifestEntry } from '../types';
 import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
@@ -366,6 +366,68 @@ describe('manifest cache TTL (resilience fix)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadRuntimeWasm — uses MAX_TREE_SITTER_RUNTIME_BYTES (not MAX_GRAMMAR_BYTES)
+// ---------------------------------------------------------------------------
+
+describe('loadRuntimeWasm — runtime-specific size cap', () => {
+  function runtimeEntry(bytes: Uint8Array, sizeOverride?: number): RuntimeManifestEntry {
+    const sha = sha256Hex(bytes);
+    return {
+      key: `audit/grammars/runtime@${sha.slice(0, 8)}.wasm`,
+      sha256: sha,
+      size: sizeOverride ?? bytes.length,
+      source: 'web-tree-sitter@0.20.8',
+      uploadedAt: '2026-04-26T00:00:00.000Z',
+    };
+  }
+
+  it('loads runtime when size is under the runtime-specific cap', async () => {
+    const entry = runtimeEntry(MIN_WASM);
+    const { bucket } = createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify({
+        version: 1, entries: [], runtime: entry, updatedAt: 'now',
+      }),
+      [entry.key]: MIN_WASM,
+    });
+    const r = await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket });
+    expect(r).not.toBeNull();
+    expect(r!.entry.sha256).toBe(entry.sha256);
+  });
+
+  it('rejects runtime that exceeds MAX_TREE_SITTER_RUNTIME_BYTES (declared in manifest)', async () => {
+    const entry = runtimeEntry(MIN_WASM, MAX_TREE_SITTER_RUNTIME_BYTES + 1);
+    const { bucket } = createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify({
+        version: 1, entries: [], runtime: entry, updatedAt: 'now',
+      }),
+      [entry.key]: MIN_WASM,
+    });
+    expect(await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket })).toBeNull();
+  });
+
+  it('returns null when the manifest has no runtime entry', async () => {
+    const { bucket } = createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify({
+        version: 1, entries: [], updatedAt: 'now',
+      }),
+    });
+    expect(await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket })).toBeNull();
+  });
+
+  it('rejects runtime when R2 bytes do not match manifest SHA', async () => {
+    const entry = runtimeEntry(MIN_WASM);
+    const tampered = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00]);
+    const { bucket } = createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify({
+        version: 1, entries: [], runtime: entry, updatedAt: 'now',
+      }),
+      [entry.key]: tampered,
+    });
+    expect(await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket })).toBeNull();
   });
 });
 

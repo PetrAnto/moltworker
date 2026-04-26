@@ -38,10 +38,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-// Mirrors src/skills/audit/types.ts MVP_GRAMMARS + MAX_GRAMMAR_BYTES.
-// Kept duplicated rather than imported so this script has no TS toolchain dependency.
+// Mirrors src/skills/audit/types.ts constants. Kept duplicated rather than
+// imported so this script has no TS toolchain dependency.
 const MVP_GRAMMARS = ['typescript', 'tsx', 'javascript', 'python', 'go'];
 const MAX_GRAMMAR_BYTES = 5 * 1024 * 1024;
+const MAX_TREE_SITTER_RUNTIME_BYTES = 1 * 1024 * 1024;
 const BUCKET_BINDING = 'MOLTBOT_BUCKET';
 const MANIFEST_KEY = 'audit/grammars/manifest.json';
 const SOURCE_TAG = 'tree-sitter-wasms@0.1.13';
@@ -137,8 +138,8 @@ async function readRuntimeWasm() {
   let info;
   try { info = await stat(RUNTIME_WASM_PATH); }
   catch { die(`runtime not found: ${RUNTIME_WASM_PATH}\n  Run: npm install web-tree-sitter@^0.20.8`); }
-  if (info.size > MAX_GRAMMAR_BYTES) {
-    die(`runtime is ${info.size} bytes — exceeds MAX_GRAMMAR_BYTES`);
+  if (info.size > MAX_TREE_SITTER_RUNTIME_BYTES) {
+    die(`runtime is ${info.size} bytes — exceeds MAX_TREE_SITTER_RUNTIME_BYTES (${MAX_TREE_SITTER_RUNTIME_BYTES})`);
   }
   const bytes = await readFile(RUNTIME_WASM_PATH);
   return { bytes, size: info.size, sha256: sha256Hex(bytes) };

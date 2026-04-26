@@ -22,6 +22,7 @@ import {
   type GrammarManifestEntry,
   type RuntimeManifestEntry,
   MAX_GRAMMAR_BYTES,
+  MAX_TREE_SITTER_RUNTIME_BYTES,
   isGrammarLanguage,
 } from '../types';
 
@@ -209,8 +210,8 @@ export async function loadRuntimeWasm(env: GrammarLoaderEnv): Promise<RuntimeLoa
   if (!manifest || !manifest.runtime) return null;
   const entry = manifest.runtime;
 
-  if (entry.size > MAX_GRAMMAR_BYTES) {
-    console.warn(`[GrammarLoader] runtime WASM rejected: ${entry.size} bytes > cap`);
+  if (entry.size > MAX_TREE_SITTER_RUNTIME_BYTES) {
+    console.warn(`[GrammarLoader] runtime WASM rejected: ${entry.size} bytes > MAX_TREE_SITTER_RUNTIME_BYTES`);
     return null;
   }
 
@@ -224,7 +225,10 @@ export async function loadRuntimeWasm(env: GrammarLoaderEnv): Promise<RuntimeLoa
     return null;
   }
   const buffer = await obj.arrayBuffer();
-  if (buffer.byteLength > MAX_GRAMMAR_BYTES) return null;
+  if (buffer.byteLength > MAX_TREE_SITTER_RUNTIME_BYTES) {
+    console.warn(`[GrammarLoader] runtime WASM bytes (${buffer.byteLength}) exceed MAX_TREE_SITTER_RUNTIME_BYTES`);
+    return null;
+  }
 
   const actualSha = await sha256Hex(buffer);
   if (actualSha !== entry.sha256) {

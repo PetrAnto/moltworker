@@ -826,6 +826,93 @@ jobs:
   });
 });
 
+// ---------------------------------------------------------------------------
+// Hardening from GPT slice-2 review of PR 505
+// ---------------------------------------------------------------------------
+
+describe('--analyze: feature gate is Vitest-scoped, not "any Node"', () => {
+  it('refuses --analyze in non-test Node when MOLTBOT_BUCKET runtime WASM is absent', async () => {
+    // Simulate a non-test Node runtime (CLI harness, local emulator, etc.)
+    // by clearing both env signals isNodeTestEnv() reads.
+    vi.stubEnv('VITEST', '');
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const tree = [{ path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 }];
+      installFetchMock([
+        { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+        { match: (u) => /\/languages$/.test(u), body: {} },
+        { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+        { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+        { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+      ]);
+
+      const result = await handleAudit(makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+        // env has MOLTBOT_BUCKET=undefined → loadRuntimeWasm returns null
+      }));
+      expect(result.kind).toBe('error');
+      expect(result.body).toMatch(/audit analysis is not enabled/i);
+      // Critically: LLM was NEVER called — gate fired before any work.
+      expect(mockLLM).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('still allows --analyze in Vitest with no MOLTBOT_BUCKET (auto-resolution fallback)', async () => {
+    // Sanity: VITEST is set in this run by default. The other --analyze
+    // tests in this file rely on this fall-through; an accidentally-too-
+    // narrow gate would break them. This test pins the contract.
+    expect(typeof process.env.VITEST !== 'undefined' && process.env.VITEST !== '').toBe(true);
+  });
+});
+
+describe('--analyze: surfaces missing-grammar coverage warning', () => {
+  it('reports which language grammars were missing and points at the uploader', async () => {
+    // Provide MOLTBOT_BUCKET so the runtime gate doesn't fire, but no
+    // grammars (loadGrammar returns null for every lang). Use a non-test
+    // env spoof? No — under VITEST the gate is bypassed; we want the
+    // grammar-unavailable path to exercise. We simulate that by giving
+    // a bucket that returns null for everything (no manifest, no runtime).
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    // Bucket exists but has no manifest → loadGrammar returns null for
+    // every language; loadRuntimeWasm also returns null.
+    const emptyBucket = {
+      get: vi.fn(async () => null),
+    } as unknown as R2Bucket;
+
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+      env: {
+        GITHUB_TOKEN: 'tok',
+        OPENROUTER_API_KEY: 'k',
+        MOLTBOT_BUCKET: emptyBucket,
+      } as unknown as MoltbotEnv,
+    }));
+    // VITEST is set, so the runtime gate is bypassed and we get to the
+    // extractor — which records "grammar 'typescript' unavailable" for
+    // src/auth.ts. The handler surfaces that as a coverage warning.
+    expect(result.kind).toBe('audit_run');
+    expect(result.body).toMatch(/coverage partial/i);
+    expect(result.body).toContain('typescript');
+    expect(result.body).toMatch(/audit:upload-grammars/);
+  });
+});
+
 describe('nested manifest discovery (monorepo support)', () => {
   it('discovers package.json and other manifests in subdirectories', async () => {
     const monorepoTree = [
