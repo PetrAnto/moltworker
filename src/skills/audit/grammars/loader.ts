@@ -189,56 +189,61 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 
 /**
  * Load the web-tree-sitter runtime WASM bytes from R2. Same SHA-verified
- * content-addressed pattern as grammars. Returns null if:
- *  - MOLTBOT_BUCKET is not configured
- *  - the manifest has no runtime entry (older manifests, or uploader hasn't
- *    pushed the runtime yet)
- *  - the R2 object is missing or fails the SHA check
- *
- * Caller (handler) decides what to do with null — typically gates the
- * --analyze feature off with a clear message.
+ * content-addressed pattern as grammars. Returns a discriminated result
+ * so the caller can distinguish "R2 not configured" from "R2 configured
+ * but the runtime entry failed SHA verification" — operators looking at
+ * a "runtime: bundled" report want to know which one they're seeing.
+ * Closes GPT slice-5 review finding 2.
  */
-export interface RuntimeLoadResult {
-  bytes: Uint8Array;
-  entry: RuntimeManifestEntry;
-  cached: boolean;
-}
+export type RuntimeLoadFailure =
+  | 'no_bucket'         // env.MOLTBOT_BUCKET is undefined
+  | 'no_manifest'       // manifest fetch failed / not found
+  | 'missing_runtime'   // manifest exists but has no runtime entry
+  | 'oversize_declared' // manifest's declared size exceeds the cap
+  | 'missing_object'    // R2 object missing despite a manifest entry
+  | 'oversize_bytes'    // R2 bytes exceed the cap (manifest lied)
+  | 'sha_mismatch';     // R2 bytes don't match the manifest SHA
 
-export async function loadRuntimeWasm(env: GrammarLoaderEnv): Promise<RuntimeLoadResult | null> {
-  if (!env.MOLTBOT_BUCKET) return null;
+export type RuntimeLoadResult =
+  | { ok: true; bytes: Uint8Array; entry: RuntimeManifestEntry; cached: boolean }
+  | { ok: false; reason: RuntimeLoadFailure };
+
+export async function loadRuntimeWasm(env: GrammarLoaderEnv): Promise<RuntimeLoadResult> {
+  if (!env.MOLTBOT_BUCKET) return { ok: false, reason: 'no_bucket' };
   const manifest = await getManifest(env.MOLTBOT_BUCKET);
-  if (!manifest || !manifest.runtime) return null;
+  if (!manifest) return { ok: false, reason: 'no_manifest' };
+  if (!manifest.runtime) return { ok: false, reason: 'missing_runtime' };
   const entry = manifest.runtime;
 
   if (entry.size > MAX_TREE_SITTER_RUNTIME_BYTES) {
     console.warn(`[GrammarLoader] runtime WASM rejected: ${entry.size} bytes > MAX_TREE_SITTER_RUNTIME_BYTES`);
-    return null;
+    return { ok: false, reason: 'oversize_declared' };
   }
 
   if (runtimeCache && runtimeCache.entry.sha256 === entry.sha256) {
-    return { bytes: runtimeCache.bytes, entry: runtimeCache.entry, cached: true };
+    return { ok: true, bytes: runtimeCache.bytes, entry: runtimeCache.entry, cached: true };
   }
 
   const obj = await env.MOLTBOT_BUCKET.get(entry.key);
   if (!obj) {
     console.warn(`[GrammarLoader] runtime R2 object missing: ${entry.key}`);
-    return null;
+    return { ok: false, reason: 'missing_object' };
   }
   const buffer = await obj.arrayBuffer();
   if (buffer.byteLength > MAX_TREE_SITTER_RUNTIME_BYTES) {
     console.warn(`[GrammarLoader] runtime WASM bytes (${buffer.byteLength}) exceed MAX_TREE_SITTER_RUNTIME_BYTES`);
-    return null;
+    return { ok: false, reason: 'oversize_bytes' };
   }
 
   const actualSha = await sha256Hex(buffer);
   if (actualSha !== entry.sha256) {
     console.warn(`[GrammarLoader] runtime SHA mismatch: manifest ${entry.sha256}, R2 ${actualSha}. Refusing.`);
-    return null;
+    return { ok: false, reason: 'sha_mismatch' };
   }
 
   const bytes = new Uint8Array(buffer);
   runtimeCache = { bytes, entry };
-  return { bytes, entry, cached: false };
+  return { ok: true, bytes, entry, cached: false };
 }
 
 /**

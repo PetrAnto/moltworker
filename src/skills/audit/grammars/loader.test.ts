@@ -394,8 +394,9 @@ describe('loadRuntimeWasm — runtime-specific size cap', () => {
       [entry.key]: MIN_WASM,
     });
     const r = await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket });
-    expect(r).not.toBeNull();
-    expect(r!.entry.sha256).toBe(entry.sha256);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.entry.sha256).toBe(entry.sha256);
   });
 
   it('rejects runtime that exceeds MAX_TREE_SITTER_RUNTIME_BYTES (declared in manifest)', async () => {
@@ -406,19 +407,25 @@ describe('loadRuntimeWasm — runtime-specific size cap', () => {
       }),
       [entry.key]: MIN_WASM,
     });
-    expect(await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket })).toBeNull();
+    const r = await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('oversize_declared');
   });
 
-  it('returns null when the manifest has no runtime entry', async () => {
+  it('reports missing_runtime when the manifest has no runtime entry', async () => {
     const { bucket } = createMockBucket({
       'audit/grammars/manifest.json': JSON.stringify({
         version: 1, entries: [], updatedAt: 'now',
       }),
     });
-    expect(await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket })).toBeNull();
+    const r = await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('missing_runtime');
   });
 
-  it('rejects runtime when R2 bytes do not match manifest SHA', async () => {
+  it('reports sha_mismatch when R2 bytes do not match manifest SHA', async () => {
     const entry = runtimeEntry(MIN_WASM);
     const tampered = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00]);
     const { bucket } = createMockBucket({
@@ -427,7 +434,31 @@ describe('loadRuntimeWasm — runtime-specific size cap', () => {
       }),
       [entry.key]: tampered,
     });
-    expect(await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket })).toBeNull();
+    const r = await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('sha_mismatch');
+  });
+
+  it('reports no_bucket when MOLTBOT_BUCKET is not configured', async () => {
+    const r = await loadRuntimeWasm({});
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('no_bucket');
+  });
+
+  it('reports missing_object when the manifest references a runtime not in R2', async () => {
+    const entry = runtimeEntry(MIN_WASM);
+    const { bucket } = createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify({
+        version: 1, entries: [], runtime: entry, updatedAt: 'now',
+      }),
+      // entry.key intentionally NOT in the bucket
+    });
+    const r = await loadRuntimeWasm({ MOLTBOT_BUCKET: bucket });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('missing_object');
   });
 });
 

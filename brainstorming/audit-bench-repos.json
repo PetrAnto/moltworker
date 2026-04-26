@@ -1,0 +1,25 @@
+[
+  {
+    "repo": "octocat/hello-world",
+    "depth": "quick",
+    "lenses": [
+      "security"
+    ]
+  },
+  {
+    "repo": "sindresorhus/p-map",
+    "depth": "quick",
+    "lenses": [
+      "security",
+      "deps"
+    ]
+  },
+  {
+    "repo": "sindresorhus/got",
+    "depth": "quick",
+    "lenses": [
+      "types",
+      "deadcode"
+    ]
+  }
+]

@@ -71,6 +71,18 @@ describe('generated file invariants', () => {
     expect(RUNTIME_WASM_BASE64.length).toBeGreaterThan(0);
     expect(RUNTIME_WASM_BASE64).toMatch(/^[A-Za-z0-9+/=]+$/); // valid base64 charset
   });
+
+  it('base64 length stays within the Worker bundle budget', () => {
+    // Closes GPT slice-5 review finding 3. The committed generated file
+    // adds base64-inflated bytes directly to the Worker bundle (the
+    // file's exported string ships verbatim, no tree-shaking). Cap at
+    // MAX_TREE_SITTER_RUNTIME_BYTES * 4/3 (the worst-case base64
+    // inflation factor) plus a small slack for line wraps + literal
+    // overhead. A future web-tree-sitter that bloats past this fails
+    // here, not silently in the deploy.
+    const cap = Math.ceil((1 * 1024 * 1024) * 4 / 3) + 2048;
+    expect(RUNTIME_WASM_BASE64.length).toBeLessThanOrEqual(cap);
+  });
 });
 
 // Integrity-guard failure paths (empty base64, size mismatch, SHA tamper)
