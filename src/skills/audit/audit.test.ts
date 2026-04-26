@@ -6,14 +6,25 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock the LLM at the analyst's import boundary so handler-level tests
+// can exercise the --analyze pipeline without hitting OpenRouter.
+vi.mock('../llm', () => ({
+  callSkillLLM: vi.fn(),
+  selectSkillModel: vi.fn((req: string | undefined, def: string) => req ?? def),
+}));
+
 import { handleAudit } from './audit';
 import { parseRepoCoords } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { profileCacheKey } from './cache';
 import { findingPriority, isLens, isDepth } from './types';
-import type { AuditPlan, RepoProfile, AuditFinding, TreeEntry } from './types';
+import { callSkillLLM } from '../llm';
+import type { AuditPlan, AuditRun, RepoProfile, AuditFinding, TreeEntry } from './types';
 import type { SkillRequest } from '../types';
 import type { MoltbotEnv } from '../../types';
+
+const mockLLM = vi.mocked(callSkillLLM);
 
 // ---------------------------------------------------------------------------
 // fetch mock helpers
@@ -457,6 +468,158 @@ describe('Code Scanning alert pagination', () => {
     const r = await handleAudit(makeRequest());
     const plan = r.data as AuditPlan;
     expect(plan.profile.codeScanningAlertsTruncated).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --analyze end-to-end (Scout -> fetch files -> Extractor -> Analyst -> render)
+// ---------------------------------------------------------------------------
+
+describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
+  it('runs the full pipeline and returns an audit_run with findings + telemetry', async () => {
+    // Fixture: repo with one source file that the LLM will flag.
+    const sourceContent = `export function login(user: string, pass: string) {
+  const TOKEN = 'sk_live_DEADBEEFCAFE';
+  return TOKEN + user + pass;
+}`;
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 50 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: sourceContent.length },
+    ];
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'b'.repeat(40) } },
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 50 },
+      },
+      {
+        match: (u) => u.includes('/contents/src%2Fauth.ts'),
+        body: { encoding: 'base64', content: btoa(sourceContent), sha: 'a1', size: sourceContent.length },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    // LLM returns one valid security finding citing src/auth.ts.
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [{
+          lens: 'security', severity: 'high', confidence: 0.75,
+          symptom: 'Hardcoded API token in login()',
+          rootCause: 'Secret committed to repo; CI lacks pre-commit secret scan',
+          correctiveAction: 'Move TOKEN to env var; rotate the leaked secret',
+          preventiveAction: { kind: 'ci', detail: 'Add gitleaks step to .github/workflows/ci.yml' },
+          evidence: [{ path: 'src/auth.ts', lines: '2-2', snippet: "const TOKEN = 'sk_live_…';" }],
+        }],
+      }),
+      tokens: { prompt: 800, completion: 200 },
+    });
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'quick' },
+    }));
+
+    expect(result.kind).toBe('audit_run');
+    const run = result.data as AuditRun;
+    expect(run.findings).toHaveLength(1);
+    expect(run.findings[0].lens).toBe('security');
+    expect(run.findings[0].severity).toBe('high');
+    expect(run.findings[0].evidence[0].path).toBe('src/auth.ts');
+    expect(run.telemetry.llmCalls).toBe(1);
+    expect(run.telemetry.tokensIn).toBe(800);
+    expect(run.telemetry.tokensOut).toBe(200);
+    expect(result.body).toContain('Hardcoded API token');
+    expect(result.body).toContain('gitleaks');
+  });
+
+  it('drops findings whose evidence cites paths outside the tree (anti-hallucination at handler level)', async () => {
+    const tree = [{ path: 'src/real.ts', type: 'blob', sha: 'a1', size: 30 }];
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'c'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      {
+        match: (u) => u.includes('/contents/src%2Freal.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [{
+          lens: 'security', severity: 'high', confidence: 0.75,
+          symptom: 'Defect in a file that does not exist',
+          rootCause: 'Imaginary',
+          correctiveAction: 'N/A',
+          preventiveAction: { kind: 'lint', detail: 'rule body' },
+          evidence: [{ path: 'src/imaginary.ts', lines: '1-1', snippet: 'fake' }],
+        }],
+      }),
+    });
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+    }));
+    expect(result.kind).toBe('audit_run');
+    const run = result.data as AuditRun;
+    expect(run.findings).toEqual([]); // forged path → dropped
+    expect(result.body).toContain('No defects found');
+  });
+
+  it('drops low-confidence findings (precision discipline)', async () => {
+    // Include both src/auth.ts (security lens match) AND package.json (a
+    // manifest the Scout always pre-fetches). The manifest snippet alone
+    // ensures the Analyst gets called even if grammar loading is unavailable.
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src%2Fauth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [
+          { lens: 'security', severity: 'high', confidence: 0.25,
+            symptom: 'Speculative finding',
+            rootCause: 'Maybe', correctiveAction: 'Try',
+            preventiveAction: { kind: 'doc', detail: '...' },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }] },
+          { lens: 'security', severity: 'medium', confidence: 0.75,
+            symptom: 'Real-looking finding',
+            rootCause: 'Cause', correctiveAction: 'Fix',
+            preventiveAction: { kind: 'lint', detail: 'rule' },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }] },
+        ],
+      }),
+    });
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+    }));
+    const run = result.data as AuditRun;
+    expect(run.findings).toHaveLength(1);
+    expect(run.findings[0].symptom).toBe('Real-looking finding');
   });
 });
 

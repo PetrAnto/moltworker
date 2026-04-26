@@ -1,23 +1,30 @@
 /**
  * Audit Skill — Handler
  *
- * v0 slice: Scout-only. Returns an `AuditPlan` describing what would be audited
- * (tree size, lens-filtered file selections, cost estimate). Extractor + Analyst
- * + Distiller land in subsequent commits per the design doc §14.
+ * Two modes (selected by the --analyze flag):
  *
- * Subcommands:
- *   /audit <repo>                          → plan-only (current default)
- *   /audit <repo> --lens <lens>            → narrow to a single lens
- *   /audit <repo> --depth quick|standard|deep
- *   /audit <repo> --branch <name>
+ *   /audit <repo>                          → plan-only (default, zero LLM)
+ *   /audit <repo> --analyze                → full Scout + Extractor + Analyst,
+ *                                            returns AuditFinding[]
+ *
+ * Other flags:
+ *   --lens <lens>            narrow to a single lens
+ *   --depth quick|standard|deep
+ *   --branch <name>
+ *
+ * For now the full-pipeline mode runs INLINE in the worker. The DO async
+ * dispatch path (mirroring /dossier) lands in the next slice.
  */
 
 import type { SkillRequest, SkillResult, SkillMeta } from '../types';
-import type { AuditPlan, Depth, Lens, RepoProfile } from './types';
-import { MVP_LENSES, isLens, isDepth } from './types';
-import { scout, parseRepoCoords } from './scout';
+import type { AuditFinding, AuditPlan, AuditRun, Depth, Lens, RepoProfile } from './types';
+import { MVP_LENSES, findingPriority, isLens, isDepth } from './types';
+import { scout, fetchFileContents, parseRepoCoords } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { getCachedProfile, cacheProfile } from './cache';
+import { extractSnippets } from './extractor/extractor';
+import { loadGrammar } from './grammars/loader';
+import { analyzeWithLens } from './analyst/analyst';
 
 export const AUDIT_META: SkillMeta = {
   id: 'audit',
@@ -88,18 +95,144 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   // 3. Build the plan — lens-filter + budget estimate
   const plan = buildPlan(profile, lenses, depth ?? 'quick');
 
-  // 4. Render
-  const body = formatPlan(plan, { cached: !!cachedFromSha, apiCalls });
+  // 4a. Plan-only mode — return immediately.
+  const analyzeFlag = request.flags.analyze === 'true' || request.subcommand === 'run';
+  if (!analyzeFlag) {
+    const body = formatPlan(plan, { cached: !!cachedFromSha, apiCalls });
+    return {
+      skillId: 'audit',
+      kind: 'audit_plan',
+      body,
+      data: plan,
+      telemetry: {
+        durationMs: Date.now() - start,
+        model: 'none',
+        llmCalls: 0,
+        toolCalls: apiCalls,
+      },
+    };
+  }
+
+  // 4b. Full pipeline: fetch selected files → Extract → Analyze → render.
+  return runFullAudit({ plan, request, apiCallsSoFar: apiCalls, cachedProfile: !!cachedFromSha, start });
+}
+
+// ---------------------------------------------------------------------------
+// Full Scout → Extractor → Analyst pipeline (inline, no DO yet)
+// ---------------------------------------------------------------------------
+
+interface RunFullAuditCtx {
+  plan: AuditPlan;
+  request: SkillRequest;
+  apiCallsSoFar: number;
+  cachedProfile: boolean;
+  start: number;
+}
+
+async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
+  const { plan, request } = ctx;
+  const profile = plan.profile;
+
+  // Union the per-lens selections so we fetch each unique path once.
+  const selectedPaths = new Set<string>();
+  for (const lens of plan.lenses) {
+    for (const p of plan.selections[lens]) selectedPaths.add(p);
+  }
+
+  // Fetch contents for the selected files (Scout pre-fetched manifests; the
+  // Extractor doesn't itself call GitHub — keeps the data flow auditable).
+  const fetchResult = selectedPaths.size > 0
+    ? await fetchFileContents({
+        owner: profile.owner,
+        repo: profile.repo,
+        ref: profile.sha,
+        paths: [...selectedPaths],
+        token: request.env.GITHUB_TOKEN,
+      })
+    : { files: [], apiCalls: 0 };
+  const totalApiCalls = ctx.apiCallsSoFar + fetchResult.apiCalls;
+  const contentByPath = new Map(fetchResult.files.map(f => [f.path, f.content] as const));
+
+  // Run the Extractor once across all selected paths. The grammar loader
+  // is supplied via a closure so tests can inject a fake; production gets
+  // the real R2-backed loader from grammars/loader.ts.
+  const extractCtx = {
+    profile,
+    selections: [...selectedPaths]
+      .map(p => ({ path: p, content: contentByPath.get(p) ?? '' }))
+      .filter(s => s.content.length > 0),
+    loadGrammar: (lang: Parameters<typeof loadGrammar>[1]) => loadGrammar(request.env, lang),
+    // parserBootstrap intentionally undefined for now — Worker bootstrap
+    // (runtimeWasmBytes) lands in a follow-up. In Node tests web-tree-sitter
+    // auto-resolves; in Worker production this will fail loud at Parser.init,
+    // signaling the missing wiring.
+  };
+  const extracted = await extractSnippets(extractCtx);
+
+  // Per-lens Analyst calls. Snippets are partitioned by the lens that asked
+  // for the file; manifests + workflow snippets reach every lens because
+  // their relevance varies by lens (a Dockerfile is signal for security,
+  // deps, perf, …).
+  const findings: AuditFinding[] = [];
+  let llmCalls = 0;
+  let promptTokens = 0;
+  let completionTokens = 0;
+  for (const lens of plan.lenses) {
+    const lensPaths = new Set(plan.selections[lens]);
+    const lensSnippets = extracted.snippets.filter(s =>
+      lensPaths.has(s.path) || s.kind === 'manifest' || s.kind === 'workflow',
+    );
+    const result = await analyzeWithLens({
+      profile,
+      snippets: lensSnippets,
+      lens,
+      env: request.env,
+      modelAlias: request.modelAlias,
+      defaultModel: AUDIT_META.defaultModel,
+    });
+    if (result.telemetry.llmCalled) llmCalls++;
+    if (result.telemetry.tokens) {
+      promptTokens += result.telemetry.tokens.prompt;
+      completionTokens += result.telemetry.tokens.completion;
+    }
+    findings.push(...result.findings);
+  }
+
+  // Sort by priority (severity × confidence) and drop low-confidence noise.
+  const ranked = findings
+    .filter(f => f.confidence >= 0.5)
+    .sort((a, b) => findingPriority(b) - findingPriority(a));
+
+  const run: AuditRun = {
+    runId: crypto.randomUUID(),
+    repo: { owner: profile.owner, name: profile.repo, sha: profile.sha },
+    lenses: plan.lenses,
+    depth: plan.depth,
+    findings: ranked,
+    telemetry: {
+      durationMs: Date.now() - ctx.start,
+      llmCalls,
+      tokensIn: promptTokens,
+      tokensOut: completionTokens,
+      // Crude $ estimate: $0.50 per 1M input + $1.50 per 1M output (mid-range
+      // model pricing). Real per-call costs are recorded in the telemetry of
+      // each LLM call; this is the user-visible aggregate.
+      costUsd: (promptTokens / 1_000_000) * 0.5 + (completionTokens / 1_000_000) * 1.5,
+      githubApiCalls: totalApiCalls,
+    },
+  };
+
   return {
     skillId: 'audit',
-    kind: 'audit_plan',
-    body,
-    data: plan,
+    kind: 'audit_run',
+    body: formatRun(run, extracted.snippets.length, extracted.parseErrors.length),
+    data: run,
     telemetry: {
-      durationMs: Date.now() - start,
-      model: 'none',
-      llmCalls: 0,
-      toolCalls: apiCalls,
+      durationMs: run.telemetry.durationMs,
+      model: request.modelAlias ?? AUDIT_META.defaultModel,
+      llmCalls,
+      toolCalls: totalApiCalls,
+      tokens: { prompt: promptTokens, completion: completionTokens },
     },
   };
 }
@@ -202,6 +335,44 @@ function formatPlan(plan: AuditPlan, ctx: { cached: boolean; apiCalls: number })
   lines.push('');
   lines.push('This is the v0 plan-only output — Extractor + Analyst land in the next slice.');
 
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Run formatting
+// ---------------------------------------------------------------------------
+
+function formatRun(run: AuditRun, snippetCount: number, parseErrorCount: number): string {
+  const lines: string[] = [];
+  lines.push(`Audit report: ${run.repo.owner}/${run.repo.name}@${run.repo.sha.slice(0, 7)}`);
+  lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${snippetCount} snippets analyzed`);
+  if (parseErrorCount > 0) lines.push(`⚠️ ${parseErrorCount} file(s) had parse issues`);
+  lines.push('');
+
+  if (run.findings.length === 0) {
+    lines.push('No defects found that meet the precision threshold (confidence ≥ 0.5).');
+  } else {
+    lines.push(`Findings (${run.findings.length}):`);
+    lines.push('');
+    // Top-N for the user-facing report; full list stays in the structured data.
+    const topN = run.findings.slice(0, 5);
+    for (const f of topN) {
+      lines.push(`[${f.severity.toUpperCase()}] ${f.symptom}`);
+      lines.push(`  Lens: ${f.lens} • Confidence: ${f.confidence}`);
+      lines.push(`  Root cause: ${f.rootCause}`);
+      lines.push(`  Fix: ${f.correctiveAction}`);
+      lines.push(`  Prevent (${f.preventiveAction.kind}): ${f.preventiveAction.detail.slice(0, 240)}${f.preventiveAction.detail.length > 240 ? '…' : ''}`);
+      lines.push(`  Evidence: ${f.evidence.map(e => `${e.path}${e.lines ? `:${e.lines}` : ''}`).join(', ')}`);
+      lines.push('');
+    }
+    if (run.findings.length > topN.length) {
+      lines.push(`… +${run.findings.length - topN.length} more in the full report.`);
+      lines.push('');
+    }
+  }
+
+  const t = run.telemetry;
+  lines.push(`Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`);
   return lines.join('\n');
 }
 
