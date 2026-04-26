@@ -51,6 +51,12 @@ export interface SkillContext {
   hotPrompt?: string;
   /** Telegram bot token — injected by handler for skills that may dispatch to DO. */
   telegramToken?: string;
+  /** True when the skill is running inside the TaskProcessor DO (i.e. it was
+   *  dispatched here from the worker). Skills that gate work on Worker-runtime
+   *  budgets (e.g. audit's inline-size guard) use this to know they have the
+   *  DO's larger CPU envelope and can take longer. The DO sets this in
+   *  processSkillTask(); callers from the worker leave it undefined. */
+  runningInDO?: boolean;
 }
 
 // ---------------------------------------------------------------------------
