@@ -1645,6 +1645,44 @@ describe('/audit export', () => {
     expect(result.body).toMatch(/7 days/i);
   });
 
+  it('shows suppressed findings in a separate section (export transparency)', async () => {
+    // Closes GPT slice-4c review finding 2. The persisted run keeps
+    // suppressed findings with `suppressed: true`; the export view
+    // surfaces them in a distinct "Suppressed findings (...)" section.
+    const run = makeRun({
+      findings: [
+        {
+          id: 'security-active1', lens: 'security', severity: 'high', confidence: 0.75,
+          evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+          symptom: 'Active defect',
+          rootCause: 'r', correctiveAction: 'c',
+          preventiveAction: { kind: 'lint', detail: 'rule' },
+        },
+        {
+          id: 'security-supp1', lens: 'security', severity: 'medium', confidence: 0.75,
+          evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+          symptom: 'Previously suppressed defect',
+          rootCause: 'r', correctiveAction: 'c',
+          preventiveAction: { kind: 'lint', detail: 'rule' },
+          suppressed: true,
+        },
+      ],
+    });
+    const kv = kvWithRun('user-1', run);
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export', text: run.runId, userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    expect(result.body).toContain('Findings (1):'); // active count, not all
+    expect(result.body).toContain('Active defect');
+    expect(result.body).toMatch(/Suppressed findings \(1\)/);
+    expect(result.body).toContain('Previously suppressed defect');
+    // The id of the suppressed finding is shown so the user can /audit
+    // unsuppress it directly from the export.
+    expect(result.body).toContain('security-supp1');
+  });
+
   it('returns JSON dump when --format json is set', async () => {
     const run = makeRun();
     const kv = kvWithRun('user-1', run);
@@ -1780,6 +1818,12 @@ describe('/audit suppress + /audit unsuppress', () => {
       }),
       put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
       delete: vi.fn(async (key: string) => { store.delete(key); }),
+      list: vi.fn(async ({ prefix }: { prefix: string }) => {
+        const keys = [...store.keys()]
+          .filter(k => k.startsWith(prefix))
+          .map(name => ({ name }));
+        return { keys, list_complete: true, cursor: undefined };
+      }),
     } as unknown as KVNamespace;
     return { kv, store };
   }
@@ -1818,11 +1862,12 @@ describe('/audit suppress + /audit unsuppress', () => {
     expect(result.body).toContain(findingId);
     expect(result.body).toContain('octocat/demo');
 
-    // Persisted under the right key
-    const supKey = 'audit:suppressed:user-1:octocat/demo';
-    const persisted = JSON.parse(store.get(supKey)!);
-    expect(persisted.ids).toEqual([findingId]);
-    expect(persisted.updatedAt).toEqual(expect.any(String));
+    // Persisted as one-key-per-finding under the per-repo prefix. The
+    // value is just metadata; the *existence* of the key is the
+    // suppression signal.
+    const expectedKey = `audit:suppressed:user-1:octocat/demo:${findingId}`;
+    expect(store.get(expectedKey)).toBeDefined();
+    expect(JSON.parse(store.get(expectedKey)!).at).toEqual(expect.any(String));
   });
 
   it('is idempotent — second suppress of same id does not duplicate', async () => {
@@ -1837,8 +1882,10 @@ describe('/audit suppress + /audit unsuppress', () => {
       env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
     }));
     expect(second.body).toMatch(/already on the suppression list/);
-    const persisted = JSON.parse(store.get('audit:suppressed:user-1:octocat/demo')!);
-    expect(persisted.ids).toEqual([findingId]); // length 1 still
+    // Still exactly one suppression key for this finding (idempotent put
+    // is fine; we shouldn't have somehow created multiple keys).
+    const supKeys = [...store.keys()].filter(k => k.startsWith('audit:suppressed:user-1:octocat/demo:'));
+    expect(supKeys).toHaveLength(1);
   });
 
   it('unsuppress removes the id; second unsuppress is a no-op', async () => {
@@ -1853,8 +1900,9 @@ describe('/audit suppress + /audit unsuppress', () => {
       env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
     }));
     expect(removed.body).toMatch(/Un-suppressed/);
-    // Empty set deletes the key entirely (no zombie entries).
-    expect(store.get('audit:suppressed:user-1:octocat/demo')).toBeUndefined();
+    // The per-finding key was deleted (no zombie entries).
+    const expectedKey = `audit:suppressed:user-1:octocat/demo:${findingId}`;
+    expect(store.get(expectedKey)).toBeUndefined();
 
     // Second unsuppress: nothing to remove.
     const noop = await handleAudit(makeRequest({
@@ -1908,7 +1956,7 @@ describe('/audit suppress + /audit unsuppress', () => {
 });
 
 describe('--analyze: applies per-repo suppression list before persist+display', () => {
-  it('drops findings whose id is on the suppression list and shows a count', async () => {
+  it('persists suppressed findings with suppressed:true (transparent for export) but excludes them from the inline view', async () => {
     const tree = [
       { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
@@ -1948,9 +1996,8 @@ describe('--analyze: applies per-repo suppression list before persist+display', 
     const expectedId = `security-${h.toString(36)}`;
 
     const kvStore = new Map<string, string>();
-    kvStore.set('audit:suppressed:user-1:octocat/hello-world', JSON.stringify({
-      ids: [expectedId], updatedAt: 'now',
-    }));
+    // One-key-per-finding suppression: the existence of the key is the signal.
+    kvStore.set(`audit:suppressed:user-1:octocat/hello-world:${expectedId}`, JSON.stringify({ at: 'now' }));
     const kv = {
       get: vi.fn(async (key: string, type?: string) => {
         const v = kvStore.get(key);
@@ -1958,7 +2005,11 @@ describe('--analyze: applies per-repo suppression list before persist+display', 
         return type === 'json' ? JSON.parse(v) : v;
       }),
       put: vi.fn(async (key: string, value: string) => { kvStore.set(key, value); }),
-      delete: vi.fn(),
+      delete: vi.fn(async (key: string) => { kvStore.delete(key); }),
+      list: vi.fn(async ({ prefix }: { prefix: string }) => {
+        const keys = [...kvStore.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name }));
+        return { keys, list_complete: true, cursor: undefined };
+      }),
     } as unknown as KVNamespace;
 
     const result = await handleAudit(makeRequest({
@@ -1969,10 +2020,16 @@ describe('--analyze: applies per-repo suppression list before persist+display', 
     expect(result.kind).toBe('audit_run');
     const run = result.data as AuditRun;
 
-    // Critical: the suppressed finding does NOT appear in the displayed
-    // run, and the user-visible body announces the suppression count.
-    expect(run.findings).toEqual([]);
+    // Suppressed findings are PERSISTED with suppressed:true (transparency
+    // for /audit export — closes GPT slice-4c review finding 2). They are
+    // excluded from the inline body view; the count is surfaced.
+    expect(run.findings).toHaveLength(1);
+    expect(run.findings[0].id).toBe(expectedId);
+    expect(run.findings[0].suppressed).toBe(true);
+    // Inline body does NOT show the suppressed finding's symptom in the
+    // "Findings" list, and the suppression count is announced.
     expect(result.body).toMatch(/1 finding\(s\) suppressed/);
+    expect(result.body).toMatch(/No defects found/); // active list is empty
   });
 });
 

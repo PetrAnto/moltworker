@@ -99,28 +99,39 @@ export async function getCachedAuditRun(
 }
 
 // ---------------------------------------------------------------------------
-// Suppression list (per-user-per-repo)
+// Suppression list (per-user-per-repo, one KV key per finding)
 // ---------------------------------------------------------------------------
+//
+// Storage layout:
+//   audit:suppressed:{userId}:{owner}/{repo}:{findingId}
+// with a tiny JSON metadata payload `{ at: ISO }`.
+//
+// One-key-per-finding eliminates the read-modify-write race that a
+// single aggregated list would have under concurrent suppress clicks
+// (T1 and T2 both read [], T1 writes [a], T2 overwrites with [b],
+// finding `a` lost). Each suppress is now an unconditional `put`; each
+// unsuppress an unconditional `delete`. Filtering uses `kv.list()` over
+// the per-repo prefix.
+//
+// No TTL on suppressions — they're explicit user choices and shouldn't
+// silently re-surface.
 
-/**
- * Stored shape: { ids: string[], updatedAt: ISO }. Array (not Set) so the
- * JSON roundtrips cleanly through KV. The set semantic is enforced at the
- * helper boundary — duplicates are deduped on add.
- */
-interface SuppressionList {
-  ids: string[];
-  updatedAt: string;
-}
-
-/** No TTL on suppressions — they're explicit user choices and shouldn't
- *  silently re-surface. The user un-suppresses or the bucket is cleared. */
 const SUPPRESS_PREFIX = 'audit:suppressed:';
 
-/** Repo-scoped suppression key. Lowercased + trimmed for case stability;
- *  scoped per-user so two users can hold independent suppression sets
- *  on the same repo. */
-export function suppressionKey(userId: string, owner: string, repo: string): string {
-  return `${SUPPRESS_PREFIX}${userId}:${owner.toLowerCase()}/${repo.toLowerCase()}`;
+/** Per-repo prefix — used by getSuppressedIds() to list one user's
+ *  suppressions for one repo. */
+function suppressionRepoPrefix(userId: string, owner: string, repo: string): string {
+  return `${SUPPRESS_PREFIX}${userId}:${owner.toLowerCase()}/${repo.toLowerCase()}:`;
+}
+
+/** Per-finding key. Lowercased owner/repo for case stability. */
+export function suppressionKey(
+  userId: string,
+  owner: string,
+  repo: string,
+  findingId: string,
+): string {
+  return `${suppressionRepoPrefix(userId, owner, repo)}${findingId}`;
 }
 
 export async function getSuppressedIds(
@@ -131,17 +142,33 @@ export async function getSuppressedIds(
 ): Promise<ReadonlySet<string>> {
   if (!kv) return new Set();
   try {
-    const data = (await kv.get(suppressionKey(userId, owner, repo), 'json')) as SuppressionList | null;
-    return new Set(data?.ids ?? []);
+    const prefix = suppressionRepoPrefix(userId, owner, repo);
+    const ids = new Set<string>();
+    // KV list pages at 1000 keys; in practice no repo gets >100 suppressions
+    // for one user. Walk pages anyway so the contract is correct under
+    // pathological load.
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await kv.list({ prefix, cursor });
+      for (const k of page.keys) {
+        const id = k.name.slice(prefix.length);
+        if (id) ids.add(id);
+      }
+      if (page.list_complete) break;
+      cursor = page.cursor;
+      if (!cursor) break;
+    }
+    return ids;
   } catch {
     return new Set();
   }
 }
 
 /**
- * Add a finding-id to the per-repo suppression list. Returns the size of
- * the list after the write (1 means newly suppressed; unchanged size
- * means it was already there).
+ * Suppress a finding-id. Idempotent: re-suppressing the same id is a no-op
+ * write. Returns whether the id was newly added (the caller surfaces
+ * "already on list" vs "newly suppressed" UX); `total` is the post-write
+ * size of the per-repo set.
  */
 export async function addSuppression(
   kv: KVNamespace | undefined,
@@ -151,17 +178,13 @@ export async function addSuppression(
   findingId: string,
 ): Promise<{ added: boolean; total: number }> {
   if (!kv) return { added: false, total: 0 };
-  const key = suppressionKey(userId, owner, repo);
-  const before = (await kv.get(key, 'json')) as SuppressionList | null;
-  const set = new Set(before?.ids ?? []);
-  const wasAlreadyThere = set.has(findingId);
-  set.add(findingId);
-  const list: SuppressionList = {
-    ids: [...set].sort(), // sorted so the JSON diffs cleanly run-over-run
-    updatedAt: new Date().toISOString(),
-  };
-  await kv.put(key, JSON.stringify(list));
-  return { added: !wasAlreadyThere, total: list.ids.length };
+  const key = suppressionKey(userId, owner, repo, findingId);
+  // Single get to detect "already there" for the UX message — not used for
+  // mutation logic, so it's not in the RMW critical path.
+  const existing = await kv.get(key);
+  await kv.put(key, JSON.stringify({ at: new Date().toISOString() }));
+  const total = (await getSuppressedIds(kv, userId, owner, repo)).size;
+  return { added: existing === null, total };
 }
 
 export async function removeSuppression(
@@ -172,21 +195,11 @@ export async function removeSuppression(
   findingId: string,
 ): Promise<{ removed: boolean; total: number }> {
   if (!kv) return { removed: false, total: 0 };
-  const key = suppressionKey(userId, owner, repo);
-  const before = (await kv.get(key, 'json')) as SuppressionList | null;
-  if (!before) return { removed: false, total: 0 };
-  const set = new Set(before.ids);
-  const wasThere = set.delete(findingId);
-  // Empty set → delete the key entirely so the listing doesn't accumulate
-  // empty entries over time.
-  if (set.size === 0) {
+  const key = suppressionKey(userId, owner, repo, findingId);
+  const existing = await kv.get(key);
+  if (existing !== null) {
     await kv.delete(key);
-    return { removed: wasThere, total: 0 };
   }
-  const list: SuppressionList = {
-    ids: [...set].sort(),
-    updatedAt: new Date().toISOString(),
-  };
-  await kv.put(key, JSON.stringify(list));
-  return { removed: wasThere, total: list.ids.length };
+  const total = (await getSuppressedIds(kv, userId, owner, repo)).size;
+  return { removed: existing !== null, total };
 }
