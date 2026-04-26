@@ -645,16 +645,22 @@ function formatPreventive(prev: { kind: string; detail: string }, runId: string)
 // /audit export <runId> — full report retrieval
 // ---------------------------------------------------------------------------
 
+/**
+ * Strict RFC 4122 UUID regex (versions 1–5). runIds are produced by
+ * crypto.randomUUID() (v4), so we accept only the canonical 36-char
+ * dashed shape. Loose patterns let typos like "deadbeef" or "--------"
+ * through to the KV layer; user-scoped keys neutralized the security
+ * impact, but rejecting at the parse boundary is cheaper + clearer.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 async function handleExport(request: SkillRequest, start: number): Promise<SkillResult> {
   const runId = request.text.trim().split(/\s+/)[0] ?? '';
   if (!runId) {
     return errorResult('Usage: /audit export <runId>');
   }
 
-  // Trivial shape check before we hit KV — runIds are UUIDs, anything else
-  // is almost certainly a typo. Cheap rejection avoids leaking "no audit
-  // run found" timing for arbitrary user input.
-  if (!/^[0-9a-fA-F-]{8,64}$/.test(runId)) {
+  if (!UUID_RE.test(runId)) {
     return errorResult(`Not a valid run id: "${runId.slice(0, 80)}"`);
   }
 

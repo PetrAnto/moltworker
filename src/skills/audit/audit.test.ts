@@ -1300,7 +1300,68 @@ describe('command-map: /audit subcommands', () => {
   });
 });
 
-describe('--analyze: persists AuditRun to NEXUS_KV after completion', () => {
+describe('--analyze: persists AuditRun to NEXUS_KV after completion (DO path)', () => {
+  it('writes the run when running with context.runningInDO=true (oversize → DO → cacheAuditRun)', async () => {
+    // Regression for the slice-3 risk GPT flagged: oversize audits dispatch
+    // to the DO; the DO calls runFullAudit with runningInDO=true; that path
+    // MUST still call cacheAuditRun so /audit export can later retrieve it.
+    // We exercise the DO's executed code path by passing runningInDO=true
+    // directly into handleAudit (the DO's processSkillTask sets the same
+    // flag when it invokes runSkill, contract tested in
+    // build-skill-env.test.ts).
+    const tree = Array.from({ length: 30 }, (_, i) => ({
+      path: `src/auth/h${i}.ts`, type: 'blob' as const, sha: `s${i}`, size: 100,
+    }));
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      // Per-file content fetches return 404 — the Analyst will short-circuit
+      // (no snippets) but the run STILL gets persisted with its empty findings.
+      { match: (u) => u.includes('/contents/'), status: 404, body: {} },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+
+    const kvStore = new Map<string, string>();
+    const kv = {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = kvStore.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(async (key: string, value: string) => { kvStore.set(key, value); }),
+    } as unknown as KVNamespace;
+
+    // Simulate the DO context: runningInDO=true bypasses the inline-budget
+    // guard AND the dispatcher. depth=deep would ordinarily refuse inline.
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      userId: 'user-99',
+      transport: 'telegram',
+      chatId: 12345,
+      context: { telegramToken: 'tg', runningInDO: true },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        NEXUS_KV: kv,
+      } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    const run = result.data as AuditRun;
+
+    // The DO-side run was persisted under the same user-scoped key shape
+    // as the inline path — round-trip via /audit export will now succeed.
+    const expectedKey = `audit:run:user-99:${run.runId}`;
+    expect(kv.put).toHaveBeenCalledWith(
+      expectedKey,
+      expect.any(String),
+      expect.objectContaining({ expirationTtl: expect.any(Number) }),
+    );
+    const persisted = JSON.parse(kvStore.get(expectedKey)!);
+    expect(persisted.runId).toBe(run.runId);
+  });
+
   it('writes the run under audit:run:{userId}:{runId} so /audit export can find it', async () => {
     const tree = [
       { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
@@ -1381,7 +1442,7 @@ describe('/audit export', () => {
 
   function makeRun(overrides: Partial<AuditRun> = {}): AuditRun {
     return {
-      runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
       repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
       lenses: ['security'],
       depth: 'quick',
@@ -1447,11 +1508,46 @@ describe('/audit export', () => {
     expect(kv.get).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['empty hex run', 'deadbeef'],                                            // too short, no dashes
+    ['all dashes', '--------'],                                               // matched the old loose regex
+    ['hex with spurious dashes', 'abc-----def'],                              // loose regex would accept
+    ['UUID with bad version digit', 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee'],  // v=c, must be 1-5
+    ['UUID with bad variant digit', 'aaaaaaaa-bbbb-4ccc-cddd-eeeeeeeeeeee'],  // var=c, must be 8-b
+    ['Wrong group lengths',         'aaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],   // 7 chars in first group
+  ])('rejects %s as not a valid runId (strict UUID)', async (_label, badId) => {
+    const kv = kvWithRun('user-1', makeRun());
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: badId,
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/not a valid run id/i);
+    expect(kv.get).not.toHaveBeenCalled();
+  });
+
+  it('accepts a real crypto.randomUUID() shape (sanity)', async () => {
+    // The v4 UUIDs the runtime produces MUST pass — otherwise we'd reject
+    // every real run id we ever stored.
+    const realUuid = crypto.randomUUID();
+    const run = makeRun({ runId: realUuid });
+    const kv = kvWithRun('user-1', run);
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: realUuid,
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+  });
+
   it('returns clear error when the run is not found (or expired)', async () => {
     const kv = kvWithRun('user-1', makeRun()); // has run for user-1, NOT user-2
     const result = await handleAudit(makeRequest({
       subcommand: 'export',
-      text: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      text: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
       userId: 'user-2', // different user → user-scoped key won't match
       env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
     }));
@@ -1475,6 +1571,71 @@ describe('/audit export', () => {
     const parsed = JSON.parse(result.body);
     expect(parsed.runId).toBe(run.runId);
     expect(parsed.findings[0].id).toBe('security-abc');
+  });
+
+  it('renders into Telegram-safe chunks when the export body exceeds 4 KiB', async () => {
+    // Build a large run: 12 findings, each with a multi-line preventive
+    // artifact, evidence snippets, and prose. The serialized body will
+    // exceed Telegram's 4096-char limit and MUST be chunked rather than
+    // sent as one oversize message (which Telegram would reject).
+    const run = makeRun({
+      findings: Array.from({ length: 12 }, (_, i) => ({
+        id: `security-${i}`,
+        lens: 'security' as const,
+        severity: 'high' as const,
+        confidence: 0.75 as const,
+        evidence: [{
+          path: 'src/auth.ts',
+          lines: `${i * 10}-${i * 10 + 5}`,
+          source: 'llm' as const,
+          snippet: `const TOKEN_${i} = 'sk_...';\n// padding line ${i}`.repeat(2),
+        }],
+        symptom: `Hardcoded secret variant ${i}`,
+        rootCause: `Repeated pattern: secret literal committed in handler ${i}; CI lacks pre-commit secret scan`,
+        correctiveAction: `Rotate TOKEN_${i}; move to env var; redeploy`,
+        preventiveAction: {
+          kind: 'ci' as const,
+          detail: [
+            `name: secret-scan-${i}`,
+            `on: [push, pull_request]`,
+            `jobs:`,
+            `  scan:`,
+            `    runs-on: ubuntu-latest`,
+            `    steps:`,
+            `      - uses: actions/checkout@v4`,
+            `      - uses: gitleaks/gitleaks-action@v2`,
+            `        with:`,
+            `          config-path: .gitleaks.toml`,
+          ].join('\n'),
+        },
+      })),
+    });
+    const kv = kvWithRun('user-1', run);
+
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: run.runId,
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    // Sanity: the body really is oversize (otherwise this isn't testing
+    // what we think it is).
+    expect(result.body.length).toBeGreaterThan(4096);
+
+    // Run the body through the actual telegram renderer used in production.
+    const { renderForTelegram } = await import('../renderers/telegram');
+    const chunks = renderForTelegram(result);
+
+    // The renderer MUST produce multiple chunks, each within Telegram's
+    // 4096-char limit. (We assert <= 4096 with a small safety margin
+    // since the renderer reserves space for tag-repair markup.)
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      expect(c.text.length).toBeLessThanOrEqual(4096);
+    }
+    // Every chunk should still parse/render the same parseMode (HTML).
+    for (const c of chunks) expect(c.parseMode).toBe('HTML');
   });
 });
 
