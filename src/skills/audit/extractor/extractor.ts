@@ -21,14 +21,14 @@
  */
 
 import { classifyNode, relevantNodeTypes } from './queries';
-import { loadLanguage, newParserForLanguage } from './parser';
+import { loadLanguage, newParserForLanguage, type BootstrapOptions } from './parser';
 import type { GrammarLoaderEnv, LoadResult } from '../grammars/loader';
 import {
   type ExtractedSnippet,
   type GrammarLanguage,
   type RepoProfile,
   type SnippetKind,
-  MAX_SNIPPET_BYTES,
+  MAX_SNIPPET_CHARS,
   isGrammarLanguage,
 } from '../types';
 
@@ -47,6 +47,11 @@ export interface ExtractContext {
   /** Loader for grammar bytes — usually a closure over the loader module's
    *  loadGrammar(env, lang). Indirected for testability. */
   loadGrammar: (lang: GrammarLanguage) => Promise<LoadResult | null>;
+  /** Forwarded to bootstrapParser(). REQUIRED in Cloudflare Workers
+   *  (set runtimeWasmBytes from a Wrangler-bundled import + pass
+   *  requireRuntimeWasmBytes: true to fail loud on misconfiguration).
+   *  In Node tests it can be omitted — the package auto-resolves. */
+  parserBootstrap?: BootstrapOptions;
 }
 
 export interface ExtractResult {
@@ -143,7 +148,7 @@ export async function extractSnippets(ctx: ExtractContext): Promise<ExtractResul
 
     let language;
     try {
-      language = await loadLanguage(lang, grammar.bytes, grammar.entry.sha256);
+      language = await loadLanguage(lang, grammar.bytes, grammar.entry.sha256, ctx.parserBootstrap);
     } catch (err) {
       for (const f of files) {
         parseErrors.push({ path: f.path, reason: `loadLanguage failed: ${errMsg(err)}` });
@@ -180,6 +185,10 @@ export async function extractSnippets(ctx: ExtractContext): Promise<ExtractResul
 // Per-file parse + node walk
 // ---------------------------------------------------------------------------
 
+/** @internal Test-only: exposed so unit tests can drive parseFile with a
+ *  stub parser/tree to assert the try/finally cleanup contract. */
+export const _parseFileForTesting = parseFile;
+
 function parseFile(
   path: string,
   source: string,
@@ -189,35 +198,43 @@ function parseFile(
   sha: string | undefined,
 ): ExtractedSnippet[] {
   const tree = parser.parse(source);
-  const wanted = relevantNodeTypes(language);
-  const nodes = tree.rootNode.descendantsOfType(wanted);
-  const out: ExtractedSnippet[] = [];
+  // try/finally so the WASM-side tree memory is released even if a node
+  // operation throws partway through traversal (e.g. an unexpected
+  // web-tree-sitter error, or our nodeName helper hitting an unhandled
+  // shape). Long-running DO jobs parsing many files would otherwise
+  // accumulate memory pressure on each error.
+  try {
+    const wanted = relevantNodeTypes(language);
+    const nodes = tree.rootNode.descendantsOfType(wanted);
+    const out: ExtractedSnippet[] = [];
 
-  for (const node of nodes) {
-    const kind = classifyNode(language, node.type);
-    if (!kind) continue;
-    // For arrow_function / function_expression: only emit if they have a
-    // declarable name (assigned to a const/let/var or method shorthand).
-    // Anonymous arrow callbacks are too noisy for an audit overview.
-    const name = nodeName(node);
-    if ((node.type === 'arrow_function' || node.type === 'function_expression') && !name) {
-      continue;
+    for (const node of nodes) {
+      const kind = classifyNode(language, node.type);
+      if (!kind) continue;
+      // For arrow_function / function_expression: only emit if they have a
+      // declarable name (assigned to a const/let/var or method shorthand).
+      // Anonymous arrow callbacks are too noisy for an audit overview.
+      const name = nodeName(node);
+      if ((node.type === 'arrow_function' || node.type === 'function_expression') && !name) {
+        continue;
+      }
+      const startLine = node.startPosition.row + 1;
+      const endLine = node.endPosition.row + 1;
+      const slice = source.slice(node.startIndex, node.endIndex);
+      const t = truncate(slice);
+      out.push({
+        path, kind, name, startLine, endLine,
+        text: t.text,
+        truncated: t.truncated,
+        language,
+        sha,
+      });
     }
-    const startLine = node.startPosition.row + 1;
-    const endLine = node.endPosition.row + 1;
-    const slice = source.slice(node.startIndex, node.endIndex);
-    const t = truncate(slice);
-    out.push({
-      path, kind, name, startLine, endLine,
-      text: t.text,
-      truncated: t.truncated,
-      language,
-      sha,
-    });
-  }
 
-  tree.delete();
-  return out;
+    return out;
+  } finally {
+    tree.delete();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,8 +273,12 @@ function countLines(s: string): number {
 }
 
 function truncate(s: string): { text: string; truncated: boolean } {
-  if (s.length <= MAX_SNIPPET_BYTES) return { text: s, truncated: false };
-  return { text: s.slice(0, MAX_SNIPPET_BYTES) + '\n…[truncated]', truncated: true };
+  // s.length is UTF-16 code units, hence MAX_SNIPPET_CHARS rather than
+  // ..._BYTES. Token count and char count are the right proxies for context
+  // budget; UTF-8 byte size matters only at transport boundaries we don't
+  // control here.
+  if (s.length <= MAX_SNIPPET_CHARS) return { text: s, truncated: false };
+  return { text: s.slice(0, MAX_SNIPPET_CHARS) + '\n…[truncated]', truncated: true };
 }
 
 function errMsg(err: unknown): string {

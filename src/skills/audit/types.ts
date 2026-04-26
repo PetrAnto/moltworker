@@ -279,7 +279,7 @@ export interface ExtractedSnippet {
   startLine: number;
   endLine: number;
   /** Verbatim slice of the source, never paraphrased. Truncated to
-   *  MAX_SNIPPET_BYTES if the node is huge (e.g. an enormous function). */
+   *  MAX_SNIPPET_CHARS if the node is huge (e.g. an enormous function). */
   text: string;
   /** Language the source was parsed as. Used by the Analyst for routing. */
   language: GrammarLanguage | 'yaml' | 'json' | 'plain';
@@ -289,10 +289,12 @@ export interface ExtractedSnippet {
   truncated?: boolean;
 }
 
-/** Cap for any single snippet's verbatim text. Keeps the Analyst's per-call
- *  context bounded even when individual nodes are massive (the Big Function
- *  problem). 8 KiB ≈ 2k tokens — plenty for RCA on a single function. */
-export const MAX_SNIPPET_BYTES = 8 * 1024;
+/** Cap for any single snippet's verbatim text, in UTF-16 *characters* (i.e.
+ *  `string.length`). Token count and char count are both reasonable proxies
+ *  for the Analyst's per-call context budget; UTF-8 byte size matters only at
+ *  transport boundaries we don't control here. ~8k chars ≈ 2k tokens —
+ *  plenty for RCA on a single function. */
+export const MAX_SNIPPET_CHARS = 8 * 1024;
 
 // ---------------------------------------------------------------------------
 // Type guards & utilities
