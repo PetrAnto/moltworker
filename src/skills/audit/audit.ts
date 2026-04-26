@@ -63,6 +63,9 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   if (request.subcommand === 'suppress' || request.subcommand === 'unsuppress') {
     return handleSuppress(request, start, request.subcommand === 'unsuppress');
   }
+  if (request.subcommand === 'fix') {
+    return handleFix(request, start);
+  }
 
   // 1. Parse args
   const repoArg = request.text.trim().split(/\s+/)[0] ?? '';
@@ -730,6 +733,121 @@ async function handleExport(request: SkillRequest, start: number): Promise<Skill
       llmCalls: 0,
       toolCalls: 0,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// /audit fix <runId> <findingId>  →  Orchestra hand-off
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a clear, self-contained orchestra task description from an audit
+ * finding. Pure function — same input → same output (reproducibility),
+ * shared by the /audit fix slash-command path and the audit:fix callback
+ * auto-dispatch path so both produce identical orchestra dispatches.
+ */
+export function buildOrchestraTask(run: AuditRun, finding: AuditFinding): string {
+  const { repo } = run;
+  const lines: string[] = [];
+  lines.push(`Fix audit finding in ${repo.owner}/${repo.name}@${repo.sha.slice(0, 7)}.`);
+  lines.push('');
+  lines.push(`Severity: ${finding.severity} • Lens: ${finding.lens} • Confidence: ${finding.confidence}`);
+  lines.push(`Symptom: ${finding.symptom}`);
+  lines.push(`Root cause: ${finding.rootCause}`);
+  lines.push('');
+  lines.push('Required corrective action:');
+  lines.push(`  ${finding.correctiveAction}`);
+  lines.push('');
+  lines.push(`Preventive control to add (${finding.preventiveAction.kind}):`);
+  for (const ln of finding.preventiveAction.detail.split('\n')) {
+    lines.push(`  ${ln}`);
+  }
+  lines.push('');
+  lines.push('Evidence:');
+  for (const e of finding.evidence) {
+    const lineRef = e.lines ? `:${e.lines}` : '';
+    lines.push(`  - ${e.path}${lineRef}${e.sha ? ` (sha ${e.sha.slice(0, 7)})` : ''}`);
+    if (e.snippet) {
+      // First line of the snippet is the most identifying — keep the
+      // orchestra prompt tight.
+      const firstLine = e.snippet.split('\n').find(s => s.trim().length > 0)?.trim() ?? '';
+      if (firstLine) lines.push(`    ${firstLine.slice(0, 200)}`);
+    }
+  }
+  if (finding.orchestraPatchBrief) {
+    lines.push('');
+    lines.push('Additional context:');
+    lines.push(`  ${finding.orchestraPatchBrief}`);
+  }
+  lines.push('');
+  lines.push(`Audit run: ${run.runId}, finding id: ${finding.id} (cite both in the PR description so /audit can mark this finding fixed on the next run).`);
+  return lines.join('\n');
+}
+
+/**
+ * Validate + resolve + build for the /audit fix path. Used by both the
+ * slash-command handler (which surfaces the dispatch text to the user)
+ * and the inline-keyboard callback (which auto-dispatches /orch run).
+ *
+ * Returns a discriminated union so the caller can pattern-match:
+ * `ok=true` carries the run + finding + orchestra task text; `ok=false`
+ * carries a user-facing error string.
+ */
+export type FixResolution =
+  | { ok: true; run: AuditRun; finding: AuditFinding; taskText: string }
+  | { ok: false; error: string };
+
+export async function resolveFix(
+  kv: KVNamespace | undefined,
+  userId: string,
+  runId: string,
+  findingId: string,
+): Promise<FixResolution> {
+  if (!UUID_RE.test(runId)) {
+    return { ok: false, error: `Not a valid run id: "${runId.slice(0, 80)}"` };
+  }
+  if (!/^[a-z]+-[a-z0-9]+$/.test(findingId)) {
+    return { ok: false, error: `Not a valid finding id: "${findingId.slice(0, 80)}"` };
+  }
+  const run = await getCachedAuditRun(kv, userId, runId);
+  if (!run) {
+    return {
+      ok: false,
+      error: `No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`,
+    };
+  }
+  const finding = run.findings.find(f => f.id === findingId);
+  if (!finding) {
+    return {
+      ok: false,
+      error: `Finding ${findingId} is not part of run ${runId.slice(0, 8)}…. Use /audit export ${runId} to list this run's findings.`,
+    };
+  }
+  return { ok: true, run, finding, taskText: buildOrchestraTask(run, finding) };
+}
+
+async function handleFix(request: SkillRequest, start: number): Promise<SkillResult> {
+  const tokens = request.text.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) {
+    return errorResult('Usage: /audit fix <runId> <findingId>');
+  }
+  const [runId, findingId] = tokens;
+  const r = await resolveFix(request.env.NEXUS_KV, request.userId, runId, findingId);
+  if (!r.ok) return errorResult(r.error);
+
+  // Slash-command path: surface the orchestra dispatch command so the user
+  // can review/edit before running it. The inline-keyboard callback path
+  // (handler.ts case 'audit' / sub === 'fix') uses resolveFix directly and
+  // dispatches /orch run automatically without this manual step.
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body:
+      `🔧 Orchestra task ready for finding ${r.finding.id} in ${r.run.repo.owner}/${r.run.repo.name}.\n\n` +
+      `Dispatch with:\n\n/orch run ${r.taskText}\n\n` +
+      `Or click the 🔧 Fix button on the original audit message to auto-dispatch.`,
+    data: { runId: r.run.runId, findingId: r.finding.id, taskText: r.taskText },
+    telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
   };
 }
 

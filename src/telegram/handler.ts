@@ -4386,9 +4386,25 @@ export class TelegramHandler {
           // in handleAudit.
           await this.handleCommand(query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never, `/audit export ${runId}`);
         } else if (sub === 'fix' && runId && findingId) {
+          // Auto-dispatch path: resolve the finding (validation + run
+          // lookup live in resolveFix so the /audit fix slash command and
+          // this callback share one source of truth) and route the
+          // orchestra task through handleCommand('/orch run …'). The
+          // user gets one acknowledgement message + whatever orchestra
+          // streams back as it runs.
+          const { resolveFix } = await import('../skills/audit/audit');
+          const r = await resolveFix(this.nexusKv, userId, runId, findingId);
+          if (!r.ok) {
+            await this.bot.sendMessage(chatId, r.error);
+            break;
+          }
           await this.bot.sendMessage(
             chatId,
-            `🔧 Orchestra hand-off for finding ${findingId} on run ${runId.slice(0, 8)}… is not enabled yet. The corrective + preventive details are already in /audit export ${runId}.`,
+            `🔧 Dispatching to orchestra: fix ${r.finding.severity} ${r.finding.lens} defect (${r.finding.id}) in ${r.run.repo.owner}/${r.run.repo.name}…`,
+          );
+          await this.handleCommand(
+            query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never,
+            `/orch run ${r.taskText}`,
           );
         } else if (sub === 'sup' && runId && findingId) {
           // Re-route through the slash command so the user-scoped KV path,
