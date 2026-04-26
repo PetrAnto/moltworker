@@ -196,7 +196,11 @@ async function dispatchToDO(
 ): Promise<SkillResult> {
   const { plan, request, start } = ctx;
   const taskId = crypto.randomUUID();
-  const doId = taskProcessor.idFromName(`audit-${request.userId}-${taskId}`);
+  // DO identity is *deterministic* per (user, repo, sha, lenses, depth) so
+  // that re-running the same audit hits the same DO instance — enabling
+  // dedupe / resume semantics later. The taskId UUID is kept for display
+  // and per-run state tracking inside the DO.
+  const doId = taskProcessor.idFromName(audit_do_key(request.userId, plan));
   const stub = taskProcessor.get(doId);
 
   // Strip env from the wire payload — Workers bindings (R2/KV/DO/Fetcher)
@@ -220,8 +224,9 @@ async function dispatchToDO(
     cloudflareApiToken: request.env.CLOUDFLARE_API_TOKEN,
   };
 
+  let resp: Response;
   try {
-    await stub.fetch('https://do/process', {
+    resp = await stub.fetch('https://do/process', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(skillTaskRequest),
@@ -229,6 +234,14 @@ async function dispatchToDO(
   } catch (err) {
     console.error('[Audit] DO dispatch failed:', err instanceof Error ? err.message : err);
     return errorResult(`Audit dispatch failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+  }
+  // The DO returns 200 + JSON on accept, anything else is a dispatch failure
+  // we MUST surface — otherwise the user sees "Audit started" while the DO
+  // never actually started. Read the body defensively (it may be empty).
+  if (!resp.ok) {
+    let detail = '';
+    try { detail = (await resp.text()).slice(0, 240); } catch { /* ignore */ }
+    return errorResult(`Audit dispatch failed: DO returned ${resp.status}${detail ? ` — ${detail}` : ''}`);
   }
 
   const { profile } = plan;
@@ -245,6 +258,20 @@ async function dispatchToDO(
       toolCalls: ctx.apiCallsSoFar,
     },
   };
+}
+
+/**
+ * Deterministic DO key. Same user + repo + SHA + lenses (sorted, normalized)
+ * + depth → same DO. Sorting the lenses keeps the key stable regardless of
+ * arg order; the SHA pins the audit to a specific commit so a force-pushed
+ * branch produces a fresh DO instance.
+ *
+ * Exposed for testing — the regression test asserts the key is stable
+ * across argument-order permutations.
+ */
+export function audit_do_key(userId: string, plan: AuditPlan): string {
+  const lensKey = [...plan.lenses].sort().join(',');
+  return `audit:${userId}:${plan.profile.owner}/${plan.profile.repo}@${plan.profile.sha}:${lensKey}:${plan.depth}`;
 }
 
 async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {

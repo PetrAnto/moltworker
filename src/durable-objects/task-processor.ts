@@ -465,6 +465,63 @@ export function isSkillTaskRequest(payload: TaskProcessorPayload): payload is Sk
   return 'kind' in payload && (payload as SkillTaskRequest).kind === 'skill';
 }
 
+/**
+ * Authoritatively rebuild a SkillRequest['env'] from the DO's own bindings
+ * + the secrets passed in the SkillTaskRequest payload.
+ *
+ * CRITICAL: callers MUST NOT spread `request.skillRequest.env`. That field
+ * crossed a `fetch()` JSON boundary, which strips all Workers bindings
+ * (R2Bucket, KVNamespace, DurableObjectNamespace, Fetcher, Queue) to `{}`
+ * while preserving their TypeScript types. Trusting it would produce a
+ * "valid-looking" env whose binding methods don't exist at runtime — the
+ * exact class of bug behind "taskProcessor.idFromName is not a function"
+ * (and the audit equivalent: "MOLTBOT_BUCKET is undefined" silently
+ * disabling the runtime-WASM gate).
+ *
+ * The DO receives the full Worker env at construction, so `doEnv` is the
+ * authoritative source for bindings. Secrets are taken from the request
+ * when supplied (allows callers to override per-task), falling back to the
+ * DO env so skills work even when the dispatcher omitted them.
+ *
+ * `TASK_PROCESSOR` is intentionally cleared so any nested skill that wants
+ * to "dispatch to a DO" falls back to inline (we're already in the DO).
+ *
+ * Exported solely for testing. Production callers go through processSkillTask.
+ */
+export function buildSkillEnv(
+  doEnv: TaskProcessorEnv,
+  request: SkillTaskRequest,
+): SkillRequest['env'] {
+  return {
+    // Bindings — only the live DO env is trustworthy
+    MOLTBOT_BUCKET: doEnv.MOLTBOT_BUCKET,
+    BACKUP_BUCKET: doEnv.BACKUP_BUCKET,
+    NEXUS_KV: doEnv.NEXUS_KV,
+    BROWSER: doEnv.BROWSER,
+    Sandbox: doEnv.Sandbox,
+    TASK_PROCESSOR: undefined,
+    // Secrets — request overrides win, DO env is the fallback
+    OPENROUTER_API_KEY: request.openrouterKey ?? doEnv.OPENROUTER_API_KEY,
+    GITHUB_TOKEN: request.githubToken ?? doEnv.GITHUB_TOKEN,
+    BRAVE_SEARCH_KEY: request.braveSearchKey ?? doEnv.BRAVE_SEARCH_KEY,
+    TAVILY_API_KEY: request.tavilyKey ?? doEnv.TAVILY_API_KEY,
+    CLOUDFLARE_API_TOKEN: request.cloudflareApiToken ?? doEnv.CLOUDFLARE_API_TOKEN,
+    ANTHROPIC_API_KEY: request.anthropicKey ?? doEnv.ANTHROPIC_API_KEY,
+    DASHSCOPE_API_KEY: request.dashscopeKey ?? doEnv.DASHSCOPE_API_KEY,
+    MOONSHOT_API_KEY: request.moonshotKey ?? doEnv.MOONSHOT_API_KEY,
+    DEEPSEEK_API_KEY: request.deepseekKey ?? doEnv.DEEPSEEK_API_KEY,
+    NVIDIA_NIM_API_KEY: request.nvidiaKey ?? doEnv.NVIDIA_NIM_API_KEY,
+    ACONTEXT_API_KEY: doEnv.ACONTEXT_API_KEY,
+    ACONTEXT_BASE_URL: doEnv.ACONTEXT_BASE_URL,
+    ARTIFICIAL_ANALYSIS_KEY: doEnv.ARTIFICIAL_ANALYSIS_KEY,
+    // Rate limit config (vars, survive JSON but DO env is still authoritative)
+    WEB_SEARCH_USER_DAILY_LIMIT: doEnv.WEB_SEARCH_USER_DAILY_LIMIT,
+    WEB_SEARCH_TASK_LIMIT: doEnv.WEB_SEARCH_TASK_LIMIT,
+    WEB_SEARCH_GLOBAL_DAILY_LIMIT: doEnv.WEB_SEARCH_GLOBAL_DAILY_LIMIT,
+    WEB_SEARCH_ALLOWLIST_USERS: doEnv.WEB_SEARCH_ALLOWLIST_USERS,
+  } as SkillRequest['env'];
+}
+
 // DO environment with R2 + Sandbox bindings
 /**
  * DO environment.
@@ -477,7 +534,7 @@ export function isSkillTaskRequest(payload: TaskProcessorPayload): payload is Sk
  * legitimately access so skill paths can authoritatively reconstruct env from
  * `this.doEnv` instead of trusting a serialized payload.
  */
-interface TaskProcessorEnv {
+export interface TaskProcessorEnv {
   // R2 / KV bindings
   MOLTBOT_BUCKET?: R2Bucket;
   BACKUP_BUCKET?: R2Bucket;
@@ -2131,48 +2188,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       initializeSkills();
 
       // Authoritatively reconstruct skill env from the DO's own bindings.
-      //
-      // CRITICAL: do NOT spread `request.skillRequest.env`. That field crossed a
-      // `fetch()` JSON boundary, which strips all Workers bindings (R2Bucket,
-      // KVNamespace, DurableObjectNamespace, Fetcher, Queue) to `{}` while
-      // preserving their TypeScript types. Trusting it would produce a "valid-
-      // looking" env whose binding methods don't exist at runtime — the exact
-      // class of bug behind "taskProcessor.idFromName is not a function".
-      //
-      // The DO receives the full Worker env at construction, so `this.doEnv`
-      // is the authoritative source for bindings. Secrets are taken from the
-      // request when supplied (allows callers to override per-task), falling
-      // back to the DO env so skills work even when the dispatcher omitted them.
-      // TASK_PROCESSOR is intentionally cleared so any nested skill that wants
-      // to "dispatch to a DO" falls back to inline (we're already in the DO).
-      const skillEnv: SkillRequest['env'] = {
-        // Bindings — only the live DO env is trustworthy
-        MOLTBOT_BUCKET: this.doEnv.MOLTBOT_BUCKET,
-        BACKUP_BUCKET: this.doEnv.BACKUP_BUCKET,
-        NEXUS_KV: this.doEnv.NEXUS_KV,
-        BROWSER: this.doEnv.BROWSER,
-        Sandbox: this.doEnv.Sandbox,
-        TASK_PROCESSOR: undefined,
-        // Secrets — request overrides win, DO env is the fallback
-        OPENROUTER_API_KEY: request.openrouterKey ?? this.doEnv.OPENROUTER_API_KEY,
-        GITHUB_TOKEN: request.githubToken ?? this.doEnv.GITHUB_TOKEN,
-        BRAVE_SEARCH_KEY: request.braveSearchKey ?? this.doEnv.BRAVE_SEARCH_KEY,
-        TAVILY_API_KEY: request.tavilyKey ?? this.doEnv.TAVILY_API_KEY,
-        CLOUDFLARE_API_TOKEN: request.cloudflareApiToken ?? this.doEnv.CLOUDFLARE_API_TOKEN,
-        ANTHROPIC_API_KEY: request.anthropicKey ?? this.doEnv.ANTHROPIC_API_KEY,
-        DASHSCOPE_API_KEY: request.dashscopeKey ?? this.doEnv.DASHSCOPE_API_KEY,
-        MOONSHOT_API_KEY: request.moonshotKey ?? this.doEnv.MOONSHOT_API_KEY,
-        DEEPSEEK_API_KEY: request.deepseekKey ?? this.doEnv.DEEPSEEK_API_KEY,
-        NVIDIA_NIM_API_KEY: request.nvidiaKey ?? this.doEnv.NVIDIA_NIM_API_KEY,
-        ACONTEXT_API_KEY: this.doEnv.ACONTEXT_API_KEY,
-        ACONTEXT_BASE_URL: this.doEnv.ACONTEXT_BASE_URL,
-        ARTIFICIAL_ANALYSIS_KEY: this.doEnv.ARTIFICIAL_ANALYSIS_KEY,
-        // Rate limit config (vars, survive JSON but DO env is still authoritative)
-        WEB_SEARCH_USER_DAILY_LIMIT: this.doEnv.WEB_SEARCH_USER_DAILY_LIMIT,
-        WEB_SEARCH_TASK_LIMIT: this.doEnv.WEB_SEARCH_TASK_LIMIT,
-        WEB_SEARCH_GLOBAL_DAILY_LIMIT: this.doEnv.WEB_SEARCH_GLOBAL_DAILY_LIMIT,
-        WEB_SEARCH_ALLOWLIST_USERS: this.doEnv.WEB_SEARCH_ALLOWLIST_USERS,
-      } as SkillRequest['env'];
+      // See buildSkillEnv() docs for the full rationale (env-over-JSON
+      // anti-pattern). Extracted into a pure function so the contract
+      // ("MOLTBOT_BUCKET et al. flow through to the skill") is unit-testable
+      // without instantiating the full DO machinery.
+      const skillEnv = buildSkillEnv(this.doEnv, request);
       const enrichedRequest: SkillRequest = {
         ...request.skillRequest,
         env: skillEnv,
