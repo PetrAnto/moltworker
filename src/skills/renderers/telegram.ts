@@ -72,6 +72,10 @@ function renderSingle(result: SkillResult): TelegramChunk {
     case 'dossier':
       return renderDossier(result);
 
+    case 'audit_plan':
+    case 'audit_run':
+      return renderAudit(result);
+
     case 'image_brief':
       return renderImageBrief(result);
 
@@ -192,6 +196,23 @@ function renderSourcePlan(result: SkillResult): TelegramChunk {
   const lines: string[] = [];
   lines.push('<b>Source Plan</b> (reply "go" to proceed)\n');
   lines.push(escapeHtml(result.body));
+  return { text: lines.join('\n'), parseMode: 'HTML' };
+}
+
+function renderAudit(result: SkillResult): TelegramChunk {
+  const heading = result.kind === 'audit_run' ? 'Audit Report' : 'Audit Plan';
+  const lines: string[] = [];
+  lines.push(`<b>🔍 ${heading}</b>\n`);
+  lines.push(`<pre>${escapeHtml(result.body)}</pre>`);
+
+  const tel = result.telemetry;
+  const parts: string[] = [];
+  if (tel.model && tel.model !== 'none') parts.push(tel.model);
+  if (tel.llmCalls > 0) parts.push(`${tel.llmCalls} LLM calls`);
+  if (tel.toolCalls > 0) parts.push(`${tel.toolCalls} API calls`);
+  parts.push(`${(tel.durationMs / 1000).toFixed(1)}s`);
+  lines.push(`\n<i>${parts.join(' • ')}</i>`);
+
   return { text: lines.join('\n'), parseMode: 'HTML' };
 }
 

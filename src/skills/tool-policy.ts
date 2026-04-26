@@ -60,6 +60,15 @@ const TOOL_POLICIES: Record<SkillId, readonly string[]> = {
     'convert_currency',
     'get_weather',
   ],
+
+  // Audit: read-only repo access. v0 (Scout-only) uses no LLM tools — all
+  // GitHub fetching is direct. The allowlist becomes meaningful once the
+  // Analyst lands and may use github_read_file for follow-up evidence.
+  audit: [
+    'github_read_file',
+    'github_list_files',
+    'github_api',
+  ],
 };
 
 // Pre-build Sets for fast lookup

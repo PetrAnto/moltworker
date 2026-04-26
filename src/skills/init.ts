@@ -10,6 +10,7 @@ import { handleOrchestra, ORCHESTRA_META } from './orchestra/handler';
 import { handleLyra, LYRA_META } from './lyra/lyra';
 import { handleSpark, SPARK_META } from './spark/spark';
 import { handleNexus, NEXUS_META } from './nexus/nexus';
+import { handleAudit, AUDIT_META } from './audit/audit';
 
 let initialized = false;
 
@@ -22,4 +23,5 @@ export function initializeSkills(): void {
   registerSkill(LYRA_META, handleLyra);
   registerSkill(SPARK_META, handleSpark);
   registerSkill(NEXUS_META, handleNexus);
+  registerSkill(AUDIT_META, handleAudit);
 }

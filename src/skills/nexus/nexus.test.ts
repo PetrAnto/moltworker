@@ -294,4 +294,71 @@ describe('/dossier DO dispatch (S3.7)', () => {
     expect(result.kind).toBe('dossier');
     expect(result.telemetry.llmCalls).toBe(2);
   });
+
+  it('strips env from the wire payload (Workers bindings do not survive JSON)', async () => {
+    // Regression: this is the root cause of the original
+    // "taskProcessor.idFromName is not a function" bug. Live Workers bindings
+    // (R2/KV/DO/Fetcher) get stripped to {} by JSON.stringify but TypeScript
+    // still claims they exist — silent type→runtime divergence. The dispatcher
+    // contract is: do NOT ship env over the wire; the receiving DO rebuilds
+    // it authoritatively from its own bindings. This test enforces that.
+    const mockStub = {
+      fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started', taskId: 'wire-test' }))),
+    };
+    const mockTaskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(mockStub),
+    };
+
+    await handleNexus(makeRequest({
+      subcommand: 'dossier',
+      text: 'wire test',
+      transport: 'telegram',
+      chatId: 123,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        MOLTBOT_BUCKET: {} as R2Bucket,
+        OPENROUTER_API_KEY: 'test-key',
+        NEXUS_KV: {} as KVNamespace,
+        TASK_PROCESSOR: mockTaskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+
+    expect(mockStub.fetch).toHaveBeenCalledTimes(1);
+    const fetchInit = mockStub.fetch.mock.calls[0][1] as RequestInit;
+    const payload = JSON.parse(fetchInit.body as string);
+
+    // Wire contract: skillRequest.env must NOT carry bindings across the boundary.
+    expect(payload.skillRequest.env).toBeUndefined();
+    // Secrets are passed explicitly so the DO can rebuild env on the other side.
+    expect(payload.openrouterKey).toBe('test-key');
+    // The full payload must JSON-roundtrip without throwing (no functions, no Symbols).
+    expect(() => JSON.parse(JSON.stringify(payload))).not.toThrow();
+  });
+
+  it('falls back to inline when TASK_PROCESSOR is a hollow object (post-JSON binding)', async () => {
+    // Defense in depth: even if some future code path forwards a dehydrated
+    // env (binding survived as {}), nexus must detect the missing methods
+    // and fall back to inline rather than crashing on .idFromName().
+    setupStandardMocks();
+
+    const result = await handleNexus(makeRequest({
+      subcommand: 'dossier',
+      text: 'OpenAI',
+      transport: 'telegram',
+      chatId: 123,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        MOLTBOT_BUCKET: {} as R2Bucket,
+        OPENROUTER_API_KEY: 'test-key',
+        NEXUS_KV: {} as KVNamespace,
+        // Hollow binding — what arrives after a JSON.stringify/parse roundtrip
+        TASK_PROCESSOR: {} as unknown,
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Must NOT throw "idFromName is not a function" — must run inline.
+    expect(result.kind).toBe('dossier');
+    expect(result.telemetry.llmCalls).toBe(2);
+  });
 });

@@ -466,11 +466,42 @@ export function isSkillTaskRequest(payload: TaskProcessorPayload): payload is Sk
 }
 
 // DO environment with R2 + Sandbox bindings
+/**
+ * DO environment.
+ *
+ * Cloudflare provides the *full Worker env* to a DO (same bindings + secrets).
+ * This interface previously declared only what the orchestra/chat path used,
+ * which caused the "TASK_PROCESSOR is not a function" class of bug: callers
+ * shipped `MoltbotEnv` over the JSON wire boundary and the DO had no
+ * authoritative bindings to rebuild from. Declare the full set the DO can
+ * legitimately access so skill paths can authoritatively reconstruct env from
+ * `this.doEnv` instead of trusting a serialized payload.
+ */
 interface TaskProcessorEnv {
+  // R2 / KV bindings
   MOLTBOT_BUCKET?: R2Bucket;
-  NEXUS_KV?: KVNamespace; // KV namespace for Nexus research cache
-  Sandbox?: DurableObjectNamespace<SandboxClass>; // Sandbox container binding (for sandbox_exec in DO)
-  SANDBOX_SLEEP_AFTER?: string; // Controls container keep-alive behavior
+  BACKUP_BUCKET?: R2Bucket;
+  NEXUS_KV?: KVNamespace;
+  // Container / fetcher bindings
+  Sandbox?: DurableObjectNamespace<SandboxClass>;
+  BROWSER?: Fetcher;
+  SANDBOX_SLEEP_AFTER?: string;
+  // Sibling DO namespaces (skills may need to dispatch to them)
+  TASK_PROCESSOR?: DurableObjectNamespace<TaskProcessor>;
+  // Provider secrets used by skills via the DO path
+  OPENROUTER_API_KEY?: string;
+  GITHUB_TOKEN?: string;
+  BRAVE_SEARCH_KEY?: string;
+  TAVILY_API_KEY?: string;
+  CLOUDFLARE_API_TOKEN?: string;
+  ANTHROPIC_API_KEY?: string;
+  DASHSCOPE_API_KEY?: string;
+  MOONSHOT_API_KEY?: string;
+  DEEPSEEK_API_KEY?: string;
+  NVIDIA_NIM_API_KEY?: string;
+  ACONTEXT_API_KEY?: string;
+  ACONTEXT_BASE_URL?: string;
+  ARTIFICIAL_ANALYSIS_KEY?: string;
   // web_search rate limit config (read from worker env vars — see src/types.ts MoltbotEnv)
   WEB_SEARCH_USER_DAILY_LIMIT?: string;
   WEB_SEARCH_TASK_LIMIT?: string;
@@ -2099,18 +2130,48 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Initialize skills registry
       initializeSkills();
 
-      // Build a fresh env with secrets from the DO request + bindings from DO env.
-      // This avoids mutating the original request object.
+      // Authoritatively reconstruct skill env from the DO's own bindings.
+      //
+      // CRITICAL: do NOT spread `request.skillRequest.env`. That field crossed a
+      // `fetch()` JSON boundary, which strips all Workers bindings (R2Bucket,
+      // KVNamespace, DurableObjectNamespace, Fetcher, Queue) to `{}` while
+      // preserving their TypeScript types. Trusting it would produce a "valid-
+      // looking" env whose binding methods don't exist at runtime — the exact
+      // class of bug behind "taskProcessor.idFromName is not a function".
+      //
+      // The DO receives the full Worker env at construction, so `this.doEnv`
+      // is the authoritative source for bindings. Secrets are taken from the
+      // request when supplied (allows callers to override per-task), falling
+      // back to the DO env so skills work even when the dispatcher omitted them.
+      // TASK_PROCESSOR is intentionally cleared so any nested skill that wants
+      // to "dispatch to a DO" falls back to inline (we're already in the DO).
       const skillEnv: SkillRequest['env'] = {
-        ...request.skillRequest.env,
-        OPENROUTER_API_KEY: request.openrouterKey,
-        GITHUB_TOKEN: request.githubToken,
-        BRAVE_SEARCH_KEY: request.braveSearchKey,
-        TAVILY_API_KEY: request.tavilyKey,
-        CLOUDFLARE_API_TOKEN: request.cloudflareApiToken,
-        // DO-level bindings (available in the DO's own env)
+        // Bindings — only the live DO env is trustworthy
         MOLTBOT_BUCKET: this.doEnv.MOLTBOT_BUCKET,
+        BACKUP_BUCKET: this.doEnv.BACKUP_BUCKET,
         NEXUS_KV: this.doEnv.NEXUS_KV,
+        BROWSER: this.doEnv.BROWSER,
+        Sandbox: this.doEnv.Sandbox,
+        TASK_PROCESSOR: undefined,
+        // Secrets — request overrides win, DO env is the fallback
+        OPENROUTER_API_KEY: request.openrouterKey ?? this.doEnv.OPENROUTER_API_KEY,
+        GITHUB_TOKEN: request.githubToken ?? this.doEnv.GITHUB_TOKEN,
+        BRAVE_SEARCH_KEY: request.braveSearchKey ?? this.doEnv.BRAVE_SEARCH_KEY,
+        TAVILY_API_KEY: request.tavilyKey ?? this.doEnv.TAVILY_API_KEY,
+        CLOUDFLARE_API_TOKEN: request.cloudflareApiToken ?? this.doEnv.CLOUDFLARE_API_TOKEN,
+        ANTHROPIC_API_KEY: request.anthropicKey ?? this.doEnv.ANTHROPIC_API_KEY,
+        DASHSCOPE_API_KEY: request.dashscopeKey ?? this.doEnv.DASHSCOPE_API_KEY,
+        MOONSHOT_API_KEY: request.moonshotKey ?? this.doEnv.MOONSHOT_API_KEY,
+        DEEPSEEK_API_KEY: request.deepseekKey ?? this.doEnv.DEEPSEEK_API_KEY,
+        NVIDIA_NIM_API_KEY: request.nvidiaKey ?? this.doEnv.NVIDIA_NIM_API_KEY,
+        ACONTEXT_API_KEY: this.doEnv.ACONTEXT_API_KEY,
+        ACONTEXT_BASE_URL: this.doEnv.ACONTEXT_BASE_URL,
+        ARTIFICIAL_ANALYSIS_KEY: this.doEnv.ARTIFICIAL_ANALYSIS_KEY,
+        // Rate limit config (vars, survive JSON but DO env is still authoritative)
+        WEB_SEARCH_USER_DAILY_LIMIT: this.doEnv.WEB_SEARCH_USER_DAILY_LIMIT,
+        WEB_SEARCH_TASK_LIMIT: this.doEnv.WEB_SEARCH_TASK_LIMIT,
+        WEB_SEARCH_GLOBAL_DAILY_LIMIT: this.doEnv.WEB_SEARCH_GLOBAL_DAILY_LIMIT,
+        WEB_SEARCH_ALLOWLIST_USERS: this.doEnv.WEB_SEARCH_ALLOWLIST_USERS,
       } as SkillRequest['env'];
       const enrichedRequest: SkillRequest = {
         ...request.skillRequest,
