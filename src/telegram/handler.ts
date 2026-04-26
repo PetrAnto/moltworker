@@ -181,6 +181,12 @@ export interface InlineKeyboardMarkup {
   inline_keyboard: InlineKeyboardButton[][];
 }
 
+/** 16-hex token shape produced by newFixDraftToken(). Validated at the
+ *  callback boundary so a hand-crafted or stale audit:go / audit:no
+ *  payload can't drive arbitrary KV reads/deletes. Closes PR 514
+ *  follow-up #3. */
+const FIX_TOKEN_RE = /^[0-9a-f]{16}$/i;
+
 /**
  * Telegram Bot API client
  */
@@ -4461,7 +4467,10 @@ export class TelegramHandler {
           await this.handleCommand(query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never, `/audit export ${runId}`);
         } else if (sub === 'fix') {
           // PREPARE: validate + resolve + create a fix draft + show
-          // confirmation keyboard parameterized on the token.
+          // confirmation keyboard parameterized on the token. Critically:
+          // the Confirm button is shown ONLY if the draft persisted —
+          // otherwise the user would see a button whose first tap fails
+          // with "expired or already processed". Closes PR 514 follow-up #1.
           const runId = parts[2] ?? '';
           const findingId = parts[3] ?? '';
           if (!runId || !findingId) break;
@@ -4470,7 +4479,7 @@ export class TelegramHandler {
           const r = await resolveFix(this.nexusKv, userId, runId, findingId);
           if (!r.ok) { await this.bot.sendMessage(chatId, r.error); break; }
           const token = newFixDraftToken();
-          await cacheFixDraft(this.nexusKv, userId, token, {
+          const stored = await cacheFixDraft(this.nexusKv, userId, token, {
             runId, findingId,
             taskText: r.taskText,
             owner: r.run.repo.owner,
@@ -4479,6 +4488,13 @@ export class TelegramHandler {
             lens: r.finding.lens,
             createdAt: new Date().toISOString(),
           });
+          if (!stored) {
+            await this.bot.sendMessage(
+              chatId,
+              '⚠️ Could not prepare this fix draft (storage unavailable). Please retry in a moment, or run /audit fix ' + runId + ' ' + findingId + ' for the manual dispatch path.',
+            );
+            break;
+          }
           await this.bot.sendMessageWithButtons(
             chatId,
             buildFixSummary(r.run, r.finding),
@@ -4489,12 +4505,16 @@ export class TelegramHandler {
             { parseMode: 'HTML' },
           );
         } else if (sub === 'go') {
-          // CONFIRM: consume the prepared draft and dispatch its taskText
-          // verbatim. Read+delete is best-effort (KV is eventually
-          // consistent) but the second confirm tap will see null once
-          // the delete propagates — pairs with the keyboard-edit below.
+          // CONFIRM: validate token shape, then consume the prepared
+          // draft and dispatch its taskText verbatim. Read+delete is
+          // best-effort (KV is eventually consistent) but the second
+          // confirm tap will see null once the delete propagates —
+          // pairs with the keyboard-edit below.
           const token = parts[2] ?? '';
-          if (!token) break;
+          if (!FIX_TOKEN_RE.test(token)) {
+            await this.bot.sendMessage(chatId, 'Invalid or expired fix confirmation token.');
+            break;
+          }
           const { consumeFixDraft } = await import('../skills/audit/cache');
           const draft = await consumeFixDraft(this.nexusKv, userId, token);
           if (!draft) {
@@ -4514,10 +4534,11 @@ export class TelegramHandler {
           );
           await this.dispatchOrchestraTask(chatId, userId, draft.taskText);
         } else if (sub === 'no') {
-          // CANCEL: delete the draft + dismiss keyboard. No KV write
-          // beyond the delete; the user simply chose not to dispatch.
+          // CANCEL: delete the draft + dismiss keyboard. Validate token
+          // shape so a hand-crafted callback can't drive arbitrary KV
+          // delete attempts (low-risk, but cheap to enforce).
           const token = parts[2] ?? '';
-          if (token) {
+          if (FIX_TOKEN_RE.test(token)) {
             const { deleteFixDraft } = await import('../skills/audit/cache');
             await deleteFixDraft(this.nexusKv, userId, token);
           }
