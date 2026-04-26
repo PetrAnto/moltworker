@@ -346,6 +346,57 @@ interface GhCodeScanningAlert {
 // Repo URL parsing (helper used by the handler)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// On-demand file fetcher (used by the Extractor stage)
+// ---------------------------------------------------------------------------
+
+export interface FetchFilesOptions {
+  owner: string;
+  repo: string;
+  /** Pinned commit SHA — every fetched file is content-addressed to this ref. */
+  ref: string;
+  paths: ReadonlyArray<string>;
+  token: string | undefined;
+  /** Per-file size cap. Files larger than this are skipped (returned as null). */
+  maxBytesPerFile?: number;
+}
+
+export interface FetchFilesResult {
+  files: Array<{ path: string; content: string | null; sha: string | null }>;
+  apiCalls: number;
+}
+
+/**
+ * Fetch raw contents for a list of paths via the Contents API. Used by the
+ * Extractor stage AFTER the Scout has built the profile and the planner has
+ * selected which paths to extract.
+ *
+ * Soft failures (404, oversized, decode error) are recorded as `content: null`
+ * so the caller can continue with the rest. Network errors don't throw.
+ */
+export async function fetchFileContents(opts: FetchFilesOptions): Promise<FetchFilesResult> {
+  const headers = ghHeaders(opts.token);
+  const cap = opts.maxBytesPerFile ?? 256 * 1024;
+  const results = await Promise.all(opts.paths.map(async (path) => {
+    const url = `${GITHUB_API}/repos/${opts.owner}/${opts.repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(opts.ref)}`;
+    const resp = await ghFetch(url, headers);
+    if (!resp.ok) return { path, content: null, sha: null };
+    const data = await resp.json() as { content?: string; encoding?: string; sha?: string; size?: number };
+    if (data.encoding !== 'base64' || typeof data.content !== 'string' || typeof data.sha !== 'string') {
+      return { path, content: null, sha: data.sha ?? null };
+    }
+    if ((data.size ?? 0) > cap) {
+      return { path, content: null, sha: data.sha };
+    }
+    try {
+      return { path, content: atob(data.content.replace(/\n/g, '')), sha: data.sha };
+    } catch {
+      return { path, content: null, sha: data.sha };
+    }
+  }));
+  return { files: results, apiCalls: results.length };
+}
+
 /** Parse "owner/repo" or any GitHub URL form into (owner, repo). */
 export function parseRepoCoords(input: string): { owner: string; repo: string } | null {
   const trimmed = input.trim();
