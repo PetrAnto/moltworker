@@ -220,3 +220,121 @@ export async function removeSuppression(
   const total = (await getSuppressedIds(kv, userId, owner, repo)).ids.size;
   return { removed: existing !== null, total };
 }
+
+// ---------------------------------------------------------------------------
+// Fix dispatch drafts (audit:fixdraft:{userId}:{token})
+// ---------------------------------------------------------------------------
+//
+// Closes GPT slice-4d follow-up findings 1 + 2: stores the prepared
+// orchestra task text behind a short-lived token so:
+//
+//   1. Confirm dispatches EXACTLY the taskText the user reviewed in the
+//      Prepare summary (no re-resolution that could differ if the run
+//      was deleted/replaced between the two clicks).
+//   2. Confirm consumes the draft (delete-first), so a second confirm
+//      tap finds null and reports "already dispatched / expired" instead
+//      of starting a duplicate orchestra run. KV is eventually
+//      consistent so this is best-effort, not a hard CAS lock — pairs
+//      with the keyboard-removal already in place.
+//
+// Side benefit: callback_data shrinks from
+//   audit:go:<36-char-uuid>:<finding-id>  (~63 bytes worst case)
+// to
+//   audit:go:<16-char-token>              (~24 bytes)
+// freeing headroom for longer finding-ids if the validator schema grows.
+
+const FIX_DRAFT_PREFIX = 'audit:fixdraft:';
+/** TTL for prepared fixes. Long enough for a "let me check the
+ *  preventive artifact in slack first" pause; short enough that
+ *  abandoned drafts don't accumulate in KV. */
+const FIX_DRAFT_TTL_SECONDS = 30 * 60;
+
+export interface FixDraft {
+  runId: string;
+  findingId: string;
+  /** The exact orchestra task text the user reviewed in the Prepare
+   *  summary. On Confirm, dispatched verbatim — no re-resolution. */
+  taskText: string;
+  /** Repo coords + finding metadata cached so the Confirm ack one-liner
+   *  doesn't need a second KV round-trip to the run. */
+  owner: string;
+  repo: string;
+  severity: string;
+  lens: string;
+  createdAt: string;
+}
+
+function fixDraftKey(userId: string, token: string): string {
+  return `${FIX_DRAFT_PREFIX}${userId}:${token}`;
+}
+
+/**
+ * Generate a fresh 16-hex-char token (64 random bits). Per-user
+ * keyspace + 30-min TTL keeps collision risk effectively zero.
+ */
+export function newFixDraftToken(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0');
+  return out;
+}
+
+export async function cacheFixDraft(
+  kv: KVNamespace | undefined,
+  userId: string,
+  token: string,
+  draft: FixDraft,
+): Promise<void> {
+  if (!kv) return;
+  try {
+    await kv.put(fixDraftKey(userId, token), JSON.stringify(draft), {
+      expirationTtl: FIX_DRAFT_TTL_SECONDS,
+    });
+  } catch (err) {
+    console.warn('[Audit] cacheFixDraft failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Read + delete in sequence (best-effort consume). Returns the draft
+ * for the caller to dispatch, or null if not found / already consumed.
+ *
+ * KV is eventually consistent so two near-simultaneous confirms can
+ * both read the draft; the keyboard-removal in the handler covers the
+ * common UI-double-tap case, this covers the "Telegram retried our
+ * callback / network blip" case once the first delete propagates.
+ */
+export async function consumeFixDraft(
+  kv: KVNamespace | undefined,
+  userId: string,
+  token: string,
+): Promise<FixDraft | null> {
+  if (!kv) return null;
+  try {
+    const key = fixDraftKey(userId, token);
+    const draft = (await kv.get(key, 'json')) as FixDraft | null;
+    if (draft) {
+      // Delete eagerly so subsequent confirm reads see null.
+      await kv.delete(key);
+    }
+    return draft;
+  } catch (err) {
+    console.warn('[Audit] consumeFixDraft failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/** Cancel path — idempotent. */
+export async function deleteFixDraft(
+  kv: KVNamespace | undefined,
+  userId: string,
+  token: string,
+): Promise<void> {
+  if (!kv) return;
+  try {
+    await kv.delete(fixDraftKey(userId, token));
+  } catch {
+    // best-effort — TTL reaps if delete failed
+  }
+}
