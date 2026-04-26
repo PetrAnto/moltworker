@@ -4418,66 +4418,94 @@ export class TelegramHandler {
         // Audit-skill inline keyboard. Short verb codes keep callback_data
         // within Telegram's 64-byte cap. Payload shapes:
         //   audit:export:<runId>           → re-runs /audit export
-        //   audit:fix:<runId>:<findingId>  → PREPARE: build summary +
+        //   audit:fix:<runId>:<findingId>  → PREPARE: build draft + token,
         //                                     show ✅ Dispatch / ❌ Cancel
-        //   audit:go:<runId>:<findingId>   → CONFIRM: dispatch orchestra
-        //   audit:no:<runId>:<findingId>   → CANCEL: dismiss keyboard
+        //   audit:go:<token>               → CONFIRM: consume draft + dispatch
+        //   audit:no:<token>               → CANCEL: delete draft
         //   audit:sup:<runId>:<findingId>  → suppression list (live)
-        // Two-step "Prepare → Confirm" gate on the orchestra hand-off
-        // closes GPT slice-4d review finding 1 — orchestra opens PRs and
-        // can modify repos, so a single button tap MUST NOT auto-mutate.
-        // Defensive parse: if anything looks malformed, ack + ignore so a
-        // stale or hand-crafted callback doesn't crash the handler.
+        //
+        // The token-based confirm/cancel verbs (slice-4d follow-up) close
+        // two issues GPT raised on PR 513: (1) duplicate confirm clicks
+        // race past the keyboard-edit on slow networks; (2) Confirm could
+        // dispatch a re-resolved task whose text differs from the Prepare
+        // summary if the run mutated between clicks. The draft stores the
+        // exact taskText the user reviewed; consumeFixDraft is delete-first
+        // so the second confirm reads null and reports "already dispatched".
+        //
+        // Defensive parse: malformed callbacks ack + ignore.
         const sub = parts[1] ?? '';
-        const runId = parts[2] ?? '';
-        const findingId = parts[3] ?? '';
-        if (sub === 'export' && runId) {
+        if (sub === 'export') {
+          const runId = parts[2] ?? '';
+          if (!runId) break;
           await this.handleCommand(query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never, `/audit export ${runId}`);
-        } else if (sub === 'fix' && runId && findingId) {
-          // PREPARE: validate + build summary + attach Confirm/Cancel.
-          // The orchestra task itself is rebuilt deterministically on
-          // confirm (resolveFix is pure given the same KV state), so we
-          // don't need to stash the prepared task between clicks.
+        } else if (sub === 'fix') {
+          // PREPARE: validate + resolve + create a fix draft + show
+          // confirmation keyboard parameterized on the token.
+          const runId = parts[2] ?? '';
+          const findingId = parts[3] ?? '';
+          if (!runId || !findingId) break;
           const { resolveFix, buildFixSummary } = await import('../skills/audit/audit');
+          const { cacheFixDraft, newFixDraftToken } = await import('../skills/audit/cache');
           const r = await resolveFix(this.nexusKv, userId, runId, findingId);
           if (!r.ok) { await this.bot.sendMessage(chatId, r.error); break; }
+          const token = newFixDraftToken();
+          await cacheFixDraft(this.nexusKv, userId, token, {
+            runId, findingId,
+            taskText: r.taskText,
+            owner: r.run.repo.owner,
+            repo: r.run.repo.name,
+            severity: r.finding.severity,
+            lens: r.finding.lens,
+            createdAt: new Date().toISOString(),
+          });
           await this.bot.sendMessageWithButtons(
             chatId,
             buildFixSummary(r.run, r.finding),
             [[
-              { text: '✅ Dispatch fix', callback_data: `audit:go:${runId}:${findingId}` },
-              { text: '❌ Cancel',       callback_data: `audit:no:${runId}:${findingId}` },
+              { text: '✅ Dispatch fix', callback_data: `audit:go:${token}` },
+              { text: '❌ Cancel',       callback_data: `audit:no:${token}` },
             ]],
             { parseMode: 'HTML' },
           );
-        } else if (sub === 'go' && runId && findingId) {
-          // CONFIRM: rebuild + dispatch via runSkill, NOT handleCommand.
-          // /orch run <multiline-task-with-flags-and-yaml> would re-enter
-          // the slash parser and parseFlags() would happily eat any
-          // `--foo bar` substring inside the orchestra prompt. Going
-          // through runSkill with a structured SkillRequest keeps the
-          // taskText opaque to the parser. Closes GPT slice-4d review
-          // finding 2.
-          const { resolveFix } = await import('../skills/audit/audit');
-          const r = await resolveFix(this.nexusKv, userId, runId, findingId);
-          if (!r.ok) { await this.bot.sendMessage(chatId, r.error); break; }
-          // Remove the Confirm/Cancel keyboard from the prepared message
-          // so the user can't double-click into a duplicate dispatch.
+        } else if (sub === 'go') {
+          // CONFIRM: consume the prepared draft and dispatch its taskText
+          // verbatim. Read+delete is best-effort (KV is eventually
+          // consistent) but the second confirm tap will see null once
+          // the delete propagates — pairs with the keyboard-edit below.
+          const token = parts[2] ?? '';
+          if (!token) break;
+          const { consumeFixDraft } = await import('../skills/audit/cache');
+          const draft = await consumeFixDraft(this.nexusKv, userId, token);
+          if (!draft) {
+            // Either the user already confirmed, the draft expired (30
+            // min TTL), or this is a stale Telegram callback retry. All
+            // three are user-facing as the same message.
+            await this.bot.sendMessage(chatId, 'This fix dispatch has already been processed or expired. Re-run /audit and tap 🔧 Prepare fix again to retry.');
+            if (query.message) await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+            break;
+          }
+          // Edit out the keyboard so the user can't double-tap into a
+          // duplicate dispatch from the prepared message itself.
           if (query.message) await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
           await this.bot.sendMessage(
             chatId,
-            `🔧 Dispatching to orchestra: fix ${r.finding.severity} ${r.finding.lens} defect (${r.finding.id}) in ${r.run.repo.owner}/${r.run.repo.name}…`,
+            `🔧 Dispatching to orchestra: fix ${draft.severity} ${draft.lens} defect (${draft.findingId}) in ${draft.owner}/${draft.repo}…`,
           );
-          await this.dispatchOrchestraTask(chatId, userId, r.taskText);
-        } else if (sub === 'no' && runId && findingId) {
-          // CANCEL: just dismiss the keyboard. We don't write anything to
-          // KV — the user simply chose not to dispatch this time.
+          await this.dispatchOrchestraTask(chatId, userId, draft.taskText);
+        } else if (sub === 'no') {
+          // CANCEL: delete the draft + dismiss keyboard. No KV write
+          // beyond the delete; the user simply chose not to dispatch.
+          const token = parts[2] ?? '';
+          if (token) {
+            const { deleteFixDraft } = await import('../skills/audit/cache');
+            await deleteFixDraft(this.nexusKv, userId, token);
+          }
           if (query.message) await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
           await this.bot.sendMessage(chatId, '❌ Fix cancelled. Re-run /audit on this repo or tap 🔧 Prepare fix again to retry.');
-        } else if (sub === 'sup' && runId && findingId) {
-          // Re-route through the slash command so the user-scoped KV path,
-          // the UUID + finding-id validation, and the run-existence check
-          // all stay centralized in handleAudit.
+        } else if (sub === 'sup') {
+          const runId = parts[2] ?? '';
+          const findingId = parts[3] ?? '';
+          if (!runId || !findingId) break;
           await this.handleCommand(
             query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never,
             `/audit suppress ${runId} ${findingId}`,

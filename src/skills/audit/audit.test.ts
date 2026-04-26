@@ -1947,20 +1947,23 @@ describe('buildFixSummary (Prepare → Confirm UX)', () => {
 });
 
 describe('audit inline keyboard: prepare→confirm callback shape', () => {
-  it('keeps audit:go and audit:no callback_data within the 64-byte cap (MVP-lens worst case)', () => {
-    // Slice-4d adds two more callback verbs (`go`, `no`). Same cap-discipline
-    // test as the existing keyboard suite — pinned via TextEncoder UTF-8
-    // bytes so a future runId/finding-id schema bump that pushes over fails
-    // here, not silently in Telegram.
-    //
-    // Worst-case shape with the current MVP lens set: longest lens name is
-    // "security" / "deadcode" (8 chars), validator's djb2 hash is uint32 ⇒
-    // base36 up to 7 chars. Worst-case finding-id is 16 chars
-    // (`security-zzzzzzz`); plus 36-char UUID + verb + colons.
+  it('keeps audit:go and audit:no callback_data within the 64-byte cap (token-based)', () => {
+    // Slice-4d follow-up: confirm/cancel use a 16-hex-char draft token
+    // instead of <runId>:<findingId>. Keeps callback_data ~24 bytes total
+    // and frees headroom for longer finding-ids if the validator schema
+    // grows. The fix prepare path still uses runId+findingId because the
+    // draft doesn't exist yet at that point.
     const runId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'; // 36 chars
     const findingId = 'security-zzzzzzz';                  // 16 chars (MVP worst case)
-    for (const verb of ['fix', 'go', 'no', 'sup']) {
+    const token = '0123456789abcdef';                      // 16 hex chars
+    // Prepare-shape verbs still take runId+findingId.
+    for (const verb of ['fix', 'sup']) {
       const data = `audit:${verb}:${runId}:${findingId}`;
+      expect(new TextEncoder().encode(data).length).toBeLessThanOrEqual(64);
+    }
+    // Confirm/cancel verbs take only the token now.
+    for (const verb of ['go', 'no']) {
+      const data = `audit:${verb}:${token}`;
       expect(new TextEncoder().encode(data).length).toBeLessThanOrEqual(64);
     }
   });
@@ -2482,5 +2485,87 @@ describe('nested manifest discovery (monorepo support)', () => {
     expect(fetchedPaths).toContain('packages/shared/tsconfig.json');
     // Vendored manifests excluded
     expect(fetchedPaths).not.toContain('node_modules/lodash/package.json');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 4d follow-up — Fix dispatch draft token (PR 513 review findings 1+2)
+// ---------------------------------------------------------------------------
+
+describe('fix dispatch draft tokens', () => {
+  function makeKV() {
+    const store = new Map<string, string>();
+    const kv = {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = store.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+      delete: vi.fn(async (key: string) => { store.delete(key); }),
+    } as unknown as KVNamespace;
+    return { kv, store };
+  }
+
+  it('newFixDraftToken produces 16 hex chars (per-user KV scope makes 64 bits enough)', async () => {
+    const { newFixDraftToken } = await import('./cache');
+    const t = newFixDraftToken();
+    expect(t).toMatch(/^[0-9a-f]{16}$/);
+    // Two consecutive tokens must differ (sanity on randomness)
+    expect(newFixDraftToken()).not.toBe(t);
+  });
+
+  it('cache + consume round-trips the prepared taskText verbatim', async () => {
+    const { cacheFixDraft, consumeFixDraft, newFixDraftToken } = await import('./cache');
+    const { kv, store } = makeKV();
+    const token = newFixDraftToken();
+    const draft = {
+      runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      findingId: 'security-abc',
+      taskText: 'Fix audit finding...\n\nMulti-line content with --flags and YAML.',
+      owner: 'octocat', repo: 'demo',
+      severity: 'high', lens: 'security',
+      createdAt: '2026-04-26T00:00:00.000Z',
+    };
+    await cacheFixDraft(kv, 'user-1', token, draft);
+    expect(store.get(`audit:fixdraft:user-1:${token}`)).toBeDefined();
+
+    const consumed = await consumeFixDraft(kv, 'user-1', token);
+    expect(consumed).toEqual(draft);
+    // Confirm consumed = deleted: a second consume returns null
+    const second = await consumeFixDraft(kv, 'user-1', token);
+    expect(second).toBeNull();
+  });
+
+  it('consume returns null for an unknown token (expired / never created)', async () => {
+    const { consumeFixDraft } = await import('./cache');
+    const { kv } = makeKV();
+    expect(await consumeFixDraft(kv, 'user-1', 'deadbeefdeadbeef')).toBeNull();
+  });
+
+  it('cross-user token cannot be consumed (per-user KV scope)', async () => {
+    const { cacheFixDraft, consumeFixDraft, newFixDraftToken } = await import('./cache');
+    const { kv } = makeKV();
+    const token = newFixDraftToken();
+    await cacheFixDraft(kv, 'user-1', token, {
+      runId: 'r', findingId: 'f', taskText: 't',
+      owner: 'o', repo: 'r', severity: 'low', lens: 'tests',
+      createdAt: 'now',
+    });
+    expect(await consumeFixDraft(kv, 'user-2', token)).toBeNull();
+    // user-1 can still consume — user-2's miss didn't disturb it
+    expect(await consumeFixDraft(kv, 'user-1', token)).not.toBeNull();
+  });
+
+  it('deleteFixDraft is idempotent (cancel path)', async () => {
+    const { cacheFixDraft, deleteFixDraft, consumeFixDraft, newFixDraftToken } = await import('./cache');
+    const { kv } = makeKV();
+    const token = newFixDraftToken();
+    await cacheFixDraft(kv, 'user-1', token, {
+      runId: 'r', findingId: 'f', taskText: 't', owner: 'o', repo: 'r', severity: 'low', lens: 'tests', createdAt: 'now',
+    });
+    await deleteFixDraft(kv, 'user-1', token);
+    await deleteFixDraft(kv, 'user-1', token); // second call must not throw
+    expect(await consumeFixDraft(kv, 'user-1', token)).toBeNull();
   });
 });
