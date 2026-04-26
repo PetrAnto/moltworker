@@ -925,7 +925,18 @@ export class TelegramHandler {
       const result = await runSkill(skillRequest);
       const chunks = renderForTelegram(result);
       for (const chunk of chunks) {
-        await this.bot.sendMessage(chatId, chunk.text, chunk.parseMode ? { parseMode: chunk.parseMode } : undefined);
+        if (chunk.replyMarkup && chunk.replyMarkup.length > 0) {
+          // Skill renderer attached inline keyboard buttons (e.g. audit_run's
+          // Fix/Suppress/Export controls) — must use sendMessageWithButtons.
+          await this.bot.sendMessageWithButtons(
+            chatId,
+            chunk.text,
+            chunk.replyMarkup,
+            chunk.parseMode ? { parseMode: chunk.parseMode } : undefined,
+          );
+        } else {
+          await this.bot.sendMessage(chatId, chunk.text, chunk.parseMode ? { parseMode: chunk.parseMode } : undefined);
+        }
       }
       return;
     }
@@ -4358,6 +4369,41 @@ export class TelegramHandler {
         }
         break;
 
+      case 'audit': {
+        // Audit-skill inline keyboard. Short verb codes keep callback_data
+        // within Telegram's 64-byte cap. Payload shapes:
+        //   audit:export:<runId>           → re-runs /audit export
+        //   audit:fix:<runId>:<findingId>  → orchestra hand-off (slice 4c)
+        //   audit:sup:<runId>:<findingId>  → suppression list (slice 4c)
+        // Defensive parse: if anything looks malformed, ack + ignore so a
+        // stale or hand-crafted callback doesn't crash the handler.
+        const sub = parts[1] ?? '';
+        const runId = parts[2] ?? '';
+        const findingId = parts[3] ?? '';
+        if (sub === 'export' && runId) {
+          // Re-route through the same skill runtime the slash command uses
+          // so the user-scoped KV path + UUID validation stay centralized
+          // in handleAudit.
+          await this.handleCommand(query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never, `/audit export ${runId}`);
+        } else if (sub === 'fix' && runId && findingId) {
+          await this.bot.sendMessage(
+            chatId,
+            `🔧 Orchestra hand-off for finding ${findingId} on run ${runId.slice(0, 8)}… lands in slice 4c. The corrective + preventive details are already in /audit export ${runId}.`,
+          );
+        } else if (sub === 'sup' && runId && findingId) {
+          // Re-route through the slash command so the user-scoped KV path,
+          // the UUID + finding-id validation, and the run-existence check
+          // all stay centralized in handleAudit.
+          await this.handleCommand(
+            query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never,
+            `/audit suppress ${runId} ${findingId}`,
+          );
+        } else {
+          console.warn('[Telegram] Unrecognized audit callback:', callbackData);
+        }
+        break;
+      }
+
       case 'modelnav': {
         // Hub navigation buttons: modelnav:list or modelnav:rank
         if (payload === 'list') {
@@ -5231,7 +5277,18 @@ export class TelegramHandler {
       const result = await runSkill(skillRequest);
       const chunks = renderForTelegram(result);
       for (const chunk of chunks) {
-        await this.bot.sendMessage(chatId, chunk.text, chunk.parseMode ? { parseMode: chunk.parseMode } : undefined);
+        if (chunk.replyMarkup && chunk.replyMarkup.length > 0) {
+          // Skill renderer attached inline keyboard buttons (e.g. audit_run's
+          // Fix/Suppress/Export controls) — must use sendMessageWithButtons.
+          await this.bot.sendMessageWithButtons(
+            chatId,
+            chunk.text,
+            chunk.replyMarkup,
+            chunk.parseMode ? { parseMode: chunk.parseMode } : undefined,
+          );
+        } else {
+          await this.bot.sendMessage(chatId, chunk.text, chunk.parseMode ? { parseMode: chunk.parseMode } : undefined);
+        }
       }
     } else {
       await this.bot.sendMessage(chatId, `Command not available: ${commandText}`);

@@ -7,6 +7,7 @@
  */
 
 import type { SkillResult } from '../types';
+import type { AuditFinding, AuditRun } from '../audit/types';
 import { isImageBrief, isVideoBrief, type ImageBrief, type VideoBrief } from '../lyra/media-types';
 
 /** Telegram's message character limit. */
@@ -14,10 +15,20 @@ const TELEGRAM_MAX_LENGTH = 4096;
 /** Leave some margin for formatting overhead. */
 const CHUNK_MAX = 4000;
 
+/** Inline-keyboard button shape. Mirrors the Telegram Bot API. */
+export interface ChunkButton {
+  text: string;
+  /** Opaque payload routed by handleCallback. Convention:
+   *  `<skillId>:<action>:<arg1>:...`. Keep ≤64 bytes — Telegram's hard limit. */
+  callback_data: string;
+}
+
 /** A single Telegram message chunk. */
 export interface TelegramChunk {
   text: string;
   parseMode?: 'HTML' | 'Markdown';
+  /** Optional inline keyboard. The handler attaches via sendMessageWithButtons. */
+  replyMarkup?: ChunkButton[][];
 }
 
 /**
@@ -38,7 +49,15 @@ export function renderForTelegram(result: SkillResult): TelegramChunk[] {
   const parts = raw.parseMode === 'HTML'
     ? splitHtmlMessage(raw.text, CHUNK_MAX)
     : splitMessage(raw.text, CHUNK_MAX);
-  return parts.map(text => ({ text, parseMode: raw.parseMode }));
+  // The replyMarkup (if any) MUST land on the last chunk only — Telegram
+  // shows the inline keyboard attached to the message containing it, and
+  // duplicating across chunks is both ugly and confusing for callbacks.
+  const out = parts.map((text, i) => ({
+    text,
+    parseMode: raw.parseMode,
+    replyMarkup: i === parts.length - 1 ? raw.replyMarkup : undefined,
+  }));
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +232,52 @@ function renderAudit(result: SkillResult): TelegramChunk {
   parts.push(`${(tel.durationMs / 1000).toFixed(1)}s`);
   lines.push(`\n<i>${parts.join(' • ')}</i>`);
 
-  return { text: lines.join('\n'), parseMode: 'HTML' };
+  // Inline keyboard: only on completed audit_run results that carry a
+  // structured AuditRun in `data` (not on plan-only previews). Buttons
+  // route through handleCallback's `audit:*` action prefix.
+  const replyMarkup = result.kind === 'audit_run'
+    ? buildAuditRunKeyboard(result.data as AuditRun | undefined)
+    : undefined;
+
+  return { text: lines.join('\n'), parseMode: 'HTML', replyMarkup };
+}
+
+/**
+ * Build the per-finding inline keyboard for an audit_run.
+ *
+ * Layout: one row of two action buttons (🔧 Fix / 🔇 Suppress) per top-3
+ * finding, plus a final 📄 Full report row that triggers /audit export.
+ * Top-3 keeps the keyboard compact (Telegram caps practical row counts
+ * around 8) and matches the precision discipline already applied to the
+ * top-N body view.
+ *
+ * callback_data shape: `audit:<action>:<runId>:<findingId>` for per-finding
+ * actions; `audit:export:<runId>` for the export shortcut. Strict 64-byte
+ * Telegram cap → we use the runId in full (36 chars) and the finding's
+ * stable id (lens-prefixed hash, ~20 chars) — fits comfortably.
+ */
+function buildAuditRunKeyboard(run: AuditRun | undefined): ChunkButton[][] | undefined {
+  if (!run || run.findings.length === 0) return undefined;
+  const rows: ChunkButton[][] = [];
+  for (const f of run.findings.slice(0, 3) as AuditFinding[]) {
+    // callback_data uses short verb codes (`fix`, `sup`) to stay within
+    // Telegram's 64-byte cap on the longest payload:
+    //   audit:sup:<36-char-uuid>:<finding-id> ≤ 64 bytes for finding-ids
+    //   up to ~16 chars (the validator's `${lens}-${hash}` shape comes in
+    //   well under that). Button labels remain human-readable.
+    rows.push([
+      { text: `🔧 Fix #${shortId(f.id)}`, callback_data: `audit:fix:${run.runId}:${f.id}` },
+      { text: `🔇 Suppress #${shortId(f.id)}`, callback_data: `audit:sup:${run.runId}:${f.id}` },
+    ]);
+  }
+  rows.push([{ text: '📄 Full report', callback_data: `audit:export:${run.runId}` }]);
+  return rows;
+}
+
+/** Last segment of a finding-id, for compact button labels. */
+function shortId(id: string): string {
+  const dash = id.lastIndexOf('-');
+  return (dash === -1 ? id : id.slice(dash + 1)).slice(0, 6);
 }
 
 // ---------------------------------------------------------------------------
