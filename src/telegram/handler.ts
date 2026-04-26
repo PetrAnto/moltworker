@@ -4373,8 +4373,8 @@ export class TelegramHandler {
         // Audit-skill inline keyboard. Short verb codes keep callback_data
         // within Telegram's 64-byte cap. Payload shapes:
         //   audit:export:<runId>           → re-runs /audit export
-        //   audit:fix:<runId>:<findingId>  → orchestra hand-off (slice 4c)
-        //   audit:sup:<runId>:<findingId>  → suppression list (slice 4c)
+        //   audit:fix:<runId>:<findingId>  → orchestra hand-off (not enabled yet)
+        //   audit:sup:<runId>:<findingId>  → suppression list (live)
         // Defensive parse: if anything looks malformed, ack + ignore so a
         // stale or hand-crafted callback doesn't crash the handler.
         const sub = parts[1] ?? '';
@@ -4388,7 +4388,7 @@ export class TelegramHandler {
         } else if (sub === 'fix' && runId && findingId) {
           await this.bot.sendMessage(
             chatId,
-            `🔧 Orchestra hand-off for finding ${findingId} on run ${runId.slice(0, 8)}… lands in slice 4c. The corrective + preventive details are already in /audit export ${runId}.`,
+            `🔧 Orchestra hand-off for finding ${findingId} on run ${runId.slice(0, 8)}… is not enabled yet. The corrective + preventive details are already in /audit export ${runId}.`,
           );
         } else if (sub === 'sup' && runId && findingId) {
           // Re-route through the slash command so the user-scoped KV path,

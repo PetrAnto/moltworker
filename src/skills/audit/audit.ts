@@ -400,21 +400,26 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     findings.push(...result.findings);
   }
 
-  // Apply per-repo suppressions before ranking. Suppressed findings are
-  // explicit user choices (via the 🔇 button or /audit suppress) and stay
-  // dropped across audit reruns until the user un-suppresses. Counted
-  // separately so the report can say "N defects suppressed by your prior
-  // /audit suppress decisions" rather than silently shrinking the list.
+  // Apply per-repo suppressions. We persist ALL validated findings (so
+  // /audit export remains transparent and the user can see what their
+  // prior suppression decisions hid), but mark the suppressed ones with
+  // `suppressed: true`. The default inline view + the keyboard's top-3
+  // filter out suppressed; the export's "Suppressed" section shows them.
   const suppressedIds = await getSuppressedIds(
     request.env.NEXUS_KV, request.userId, profile.owner, profile.repo,
   );
-  const suppressedDropped = findings.filter(f => suppressedIds.has(f.id)).length;
-
-  // Sort by priority (severity × confidence) and drop low-confidence noise.
-  const ranked = findings
+  const annotated = findings
     .filter(f => f.confidence >= 0.5)
-    .filter(f => !suppressedIds.has(f.id))
-    .sort((a, b) => findingPriority(b) - findingPriority(a));
+    .map(f => suppressedIds.has(f.id) ? { ...f, suppressed: true } : f);
+  const suppressedDropped = annotated.filter(f => f.suppressed).length;
+
+  // Sort by priority (severity × confidence). Suppressed findings rank
+  // last so any caller that doesn't filter still pushes them to the
+  // bottom of any list view.
+  const ranked = annotated.sort((a, b) => {
+    if (!!a.suppressed !== !!b.suppressed) return a.suppressed ? 1 : -1;
+    return findingPriority(b) - findingPriority(a);
+  });
 
   const run: AuditRun = {
     runId: crypto.randomUUID(),
@@ -623,13 +628,15 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
   }
   lines.push('');
 
-  if (run.findings.length === 0) {
+  // Inline (top-N) view: suppressed findings are excluded.
+  const visible = run.findings.filter(f => !f.suppressed);
+  if (visible.length === 0) {
     lines.push('No defects found that meet the precision threshold (confidence ≥ 0.5).');
   } else {
-    lines.push(`Findings (${run.findings.length}):`);
+    lines.push(`Findings (${visible.length}):`);
     lines.push('');
     // Top-N for the user-facing report; full list stays in the structured data.
-    const topN = run.findings.slice(0, 5);
+    const topN = visible.slice(0, 5);
     for (const f of topN) {
       lines.push(`[${f.severity.toUpperCase()}] ${f.symptom}`);
       lines.push(`  Lens: ${f.lens} • Confidence: ${f.confidence}`);
@@ -639,8 +646,8 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
       lines.push(`  Evidence: ${f.evidence.map(e => `${e.path}${e.lines ? `:${e.lines}` : ''}`).join(', ')}`);
       lines.push('');
     }
-    if (run.findings.length > topN.length) {
-      lines.push(`… +${run.findings.length - topN.length} more in the full report.`);
+    if (visible.length > topN.length) {
+      lines.push(`… +${visible.length - topN.length} more in the full report.`);
       lines.push('');
     }
   }
@@ -757,12 +764,14 @@ async function handleSuppress(
   if (!run) {
     return errorResult(`No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`);
   }
-  // Sanity: the finding must actually exist in this run. Stale callbacks
-  // from a re-run pointing at an id that's no longer in the report still
-  // succeed (we still record the suppression for future runs), but if the
-  // id was never in this run we reject.
+  // Sanity: the finding must actually exist in this run (active or
+  // suppressed). Now that we persist suppressed findings with
+  // `suppressed: true`, the user can re-suppress / un-suppress a
+  // finding that has been suppressed before (the previous design lost
+  // visibility of those — see GPT slice-4c review finding 3). Reject
+  // only when the id was never in this run.
   const findingExisted = run.findings.some(f => f.id === findingId);
-  if (!findingExisted && !unsuppress) {
+  if (!findingExisted) {
     return errorResult(`Finding ${findingId} is not part of run ${runId.slice(0, 8)}…. Use /audit export ${runId} to list this run's findings.`);
   }
 
@@ -805,38 +814,47 @@ function formatRunFull(run: AuditRun): string {
   lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth}`);
   lines.push('');
 
-  if (run.findings.length === 0) {
-    lines.push('No defects found at confidence ≥ 0.5 (precision threshold).');
+  const active = run.findings.filter(f => !f.suppressed);
+  const suppressed = run.findings.filter(f => f.suppressed);
+
+  if (active.length === 0) {
+    lines.push('No active defects at confidence ≥ 0.5 (precision threshold).');
   } else {
-    lines.push(`Findings (${run.findings.length}):`);
+    lines.push(`Findings (${active.length}):`);
     lines.push('');
-    let i = 0;
-    for (const f of run.findings) {
-      i++;
-      lines.push(`${i}. [${f.severity.toUpperCase()}] ${f.symptom}`);
-      lines.push(`   Lens: ${f.lens} • Confidence: ${f.confidence}`);
-      lines.push(`   Root cause: ${f.rootCause}`);
-      lines.push(`   Corrective action: ${f.correctiveAction}`);
-      lines.push(`   Preventive (${f.preventiveAction.kind}):`);
-      // Indent the artifact body so it's visually distinct from prose.
-      for (const ln of f.preventiveAction.detail.split('\n')) {
-        lines.push(`     ${ln}`);
-      }
-      lines.push(`   Evidence:`);
-      for (const e of f.evidence) {
-        const lineRef = e.lines ? `:${e.lines}` : '';
-        lines.push(`     - ${e.path}${lineRef}${e.sha ? ` (sha: ${e.sha.slice(0, 7)})` : ''}`);
-        if (e.snippet) {
-          for (const ln of e.snippet.split('\n').slice(0, 8)) lines.push(`         ${ln}`);
-        }
-      }
-      lines.push('');
-    }
+    active.forEach((f, idx) => appendFinding(lines, f, idx + 1));
+  }
+
+  if (suppressed.length > 0) {
+    lines.push(`Suppressed findings (${suppressed.length}) — listed for transparency; excluded from the inline view by your prior /audit suppress decisions:`);
+    lines.push('');
+    suppressed.forEach((f, idx) => appendFinding(lines, f, idx + 1, true));
   }
 
   const t = run.telemetry;
   lines.push(`Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`);
   return lines.join('\n');
+}
+
+function appendFinding(lines: string[], f: AuditFinding, n: number, isSuppressed = false): void {
+  const tag = isSuppressed ? '🔇' : `${n}.`;
+  lines.push(`${tag} [${f.severity.toUpperCase()}] ${f.symptom}${isSuppressed ? '' : ''}`);
+  lines.push(`   Lens: ${f.lens} • Confidence: ${f.confidence} • id: ${f.id}`);
+  lines.push(`   Root cause: ${f.rootCause}`);
+  lines.push(`   Corrective action: ${f.correctiveAction}`);
+  lines.push(`   Preventive (${f.preventiveAction.kind}):`);
+  for (const ln of f.preventiveAction.detail.split('\n')) {
+    lines.push(`     ${ln}`);
+  }
+  lines.push(`   Evidence:`);
+  for (const e of f.evidence) {
+    const lineRef = e.lines ? `:${e.lines}` : '';
+    lines.push(`     - ${e.path}${lineRef}${e.sha ? ` (sha: ${e.sha.slice(0, 7)})` : ''}`);
+    if (e.snippet) {
+      for (const ln of e.snippet.split('\n').slice(0, 8)) lines.push(`         ${ln}`);
+    }
+  }
+  lines.push('');
 }
 
 // ---------------------------------------------------------------------------

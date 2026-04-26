@@ -173,6 +173,12 @@ export interface AuditFinding {
   };
   /** Ready-to-execute task description for orchestra. Optional. */
   orchestraPatchBrief?: string;
+  /** True when this finding's id is on the per-repo suppression list at
+   *  audit time. Suppressed findings are persisted with the run (so
+   *  /audit export remains transparent — the user can see what their
+   *  prior suppression decisions hid) but excluded from the default
+   *  inline view. */
+  suppressed?: boolean;
 }
 
 export interface AuditRun {
