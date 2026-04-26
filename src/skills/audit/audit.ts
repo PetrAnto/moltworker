@@ -127,9 +127,14 @@ export function buildPlan(profile: RepoProfile, lenses: Lens[], depth: Depth): A
   }
 
   if (profile.codeScanningAlerts.length > 0) {
-    notes.push(`${profile.codeScanningAlerts.length} pre-existing GitHub Code Scanning alerts will be ingested as evidence.`);
+    const truncatedSuffix = profile.codeScanningAlertsTruncated ? ' (first page only — more may exist)' : '';
+    notes.push(`${profile.codeScanningAlerts.length} pre-existing GitHub Code Scanning alerts will be ingested as evidence${truncatedSuffix}.`);
   } else {
     notes.push('No GitHub Code Scanning alerts available (feature disabled or no findings).');
+  }
+
+  if (profile.treeTruncated) {
+    notes.push('⚠️ GitHub tree response was truncated (>100k entries or >7 MB) — audit coverage is partial. Consider --scope to narrow.');
   }
 
   if (profile.tree.length === 0) {

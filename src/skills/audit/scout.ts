@@ -13,10 +13,35 @@
  * the caller's responsibility (see ./cache.ts).
  */
 
-import { ALWAYS_FETCH_MANIFESTS } from './lenses';
+import { ALWAYS_FETCH_MANIFESTS, VENDORED_PATTERNS } from './lenses';
 import type { RepoProfile, TreeEntry, ManifestFile, CodeScanningAlert, Severity } from './types';
 
 const GITHUB_API = 'https://api.github.com';
+
+/** First-page cap for Code Scanning Alerts. We don't paginate in v0; if the
+ *  response equals this we record a `codeScanningAlertsTruncated` flag. */
+const ALERTS_PER_PAGE = 50;
+
+/** Manifest basenames worth discovering at any depth (monorepos). */
+const NESTED_MANIFEST_BASENAMES = new Set([
+  'package.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'tsconfig.json',
+  'go.mod',
+  'go.sum',
+  'Cargo.toml',
+  'Cargo.lock',
+  'pyproject.toml',
+  'requirements.txt',
+  'poetry.lock',
+  'wrangler.toml',
+  'wrangler.jsonc',
+  'Dockerfile',
+]);
+
+/** Cap on nested-manifest discovery to keep the API fan-out bounded. */
+const MAX_NESTED_MANIFESTS = 32;
 
 // ---------------------------------------------------------------------------
 // Public entrypoint
@@ -55,17 +80,32 @@ export async function scout(opts: ScoutOptions): Promise<ScoutResult> {
   const branch = opts.branch ?? meta.default_branch;
 
   // 2. Languages (parallel with branch ref)
+  // NOTE: branch names may contain '/' (e.g. "feature/audit-v1"). The slashes
+  // are path separators inside the ref, not part of segment names — encode
+  // each segment individually so we don't double-encode the separators.
+  const branchPath = branch.split('/').map(encodeURIComponent).join('/');
   const [langResp, refResp] = await Promise.all([
     ghFetch(`${GITHUB_API}/repos/${opts.owner}/${opts.repo}/languages`, headers),
-    ghFetch(`${GITHUB_API}/repos/${opts.owner}/${opts.repo}/git/refs/heads/${encodeURIComponent(branch)}`, headers),
+    ghFetch(`${GITHUB_API}/repos/${opts.owner}/${opts.repo}/git/refs/heads/${branchPath}`, headers),
   ]);
   apiCalls += 2;
   if (!refResp.ok) {
     throw new Error(`Scout: branch "${branch}" not found (${refResp.status})`);
   }
+  // refs/heads with slashes can return either a single ref object or an array
+  // (when GitHub treats the partial path as a prefix match). Handle both.
   const languages = langResp.ok ? await langResp.json() as Record<string, number> : {};
-  const refData = await refResp.json() as { object: { sha: string } };
-  const sha = refData.object.sha;
+  const refDataRaw = await refResp.json() as
+    | { ref: string; object: { sha: string } }
+    | Array<{ ref: string; object: { sha: string } }>;
+  const exactRefName = `refs/heads/${branch}`;
+  const matchedRef = Array.isArray(refDataRaw)
+    ? (refDataRaw.find(r => r.ref === exactRefName) ?? refDataRaw[0])
+    : refDataRaw;
+  if (!matchedRef || !matchedRef.object?.sha) {
+    throw new Error(`Scout: branch "${branch}" did not resolve to a commit SHA`);
+  }
+  const sha = matchedRef.object.sha;
 
   // 3. Recursive tree (single call thanks to ?recursive=1)
   const treeResp = await ghFetch(`${GITHUB_API}/repos/${opts.owner}/${opts.repo}/git/trees/${sha}?recursive=1`, headers);
@@ -74,9 +114,11 @@ export async function scout(opts: ScoutOptions): Promise<ScoutResult> {
     throw new Error(`Scout: tree fetch failed (${treeResp.status})`);
   }
   const treeData = await treeResp.json() as GhTreeResponse;
-  if (treeData.truncated) {
-    // For monorepos >1000 entries the API truncates. We document this as risk
-    // R5 and flag it to the caller via a profile note rather than failing.
+  const treeTruncated = treeData.truncated === true;
+  if (treeTruncated) {
+    // GitHub caps recursive tree listings at ~100k entries / 7 MB. Surfaced
+    // through `RepoProfile.treeTruncated` so the user is told the audit
+    // coverage is partial.
     console.warn(`[Scout] tree truncated for ${opts.owner}/${opts.repo}@${sha}`);
   }
   const tree: TreeEntry[] = treeData.tree.map(t => ({
@@ -86,24 +128,30 @@ export async function scout(opts: ScoutOptions): Promise<ScoutResult> {
     size: t.size,
   }));
 
-  // 4. Manifests — only fetch entries actually present in the tree
+  // 4. Manifests — root-pinned set + nested discovery (monorepo support).
   const treePathSet = new Set(tree.map(t => t.path));
-  const manifestPaths = ALWAYS_FETCH_MANIFESTS.filter(p => treePathSet.has(p));
+  const rootManifestPaths = ALWAYS_FETCH_MANIFESTS.filter(p => treePathSet.has(p));
+  const nestedManifestPaths = discoverNestedManifests(tree, new Set(rootManifestPaths));
+  const manifestPaths = [...rootManifestPaths, ...nestedManifestPaths];
   const manifests = await Promise.all(
     manifestPaths.map(path => fetchManifest(opts.owner, opts.repo, path, sha, headers)),
   );
   apiCalls += manifestPaths.length;
 
-  // 5. Code Scanning Alerts — optional, often 404 (disabled or no-access)
+  // 5. Code Scanning Alerts — optional, often 404 (disabled or no-access).
+  // First page only; v0 documents the cap rather than paginating.
   const alertsResp = await ghFetch(
-    `${GITHUB_API}/repos/${opts.owner}/${opts.repo}/code-scanning/alerts?state=open&per_page=50`,
+    `${GITHUB_API}/repos/${opts.owner}/${opts.repo}/code-scanning/alerts?state=open&per_page=${ALERTS_PER_PAGE}`,
     headers,
   );
   apiCalls++;
   let codeScanningAlerts: CodeScanningAlert[] = [];
+  let codeScanningAlertsTruncated = false;
   if (alertsResp.ok) {
     const alerts = await alertsResp.json() as GhCodeScanningAlert[];
     codeScanningAlerts = alerts.map(toCodeScanningAlert);
+    // Best-effort signal: if we got a full page back, more probably exist.
+    codeScanningAlertsTruncated = alerts.length >= ALERTS_PER_PAGE;
   }
   // 404 / 403 / 410 are all "code scanning not available here" — silent.
 
@@ -123,11 +171,35 @@ export async function scout(opts: ScoutOptions): Promise<ScoutResult> {
     tree,
     manifests: manifests.filter((m): m is ManifestFile => m !== null),
     codeScanningAlerts,
+    codeScanningAlertsTruncated,
+    treeTruncated,
     profileHash: hashProfile(sha, tree),
     collectedAt: new Date().toISOString(),
   };
 
   return { profile, apiCalls };
+}
+
+/**
+ * Discover monorepo manifests beyond the root set. Walks the tree once,
+ * keeping blob entries whose basename is a known manifest, excluding
+ * vendored paths and anything already in the root set, capped to
+ * MAX_NESTED_MANIFESTS to bound the API fan-out.
+ */
+function discoverNestedManifests(tree: TreeEntry[], alreadyFetched: Set<string>): string[] {
+  const results: string[] = [];
+  for (const entry of tree) {
+    if (entry.type !== 'blob') continue;
+    if (alreadyFetched.has(entry.path)) continue;
+    if (VENDORED_PATTERNS.some(re => re.test(entry.path))) continue;
+    const slash = entry.path.lastIndexOf('/');
+    if (slash === -1) continue; // root-level handled by ALWAYS_FETCH_MANIFESTS
+    const basename = entry.path.slice(slash + 1);
+    if (!NESTED_MANIFEST_BASENAMES.has(basename)) continue;
+    results.push(entry.path);
+    if (results.length >= MAX_NESTED_MANIFESTS) break;
+  }
+  return results;
 }
 
 // ---------------------------------------------------------------------------

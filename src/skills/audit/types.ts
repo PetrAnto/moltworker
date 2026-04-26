@@ -73,6 +73,12 @@ export interface RepoProfile {
   manifests: ManifestFile[];
   /** Pre-existing GitHub Code Scanning Alerts. Empty if disabled on the repo. */
   codeScanningAlerts: CodeScanningAlert[];
+  /** True if the alerts list was truncated (we only paginate the first page). */
+  codeScanningAlertsTruncated: boolean;
+  /** True if GitHub truncated the recursive tree response (>~100k entries or
+   *  >7 MB serialized — the API caps recursive listings). When true, audit
+   *  coverage is partial and the user must be told. */
+  treeTruncated: boolean;
   /** Hash of (sha + tree byte sizes) for cache invalidation. */
   profileHash: string;
   /** When the profile was collected (ISO). */

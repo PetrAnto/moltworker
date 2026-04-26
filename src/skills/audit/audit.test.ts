@@ -321,3 +321,189 @@ describe('reproducibility', () => {
     expect(p1.sha).toBe(p2.sha);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pre-merge fixes from GPT review
+// ---------------------------------------------------------------------------
+
+describe('branch names with "/" (e.g. feature/audit-v1)', () => {
+  it('does not URI-encode the slash separators in the ref path', async () => {
+    let capturedRefUrl = '';
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      {
+        match: (u) => /\/languages$/.test(u),
+        body: {},
+      },
+      {
+        match: (u) => {
+          const isRef = /\/git\/refs\/heads\//.test(u);
+          if (isRef) capturedRefUrl = u;
+          return isRef;
+        },
+        body: { ref: 'refs/heads/feature/audit-v1', object: { sha: 'a'.repeat(40) } },
+      },
+      {
+        match: (u) => /\/git\/trees\//.test(u),
+        body: { truncated: false, tree: [] },
+      },
+      {
+        match: (u) => u.includes('/code-scanning/alerts'),
+        status: 404, body: {},
+      },
+    ]);
+
+    const r = await handleAudit(makeRequest({ flags: { branch: 'feature/audit-v1' } }));
+    expect(r.kind).toBe('audit_plan');
+    // The slash MUST survive — encoded segments separated by literal "/"
+    expect(capturedRefUrl).toContain('/git/refs/heads/feature/audit-v1');
+    expect(capturedRefUrl).not.toContain('feature%2F');
+  });
+
+  it('handles ref-array responses (prefix-match) and picks the exact match', async () => {
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        // GitHub returns an array when the ref name is treated as a prefix
+        body: [
+          { ref: 'refs/heads/feature/audit-v10', object: { sha: 'b'.repeat(40) } },
+          { ref: 'refs/heads/feature/audit-v1',  object: { sha: 'c'.repeat(40) } },
+        ],
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree: [] } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    const r = await handleAudit(makeRequest({ flags: { branch: 'feature/audit-v1' } }));
+    expect(r.kind).toBe('audit_plan');
+    const plan = r.data as AuditPlan;
+    expect(plan.profile.sha).toBe('c'.repeat(40));
+  });
+});
+
+describe('tree truncation', () => {
+  it('sets profile.treeTruncated and surfaces a note in the plan', async () => {
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 99999, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } },
+      },
+      {
+        match: (u) => /\/git\/trees\//.test(u),
+        body: { truncated: true, tree: SAMPLE_TREE.slice(0, 3) },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    const r = await handleAudit(makeRequest());
+    expect(r.kind).toBe('audit_plan');
+    const plan = r.data as AuditPlan;
+    expect(plan.profile.treeTruncated).toBe(true);
+    expect(r.body).toMatch(/truncated/i);
+  });
+
+  it('sets treeTruncated=false on a complete response', async () => {
+    mockGitHub();
+    const r = await handleAudit(makeRequest());
+    const plan = r.data as AuditPlan;
+    expect(plan.profile.treeTruncated).toBe(false);
+  });
+});
+
+describe('Code Scanning alert pagination', () => {
+  it('flags codeScanningAlertsTruncated when a full first page is returned', async () => {
+    const fullPage = Array.from({ length: 50 }, (_, i) => ({
+      number: i, state: 'open' as const,
+      rule: { id: `rule-${i}`, severity: 'medium' },
+      most_recent_instance: { location: { path: `src/x${i}.ts`, start_line: 1 } },
+    }));
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'e'.repeat(40) } },
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree: [] } },
+      { match: (u) => u.includes('/code-scanning/alerts'), body: fullPage },
+    ]);
+
+    const r = await handleAudit(makeRequest());
+    expect(r.kind).toBe('audit_plan');
+    const plan = r.data as AuditPlan;
+    expect(plan.profile.codeScanningAlerts.length).toBe(50);
+    expect(plan.profile.codeScanningAlertsTruncated).toBe(true);
+    expect(r.body).toMatch(/first page only/i);
+  });
+
+  it('does not flag truncation when fewer alerts are returned', async () => {
+    mockGitHub();
+    const r = await handleAudit(makeRequest());
+    const plan = r.data as AuditPlan;
+    expect(plan.profile.codeScanningAlertsTruncated).toBe(false);
+  });
+});
+
+describe('nested manifest discovery (monorepo support)', () => {
+  it('discovers package.json and other manifests in subdirectories', async () => {
+    const monorepoTree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 100 },
+      { path: 'apps/web/package.json', type: 'blob', sha: 'm1', size: 100 },
+      { path: 'apps/api/package.json', type: 'blob', sha: 'm2', size: 100 },
+      { path: 'packages/shared/package.json', type: 'blob', sha: 'm3', size: 100 },
+      { path: 'packages/shared/tsconfig.json', type: 'blob', sha: 'm4', size: 100 },
+      // Vendored manifests must be skipped
+      { path: 'node_modules/lodash/package.json', type: 'blob', sha: 'm5', size: 100 },
+    ];
+    let manifestFetches: string[] = [];
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'f'.repeat(40) } },
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree: monorepoTree } },
+      {
+        match: (u) => {
+          const m = /\/contents\/(.+?)\?ref=/.exec(u);
+          if (m) manifestFetches.push(decodeURIComponent(m[1]));
+          return !!m;
+        },
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'x', size: 100 },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    const r = await handleAudit(makeRequest());
+    expect(r.kind).toBe('audit_plan');
+    const plan = r.data as AuditPlan;
+    const fetchedPaths = plan.profile.manifests.map(m => m.path);
+    expect(fetchedPaths).toContain('package.json');
+    expect(fetchedPaths).toContain('apps/web/package.json');
+    expect(fetchedPaths).toContain('apps/api/package.json');
+    expect(fetchedPaths).toContain('packages/shared/package.json');
+    expect(fetchedPaths).toContain('packages/shared/tsconfig.json');
+    // Vendored manifests excluded
+    expect(fetchedPaths).not.toContain('node_modules/lodash/package.json');
+  });
+});
