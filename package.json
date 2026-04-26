@@ -29,7 +29,8 @@
     "hono": "^4.11.6",
     "jose": "^6.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "web-tree-sitter": "^0.20.8"
   },
   "devDependencies": {
     "@cloudflare/sandbox": "*",

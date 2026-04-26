@@ -285,3 +285,127 @@ describe('preloadGrammars', () => {
     expect(ok.size).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Hardening — fixes from GPT review of slice 1
+// ---------------------------------------------------------------------------
+
+describe('SHA-256 integrity verification (security fix)', () => {
+  it('returns null when R2 object SHA does not match manifest SHA', async () => {
+    // Manifest claims MIN_WASM's SHA but R2 has a different (still valid) WASM.
+    const entry = makeEntry('typescript', MIN_WASM);
+    const tampered = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00]);
+
+    const { bucket } = createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify(makeManifest([entry])),
+      [entry.key]: tampered,
+    });
+    const result = await loadGrammar({ MOLTBOT_BUCKET: bucket }, 'typescript');
+    expect(result).toBeNull();
+  });
+
+  it('still loads when the SHA matches (positive control)', async () => {
+    const entry = makeEntry('typescript', MIN_WASM);
+    const { bucket } = createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify(makeManifest([entry])),
+      [entry.key]: MIN_WASM,
+    });
+    const result = await loadGrammar({ MOLTBOT_BUCKET: bucket }, 'typescript');
+    expect(result).not.toBeNull();
+  });
+});
+
+describe('manifest cache TTL (resilience fix)', () => {
+  it('refetches the manifest after the TTL elapses, picking up new entries', async () => {
+    vi.useFakeTimers();
+    try {
+      const ts = makeEntry('typescript');
+      const py = makeEntry('python');
+
+      // Round 1: manifest only has typescript
+      const round1 = createMockBucket({
+        'audit/grammars/manifest.json': JSON.stringify(makeManifest([ts])),
+        [ts.key]: MIN_WASM,
+      });
+      vi.stubGlobal('crypto', globalThis.crypto);
+      const r1 = await loadGrammar({ MOLTBOT_BUCKET: round1.bucket }, 'python');
+      expect(r1).toBeNull(); // python not yet in manifest
+
+      // Advance past TTL
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+      // Round 2: same isolate, but bucket now has both entries
+      const round2 = createMockBucket({
+        'audit/grammars/manifest.json': JSON.stringify(makeManifest([ts, py])),
+        [ts.key]: MIN_WASM,
+        [py.key]: MIN_WASM,
+      });
+      const r2 = await loadGrammar({ MOLTBOT_BUCKET: round2.bucket }, 'python');
+      expect(r2).not.toBeNull();
+      expect(r2!.entry.language).toBe('python');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT refetch within the TTL window', async () => {
+    vi.useFakeTimers();
+    try {
+      const ts = makeEntry('typescript');
+      const { bucket, state } = createMockBucket({
+        'audit/grammars/manifest.json': JSON.stringify(makeManifest([ts])),
+        [ts.key]: MIN_WASM,
+      });
+      await loadGrammar({ MOLTBOT_BUCKET: bucket }, 'typescript');
+      const callsAfterFirst = state.getCalls.length;
+
+      await vi.advanceTimersByTimeAsync(60 * 1000); // 1 minute, well under 10
+      await loadGrammar({ MOLTBOT_BUCKET: bucket }, 'typescript');
+      // No new manifest read (cached); module also cached → no growth at all
+      expect(state.getCalls.length).toBe(callsAfterFirst);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('manifest key prefix validation (correctness fix)', () => {
+  function rejectFixture(badKey: string) {
+    const ts = makeEntry('typescript');
+    const bad = { ...ts, key: badKey };
+    return createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify({ version: 1, entries: [bad], updatedAt: 'now' }),
+    });
+  }
+
+  it('rejects manifest where key encodes a different language', async () => {
+    const ts = makeEntry('typescript');
+    // Key claims python but entry is for typescript — language↔key mismatch
+    const { bucket } = rejectFixture(`audit/grammars/python@${ts.sha256.slice(0, 8)}.wasm`);
+    const result = await loadGrammar({ MOLTBOT_BUCKET: bucket }, 'typescript');
+    expect(result).toBeNull();
+  });
+
+  it('rejects manifest where key encodes a different SHA prefix', async () => {
+    const { bucket } = rejectFixture('audit/grammars/typescript@deadbeef.wasm');
+    const result = await loadGrammar({ MOLTBOT_BUCKET: bucket }, 'typescript');
+    expect(result).toBeNull();
+  });
+
+  it('rejects manifest where key has the wrong extension', async () => {
+    const ts = makeEntry('typescript');
+    const { bucket } = rejectFixture(`audit/grammars/typescript@${ts.sha256.slice(0, 8)}.bin`);
+    const result = await loadGrammar({ MOLTBOT_BUCKET: bucket }, 'typescript');
+    expect(result).toBeNull();
+  });
+
+  it('accepts a key that correctly encodes language + sha8 + .wasm (positive control)', async () => {
+    const ts = makeEntry('typescript');
+    const { bucket } = createMockBucket({
+      'audit/grammars/manifest.json': JSON.stringify(makeManifest([ts])),
+      [ts.key]: MIN_WASM,
+    });
+    const result = await loadGrammar({ MOLTBOT_BUCKET: bucket }, 'typescript');
+    expect(result).not.toBeNull();
+  });
+});

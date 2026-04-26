@@ -255,6 +255,46 @@ export interface GrammarManifest {
 export const MAX_GRAMMAR_BYTES = 5 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
+// Extractor output (zero-LLM AST snippets passed to the Analyst)
+// ---------------------------------------------------------------------------
+
+/** Categories the Extractor emits. The Analyst's prompts vary by kind. */
+export type SnippetKind =
+  | 'function'    // function declarations + methods
+  | 'class'       // class / interface / type alias declarations
+  | 'import'      // top-of-file imports — security/dep evidence
+  | 'export'      // public surface — types/deadcode evidence
+  | 'workflow'    // .github/workflows/*.yml — security lens, full file
+  | 'manifest';   // package.json/tsconfig.json/etc — verbatim, full file
+
+export interface ExtractedSnippet {
+  /** Path from RepoProfile.tree — the only paths the Analyst will ever
+   *  see, enforced via a path enum at the prompt boundary. */
+  path: string;
+  kind: SnippetKind;
+  /** The symbol or anchor name (e.g. "handleAudit", "AuthMiddleware",
+   *  "@actions/checkout"). Empty for kinds where it doesn't apply. */
+  name: string;
+  /** Line range from the source file (1-indexed, inclusive on both ends). */
+  startLine: number;
+  endLine: number;
+  /** Verbatim slice of the source, never paraphrased. Truncated to
+   *  MAX_SNIPPET_BYTES if the node is huge (e.g. an enormous function). */
+  text: string;
+  /** Language the source was parsed as. Used by the Analyst for routing. */
+  language: GrammarLanguage | 'yaml' | 'json' | 'plain';
+  /** Blob SHA from the tree entry — locks the snippet to a content hash. */
+  sha?: string;
+  /** Whether `text` was truncated (i.e. node bigger than the cap). */
+  truncated?: boolean;
+}
+
+/** Cap for any single snippet's verbatim text. Keeps the Analyst's per-call
+ *  context bounded even when individual nodes are massive (the Big Function
+ *  problem). 8 KiB ≈ 2k tokens — plenty for RCA on a single function. */
+export const MAX_SNIPPET_BYTES = 8 * 1024;
+
+// ---------------------------------------------------------------------------
 // Type guards & utilities
 // ---------------------------------------------------------------------------
 

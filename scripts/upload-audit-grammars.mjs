@@ -8,10 +8,15 @@
  * existing R2 manifest and skips unchanged entries.
  *
  * Usage:
- *   npm run audit:upload-grammars                  # upload MVP set
- *   node scripts/upload-audit-grammars.mjs --all   # upload everything tree-sitter-wasms ships
- *   node scripts/upload-audit-grammars.mjs --dry-run
- *   node scripts/upload-audit-grammars.mjs --remote production
+ *   npm run audit:upload-grammars                       # upload MVP set
+ *   npm run audit:upload-grammars -- --all              # everything tree-sitter-wasms ships
+ *   npm run audit:upload-grammars -- --dry-run          # plan without writing
+ *   npm run audit:upload-grammars -- --env production   # target a Wrangler environment
+ *   npm run audit:upload-grammars -- --help             # show usage
+ *
+ * Wrangler is always invoked with --remote so that R2 writes hit the
+ * Cloudflare-side bucket (never a local emulator). The script's own --env
+ * flag selects the Wrangler environment (e.g. staging vs production).
  *
  * R2 layout produced:
  *   audit/grammars/manifest.json
@@ -49,10 +54,40 @@ const GRAMMAR_DIR = resolve(__dirname, '..', 'node_modules', 'tree-sitter-wasms'
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
+if (args.includes('--help') || args.includes('-h')) {
+  printUsageAndExit(0);
+}
 const DRY_RUN = args.includes('--dry-run');
 const ALL = args.includes('--all');
-const REMOTE_IDX = args.indexOf('--remote');
-const REMOTE = REMOTE_IDX !== -1 ? args[REMOTE_IDX + 1] : null; // e.g. "production"
+const ENV_IDX = args.indexOf('--env');
+const WRANGLER_ENV = ENV_IDX !== -1 ? args[ENV_IDX + 1] : null; // e.g. "production"
+if (ENV_IDX !== -1 && (!WRANGLER_ENV || WRANGLER_ENV.startsWith('--'))) {
+  console.error('[grammars] ERROR: --env requires a value (e.g. --env production)');
+  printUsageAndExit(1);
+}
+// Backwards-compat warning: the v0 of this script accepted --remote <env>
+// to mean "use this wrangler environment". That conflated wrangler's own
+// --remote (operate on Cloudflare-side resources) with environment
+// selection. Now --env names the environment, and --remote is always
+// passed to wrangler internally. Tell operators if they used the old form.
+if (args.includes('--remote')) {
+  console.error('[grammars] ERROR: --remote was renamed to --env. Use: --env <wrangler-env>');
+  printUsageAndExit(1);
+}
+
+function printUsageAndExit(code) {
+  console.log(`Usage: node scripts/upload-audit-grammars.mjs [options]
+
+Options:
+  --all                Upload every grammar tree-sitter-wasms ships (not just MVP set)
+  --dry-run            Show what would happen without writing to R2
+  --env <name>         Use the named Wrangler environment (e.g. production, staging)
+  --help, -h           Show this message
+
+Wrangler is always invoked with --remote so writes go to the real Cloudflare
+bucket. Re-running with no changes is a no-op.`);
+  process.exit(code);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,7 +103,7 @@ function sha256Hex(buf) {
 
 function wranglerArgs(...rest) {
   const out = ['wrangler', ...rest];
-  if (REMOTE) out.push(`--env=${REMOTE}`);
+  if (WRANGLER_ENV) out.push(`--env=${WRANGLER_ENV}`);
   out.push('--remote');
   return out;
 }
