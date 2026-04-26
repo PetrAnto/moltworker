@@ -14,7 +14,7 @@ vi.mock('../llm', () => ({
   selectSkillModel: vi.fn((req: string | undefined, def: string) => req ?? def),
 }));
 
-import { handleAudit } from './audit';
+import { handleAudit, audit_do_key } from './audit';
 import { parseRepoCoords, encodeRepoPath } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { profileCacheKey } from './cache';
@@ -1129,6 +1129,147 @@ describe('--analyze: DO dispatch routing', () => {
     // No DO available → refuse with clear message; never throws.
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/too large for inline/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 3 follow-ups (GPT review): deterministic key, status check, DO env
+// ---------------------------------------------------------------------------
+
+describe('audit_do_key — deterministic DO identity', () => {
+  function planFor(overrides: Partial<{ owner: string; repo: string; sha: string; lenses: ('security'|'deps'|'types'|'tests'|'deadcode'|'perf')[]; depth: 'quick'|'standard'|'deep' }> = {}) {
+    return {
+      profile: {
+        owner: overrides.owner ?? 'octocat',
+        repo: overrides.repo ?? 'demo',
+        sha: overrides.sha ?? 'a'.repeat(40),
+        defaultBranch: 'main',
+        meta: { private: false, archived: false, sizeKb: 0, primaryLanguage: 'TypeScript', languages: {}, description: null },
+        tree: [], manifests: [], codeScanningAlerts: [],
+        codeScanningAlertsTruncated: false, treeTruncated: false,
+        profileHash: 'h', collectedAt: 'now',
+      },
+      lenses: overrides.lenses ?? (['security'] as const),
+      depth: overrides.depth ?? 'quick',
+      selections: { security: [], deps: [], types: [], tests: [], deadcode: [], perf: [] },
+      estimate: { llmCalls: 0, inputTokens: 0, costUsd: 0 },
+      notes: [],
+    } as Parameters<typeof audit_do_key>[1];
+  }
+
+  it('produces the same key for the same audit on rerun', () => {
+    const k1 = audit_do_key('user-1', planFor({ lenses: ['security', 'deps'] }));
+    const k2 = audit_do_key('user-1', planFor({ lenses: ['security', 'deps'] }));
+    expect(k1).toBe(k2);
+  });
+
+  it('is order-stable on the lens list', () => {
+    const k1 = audit_do_key('u', planFor({ lenses: ['security', 'deps', 'types'] }));
+    const k2 = audit_do_key('u', planFor({ lenses: ['types', 'security', 'deps'] }));
+    expect(k1).toBe(k2);
+  });
+
+  it('produces different keys when the SHA differs (commit-pinned)', () => {
+    const k1 = audit_do_key('u', planFor({ sha: 'a'.repeat(40) }));
+    const k2 = audit_do_key('u', planFor({ sha: 'b'.repeat(40) }));
+    expect(k1).not.toBe(k2);
+  });
+
+  it('produces different keys for different users (isolation)', () => {
+    expect(audit_do_key('u1', planFor())).not.toBe(audit_do_key('u2', planFor()));
+  });
+
+  it('produces different keys for different depths', () => {
+    expect(audit_do_key('u', planFor({ depth: 'quick' })))
+      .not.toBe(audit_do_key('u', planFor({ depth: 'deep' })));
+  });
+});
+
+describe('--analyze: DO dispatch status check (slice-3 hardening)', () => {
+  /** Reuse the same big-tree fixture as the slice-3 dispatch tests. */
+  function installBigRepoFetchMock() {
+    const tree = Array.from({ length: 60 }, (_, i) => ({
+      path: `src/auth/h${i}.ts`, type: 'blob' as const, sha: `s${i}`, size: 100,
+    }));
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+  }
+
+  it('returns an error when the DO responds with a non-2xx status', async () => {
+    installBigRepoFetchMock();
+    const stub = {
+      fetch: vi.fn().mockResolvedValue(new Response('overloaded', { status: 503 })),
+    };
+    const taskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(stub),
+    };
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'telegram',
+      chatId: 12345,
+      context: { telegramToken: 'tg-token' },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: taskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+
+    // Critical: do NOT report "Audit started" when the DO refused.
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/dispatch failed/i);
+    expect(result.body).toContain('503');
+    expect(result.body).toContain('overloaded'); // body excerpt is surfaced
+  });
+
+  it('uses a deterministic DO id (audit_do_key) for the dispatch', async () => {
+    installBigRepoFetchMock();
+    const stub = {
+      fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started' }))),
+    };
+    const taskProcessor = {
+      idFromName: vi.fn().mockReturnValue('do-id'),
+      get: vi.fn().mockReturnValue(stub),
+    };
+
+    await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'telegram',
+      chatId: 12345,
+      userId: 'user-42',
+      context: { telegramToken: 'tg-token' },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: taskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+
+    // The id should embed (user, repo, sha, lens, depth) — NOT a UUID.
+    const passedId = taskProcessor.idFromName.mock.calls[0][0];
+    expect(passedId).toContain('audit:user-42:octocat/hello-world');
+    expect(passedId).toContain('security');
+    expect(passedId).toContain('deep');
+    // Not a random UUID — repeated calls produce the SAME id.
+    taskProcessor.idFromName.mockClear();
+    await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      transport: 'telegram',
+      chatId: 12345,
+      userId: 'user-42',
+      context: { telegramToken: 'tg-token' },
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        TASK_PROCESSOR: taskProcessor,
+      } as unknown as MoltbotEnv,
+    }));
+    const passedId2 = taskProcessor.idFromName.mock.calls[0][0];
+    expect(passedId2).toBe(passedId);
   });
 });
 
