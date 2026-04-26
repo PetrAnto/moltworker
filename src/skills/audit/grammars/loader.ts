@@ -33,8 +33,20 @@ const MANIFEST_KEY = 'audit/grammars/manifest.json';
 // Module-scope state is per-Worker-isolate. Cloudflare may evict an isolate
 // at any time, but while it lives the cache holds. This is the same pattern
 // the runtime uses for compiled tool schemas elsewhere.
+//
+// Manifest cache has a TTL so a freshly-uploaded grammar becomes visible
+// within MANIFEST_CACHE_TTL_MS even on isolates that loaded an older
+// manifest. Compiled-module cache has no TTL — it's keyed by content SHA,
+// so a grammar version bump produces a different cache key automatically.
 
-let manifestCache: GrammarManifest | null = null;
+interface CachedManifest {
+  value: GrammarManifest;
+  fetchedAt: number;
+}
+
+const MANIFEST_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+let manifestCache: CachedManifest | null = null;
 const moduleCache = new Map<string, WebAssembly.Module>(); // key = `${lang}@${sha8}`
 
 /** Test-only: clear caches between tests. Not exported via index/types. */
@@ -116,6 +128,18 @@ export async function loadGrammar(
     return null;
   }
 
+  // Integrity check: hash the actual bytes and compare against the manifest.
+  // The manifest is content-addressed by design; without this verification
+  // the cache key (sha8 prefix) and the bytes can drift apart silently after
+  // an R2 overwrite or cross-upload, weakening the supply-chain guarantee.
+  const actualSha = await sha256Hex(bytes);
+  if (actualSha !== entry.sha256) {
+    console.warn(
+      `[GrammarLoader] SHA mismatch for "${language}": manifest claims ${entry.sha256}, R2 bytes are ${actualSha}. Refusing to compile.`,
+    );
+    return null;
+  }
+
   let module: WebAssembly.Module;
   try {
     module = await WebAssembly.compile(bytes);
@@ -126,6 +150,16 @@ export async function loadGrammar(
 
   moduleCache.set(cacheKey, module);
   return { module, entry, cached: false };
+}
+
+async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const view = new Uint8Array(digest);
+  let out = '';
+  for (let i = 0; i < view.length; i++) {
+    out += view[i].toString(16).padStart(2, '0');
+  }
+  return out;
 }
 
 /**
@@ -152,7 +186,9 @@ export async function preloadGrammars(
 // ---------------------------------------------------------------------------
 
 async function getManifest(bucket: R2Bucket): Promise<GrammarManifest | null> {
-  if (manifestCache) return manifestCache;
+  if (manifestCache && Date.now() - manifestCache.fetchedAt < MANIFEST_CACHE_TTL_MS) {
+    return manifestCache.value;
+  }
 
   let obj: R2ObjectBody | null;
   try {
@@ -178,7 +214,7 @@ async function getManifest(bucket: R2Bucket): Promise<GrammarManifest | null> {
     return null;
   }
 
-  manifestCache = parsed;
+  manifestCache = { value: parsed, fetchedAt: Date.now() };
   return parsed;
 }
 
@@ -194,12 +230,18 @@ function isManifest(v: unknown): v is GrammarManifest {
 function isManifestEntry(v: unknown): v is GrammarManifestEntry {
   if (typeof v !== 'object' || v === null) return false;
   const e = v as Partial<GrammarManifestEntry>;
-  return (
-    isGrammarLanguage(e.language) &&
-    typeof e.key === 'string' && e.key.startsWith('audit/grammars/') &&
-    typeof e.sha256 === 'string' && /^[a-f0-9]{64}$/.test(e.sha256) &&
-    typeof e.size === 'number' && Number.isInteger(e.size) && e.size > 0 &&
-    typeof e.source === 'string' &&
-    typeof e.uploadedAt === 'string'
-  );
+  if (!isGrammarLanguage(e.language)) return false;
+  if (typeof e.key !== 'string') return false;
+  if (typeof e.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(e.sha256)) return false;
+  if (typeof e.size !== 'number' || !Number.isInteger(e.size) || e.size <= 0) return false;
+  if (typeof e.source !== 'string') return false;
+  if (typeof e.uploadedAt !== 'string') return false;
+  // Key MUST encode language + sha8 + .wasm. Without this, a malformed manifest
+  // could route typescript -> python@<sha>.wasm and the loader would happily
+  // serve the wrong grammar (the SHA verification would catch the bytes, but
+  // the manifest claim itself is still incoherent and we want to reject it
+  // at validation time).
+  const expectedPrefix = `audit/grammars/${e.language}@${e.sha256.slice(0, 8)}`;
+  if (!e.key.startsWith(expectedPrefix) || !e.key.endsWith('.wasm')) return false;
+  return true;
 }
