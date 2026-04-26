@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { createTelegramHandler, TelegramBot, type TelegramUpdate } from '../telegram/handler';
+import { timingSafeEqual } from '../utils/timing-safe-equal';
 
 const telegram = new Hono<AppEnv>();
 
@@ -23,9 +24,23 @@ telegram.post('/webhook/:token', async (c) => {
     return c.json({ error: 'Bot not configured' }, 500);
   }
 
-  if (token !== env.TELEGRAM_BOT_TOKEN) {
+  // Constant-time compare: a plain `!==` would leak the matching prefix
+  // length of the bot token, which (since this token = full bot impersonation)
+  // is not acceptable.
+  if (!timingSafeEqual(token, env.TELEGRAM_BOT_TOKEN)) {
     console.error('[Telegram] Invalid webhook token');
     return c.json({ error: 'Invalid token' }, 401);
+  }
+
+  // Optional second factor: validate Telegram's X-Telegram-Bot-Api-Secret-Token
+  // header. Only enforced when TELEGRAM_WEBHOOK_SECRET is configured, so
+  // existing deployments keep working until they re-run /telegram/setup.
+  if (env.TELEGRAM_WEBHOOK_SECRET) {
+    const provided = c.req.header('X-Telegram-Bot-Api-Secret-Token') || '';
+    if (!timingSafeEqual(provided, env.TELEGRAM_WEBHOOK_SECRET)) {
+      console.error('[Telegram] Invalid webhook secret-token header');
+      return c.json({ error: 'Invalid secret token' }, 401);
+    }
   }
 
   // Check for OpenRouter API key
@@ -124,7 +139,7 @@ telegram.get('/setup', async (c) => {
   const webhookUrl = `${workerUrl}/telegram/webhook/${env.TELEGRAM_BOT_TOKEN}`;
 
   const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
-  const success = await bot.setWebhook(webhookUrl);
+  const success = await bot.setWebhook(webhookUrl, env.TELEGRAM_WEBHOOK_SECRET);
 
   // Register bot menu commands.
   //
