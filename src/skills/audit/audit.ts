@@ -23,8 +23,13 @@ import { scout, fetchFileContents, parseRepoCoords } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { getCachedProfile, cacheProfile } from './cache';
 import { extractSnippets } from './extractor/extractor';
-import { loadGrammar } from './grammars/loader';
+import { loadGrammar, loadRuntimeWasm } from './grammars/loader';
 import { analyzeWithLens } from './analyst/analyst';
+
+/** Hard inline-execution budget. Beyond this we refuse with a clear message
+ *  rather than burn the Worker's 10s wall-clock on a doomed audit. The DO
+ *  async dispatch path (slice 3) lifts this. */
+const INLINE_MAX_FILES = 25;
 
 export const AUDIT_META: SkillMeta = {
   id: 'audit',
@@ -139,6 +144,35 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     for (const p of plan.selections[lens]) selectedPaths.add(p);
   }
 
+  // Inline-budget guard: until the DO dispatch path lands (slice 3), refuse
+  // audits that would exceed our Worker wall-clock (10s) or Telegram webhook
+  // expectations. Per GPT's slice-2 review, the safe inline envelope is:
+  //   - depth=quick (small per-lens caps)
+  //   - selectedPaths <= INLINE_MAX_FILES
+  // Anything beyond that needs the DO dispatch path.
+  if (plan.depth !== 'quick' || selectedPaths.size > INLINE_MAX_FILES) {
+    return errorResult(
+      `Audit too large for inline execution: depth=${plan.depth}, ${selectedPaths.size} files selected (max inline: depth=quick + ${INLINE_MAX_FILES} files).\n` +
+      `Use --depth quick + --lens <single-lens>, or wait for the DO async dispatch path.`,
+    );
+  }
+
+  // Worker-bootstrap gate: --analyze needs the web-tree-sitter runtime WASM.
+  // Without it Parser.init fails inside the Worker. We fetch the runtime
+  // bytes from R2 (pushed by scripts/upload-audit-grammars.mjs) before any
+  // Extractor work happens; if absent, surface a clear "not enabled" message.
+  let runtimeWasmBytes: Uint8Array | null = null;
+  if (request.env.MOLTBOT_BUCKET) {
+    const runtime = await loadRuntimeWasm({ MOLTBOT_BUCKET: request.env.MOLTBOT_BUCKET });
+    runtimeWasmBytes = runtime?.bytes ?? null;
+  }
+  if (!runtimeWasmBytes && !isNodeTestEnv()) {
+    return errorResult(
+      'Audit analysis is not enabled in this build: tree-sitter runtime WASM is not present in MOLTBOT_BUCKET. ' +
+      'Run `npm run audit:upload-grammars` to push it, then retry.',
+    );
+  }
+
   // Fetch contents for the selected files (Scout pre-fetched manifests; the
   // Extractor doesn't itself call GitHub — keeps the data flow auditable).
   const fetchResult = selectedPaths.size > 0
@@ -151,21 +185,36 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       })
     : { files: [], apiCalls: 0 };
   const totalApiCalls = ctx.apiCallsSoFar + fetchResult.apiCalls;
-  const contentByPath = new Map(fetchResult.files.map(f => [f.path, f.content] as const));
 
-  // Run the Extractor once across all selected paths. The grammar loader
-  // is supplied via a closure so tests can inject a fake; production gets
-  // the real R2-backed loader from grammars/loader.ts.
+  // Validate fetched-file SHA against the tree SHA. A mismatch is rare but
+  // possible (symlinks, submodules, ref drift between calls). Skip files
+  // that don't agree — the Analyst's evidence-bound contract relies on
+  // path+content being internally consistent.
+  const treeSha = new Map(profile.tree.map(t => [t.path, t.sha] as const));
+  let shaMismatches = 0;
+  const contentByPath = new Map<string, string>();
+  for (const f of fetchResult.files) {
+    if (f.content == null) continue;
+    const expected = treeSha.get(f.path);
+    if (expected && f.sha && expected !== f.sha) {
+      shaMismatches++;
+      continue;
+    }
+    contentByPath.set(f.path, f.content);
+  }
+
+  // Run the Extractor once across all selected paths. The grammar loader is
+  // supplied via a closure; in Worker production we pass runtimeWasmBytes so
+  // bootstrapParser hits the strict mode and fails loudly on misconfig.
   const extractCtx = {
     profile,
     selections: [...selectedPaths]
       .map(p => ({ path: p, content: contentByPath.get(p) ?? '' }))
       .filter(s => s.content.length > 0),
     loadGrammar: (lang: Parameters<typeof loadGrammar>[1]) => loadGrammar(request.env, lang),
-    // parserBootstrap intentionally undefined for now — Worker bootstrap
-    // (runtimeWasmBytes) lands in a follow-up. In Node tests web-tree-sitter
-    // auto-resolves; in Worker production this will fail loud at Parser.init,
-    // signaling the missing wiring.
+    parserBootstrap: runtimeWasmBytes
+      ? { runtimeWasmBytes, requireRuntimeWasmBytes: true }
+      : undefined, // Node tests fall back to the package's auto-resolution
   };
   const extracted = await extractSnippets(extractCtx);
 
@@ -225,7 +274,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   return {
     skillId: 'audit',
     kind: 'audit_run',
-    body: formatRun(run, extracted.snippets.length, extracted.parseErrors.length),
+    body: formatRun(run, extracted.snippets.length, extracted.parseErrors.length, shaMismatches),
     data: run,
     telemetry: {
       durationMs: run.telemetry.durationMs,
@@ -235,6 +284,16 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       tokens: { prompt: promptTokens, completion: completionTokens },
     },
   };
+}
+
+/**
+ * Heuristic: are we running under vitest/Node? Used only by the inline
+ * --analyze path to permit the parserBootstrap-less code path that
+ * web-tree-sitter auto-resolves at unit-test time. Production Workers
+ * never have these globals.
+ */
+function isNodeTestEnv(): boolean {
+  return typeof process !== 'undefined' && process.versions?.node !== undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,11 +401,17 @@ function formatPlan(plan: AuditPlan, ctx: { cached: boolean; apiCalls: number })
 // Run formatting
 // ---------------------------------------------------------------------------
 
-function formatRun(run: AuditRun, snippetCount: number, parseErrorCount: number): string {
+function formatRun(
+  run: AuditRun,
+  snippetCount: number,
+  parseErrorCount: number,
+  shaMismatches: number,
+): string {
   const lines: string[] = [];
   lines.push(`Audit report: ${run.repo.owner}/${run.repo.name}@${run.repo.sha.slice(0, 7)}`);
   lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${snippetCount} snippets analyzed`);
   if (parseErrorCount > 0) lines.push(`⚠️ ${parseErrorCount} file(s) had parse issues`);
+  if (shaMismatches > 0) lines.push(`⚠️ ${shaMismatches} file(s) skipped: fetched SHA disagreed with tree SHA`);
   lines.push('');
 
   if (run.findings.length === 0) {
@@ -361,7 +426,7 @@ function formatRun(run: AuditRun, snippetCount: number, parseErrorCount: number)
       lines.push(`  Lens: ${f.lens} • Confidence: ${f.confidence}`);
       lines.push(`  Root cause: ${f.rootCause}`);
       lines.push(`  Fix: ${f.correctiveAction}`);
-      lines.push(`  Prevent (${f.preventiveAction.kind}): ${f.preventiveAction.detail.slice(0, 240)}${f.preventiveAction.detail.length > 240 ? '…' : ''}`);
+      lines.push(`  Prevent: ${formatPreventive(f.preventiveAction, run.runId)}`);
       lines.push(`  Evidence: ${f.evidence.map(e => `${e.path}${e.lines ? `:${e.lines}` : ''}`).join(', ')}`);
       lines.push('');
     }
@@ -374,6 +439,23 @@ function formatRun(run: AuditRun, snippetCount: number, parseErrorCount: number)
   const t = run.telemetry;
   lines.push(`Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`);
   return lines.join('\n');
+}
+
+/**
+ * Render a preventive action for the Telegram top-5 view. We keep the
+ * top-level brief but preserve the artifact KIND (CI gate vs lint rule
+ * vs Semgrep rule, etc.) and the first non-empty line of the artifact —
+ * that's usually the most identifying detail (e.g. the rule id, the
+ * step name) and lets the user judge relevance without scrolling. Full
+ * artifacts live in result.data and are exposed via /audit export
+ * (lands with the Distiller slice).
+ */
+function formatPreventive(prev: { kind: string; detail: string }, runId: string): string {
+  const firstLine = prev.detail.split('\n').find(l => l.trim().length > 0)?.trim() ?? '';
+  const more = prev.detail.includes('\n') || prev.detail.length > firstLine.length;
+  const summary = firstLine.length > 200 ? firstLine.slice(0, 200) + '…' : firstLine;
+  const exportHint = more ? ` (full artifact via /audit export ${runId})` : '';
+  return `[${prev.kind}] ${summary}${exportHint}`;
 }
 
 // ---------------------------------------------------------------------------

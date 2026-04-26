@@ -48,6 +48,8 @@ const SOURCE_TAG = 'tree-sitter-wasms@0.1.13';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GRAMMAR_DIR = resolve(__dirname, '..', 'node_modules', 'tree-sitter-wasms', 'out');
+const RUNTIME_WASM_PATH = resolve(__dirname, '..', 'node_modules', 'web-tree-sitter', 'tree-sitter.wasm');
+const RUNTIME_SOURCE_TAG = 'web-tree-sitter@0.20.8';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -131,8 +133,23 @@ async function readGrammar(language) {
   return { language, bytes, size: info.size, sha256: sha256Hex(bytes) };
 }
 
+async function readRuntimeWasm() {
+  let info;
+  try { info = await stat(RUNTIME_WASM_PATH); }
+  catch { die(`runtime not found: ${RUNTIME_WASM_PATH}\n  Run: npm install web-tree-sitter@^0.20.8`); }
+  if (info.size > MAX_GRAMMAR_BYTES) {
+    die(`runtime is ${info.size} bytes — exceeds MAX_GRAMMAR_BYTES`);
+  }
+  const bytes = await readFile(RUNTIME_WASM_PATH);
+  return { bytes, size: info.size, sha256: sha256Hex(bytes) };
+}
+
 function makeKey(language, sha256) {
   return `audit/grammars/${language}@${sha256.slice(0, 8)}.wasm`;
+}
+
+function makeRuntimeKey(sha256) {
+  return `audit/grammars/runtime@${sha256.slice(0, 8)}.wasm`;
 }
 
 /** Fetch existing manifest from R2; null if absent. */
@@ -220,12 +237,34 @@ async function main() {
     uploadObject(u.key, u.bytes, 'application/wasm');
   }
 
-  // 4. Write manifest (always — even on no-change runs we update updatedAt
+  // 4. Push the runtime WASM (web-tree-sitter/tree-sitter.wasm). Same
+  //    SHA-keyed idempotent pattern. The Worker's Extractor needs this
+  //    via Parser.init({wasmBinary}); without it /audit --analyze stays
+  //    feature-gated off.
+  const runtime = await readRuntimeWasm();
+  const runtimeEntry = {
+    key: makeRuntimeKey(runtime.sha256),
+    sha256: runtime.sha256,
+    size: runtime.size,
+    source: RUNTIME_SOURCE_TAG,
+    uploadedAt: existingManifest?.runtime?.sha256 === runtime.sha256
+      ? existingManifest.runtime.uploadedAt
+      : new Date().toISOString(),
+  };
+  if (existingManifest?.runtime?.sha256 === runtime.sha256) {
+    log(`unchanged: runtime (${runtime.size} bytes, sha8=${runtime.sha256.slice(0, 8)})`);
+  } else {
+    uploadObject(runtimeEntry.key, runtime.bytes, 'application/wasm');
+    log(`upload:    runtime (${runtime.size} bytes, sha8=${runtime.sha256.slice(0, 8)})`);
+  }
+
+  // 5. Write manifest (always — even on no-change runs we update updatedAt
   //    only when there were uploads, to keep idempotency honest).
-  const noChange = uploads.length === 0;
+  const noChange = uploads.length === 0 && existingManifest?.runtime?.sha256 === runtime.sha256;
   const newManifest = {
     version: 1,
     entries: newEntries.sort((a, b) => a.language.localeCompare(b.language)),
+    runtime: runtimeEntry,
     updatedAt: noChange && existingManifest?.updatedAt
       ? existingManifest.updatedAt
       : new Date().toISOString(),
@@ -249,6 +288,8 @@ function manifestEquals(a, b) {
     if (!prev) return false;
     if (prev.sha256 !== e.sha256 || prev.size !== e.size || prev.key !== e.key) return false;
   }
+  if ((a.runtime?.sha256 ?? null) !== (b.runtime?.sha256 ?? null)) return false;
+  if ((a.runtime?.key ?? null) !== (b.runtime?.key ?? null)) return false;
   return true;
 }
 
