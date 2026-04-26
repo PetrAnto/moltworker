@@ -1,0 +1,209 @@
+/**
+ * Audit Skill — Core Types
+ *
+ * Shared types for the /audit skill. See brainstorming/audit-skill-design-v1.md
+ * for the full design rationale.
+ */
+
+// ---------------------------------------------------------------------------
+// Public surface (used by handler + DO + renderer)
+// ---------------------------------------------------------------------------
+
+/** Audit lenses. Only MVP set is wired in v0; the rest land post-MVP. */
+export type Lens =
+  | 'security'
+  | 'deps'
+  | 'types'
+  | 'tests'
+  | 'deadcode'
+  | 'perf';
+
+export const MVP_LENSES: ReadonlyArray<Lens> = ['security', 'deps', 'types', 'tests', 'deadcode', 'perf'];
+
+/** Severity scale per finding. */
+export type Severity = 'critical' | 'high' | 'medium' | 'low';
+
+/** Coarse-grained confidence in a finding (post-validation). */
+export type Confidence = 0.25 | 0.5 | 0.75 | 1.0;
+
+/** Audit depth tiers — controls token + tool budgets. */
+export type Depth = 'quick' | 'standard' | 'deep';
+
+/** Source of an evidence record. */
+export type EvidenceSource = 'github' | 'static' | 'wasm-ast' | 'llm';
+
+/** Preventive-action artifact kinds. */
+export type PreventiveKind =
+  | 'ci'
+  | 'lint'
+  | 'semgrep'
+  | 'ast-grep'
+  | 'dep-policy'
+  | 'doc'
+  | 'test-fixture'
+  | 'claude-md';
+
+// ---------------------------------------------------------------------------
+// Scout output — the cheap pre-pass artifact
+// ---------------------------------------------------------------------------
+
+/**
+ * Repo profile produced by the Scout. Cacheable by (owner, repo, sha).
+ * Contains zero-LLM evidence: tree, manifests, existing alerts.
+ */
+export interface RepoProfile {
+  /** Repo coordinates. */
+  owner: string;
+  repo: string;
+  defaultBranch: string;
+  /** Commit SHA the profile is pinned to — every claim downstream cites this. */
+  sha: string;
+  /** Repo-level metadata returned by GET /repos/{owner}/{repo}. */
+  meta: {
+    private: boolean;
+    archived: boolean;
+    sizeKb: number;
+    primaryLanguage: string | null;
+    languages: Record<string, number>; // bytes per language
+    description: string | null;
+  };
+  /** Flattened tree from /git/trees/{sha}?recursive=1. */
+  tree: TreeEntry[];
+  /** Manifests + critical config files we always fetch. */
+  manifests: ManifestFile[];
+  /** Pre-existing GitHub Code Scanning Alerts. Empty if disabled on the repo. */
+  codeScanningAlerts: CodeScanningAlert[];
+  /** Hash of (sha + tree byte sizes) for cache invalidation. */
+  profileHash: string;
+  /** When the profile was collected (ISO). */
+  collectedAt: string;
+}
+
+export interface TreeEntry {
+  path: string;
+  type: 'blob' | 'tree';
+  /** Blob SHA for files; lets us pin evidence by content. */
+  sha: string;
+  /** Byte size for blobs (not present for trees). */
+  size?: number;
+}
+
+export interface ManifestFile {
+  path: string;
+  /** Verbatim content (decoded from base64) or null if too large. */
+  content: string | null;
+  sha: string;
+}
+
+export interface CodeScanningAlert {
+  number: number;
+  state: 'open' | 'closed' | 'dismissed' | 'fixed';
+  severity: Severity;
+  rule: string;
+  description: string;
+  path: string;
+  lineStart?: number;
+  lineEnd?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Audit plan — what the Extractor + Analyst will work on
+// ---------------------------------------------------------------------------
+
+/**
+ * Output of `/audit ... --plan` (the cheap pre-flight). Also embedded in
+ * full audit runs as the first stage of the four-role pipeline.
+ */
+export interface AuditPlan {
+  profile: RepoProfile;
+  lenses: Lens[];
+  depth: Depth;
+  /** Files the Scout selected for the Extractor, grouped by lens. */
+  selections: Record<Lens, string[]>;
+  /** Crude cost estimate (LLM calls + tokens), driven by depth. */
+  estimate: {
+    llmCalls: number;
+    inputTokens: number;
+    costUsd: number;
+  };
+  notes: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Findings + Run (post-Analyst — empty in v0 Scout-only handler)
+// ---------------------------------------------------------------------------
+
+export interface AuditEvidence {
+  /** MUST be a real path from `RepoProfile.tree`. The Analyst's path enum is
+   *  populated from this list and a post-LLM validator rejects anything else. */
+  path: string;
+  /** e.g. "42-58". */
+  lines?: string;
+  /** Verbatim, never paraphrased. */
+  snippet?: string;
+  source: EvidenceSource;
+  /** Blob/commit SHA that locks the claim to a point in time. */
+  sha?: string;
+}
+
+export interface AuditFinding {
+  /** Stable hash of (lens + path + symptom) — used for /suppress and dedup. */
+  id: string;
+  lens: Lens;
+  severity: Severity;
+  confidence: Confidence;
+  /** Non-empty. No claim without citation. */
+  evidence: AuditEvidence[];
+  /** Observable defect. */
+  symptom: string;
+  /** 5-Whys terminus — process/design/config, not a single bad line. */
+  rootCause: string;
+  /** Immediate patch. Becomes orchestra task when --pr is set. */
+  correctiveAction: string;
+  preventiveAction: {
+    kind: PreventiveKind;
+    /** Concrete artifact — e.g. the lint rule body, the workflow yaml, etc. */
+    detail: string;
+  };
+  /** Ready-to-execute task description for orchestra. Optional. */
+  orchestraPatchBrief?: string;
+}
+
+export interface AuditRun {
+  runId: string;
+  repo: { owner: string; name: string; sha: string };
+  lenses: Lens[];
+  depth: Depth;
+  findings: AuditFinding[];
+  telemetry: {
+    durationMs: number;
+    llmCalls: number;
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number;
+    githubApiCalls: number;
+  };
+  /** Prior runId if this run was a delta against a cached profile. */
+  cachedFrom?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Type guards
+// ---------------------------------------------------------------------------
+
+export function isLens(value: unknown): value is Lens {
+  return typeof value === 'string' && (MVP_LENSES as ReadonlyArray<string>).includes(value);
+}
+
+export function isDepth(value: unknown): value is Depth {
+  return value === 'quick' || value === 'standard' || value === 'deep';
+}
+
+/** Priority score per the design doc §6 — used for top-N display ranking. */
+export function findingPriority(f: AuditFinding): number {
+  const severityWeight: Record<Severity, number> = { critical: 1.0, high: 0.75, medium: 0.5, low: 0.25 };
+  // Without an LLM in v0, likelihood/blast-radius are derived heuristics; for now
+  // collapse to a simple severity + confidence ranking. The Analyst will populate
+  // the missing inputs in v1.
+  return 0.6 * severityWeight[f.severity] + 0.4 * f.confidence;
+}

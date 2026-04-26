@@ -12,7 +12,7 @@ import type { MoltbotEnv } from '../types';
 // ---------------------------------------------------------------------------
 
 /** Known skill IDs. Extend as new skills are registered. */
-export type SkillId = 'orchestra' | 'lyra' | 'spark' | 'nexus';
+export type SkillId = 'orchestra' | 'lyra' | 'spark' | 'nexus' | 'audit';
 
 /** Transport the request originated from. */
 export type Transport = 'telegram' | 'web' | 'api' | 'simulate';
@@ -74,6 +74,8 @@ export type SkillResultKind =
   | 'dossier'         // Nexus research dossier
   | 'source_plan'     // Nexus HITL gate (awaiting approval)
   | 'orchestra'       // Orchestra result (PR link, roadmap, etc.)
+  | 'audit_plan'      // Audit Scout pre-flight (file selections + cost estimate)
+  | 'audit_run'       // Audit full run (findings + RCA + CAPA) — lands with the Analyst
   | 'error';          // Error response
 
 /** Telemetry data attached to every skill result. */

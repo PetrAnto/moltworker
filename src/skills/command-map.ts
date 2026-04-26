@@ -50,6 +50,9 @@ export const COMMAND_SKILL_MAP: Record<string, CommandMapping> = {
   // Nexus — Research (Phase 3)
   '/research':  { skillId: 'nexus', defaultSubcommand: 'research' },
   '/dossier':   { skillId: 'nexus', defaultSubcommand: 'dossier' },
+
+  // Audit — Repo audit + RCA + CAPA (Phase 4, v0 Scout-only)
+  '/audit':     { skillId: 'audit', defaultSubcommand: 'plan' },
 };
 
 /**
