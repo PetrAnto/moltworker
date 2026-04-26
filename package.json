@@ -21,7 +21,8 @@
     "format": "oxfmt --write src/",
     "format:check": "oxfmt --check src/",
     "audit:upload-grammars": "node scripts/upload-audit-grammars.mjs",
-    "audit:sync-runtime": "node scripts/sync-tree-sitter-runtime.mjs"
+    "audit:sync-runtime": "node scripts/sync-tree-sitter-runtime.mjs",
+    "audit:sync-runtime:check": "node scripts/sync-tree-sitter-runtime.mjs --check"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.0.5",

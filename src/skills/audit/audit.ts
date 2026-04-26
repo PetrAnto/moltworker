@@ -327,9 +327,21 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   // Both paths SHA-verify the bytes before use.
   let runtimeWasmBytes: Uint8Array | null = null;
   let runtimeSource: 'r2' | 'bundled' | null = null;
+  let r2RuntimeFailureReason: string | null = null;
   if (request.env.MOLTBOT_BUCKET) {
     const r2 = await loadRuntimeWasm({ MOLTBOT_BUCKET: request.env.MOLTBOT_BUCKET });
-    if (r2) { runtimeWasmBytes = r2.bytes; runtimeSource = 'r2'; }
+    if (r2.ok) {
+      runtimeWasmBytes = r2.bytes;
+      runtimeSource = 'r2';
+    } else if (r2.reason !== 'no_bucket' && r2.reason !== 'no_manifest' && r2.reason !== 'missing_runtime') {
+      // 'no_bucket' / 'no_manifest' / 'missing_runtime' are routine
+      // — the operator simply hasn't run audit:upload-grammars. The
+      // remaining failure modes (sha_mismatch, oversize_*, missing_object)
+      // mean the operator pushed something but it's broken — surface
+      // that distinct case so they can fix R2 instead of wondering
+      // why "runtime: bundled" appears after a successful upload.
+      r2RuntimeFailureReason = r2.reason;
+    }
   }
   if (!runtimeWasmBytes) {
     const bundled = await getBundledRuntimeWasm();
@@ -488,6 +500,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       suppressedDropped,
       suppressionReadError: suppression.error,
       runtimeSource,
+      r2RuntimeFailureReason,
     }),
     data: run,
     telemetry: {
@@ -637,8 +650,15 @@ interface FormatRunCounts {
   /** Which path supplied the tree-sitter runtime WASM:
    *    'r2'      — hot-uploaded version from MOLTBOT_BUCKET (preferred)
    *    'bundled' — committed-into-source fallback (cold-start resilient)
-   *    null      — neither available (Node-test mode auto-resolves) */
+   *    null      — neither available (only possible in Node test mode) */
   runtimeSource?: 'r2' | 'bundled' | null;
+  /** Non-null when the runtime came from `bundled` because the R2
+   *  runtime was configured but failed verification (sha_mismatch,
+   *  oversize_*, missing_object). Surfaced as a discrete warning so
+   *  operators can tell "R2 unconfigured" (silent) apart from "R2
+   *  configured but broken" (loud). Routine cases (no_bucket /
+   *  no_manifest / missing_runtime) deliberately don't trigger this. */
+  r2RuntimeFailureReason?: string | null;
 }
 
 function formatRun(run: AuditRun, c: FormatRunCounts): string {
@@ -646,6 +666,9 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
   lines.push(`Audit report: ${run.repo.owner}/${run.repo.name}@${run.repo.sha.slice(0, 7)}`);
   const runtimeNote = c.runtimeSource ? ` • runtime: ${c.runtimeSource}` : '';
   lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${c.snippetCount} snippets analyzed${runtimeNote}`);
+  if (c.r2RuntimeFailureReason) {
+    lines.push(`⚠️ R2 runtime unavailable: ${c.r2RuntimeFailureReason}. Used the bundled fallback. Run \`npm run audit:upload-grammars\` to fix the R2 runtime entry.`);
+  }
   if (c.missingGrammars.size > 0) {
     const langs = [...c.missingGrammars].sort().join(', ');
     lines.push(`⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — run \`npm run audit:upload-grammars\` to enable.`);

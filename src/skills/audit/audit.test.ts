@@ -859,11 +859,77 @@ describe('--analyze: bundled-fallback runtime (slice 5 cold-start path)', () => 
     expect(result.body).toContain('runtime: bundled');
   });
 
-  it('still allows --analyze in Vitest with no MOLTBOT_BUCKET (auto-resolution fallback)', async () => {
-    // Sanity: VITEST is set in this run by default. The other --analyze
-    // tests in this file rely on this fall-through; an accidentally-too-
-    // narrow gate would break them. This test pins the contract.
-    expect(typeof process.env.VITEST !== 'undefined' && process.env.VITEST !== '').toBe(true);
+  it('surfaces an "R2 runtime unavailable" warning when R2 was configured but failed verification', async () => {
+    // Closes GPT slice-5 review finding 2. R2 has a manifest with a
+    // runtime entry whose declared SHA does not match the bytes —
+    // simulates a half-complete or corrupted upload. The handler
+    // should still complete via the bundled fallback, but the report
+    // must distinctly say "R2 runtime unavailable" so the operator
+    // doesn't think audit:upload-grammars succeeded.
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    // R2 with a runtime manifest entry whose SHA won't match.
+    const fakeBucket = {
+      get: vi.fn(async (key: string) => {
+        if (key === 'audit/grammars/manifest.json') {
+          // Manifest declares a runtime with sha=zeros; the bytes below
+          // produce a real SHA → mismatch path triggers.
+          return {
+            json: async () => ({
+              version: 1,
+              entries: [],
+              runtime: {
+                key: 'audit/grammars/runtime@00000000.wasm',
+                sha256: '0'.repeat(64),
+                size: 8,
+                source: 'fake',
+                uploadedAt: 'now',
+              },
+              updatedAt: 'now',
+            }),
+            arrayBuffer: async () => new ArrayBuffer(0),
+          } as unknown as R2ObjectBody;
+        }
+        if (key === 'audit/grammars/runtime@00000000.wasm') {
+          return {
+            json: async () => ({}),
+            arrayBuffer: async () => new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]).buffer,
+          } as unknown as R2ObjectBody;
+        }
+        return null;
+      }),
+      put: vi.fn(),
+      delete: vi.fn(),
+      list: vi.fn(async () => ({ keys: [], list_complete: true, cursor: undefined })),
+    } as unknown as R2Bucket;
+
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+
+    // Reset the loader's per-isolate manifest cache so this test gets a
+    // fresh fetch (other tests run before this one in the same file).
+    const loader = await import('./grammars/loader');
+    loader._resetGrammarCachesForTesting();
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', MOLTBOT_BUCKET: fakeBucket } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    // Used the bundled fallback (R2 was broken, not just unconfigured).
+    expect(result.body).toContain('runtime: bundled');
+    // Distinct warning so the operator can fix R2.
+    expect(result.body).toMatch(/R2 runtime unavailable: sha_mismatch/);
   });
 });
 

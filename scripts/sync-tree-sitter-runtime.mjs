@@ -16,7 +16,9 @@
  *     redeploy), then falls back to the bundled bytes — no hard
  *     dependency on R2 being warm for /audit --analyze to work.
  *
- * Run via:  npm run audit:sync-runtime
+ * Run via:
+ *   npm run audit:sync-runtime          → write/update the generated file
+ *   npm run audit:sync-runtime -- --check → exit non-zero if stale (CI gate)
  * Idempotent: re-running with no upstream change is a no-op.
  */
 
@@ -24,6 +26,8 @@ import { readFile, writeFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const CHECK_ONLY = process.argv.includes('--check');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_WASM_PATH = resolve(__dirname, '..', 'node_modules', 'web-tree-sitter', 'tree-sitter.wasm');
@@ -58,7 +62,16 @@ async function main() {
     return;
   }
 
-  // 3. Write
+  // 3. --check mode: exit non-zero so CI catches stale generated files.
+  if (CHECK_ONLY) {
+    console.error('[sync-runtime] STALE');
+    console.error(`  installed:  web-tree-sitter@${pkg.version}, sha8=${sha256.slice(0, 8)}`);
+    console.error(`  generated:  ${marker.replace('RUNTIME_WASM_SHA256 = ', '').replace(/'/g, '').slice(0, 8) || '(missing)'}`);
+    console.error('  Run `npm run audit:sync-runtime` to regenerate before deploying.');
+    process.exit(1);
+  }
+
+  // 4. Write (default mode)
   const source = generated({ base64, sha256, size: bytes.length, version: pkg.version });
   await writeFile(OUT_PATH, source, 'utf8');
   log(`wrote ${OUT_PATH}`);
