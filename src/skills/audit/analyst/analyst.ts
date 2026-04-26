@@ -103,10 +103,13 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
     llmText = result.text;
     tokens = result.tokens;
   } catch (err) {
-    console.error('[Analyst] LLM call failed:', err instanceof Error ? err.message : err);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[Analyst] LLM call failed:', message);
+    // Distinct from json_parse_failed: this is an upstream/network/auth
+    // failure on the model call itself, not a bad JSON response.
     return {
       findings: [],
-      issues: [{ kind: 'json_parse_failed', raw: '' }],
+      issues: [{ kind: 'llm_call_failed', message }],
       telemetry: { durationMs: Date.now() - start, model, llmCalled: true },
     };
   }

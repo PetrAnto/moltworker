@@ -15,7 +15,7 @@ vi.mock('../llm', () => ({
 }));
 
 import { handleAudit } from './audit';
-import { parseRepoCoords } from './scout';
+import { parseRepoCoords, encodeRepoPath } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { profileCacheKey } from './cache';
 import { findingPriority, isLens, isDepth } from './types';
@@ -137,6 +137,23 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 // parseRepoCoords
 // ---------------------------------------------------------------------------
+
+describe('encodeRepoPath (Contents API URL fix)', () => {
+  it('preserves slashes between segments', () => {
+    expect(encodeRepoPath('src/auth.ts')).toBe('src/auth.ts');
+    expect(encodeRepoPath('packages/foo/src/index.ts')).toBe('packages/foo/src/index.ts');
+    expect(encodeRepoPath('.github/workflows/deploy.yml')).toBe('.github/workflows/deploy.yml');
+  });
+
+  it('encodes individual segments with special characters', () => {
+    expect(encodeRepoPath('src/file with space.ts')).toBe('src/file%20with%20space.ts');
+    expect(encodeRepoPath('src/résumé.ts')).toBe('src/r%C3%A9sum%C3%A9.ts');
+  });
+
+  it('handles single-segment paths', () => {
+    expect(encodeRepoPath('package.json')).toBe('package.json');
+  });
+});
 
 describe('parseRepoCoords', () => {
   it('parses owner/repo shorthand', () => {
@@ -502,7 +519,7 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
         body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 50 },
       },
       {
-        match: (u) => u.includes('/contents/src%2Fauth.ts'),
+        match: (u) => u.includes('/contents/src/auth.ts'),
         body: { encoding: 'base64', content: btoa(sourceContent), sha: 'a1', size: sourceContent.length },
       },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
@@ -551,7 +568,7 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
       { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'c'.repeat(40) } } },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
       {
-        match: (u) => u.includes('/contents/src%2Freal.ts'),
+        match: (u) => u.includes('/contents/src/real.ts'),
         body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
       },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
@@ -593,7 +610,7 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
       { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } } },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
       { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src%2Fauth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
@@ -620,6 +637,192 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
     const run = result.data as AuditRun;
     expect(run.findings).toHaveLength(1);
     expect(run.findings[0].symptom).toBe('Real-looking finding');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pre-merge fixes from GPT slice-2 review
+// ---------------------------------------------------------------------------
+
+describe('--analyze: GitHub Contents API URL encoding (path fix)', () => {
+  it('builds /contents/<path> URLs with literal slashes for nested files', async () => {
+    // Capture every URL that hits the Contents API; assert none of them
+    // have %2F separators.
+    const contentUrls: string[] = [];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/trees\//.test(u),
+        body: {
+          truncated: false,
+          tree: [
+            { path: 'package.json', type: 'blob', sha: 's0', size: 50 },
+            { path: 'src/auth/login.ts', type: 'blob', sha: 's1', size: 100 },
+          ],
+        },
+      },
+      {
+        match: (u) => {
+          if (u.includes('/contents/')) contentUrls.push(u);
+          return /\/contents\//.test(u);
+        },
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 's0', size: 50 },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+    await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+    }));
+
+    // Every Contents URL must keep '/'  literal — that's the regression.
+    for (const u of contentUrls) {
+      expect(u).not.toContain('%2F');
+      expect(u).not.toContain('%2f');
+    }
+    // We DID hit /contents/ (sanity).
+    expect(contentUrls.length).toBeGreaterThan(0);
+  });
+});
+
+describe('--analyze: inline budget guard', () => {
+  it('refuses inline runs that exceed INLINE_MAX_FILES', async () => {
+    // Build a tree where deep depth selects > 25 files of a security-matching shape.
+    const tree = Array.from({ length: 60 }, (_, i) => ({
+      path: `src/auth/h${i}.ts`,
+      type: 'blob' as const,
+      sha: `s${i}`,
+      size: 100,
+    }));
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/too large for inline/i);
+    // LLM must NOT have been called (we refused before any work).
+    expect(mockLLM).not.toHaveBeenCalled();
+  });
+});
+
+describe('--analyze: fetched-file SHA validation', () => {
+  it('skips files where the fetched SHA disagrees with the tree SHA', async () => {
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'TREE_SHA_PACKAGE', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'TREE_SHA_AUTH', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      // package.json: SHA matches → kept
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'TREE_SHA_PACKAGE', size: 30 } },
+      // src/auth.ts: SHA disagrees → skipped
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'WRONG_SHA', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+    }));
+    expect(result.kind).toBe('audit_run');
+    // The user-visible body surfaces the mismatch warning.
+    expect(result.body).toMatch(/SHA disagreed/);
+  });
+});
+
+describe('--analyze: preventive artifact formatting', () => {
+  it('renders kind + first line + export hint when artifact is multi-line', async () => {
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    const multiLineArtifact = `name: secret-scan
+on: [push, pull_request]
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gitleaks/gitleaks-action@v2`;
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [{
+          lens: 'security', severity: 'high', confidence: 0.75,
+          symptom: 'Hardcoded token',
+          rootCause: 'No pre-commit secret scan',
+          correctiveAction: 'Move to env',
+          preventiveAction: { kind: 'ci', detail: multiLineArtifact },
+          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
+        }],
+      }),
+    });
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+    }));
+    // The first line is preserved, kind is shown, and we point to /audit export
+    // for the full artifact rather than truncating mid-content.
+    expect(result.body).toContain('[ci]');
+    expect(result.body).toContain('name: secret-scan');
+    expect(result.body).toMatch(/\/audit export/);
+    // The middle of the artifact must NOT appear in the top-5 view —
+    // that's the export's job.
+    expect(result.body).not.toContain('gitleaks/gitleaks-action');
+  });
+
+  it('keeps single-line artifacts as-is without an export hint', async () => {
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'e'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [{
+          lens: 'security', severity: 'high', confidence: 0.75,
+          symptom: 'X', rootCause: 'Y', correctiveAction: 'Z',
+          preventiveAction: { kind: 'lint', detail: 'no-eval rule with description' },
+          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
+        }],
+      }),
+    });
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+    }));
+    expect(result.body).toContain('[lint] no-eval rule with description');
+    expect(result.body).not.toMatch(/\/audit export/);
   });
 });
 

@@ -42,6 +42,7 @@ export interface ValidateResult {
 }
 
 export type ValidatorIssue =
+  | { kind: 'llm_call_failed'; message: string }
   | { kind: 'json_parse_failed'; raw: string }
   | { kind: 'top_level_not_object' }
   | { kind: 'findings_not_array' }

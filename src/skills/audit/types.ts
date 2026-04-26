@@ -240,12 +240,35 @@ export interface GrammarManifestEntry {
   uploadedAt: string;
 }
 
-/** Top-level manifest stored at `audit/grammars/manifest.json` in R2. */
+/**
+ * Top-level manifest stored at `audit/grammars/manifest.json` in R2.
+ *
+ * `runtime` (optional) carries the web-tree-sitter runtime WASM
+ * (~192 KiB) that the Worker passes to `Parser.init({wasmBinary})`.
+ * Lives in the same manifest so a single uploader run pushes everything
+ * the Extractor needs to bootstrap inside the Worker. Older manifests
+ * without `runtime` still validate (back-compat for the slice 1 build).
+ */
 export interface GrammarManifest {
   version: 1;
   entries: GrammarManifestEntry[];
+  /** Optional — present once the runtime WASM has been uploaded. */
+  runtime?: RuntimeManifestEntry;
   /** ISO timestamp of the most recent uploader run. */
   updatedAt: string;
+}
+
+/**
+ * Per-runtime entry. Distinct shape from `GrammarManifestEntry` because the
+ * runtime has no `language` field and lives at a fixed key.
+ */
+export interface RuntimeManifestEntry {
+  /** R2 key — always `audit/grammars/runtime@<sha8>.wasm`. */
+  key: string;
+  sha256: string;
+  size: number;
+  source: string; // e.g. "web-tree-sitter@0.20.8"
+  uploadedAt: string;
 }
 
 /** Maximum WASM size the loader will accept. Hard guard against accidental

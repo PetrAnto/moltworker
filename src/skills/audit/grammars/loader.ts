@@ -20,6 +20,7 @@ import {
   type GrammarLanguage,
   type GrammarManifest,
   type GrammarManifestEntry,
+  type RuntimeManifestEntry,
   MAX_GRAMMAR_BYTES,
   isGrammarLanguage,
 } from '../types';
@@ -54,15 +55,23 @@ interface CachedGrammar {
   module: WebAssembly.Module;
 }
 
+/** Cached runtime WASM bytes. Same SHA-verified content-addressed pattern. */
+interface CachedRuntime {
+  bytes: Uint8Array;
+  entry: RuntimeManifestEntry;
+}
+
 const MANIFEST_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 let manifestCache: CachedManifest | null = null;
 const grammarCache = new Map<string, CachedGrammar>(); // key = `${lang}@${sha8}`
+let runtimeCache: CachedRuntime | null = null;
 
 /** Test-only: clear caches between tests. Not exported via index/types. */
 export function _resetGrammarCachesForTesting(): void {
   manifestCache = null;
   grammarCache.clear();
+  runtimeCache = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +187,57 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 }
 
 /**
+ * Load the web-tree-sitter runtime WASM bytes from R2. Same SHA-verified
+ * content-addressed pattern as grammars. Returns null if:
+ *  - MOLTBOT_BUCKET is not configured
+ *  - the manifest has no runtime entry (older manifests, or uploader hasn't
+ *    pushed the runtime yet)
+ *  - the R2 object is missing or fails the SHA check
+ *
+ * Caller (handler) decides what to do with null — typically gates the
+ * --analyze feature off with a clear message.
+ */
+export interface RuntimeLoadResult {
+  bytes: Uint8Array;
+  entry: RuntimeManifestEntry;
+  cached: boolean;
+}
+
+export async function loadRuntimeWasm(env: GrammarLoaderEnv): Promise<RuntimeLoadResult | null> {
+  if (!env.MOLTBOT_BUCKET) return null;
+  const manifest = await getManifest(env.MOLTBOT_BUCKET);
+  if (!manifest || !manifest.runtime) return null;
+  const entry = manifest.runtime;
+
+  if (entry.size > MAX_GRAMMAR_BYTES) {
+    console.warn(`[GrammarLoader] runtime WASM rejected: ${entry.size} bytes > cap`);
+    return null;
+  }
+
+  if (runtimeCache && runtimeCache.entry.sha256 === entry.sha256) {
+    return { bytes: runtimeCache.bytes, entry: runtimeCache.entry, cached: true };
+  }
+
+  const obj = await env.MOLTBOT_BUCKET.get(entry.key);
+  if (!obj) {
+    console.warn(`[GrammarLoader] runtime R2 object missing: ${entry.key}`);
+    return null;
+  }
+  const buffer = await obj.arrayBuffer();
+  if (buffer.byteLength > MAX_GRAMMAR_BYTES) return null;
+
+  const actualSha = await sha256Hex(buffer);
+  if (actualSha !== entry.sha256) {
+    console.warn(`[GrammarLoader] runtime SHA mismatch: manifest ${entry.sha256}, R2 ${actualSha}. Refusing.`);
+    return null;
+  }
+
+  const bytes = new Uint8Array(buffer);
+  runtimeCache = { bytes, entry };
+  return { bytes, entry, cached: false };
+}
+
+/**
  * Pre-warm grammars in parallel. Returns the set of languages that loaded
  * successfully so the Extractor can skip the rest. Does not throw on
  * partial failure — best-effort.
@@ -239,7 +299,26 @@ function isManifest(v: unknown): v is GrammarManifest {
   if (m.version !== 1) return false;
   if (typeof m.updatedAt !== 'string') return false;
   if (!Array.isArray(m.entries)) return false;
-  return m.entries.every(isManifestEntry);
+  if (!m.entries.every(isManifestEntry)) return false;
+  // runtime is optional (back-compat with manifests written before the
+  // runtime-bytes-via-R2 wiring).
+  if (m.runtime !== undefined && !isRuntimeEntry(m.runtime)) return false;
+  return true;
+}
+
+function isRuntimeEntry(v: unknown): v is RuntimeManifestEntry {
+  if (typeof v !== 'object' || v === null) return false;
+  const e = v as Partial<RuntimeManifestEntry>;
+  if (typeof e.key !== 'string') return false;
+  if (typeof e.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(e.sha256)) return false;
+  if (typeof e.size !== 'number' || !Number.isInteger(e.size) || e.size <= 0) return false;
+  if (typeof e.source !== 'string') return false;
+  if (typeof e.uploadedAt !== 'string') return false;
+  // Key MUST encode `runtime@<sha8>.wasm` so the manifest can't lie about
+  // what's stored where.
+  const expectedPrefix = `audit/grammars/runtime@${e.sha256.slice(0, 8)}`;
+  if (!e.key.startsWith(expectedPrefix) || !e.key.endsWith('.wasm')) return false;
+  return true;
 }
 
 function isManifestEntry(v: unknown): v is GrammarManifestEntry {

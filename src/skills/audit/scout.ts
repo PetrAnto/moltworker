@@ -43,6 +43,19 @@ const NESTED_MANIFEST_BASENAMES = new Set([
 /** Cap on nested-manifest discovery to keep the API fan-out bounded. */
 const MAX_NESTED_MANIFESTS = 32;
 
+/**
+ * Encode a repo path for use in a GitHub Contents API URL. The Contents
+ * endpoint expects literal `/` between segments — `encodeURIComponent` on
+ * the whole path produces `src%2Fauth.ts` which 404s for nested files.
+ *
+ * Exported because the same fix needs to be applied at every URL-build
+ * site (manifests, file fetches) and the regression test asserts on
+ * generated URLs directly.
+ */
+export function encodeRepoPath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 // ---------------------------------------------------------------------------
 // Public entrypoint
 // ---------------------------------------------------------------------------
@@ -232,7 +245,7 @@ async function fetchManifest(
   ref: string,
   headers: Record<string, string>,
 ): Promise<ManifestFile | null> {
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`;
+  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${encodeRepoPath(path)}?ref=${encodeURIComponent(ref)}`;
   const resp = await ghFetch(url, headers);
   if (!resp.ok) return null;
 
@@ -378,7 +391,7 @@ export async function fetchFileContents(opts: FetchFilesOptions): Promise<FetchF
   const headers = ghHeaders(opts.token);
   const cap = opts.maxBytesPerFile ?? 256 * 1024;
   const results = await Promise.all(opts.paths.map(async (path) => {
-    const url = `${GITHUB_API}/repos/${opts.owner}/${opts.repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(opts.ref)}`;
+    const url = `${GITHUB_API}/repos/${opts.owner}/${opts.repo}/contents/${encodeRepoPath(path)}?ref=${encodeURIComponent(opts.ref)}`;
     const resp = await ghFetch(url, headers);
     if (!resp.ok) return { path, content: null, sha: null };
     const data = await resp.json() as { content?: string; encoding?: string; sha?: string; size?: number };

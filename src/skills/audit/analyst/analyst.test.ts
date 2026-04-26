@@ -116,7 +116,7 @@ describe('analyzeWithLens — orchestration', () => {
     expect(mockCall.mock.calls[0][0].systemPrompt).toBe('CUSTOM SYSTEM PROMPT');
   });
 
-  it('degrades gracefully on LLM failure (returns empty findings, never throws)', async () => {
+  it('reports llm_call_failed (distinct from json_parse_failed) on upstream failure', async () => {
     mockCall.mockRejectedValueOnce(new Error('upstream 503'));
     const r = await analyzeWithLens({
       profile: profileFor(['src/x.ts']),
@@ -125,8 +125,21 @@ describe('analyzeWithLens — orchestration', () => {
       env,
     });
     expect(r.findings).toEqual([]);
-    expect(r.issues[0].kind).toBe('json_parse_failed');
+    expect(r.issues[0].kind).toBe('llm_call_failed');
+    expect((r.issues[0] as { kind: 'llm_call_failed'; message: string }).message).toContain('upstream 503');
     expect(r.telemetry.llmCalled).toBe(true);
+  });
+
+  it('reports json_parse_failed (distinct from llm_call_failed) on bad JSON response', async () => {
+    mockCall.mockResolvedValueOnce({ text: '{not valid json' });
+    const r = await analyzeWithLens({
+      profile: profileFor(['src/x.ts']),
+      snippets: [snippet('src/x.ts')],
+      lens: 'security',
+      env,
+    });
+    expect(r.findings).toEqual([]);
+    expect(r.issues[0].kind).toBe('json_parse_failed');
   });
 
   it('drops findings the LLM tried to attribute to a forged path (path-enum guard end-to-end)', async () => {
