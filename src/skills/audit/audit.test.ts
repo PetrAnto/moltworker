@@ -2569,3 +2569,77 @@ describe('fix dispatch draft tokens', () => {
     expect(await consumeFixDraft(kv, 'user-1', token)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// PR 514 review: cacheFixDraft returns boolean; bad-token shape rejected
+// ---------------------------------------------------------------------------
+
+describe('cacheFixDraft return value (closes PR 514 follow-up #1)', () => {
+  it('returns true when the put succeeds', async () => {
+    const { cacheFixDraft, newFixDraftToken } = await import('./cache');
+    const store = new Map<string, string>();
+    const kv = {
+      get: vi.fn(async () => null),
+      put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+      delete: vi.fn(),
+    } as unknown as KVNamespace;
+
+    const ok = await cacheFixDraft(kv, 'user-1', newFixDraftToken(), {
+      runId: 'r', findingId: 'f', taskText: 't', owner: 'o', repo: 'r',
+      severity: 'low', lens: 'tests', createdAt: 'now',
+    });
+    expect(ok).toBe(true);
+    expect(store.size).toBe(1);
+  });
+
+  it('returns false when KV put throws (callers gate Confirm button on this)', async () => {
+    const { cacheFixDraft, newFixDraftToken } = await import('./cache');
+    const kv = {
+      get: vi.fn(async () => null),
+      put: vi.fn(async () => { throw new Error('KV unavailable'); }),
+      delete: vi.fn(),
+    } as unknown as KVNamespace;
+
+    const ok = await cacheFixDraft(kv, 'user-1', newFixDraftToken(), {
+      runId: 'r', findingId: 'f', taskText: 't', owner: 'o', repo: 'r',
+      severity: 'low', lens: 'tests', createdAt: 'now',
+    });
+    expect(ok).toBe(false);
+  });
+
+  it('returns false when KV is undefined', async () => {
+    const { cacheFixDraft, newFixDraftToken } = await import('./cache');
+    const ok = await cacheFixDraft(undefined, 'user-1', newFixDraftToken(), {
+      runId: 'r', findingId: 'f', taskText: 't', owner: 'o', repo: 'r',
+      severity: 'low', lens: 'tests', createdAt: 'now',
+    });
+    expect(ok).toBe(false);
+  });
+});
+
+describe('FIX_TOKEN_RE shape (closes PR 514 follow-up #3)', () => {
+  // The regex is the same one used in the handler's audit:go / audit:no
+  // gates; we re-declare it here so the contract is testable without
+  // booting the TelegramHandler scaffold.
+  const FIX_TOKEN_RE = /^[0-9a-f]{16}$/i;
+
+  it('accepts a real newFixDraftToken() output', async () => {
+    const { newFixDraftToken } = await import('./cache');
+    for (let i = 0; i < 50; i++) {
+      expect(FIX_TOKEN_RE.test(newFixDraftToken())).toBe(true);
+    }
+  });
+
+  it.each([
+    ['empty',                ''],
+    ['too short',            '0123456789abcde'],     // 15 chars
+    ['too long',             '0123456789abcdef0'],   // 17 chars
+    ['non-hex chars',        'gggggggggggggggg'],
+    ['runId shape',          'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],
+    ['hex with dashes',      '0123-4567-89ab-cdef'], // wrong shape
+    ['SQL-injection-y',      "0' OR 1=1--      "],
+    ['suppression-key path', 'audit:fixdraft:user'],
+  ])('rejects %s', (_label, bad) => {
+    expect(FIX_TOKEN_RE.test(bad)).toBe(false);
+  });
+});

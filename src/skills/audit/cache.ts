@@ -280,19 +280,28 @@ export function newFixDraftToken(): string {
   return out;
 }
 
+/**
+ * Persist a fix draft. Returns `true` if the put succeeded, `false`
+ * otherwise (KV unavailable, write failed). Callers MUST gate the
+ * Confirm button on this — without it, a failed put produces a usable-
+ * looking ✅ Dispatch button whose first tap reports "expired or
+ * already processed". Closes GPT slice-4d (PR 514) follow-up #1.
+ */
 export async function cacheFixDraft(
   kv: KVNamespace | undefined,
   userId: string,
   token: string,
   draft: FixDraft,
-): Promise<void> {
-  if (!kv) return;
+): Promise<boolean> {
+  if (!kv) return false;
   try {
     await kv.put(fixDraftKey(userId, token), JSON.stringify(draft), {
       expirationTtl: FIX_DRAFT_TTL_SECONDS,
     });
+    return true;
   } catch (err) {
     console.warn('[Audit] cacheFixDraft failed:', err instanceof Error ? err.message : err);
+    return false;
   }
 }
 
