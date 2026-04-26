@@ -142,6 +142,7 @@ export function parseCommandMessage(message: string): {
     orchestra: ['init', 'run', 'redo', 'do', 'draft', 'next', 'status', 'history', 'plan', 'lock', 'unlock', 'health', 'reset'],
     // nexus: only /research and /dossier have modes (quick/decision/full),
     // but those are flags, not subcommands. Keep them as flags.
+    audit: ['plan', 'run', 'export'],
   };
 
   const subs = MULTI_SUBCOMMAND_SKILLS[mapping.skillId];

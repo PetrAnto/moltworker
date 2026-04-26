@@ -16,6 +16,7 @@ vi.mock('../llm', () => ({
 
 import { handleAudit, audit_do_key } from './audit';
 import { parseRepoCoords, encodeRepoPath } from './scout';
+import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { profileCacheKey } from './cache';
 import { findingPriority, isLens, isDepth } from './types';
@@ -1270,6 +1271,210 @@ describe('--analyze: DO dispatch status check (slice-3 hardening)', () => {
     }));
     const passedId2 = taskProcessor.idFromName.mock.calls[0][0];
     expect(passedId2).toBe(passedId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 4a — /audit export <runId> + AuditRun persistence
+// ---------------------------------------------------------------------------
+
+describe('command-map: /audit subcommands', () => {
+  it('parses /audit export <runId> as subcommand=export with text=runId', () => {
+    const r = parseCommandMessage('/audit export abc-def-123');
+    expect(r).not.toBeNull();
+    expect(r!.mapping.skillId).toBe('audit');
+    expect(r!.subcommand).toBe('export');
+    expect(r!.text).toBe('abc-def-123');
+  });
+
+  it('parses /audit run <repo> as subcommand=run', () => {
+    const r = parseCommandMessage('/audit run octocat/demo');
+    expect(r!.subcommand).toBe('run');
+    expect(r!.text).toBe('octocat/demo');
+  });
+
+  it('falls back to subcommand=plan when no recognized subcommand', () => {
+    const r = parseCommandMessage('/audit octocat/demo');
+    expect(r!.subcommand).toBe('plan');
+    expect(r!.text).toBe('octocat/demo');
+  });
+});
+
+describe('--analyze: persists AuditRun to NEXUS_KV after completion', () => {
+  it('writes the run under audit:run:{userId}:{runId} so /audit export can find it', async () => {
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
+    ];
+    installFetchMock([
+      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      { match: (u) => /\/languages$/.test(u), body: {} },
+      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
+      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [{
+          lens: 'security', severity: 'high', confidence: 0.75,
+          symptom: 'Token leak',
+          rootCause: 'No secret scan',
+          correctiveAction: 'Rotate + env var',
+          preventiveAction: { kind: 'ci', detail: 'Add gitleaks step' },
+          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
+        }],
+      }),
+    });
+
+    const kvStore = new Map<string, string>();
+    const kv = {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = kvStore.get(key);
+        if (v === undefined) return null;
+        if (type === 'json') return JSON.parse(v);
+        return v;
+      }),
+      put: vi.fn(async (key: string, value: string) => { kvStore.set(key, value); }),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit(makeRequest({
+      flags: { analyze: 'true', lens: 'security' },
+      userId: 'user-42',
+      env: {
+        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
+        NEXUS_KV: kv,
+      } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    const run = result.data as AuditRun;
+
+    // Persistence: KV.put was called with the user-scoped key.
+    const expectedKey = `audit:run:user-42:${run.runId}`;
+    expect(kv.put).toHaveBeenCalledWith(
+      expectedKey,
+      expect.any(String),
+      expect.objectContaining({ expirationTtl: expect.any(Number) }),
+    );
+    // The persisted value JSON-roundtrips back to the same shape.
+    const persisted = JSON.parse(kvStore.get(expectedKey)!);
+    expect(persisted.runId).toBe(run.runId);
+    expect(persisted.findings).toHaveLength(1);
+  });
+});
+
+describe('/audit export', () => {
+  function kvWithRun(userId: string, run: AuditRun) {
+    const store = new Map<string, string>();
+    store.set(`audit:run:${userId}:${run.runId}`, JSON.stringify(run));
+    return {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = store.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(),
+    } as unknown as KVNamespace;
+  }
+
+  function makeRun(overrides: Partial<AuditRun> = {}): AuditRun {
+    return {
+      runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+      lenses: ['security'],
+      depth: 'quick',
+      findings: [
+        {
+          id: 'security-abc',
+          lens: 'security',
+          severity: 'high',
+          confidence: 0.75,
+          evidence: [{ path: 'src/auth.ts', lines: '10-15', source: 'llm', snippet: 'const TOKEN = …', sha: 'a1' }],
+          symptom: 'Hardcoded API token',
+          rootCause: 'Missing pre-commit secret scan',
+          correctiveAction: 'Rotate token; move to env var',
+          preventiveAction: {
+            kind: 'ci',
+            detail: 'name: secret-scan\non: [push]\njobs:\n  scan:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: gitleaks/gitleaks-action@v2',
+          },
+        },
+      ],
+      telemetry: { durationMs: 1234, llmCalls: 1, tokensIn: 800, tokensOut: 200, costUsd: 0.0007, githubApiCalls: 7 },
+      ...overrides,
+    };
+  }
+
+  it('returns a full report from KV when given a valid runId', async () => {
+    const run = makeRun();
+    const kv = kvWithRun('user-1', run);
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: run.runId,
+      userId: 'user-1',
+      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('audit_run');
+    // Full preventive artifact present (including the multi-line workflow yaml).
+    expect(result.body).toContain('gitleaks/gitleaks-action@v2');
+    expect(result.body).toContain('name: secret-scan');
+    // Run id is surfaced.
+    expect(result.body).toContain(run.runId);
+  });
+
+  it('rejects empty runId with usage hint', async () => {
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: '',
+      userId: 'user-1',
+      env: { NEXUS_KV: kvWithRun('user-1', makeRun()) } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/usage/i);
+  });
+
+  it('rejects malformed runId without hitting KV', async () => {
+    const kv = kvWithRun('user-1', makeRun());
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: 'not a real id with spaces',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/not a valid run id/i);
+    expect(kv.get).not.toHaveBeenCalled();
+  });
+
+  it('returns clear error when the run is not found (or expired)', async () => {
+    const kv = kvWithRun('user-1', makeRun()); // has run for user-1, NOT user-2
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      userId: 'user-2', // different user → user-scoped key won't match
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/no audit run found/i);
+    expect(result.body).toMatch(/7 days/i);
+  });
+
+  it('returns JSON dump when --format json is set', async () => {
+    const run = makeRun();
+    const kv = kvWithRun('user-1', run);
+    const result = await handleAudit(makeRequest({
+      subcommand: 'export',
+      text: run.runId,
+      userId: 'user-1',
+      flags: { format: 'json' },
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('text');
+    // Body is parseable JSON with the same data.
+    const parsed = JSON.parse(result.body);
+    expect(parsed.runId).toBe(run.runId);
+    expect(parsed.findings[0].id).toBe('security-abc');
   });
 });
 

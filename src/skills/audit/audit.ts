@@ -25,7 +25,7 @@ import type { AuditFinding, AuditPlan, AuditRun, Depth, Lens, RepoProfile } from
 import { MVP_LENSES, findingPriority, isLens, isDepth } from './types';
 import { scout, fetchFileContents, parseRepoCoords } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
-import { getCachedProfile, cacheProfile } from './cache';
+import { getCachedProfile, cacheProfile, cacheAuditRun, getCachedAuditRun } from './cache';
 import { extractSnippets } from './extractor/extractor';
 import { loadGrammar, loadRuntimeWasm } from './grammars/loader';
 import { analyzeWithLens } from './analyst/analyst';
@@ -50,6 +50,12 @@ export const AUDIT_META: SkillMeta = {
 
 export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   const start = Date.now();
+
+  // 0. /audit export <runId> — short-circuit before the repo-arg parsing
+  // because the text is a runId, not a repo coords string.
+  if (request.subcommand === 'export') {
+    return handleExport(request, start);
+  }
 
   // 1. Parse args
   const repoArg = request.text.trim().split(/\s+/)[0] ?? '';
@@ -425,6 +431,13 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     else otherParseErrors++;
   }
 
+  // Persist the run for /audit export <runId>. The top-5 view in the
+  // Telegram message is bounded; the full report (all findings + full
+  // preventive artifacts + RCA prose) lives here. Best-effort: if KV
+  // is unavailable, the user just can't `export` later — the inline
+  // result still shows the top-5 + run id.
+  await cacheAuditRun(request.env.NEXUS_KV, request.userId, run);
+
   return {
     skillId: 'audit',
     kind: 'audit_run',
@@ -626,6 +639,107 @@ function formatPreventive(prev: { kind: string; detail: string }, runId: string)
   const summary = firstLine.length > 200 ? firstLine.slice(0, 200) + '…' : firstLine;
   const exportHint = more ? ` (full artifact via /audit export ${runId})` : '';
   return `[${prev.kind}] ${summary}${exportHint}`;
+}
+
+// ---------------------------------------------------------------------------
+// /audit export <runId> — full report retrieval
+// ---------------------------------------------------------------------------
+
+async function handleExport(request: SkillRequest, start: number): Promise<SkillResult> {
+  const runId = request.text.trim().split(/\s+/)[0] ?? '';
+  if (!runId) {
+    return errorResult('Usage: /audit export <runId>');
+  }
+
+  // Trivial shape check before we hit KV — runIds are UUIDs, anything else
+  // is almost certainly a typo. Cheap rejection avoids leaking "no audit
+  // run found" timing for arbitrary user input.
+  if (!/^[0-9a-fA-F-]{8,64}$/.test(runId)) {
+    return errorResult(`Not a valid run id: "${runId.slice(0, 80)}"`);
+  }
+
+  const run = await getCachedAuditRun(request.env.NEXUS_KV, request.userId, runId);
+  if (!run) {
+    return errorResult(`No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`);
+  }
+
+  const format = request.flags.format === 'json' ? 'json' : 'markdown';
+  if (format === 'json') {
+    // JSON export: structured data, machine-readable. No top-N truncation.
+    return {
+      skillId: 'audit',
+      kind: 'text', // rendered as <pre>JSON</pre> on the telegram side
+      body: JSON.stringify(run, null, 2),
+      data: run,
+      telemetry: {
+        durationMs: Date.now() - start,
+        model: 'none',
+        llmCalls: 0,
+        toolCalls: 0,
+      },
+    };
+  }
+
+  return {
+    skillId: 'audit',
+    kind: 'audit_run',
+    body: formatRunFull(run),
+    data: run,
+    telemetry: {
+      durationMs: Date.now() - start,
+      model: 'none',
+      llmCalls: 0,
+      toolCalls: 0,
+    },
+  };
+}
+
+/**
+ * Full report formatter — used by /audit export. Unlike formatRun (top-5
+ * + truncated preventive artifacts for the inline Telegram view), this
+ * emits every finding with the full preventive artifact verbatim. Caller
+ * is the telegram chunker, which splits at the 4 KB boundary.
+ */
+function formatRunFull(run: AuditRun): string {
+  const lines: string[] = [];
+  lines.push(`Audit report — full export`);
+  lines.push(`Repo: ${run.repo.owner}/${run.repo.name}@${run.repo.sha.slice(0, 7)}`);
+  lines.push(`Run id: ${run.runId}`);
+  lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth}`);
+  lines.push('');
+
+  if (run.findings.length === 0) {
+    lines.push('No defects found at confidence ≥ 0.5 (precision threshold).');
+  } else {
+    lines.push(`Findings (${run.findings.length}):`);
+    lines.push('');
+    let i = 0;
+    for (const f of run.findings) {
+      i++;
+      lines.push(`${i}. [${f.severity.toUpperCase()}] ${f.symptom}`);
+      lines.push(`   Lens: ${f.lens} • Confidence: ${f.confidence}`);
+      lines.push(`   Root cause: ${f.rootCause}`);
+      lines.push(`   Corrective action: ${f.correctiveAction}`);
+      lines.push(`   Preventive (${f.preventiveAction.kind}):`);
+      // Indent the artifact body so it's visually distinct from prose.
+      for (const ln of f.preventiveAction.detail.split('\n')) {
+        lines.push(`     ${ln}`);
+      }
+      lines.push(`   Evidence:`);
+      for (const e of f.evidence) {
+        const lineRef = e.lines ? `:${e.lines}` : '';
+        lines.push(`     - ${e.path}${lineRef}${e.sha ? ` (sha: ${e.sha.slice(0, 7)})` : ''}`);
+        if (e.snippet) {
+          for (const ln of e.snippet.split('\n').slice(0, 8)) lines.push(`         ${ln}`);
+        }
+      }
+      lines.push('');
+    }
+  }
+
+  const t = run.telemetry;
+  lines.push(`Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`);
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
