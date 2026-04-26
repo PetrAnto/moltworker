@@ -1,0 +1,205 @@
+/**
+ * Audit Skill — Grammar Loader (R2-backed, isolate-cached)
+ *
+ * Loads tree-sitter WASM grammars from MOLTBOT_BUCKET. Compiled
+ * `WebAssembly.Module` is cached in a module-scope Map keyed by
+ * (language, sha8) so the second parse in the same Worker isolate is
+ * zero-cost. The Extractor consumes this loader; this file deliberately
+ * does NOT depend on web-tree-sitter — it's just bytes → compiled module.
+ *
+ * Invariants:
+ *   - No fallback if a grammar is missing. We return null and let the
+ *     caller skip that language gracefully.
+ *   - Hard size cap (MAX_GRAMMAR_BYTES) before compile.
+ *   - Manifest is fetched once per isolate, then cached.
+ *   - Cache key includes sha256 prefix → swapping a grammar version forces
+ *     fresh compile.
+ */
+
+import {
+  type GrammarLanguage,
+  type GrammarManifest,
+  type GrammarManifestEntry,
+  MAX_GRAMMAR_BYTES,
+  isGrammarLanguage,
+} from '../types';
+
+const MANIFEST_KEY = 'audit/grammars/manifest.json';
+
+// ---------------------------------------------------------------------------
+// Isolate-scoped caches
+// ---------------------------------------------------------------------------
+//
+// Module-scope state is per-Worker-isolate. Cloudflare may evict an isolate
+// at any time, but while it lives the cache holds. This is the same pattern
+// the runtime uses for compiled tool schemas elsewhere.
+
+let manifestCache: GrammarManifest | null = null;
+const moduleCache = new Map<string, WebAssembly.Module>(); // key = `${lang}@${sha8}`
+
+/** Test-only: clear caches between tests. Not exported via index/types. */
+export function _resetGrammarCachesForTesting(): void {
+  manifestCache = null;
+  moduleCache.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+export interface GrammarLoaderEnv {
+  /** R2 bucket holding manifest + grammar blobs. */
+  MOLTBOT_BUCKET?: R2Bucket;
+}
+
+export interface LoadResult {
+  module: WebAssembly.Module;
+  /** The manifest entry that was used (handy for telemetry). */
+  entry: GrammarManifestEntry;
+  /** Whether this came from the isolate cache (cheap) or a cold compile. */
+  cached: boolean;
+}
+
+/**
+ * Load and compile the tree-sitter grammar for a language. Returns null if:
+ *  - MOLTBOT_BUCKET is not configured
+ *  - the manifest is missing
+ *  - the language has no manifest entry
+ *  - the WASM blob is missing in R2
+ *  - the blob exceeds MAX_GRAMMAR_BYTES
+ *  - the compile fails (logged, not thrown)
+ *
+ * The caller is expected to skip a missing language and continue with
+ * others, surfacing a "language X unsupported" note in the audit plan.
+ */
+export async function loadGrammar(
+  env: GrammarLoaderEnv,
+  language: GrammarLanguage,
+): Promise<LoadResult | null> {
+  if (!env.MOLTBOT_BUCKET) {
+    console.warn('[GrammarLoader] MOLTBOT_BUCKET not configured');
+    return null;
+  }
+  if (!isGrammarLanguage(language)) {
+    console.warn(`[GrammarLoader] not a known grammar language: ${language}`);
+    return null;
+  }
+
+  const manifest = await getManifest(env.MOLTBOT_BUCKET);
+  if (!manifest) return null;
+
+  const entry = manifest.entries.find(e => e.language === language);
+  if (!entry) {
+    console.warn(`[GrammarLoader] manifest has no entry for "${language}"`);
+    return null;
+  }
+
+  if (entry.size > MAX_GRAMMAR_BYTES) {
+    console.warn(`[GrammarLoader] grammar "${language}" rejected: ${entry.size} bytes > ${MAX_GRAMMAR_BYTES}`);
+    return null;
+  }
+
+  const cacheKey = `${entry.language}@${entry.sha256.slice(0, 8)}`;
+  const cached = moduleCache.get(cacheKey);
+  if (cached) {
+    return { module: cached, entry, cached: true };
+  }
+
+  const obj = await env.MOLTBOT_BUCKET.get(entry.key);
+  if (!obj) {
+    console.warn(`[GrammarLoader] R2 object missing: ${entry.key}`);
+    return null;
+  }
+  const bytes = await obj.arrayBuffer();
+  if (bytes.byteLength > MAX_GRAMMAR_BYTES) {
+    console.warn(`[GrammarLoader] R2 object size (${bytes.byteLength}) exceeds cap`);
+    return null;
+  }
+
+  let module: WebAssembly.Module;
+  try {
+    module = await WebAssembly.compile(bytes);
+  } catch (err) {
+    console.error(`[GrammarLoader] WebAssembly.compile failed for "${language}":`, err);
+    return null;
+  }
+
+  moduleCache.set(cacheKey, module);
+  return { module, entry, cached: false };
+}
+
+/**
+ * Pre-warm grammars in parallel. Returns the set of languages that loaded
+ * successfully so the Extractor can skip the rest. Does not throw on
+ * partial failure — best-effort.
+ */
+export async function preloadGrammars(
+  env: GrammarLoaderEnv,
+  languages: ReadonlyArray<GrammarLanguage>,
+): Promise<Set<GrammarLanguage>> {
+  const results = await Promise.all(
+    languages.map(async (lang) => ({ lang, result: await loadGrammar(env, lang) })),
+  );
+  const ok = new Set<GrammarLanguage>();
+  for (const r of results) {
+    if (r.result) ok.add(r.lang);
+  }
+  return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Manifest fetch + validation
+// ---------------------------------------------------------------------------
+
+async function getManifest(bucket: R2Bucket): Promise<GrammarManifest | null> {
+  if (manifestCache) return manifestCache;
+
+  let obj: R2ObjectBody | null;
+  try {
+    obj = await bucket.get(MANIFEST_KEY);
+  } catch (err) {
+    console.error('[GrammarLoader] manifest fetch failed:', err);
+    return null;
+  }
+  if (!obj) {
+    console.warn(`[GrammarLoader] manifest missing at R2 key "${MANIFEST_KEY}". Run scripts/upload-audit-grammars.mjs first.`);
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = await obj.json();
+  } catch (err) {
+    console.error('[GrammarLoader] manifest is not valid JSON:', err);
+    return null;
+  }
+  if (!isManifest(parsed)) {
+    console.error('[GrammarLoader] manifest failed schema validation');
+    return null;
+  }
+
+  manifestCache = parsed;
+  return parsed;
+}
+
+function isManifest(v: unknown): v is GrammarManifest {
+  if (typeof v !== 'object' || v === null) return false;
+  const m = v as Partial<GrammarManifest>;
+  if (m.version !== 1) return false;
+  if (typeof m.updatedAt !== 'string') return false;
+  if (!Array.isArray(m.entries)) return false;
+  return m.entries.every(isManifestEntry);
+}
+
+function isManifestEntry(v: unknown): v is GrammarManifestEntry {
+  if (typeof v !== 'object' || v === null) return false;
+  const e = v as Partial<GrammarManifestEntry>;
+  return (
+    isGrammarLanguage(e.language) &&
+    typeof e.key === 'string' && e.key.startsWith('audit/grammars/') &&
+    typeof e.sha256 === 'string' && /^[a-f0-9]{64}$/.test(e.sha256) &&
+    typeof e.size === 'number' && Number.isInteger(e.size) && e.size > 0 &&
+    typeof e.source === 'string' &&
+    typeof e.uploadedAt === 'string'
+  );
+}

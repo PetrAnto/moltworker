@@ -19,7 +19,8 @@
     "lint": "oxlint src/",
     "lint:fix": "oxlint --fix src/",
     "format": "oxfmt --write src/",
-    "format:check": "oxfmt --check src/"
+    "format:check": "oxfmt --check src/",
+    "audit:upload-grammars": "node scripts/upload-audit-grammars.mjs"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.0.5",
@@ -41,6 +42,7 @@
     "@vitest/coverage-v8": "^4.0.18",
     "oxfmt": "^0.28.0",
     "oxlint": "^1.43.0",
+    "tree-sitter-wasms": "^0.1.13",
     "typescript": "^5.9.3",
     "vite": "^6.0.0",
     "vitest": "^4.0.18",

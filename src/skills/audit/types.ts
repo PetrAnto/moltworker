@@ -205,6 +205,63 @@ export function isDepth(value: unknown): value is Depth {
   return value === 'quick' || value === 'standard' || value === 'deep';
 }
 
+// ---------------------------------------------------------------------------
+// Grammar manifest (R2-stored tree-sitter WASM grammars)
+// ---------------------------------------------------------------------------
+
+/**
+ * Languages we ship MVP grammars for. Each entry has a corresponding
+ * `audit/grammars/<lang>@<sha8>.wasm` blob in R2 and a manifest entry.
+ */
+export type GrammarLanguage =
+  | 'typescript'
+  | 'tsx'
+  | 'javascript'
+  | 'python'
+  | 'go';
+
+export const MVP_GRAMMARS: ReadonlyArray<GrammarLanguage> = ['typescript', 'tsx', 'javascript', 'python', 'go'];
+
+/**
+ * Per-language entry in the R2 manifest. Versioning is by content SHA so a
+ * cache lookup MISS only happens when the actual WASM bytes change.
+ */
+export interface GrammarManifestEntry {
+  language: GrammarLanguage;
+  /** R2 key — path in MOLTBOT_BUCKET. Includes the SHA8 for cache-busting. */
+  key: string;
+  /** Hex SHA-256 of the WASM bytes. Full hash, manifest-pinned. */
+  sha256: string;
+  /** Size in bytes — used by the loader as the size guard. */
+  size: number;
+  /** Source tag — e.g. "tree-sitter-wasms@0.1.13". Free-form. */
+  source: string;
+  /** ISO timestamp the entry was uploaded. */
+  uploadedAt: string;
+}
+
+/** Top-level manifest stored at `audit/grammars/manifest.json` in R2. */
+export interface GrammarManifest {
+  version: 1;
+  entries: GrammarManifestEntry[];
+  /** ISO timestamp of the most recent uploader run. */
+  updatedAt: string;
+}
+
+/** Maximum WASM size the loader will accept. Hard guard against accidental
+ *  oversized uploads (a malicious or buggy upload could blow CPU budgets
+ *  during compile). 5 MiB covers the largest production grammar (TSX at
+ *  ~2.4 MiB) with comfortable headroom. */
+export const MAX_GRAMMAR_BYTES = 5 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// Type guards & utilities
+// ---------------------------------------------------------------------------
+
+export function isGrammarLanguage(value: unknown): value is GrammarLanguage {
+  return typeof value === 'string' && (MVP_GRAMMARS as ReadonlyArray<string>).includes(value);
+}
+
 /** Priority score per the design doc §6 — used for top-N display ranking. */
 export function findingPriority(f: AuditFinding): number {
   const severityWeight: Record<Severity, number> = { critical: 1.0, high: 0.75, medium: 0.5, low: 0.25 };
