@@ -65,7 +65,9 @@ const LENS    = flag('lens')      ?? null;       // null → all lenses in confi
 const TIMEOUT = Number(flag('timeout') ?? 120_000);
 const DRY_RUN = has('dry-run');
 
-if (!BOT_URL) die('--bot-url or MOLTBOT_URL is required');
+// In dry-run mode neither url nor key is required — we just print the
+// plan. In real-run mode both are needed; fail fast with a clear hint.
+if (!BOT_URL && !DRY_RUN) die('--bot-url or MOLTBOT_URL is required');
 if (!API_KEY && !DRY_RUN) die('--api-key or DEBUG_API_KEY is required');
 if (DEPTH && !['quick', 'standard', 'deep'].includes(DEPTH)) die(`bad --depth: ${DEPTH}`);
 
@@ -269,7 +271,8 @@ async function appendRow(row) {
 
 async function main() {
   const repos = await loadRepoConfig();
-  log(`bench against ${BOT_URL} • ${repos.length} repo entry/ies • out: ${OUT}`);
+  const targetUrl = BOT_URL || '(dry-run, no bot URL)';
+  log(`bench against ${targetUrl} • ${repos.length} repo entry/ies • out: ${OUT}`);
   if (DRY_RUN) log('DRY RUN — no network or file writes');
 
   // Expand the config into individual (repo, depth, lens) runs.
