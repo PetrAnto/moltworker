@@ -44,12 +44,19 @@ export function confidenceLabel(score: number): string {
 
 /**
  * Format evidence items as a text block for LLM consumption.
+ *
+ * Citation tokens are the source NAME wrapped in brackets — e.g.
+ * `[Brave Search]`, `[OpenAlex]`. We deliberately avoid `[Source N]` index
+ * tokens because the model otherwise extrapolates and invents `[Source 2]`
+ * when only one source was actually fetched (observed in production on
+ * single-source dossiers). Names are also what we render in the user-facing
+ * Sources block, so quotes line up visually.
  */
 export function formatEvidenceForLLM(evidence: EvidenceItem[]): string {
   return evidence
-    .map((e, i) => {
-      const urlLine = e.url ? ` (${e.url})` : '';
-      return `[Source ${i + 1}: ${e.source}${urlLine}] (confidence: ${e.confidence})\n${e.data}`;
+    .map(e => {
+      const urlLine = e.url ? ` ${e.url}` : '';
+      return `[${e.source}] (confidence: ${e.confidence})${urlLine}\n${e.data}`;
     })
     .join('\n\n---\n\n');
 }
