@@ -7,7 +7,7 @@
  */
 
 import { createOpenRouterClient, type ChatMessage, type ResponseFormat } from '../openrouter/client';
-import { getModel, DEFAULT_MODEL } from '../openrouter/models';
+import { getModel, getModelId, getProvider, isDirectApi, DEFAULT_MODEL } from '../openrouter/models';
 import type { MoltbotEnv } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,34 @@ export function selectSkillModel(
   if (requestModel && getModel(requestModel)) return requestModel;
   if (getModel(skillDefault)) return skillDefault;
   return DEFAULT_MODEL;
+}
+
+/**
+ * Resolve the model id the skill path should ship to OpenRouter for a given
+ * alias.
+ *
+ * Returns:
+ *   - undefined when the registry id is already OpenRouter-compatible (the
+ *     caller's default lookup path is fine);
+ *   - a synthesized `anthropic/<id>` for direct-API Anthropic aliases (so
+ *     OpenRouter can resolve `sonnet` → `anthropic/claude-sonnet-4-6`);
+ *   - throws for direct-only providers (DashScope/Moonshot/DeepSeek/etc.)
+ *     because routing them through OpenRouter isn't viable — surface a clear
+ *     "switch model" message instead of a confusing OpenRouter rejection.
+ */
+export function resolveSkillModelId(modelAlias: string): string | undefined {
+  if (!isDirectApi(modelAlias)) return undefined;
+
+  const provider = getProvider(modelAlias);
+  if (provider === 'anthropic') {
+    const id = getModelId(modelAlias);
+    return id.includes('/') ? id : `anthropic/${id}`;
+  }
+
+  throw new Error(
+    `Skills can't use the direct-API model "${modelAlias}" (provider: ${provider}). ` +
+    `Switch to an OpenRouter-routed model — e.g. /use auto, /use kimi26or, /use flash, or /use sonnetrouter.`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -89,10 +117,19 @@ export async function callSkillLLM(options: CallSkillLLMOptions): Promise<CallSk
   }
   messages.push({ role: 'user', content: userPrompt });
 
+  // Route direct-API models through OpenRouter where possible. The skill path
+  // only speaks OpenRouter (no streaming Anthropic/DashScope/Moonshot/DeepSeek
+  // clients), so an alias like `sonnet` (provider:'anthropic', id:'claude-sonnet-4-6')
+  // would otherwise ship a bare id OpenRouter rejects. For Anthropic models we
+  // synthesize the OpenRouter form `anthropic/<id>`. For direct-only providers
+  // we surface a clear error pointing the user at compatible models.
+  const modelIdOverride = resolveSkillModelId(modelAlias);
+
   const response = await client.chatCompletion(modelAlias, messages, {
     maxTokens: maxTokens ?? 4096,
     temperature: temperature ?? 0.7,
     responseFormat,
+    modelIdOverride,
   });
 
   const text = response.choices[0]?.message?.content ?? '';

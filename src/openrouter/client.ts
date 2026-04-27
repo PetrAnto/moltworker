@@ -447,9 +447,17 @@ export class OpenRouterClient {
       temperature?: number;
       reasoningLevel?: ReasoningLevel;
       responseFormat?: ResponseFormat;
+      /**
+       * Override the model id sent to OpenRouter. The default is the
+       * `getModelId(alias)` lookup; callers can pass an explicit id when the
+       * registry's id is for a non-OpenRouter provider (e.g. the `sonnet`
+       * alias holds the bare Anthropic id `claude-sonnet-4-6`, but OpenRouter
+       * needs the namespaced form `anthropic/claude-sonnet-4-6`).
+       */
+      modelIdOverride?: string;
     }
   ): Promise<ChatCompletionResponse> {
-    const modelId = getModelId(modelAlias);
+    const modelId = options?.modelIdOverride ?? getModelId(modelAlias);
 
     // Inject cache_control on system messages for Anthropic models (prompt caching)
     const cachedMessages = isAnthropicModel(modelAlias) ? injectCacheControl(messages) : messages;
