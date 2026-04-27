@@ -345,6 +345,50 @@ node /root/clawd/skills/cloudflare-browser/scripts/video.js "https://site1.com,h
 
 See `skills/cloudflare-browser/SKILL.md` for full documentation.
 
+## Repo Audit (`/audit`)
+
+`/audit` is a Worker-resident skill that profiles a GitHub repo, extracts AST snippets, and runs an LLM review across configurable lenses (security, types, deadcode, etc.) — no clone required, no shell access, all reads go through the GitHub Tree + Contents API.
+
+### Subscriptions
+
+Schedule recurring audits per repo from Telegram. Subscriptions are stored in `NEXUS_KV` under `audit:sub:{userId}:{owner}/{repo}` and dispatched on the `0 */6 * * *` cron tick.
+
+```text
+/audit subscribe owner/repo                          # weekly, default depth/lenses
+/audit subscribe owner/repo --daily                  # daily cadence
+/audit subscribe owner/repo --lens security --depth standard --branch main
+/audit unsubscribe owner/repo                        # stop scheduled audits
+/audit subs                                          # list active subscriptions
+```
+
+Editing a subscription preserves `createdAt` / `lastRunAt` / `lastTaskId` / `lastRunId` so cadence changes don't accidentally re-trigger a recent run. The 6h cron means daily/weekly subs can fire up to ~6h late — accepted trade-off vs. adding a tighter schedule.
+
+### Cron dispatch + idempotency
+
+On each 6h tick the worker scans `audit:sub:*` and dispatches every subscription whose cadence has elapsed via the existing `TaskProcessor` DO. To avoid double-dispatch when the scheduled handler is retried, each dispatch writes a `dispatchStartedAt` marker before the DO fetch and clears it on success or failure. `isSubscriptionDue()` skips any sub with a marker fresher than `DISPATCH_IN_FLIGHT_GRACE_MS` (10 minutes); markers older than that are treated as crashed dispatchers and re-tried on the next tick.
+
+This is **best-effort idempotent** — KV is not CAS, so two perfectly-concurrent scans can still race. Strict once-only scheduling would require a per-subscription Durable Object; v1 accepts the realistic-retry-only window.
+
+### Admin tab — `/_admin/audit`
+
+The `/_admin/audit` tab surfaces three sections, all read-only over the canonical `audit:*` KV namespaces (no parallel storage):
+
+- **Active Subscriptions** — cadence, lens, depth, last run age, last task id, last runId. A pointer whose run has aged out of the 7-day TTL renders as `expired`. A `dispatchStartedAt` marker shows as `in flight` (yellow) or `stale dispatch` (red, past the grace window) so stuck subs are visually distinguishable. One-click Unsubscribe per row.
+- **Recent Runs** — top 20 by `createdAtMs` metadata: repo+sha, lenses, findings count, LLM calls, tokens in→out, duration, cost, run id. Older runs without metadata sort to the bottom.
+- **Suppressed Findings** — one row per `audit:suppressed:*` entry; one-click Un-suppress writes through `removeSuppression()` so admin and Telegram views stay consistent.
+
+Backed by `GET /api/admin/audit/overview?limit=N` (default 20, max 100), `DELETE /api/admin/audit/subscriptions/:userId/:owner/:repo`, and `DELETE /api/admin/audit/suppressions/:userId/:owner/:repo/:findingId`. All routes are gated by Cloudflare Access; path segments are validated against tight regexes before reaching KV-key construction.
+
+### Untrusted-input hardening
+
+The audit pipeline ingests arbitrary GitHub repos and feeds excerpts straight into LLM prompts, so every source file is treated as untrusted. Before the Analyst's evidence block is built, snippet text and code-scanning-alert descriptions go through `sanitizeText()` (`src/skills/audit/sanitize.ts`):
+
+- **Sanitize** known prompt-injection markers — phrases like `IGNORE PREVIOUS INSTRUCTIONS`, `disregard the above prompts`, `you are now in developer mode`; chat-template role tags `<system>`/`<assistant>`/`<user>`/`<tool>`, `<|im_start|>`/`<|im_end|>`, `[INST]`/`[/INST]`, `<|endoftext|>`. Each match is replaced with `[REDACTED: <label>]`.
+- **Truncate** contiguous base64-charset runs ≥ 256 chars to `[REDACTED-BASE64: <length>B]`. Stops a multi-megabyte blob in a comment from blowing the LLM context.
+- **Strip** zero-width / RTL-override Unicode (U+200B-class). Done first so an attacker can't hide an injection phrase inside an obfuscated identifier.
+
+The pattern catalog is conservative: a variable named `ignorePrevious`, a regex like `/system/`, or the substring `IGNORE` alone all pass through unchanged. The notice count is exposed on `AnalyzeResult.telemetry.sanitizationNotices` so an operator can spot sustained injection attempts across runs.
+
 ## Optional: Cloudflare AI Gateway
 
 You can route API requests through [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/) for caching, rate limiting, analytics, and cost tracking. AI Gateway supports multiple providers — configure your preferred provider in the gateway and use these env vars:
