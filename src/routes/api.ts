@@ -1,7 +1,13 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { createAccessMiddleware } from '../auth';
-import { ensureMoltbotGateway, findExistingMoltbotProcess, killGateway, syncToR2, waitForProcess } from '../gateway';
+import {
+  ensureMoltbotGateway,
+  findExistingMoltbotProcess,
+  killGateway,
+  syncToR2,
+  waitForProcess,
+} from '../gateway';
 import { createAcontextClient } from '../acontext/client';
 import type { LearningHistory, TaskLearning } from '../openrouter/learnings';
 import type { OrchestraHistory, OrchestraTask } from '../orchestra/orchestra';
@@ -9,6 +15,11 @@ import { runSkill } from '../skills/runtime';
 import { initializeSkills } from '../skills/init';
 import { renderForWeb } from '../skills/renderers/web';
 import type { SkillRequest, SkillId } from '../skills/types';
+import {
+  getAuditOverview,
+  deleteAuditSubscription,
+  removeSuppression,
+} from '../skills/audit/cache';
 
 // CLI commands can take 10-15 seconds to complete due to WebSocket connection overhead
 const CLI_TIMEOUT_MS = 20000;
@@ -150,13 +161,13 @@ async function buildAnalyticsOverview(r2: R2Bucket): Promise<AnalyticsOverview> 
     incrementCounter(overview.orchestraTasks.byRepo, task.repo || 'unknown');
   }
 
-  overview.successRate = overview.totalTasks === 0
-    ? 0
-    : Number(((successfulTasks / overview.totalTasks) * 100).toFixed(1));
-  overview.avgDurationMs = overview.totalTasks === 0 ? 0 : Math.round(totalDurationMs / overview.totalTasks);
-  overview.recentTasks = allTasks
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, 20);
+  overview.successRate =
+    overview.totalTasks === 0
+      ? 0
+      : Number(((successfulTasks / overview.totalTasks) * 100).toFixed(1));
+  overview.avgDurationMs =
+    overview.totalTasks === 0 ? 0 : Math.round(totalDurationMs / overview.totalTasks);
+  overview.recentTasks = allTasks.sort((a, b) => b.timestamp - a.timestamp).slice(0, 20);
 
   return overview;
 }
@@ -199,7 +210,7 @@ async function buildOrchestraAnalytics(r2: R2Bucket): Promise<OrchestraAnalytics
 /**
  * API routes
  * - /api/admin/* - Protected admin API routes (Cloudflare Access required)
- * 
+ *
  * Note: /api/status is now handled by publicRoutes (no auth required)
  */
 const api = new Hono<AppEnv>();
@@ -222,7 +233,9 @@ adminApi.get('/devices', async (c) => {
 
     // Run OpenClaw CLI to list devices
     // Must specify --url to connect to the gateway running in the same container
-    const proc = await sandbox.startProcess(`openclaw devices list --json --url ws://localhost:18789${tokenArg(c.env)}`);
+    const proc = await sandbox.startProcess(
+      `openclaw devices list --json --url ws://localhost:18789${tokenArg(c.env)}`,
+    );
     await waitForProcess(proc, CLI_TIMEOUT_MS);
 
     const logs = await proc.getLogs();
@@ -274,7 +287,9 @@ adminApi.post('/devices/:requestId/approve', async (c) => {
     await ensureMoltbotGateway(sandbox, c.env);
 
     // Run OpenClaw CLI to approve the device
-    const proc = await sandbox.startProcess(`openclaw devices approve ${requestId} --url ws://localhost:18789${tokenArg(c.env)}`);
+    const proc = await sandbox.startProcess(
+      `openclaw devices approve ${requestId} --url ws://localhost:18789${tokenArg(c.env)}`,
+    );
     await waitForProcess(proc, CLI_TIMEOUT_MS);
 
     const logs = await proc.getLogs();
@@ -306,7 +321,9 @@ adminApi.post('/devices/approve-all', async (c) => {
     await ensureMoltbotGateway(sandbox, c.env);
 
     // First, get the list of pending devices
-    const listProc = await sandbox.startProcess(`openclaw devices list --json --url ws://localhost:18789${tokenArg(c.env)}`);
+    const listProc = await sandbox.startProcess(
+      `openclaw devices list --json --url ws://localhost:18789${tokenArg(c.env)}`,
+    );
     await waitForProcess(listProc, CLI_TIMEOUT_MS);
 
     const listLogs = await listProc.getLogs();
@@ -333,11 +350,14 @@ adminApi.post('/devices/approve-all', async (c) => {
 
     for (const device of pending) {
       try {
-        const approveProc = await sandbox.startProcess(`openclaw devices approve ${device.requestId} --url ws://localhost:18789${tokenArg(c.env)}`);
+        const approveProc = await sandbox.startProcess(
+          `openclaw devices approve ${device.requestId} --url ws://localhost:18789${tokenArg(c.env)}`,
+        );
         await waitForProcess(approveProc, CLI_TIMEOUT_MS);
 
         const approveLogs = await approveProc.getLogs();
-        const success = approveLogs.stdout?.toLowerCase().includes('approved') || approveProc.exitCode === 0;
+        const success =
+          approveLogs.stdout?.toLowerCase().includes('approved') || approveProc.exitCode === 0;
 
         results.push({ requestId: device.requestId, success });
       } catch (err) {
@@ -349,10 +369,10 @@ adminApi.post('/devices/approve-all', async (c) => {
       }
     }
 
-    const approvedCount = results.filter(r => r.success).length;
+    const approvedCount = results.filter((r) => r.success).length;
     return c.json({
-      approved: results.filter(r => r.success).map(r => r.requestId),
-      failed: results.filter(r => !r.success),
+      approved: results.filter((r) => r.success).map((r) => r.requestId),
+      failed: results.filter((r) => !r.success),
       message: `Approved ${approvedCount} of ${pending.length} device(s)`,
     });
   } catch (error) {
@@ -365,8 +385,8 @@ adminApi.post('/devices/approve-all', async (c) => {
 adminApi.get('/storage', async (c) => {
   const sandbox = c.get('sandbox');
   const hasCredentials = !!(
-    c.env.R2_ACCESS_KEY_ID && 
-    c.env.R2_SECRET_ACCESS_KEY && 
+    c.env.R2_ACCESS_KEY_ID &&
+    c.env.R2_SECRET_ACCESS_KEY &&
     c.env.CF_ACCOUNT_ID
   );
 
@@ -395,7 +415,7 @@ adminApi.get('/storage', async (c) => {
     configured: hasCredentials,
     missing: missing.length > 0 ? missing : undefined,
     lastSync,
-    message: hasCredentials 
+    message: hasCredentials
       ? 'R2 storage is configured. Your data will persist across container restarts.'
       : 'R2 storage is not configured. Paired devices and conversations will be lost when the container restarts.',
   });
@@ -404,9 +424,9 @@ adminApi.get('/storage', async (c) => {
 // POST /api/admin/storage/sync - Trigger a manual sync to R2
 adminApi.post('/storage/sync', async (c) => {
   const sandbox = c.get('sandbox');
-  
+
   const result = await syncToR2(sandbox, c.env);
-  
+
   if (result.success) {
     return c.json({
       success: true,
@@ -415,11 +435,14 @@ adminApi.post('/storage/sync', async (c) => {
     });
   } else {
     const status = result.error?.includes('not configured') ? 400 : 500;
-    return c.json({
-      success: false,
-      error: result.error,
-      details: result.details,
-    }, status);
+    return c.json(
+      {
+        success: false,
+        error: result.error,
+        details: result.details,
+      },
+      status,
+    );
   }
 });
 
@@ -537,7 +560,8 @@ adminApi.get('/models/catalog', async (c) => {
     if (!catalog) {
       return c.json({
         synced: false,
-        message: 'No auto-sync has been performed yet. Trigger one with POST /api/admin/models/sync',
+        message:
+          'No auto-sync has been performed yet. Trigger one with POST /api/admin/models/sync',
       });
     }
 
@@ -548,18 +572,18 @@ adminApi.get('/models/catalog', async (c) => {
 
     // Filter by tier
     if (tier === 'free') {
-      models = models.filter(m => m.isFree);
+      models = models.filter((m) => m.isFree);
     } else if (tier === 'paid') {
-      models = models.filter(m => !m.isFree);
+      models = models.filter((m) => !m.isFree);
     }
 
     // Filter by capability
     if (capability === 'tools') {
-      models = models.filter(m => m.supportsTools);
+      models = models.filter((m) => m.supportsTools);
     } else if (capability === 'vision') {
-      models = models.filter(m => m.supportsVision);
+      models = models.filter((m) => m.supportsVision);
     } else if (capability === 'reasoning') {
-      models = models.filter(m => m.reasoning && m.reasoning !== 'none');
+      models = models.filter((m) => m.reasoning && m.reasoning !== 'none');
     }
 
     const stale = Object.entries(catalog.deprecations)
@@ -573,7 +597,7 @@ adminApi.get('/models/catalog', async (c) => {
       totalSynced: Object.keys(catalog.models).length,
       modelsReturned: models.length,
       staleCount: stale.length,
-      models: models.map(m => ({
+      models: models.map((m) => ({
         alias: m.alias,
         id: m.id,
         name: m.name,
@@ -644,7 +668,7 @@ api.post('/skills/execute', async (c) => {
   }
 
   try {
-    const body = await c.req.json() as {
+    const body = (await c.req.json()) as {
       skillId?: string;
       subcommand?: string;
       text?: string;
@@ -676,6 +700,107 @@ api.post('/skills/execute', async (c) => {
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Audit admin tab — Phase 1, Slice B
+// ---------------------------------------------------------------------------
+//
+// Read-only aggregator over the existing NEXUS_KV namespaces:
+//   audit:sub:*         (subscriptions)
+//   audit:run:*         (recent runs, sorted via metadata.createdAtMs)
+//   audit:suppressed:*  (suppression list)
+//
+// No new storage shape. All mutations (unsubscribe / un-suppress) target
+// the same KV keys the user-facing /audit subcommands use, so admin
+// operations and Telegram operations remain consistent.
+
+// GET /api/admin/audit/overview — subscriptions + recent runs + suppressions
+adminApi.get('/audit/overview', async (c) => {
+  if (!c.env.NEXUS_KV) {
+    return c.json({ error: 'NEXUS_KV not bound — audit admin tab requires KV.' }, 503);
+  }
+  const limitRaw = c.req.query('limit');
+  const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 0, 1), 100) : 20;
+  try {
+    const overview = await getAuditOverview(c.env.NEXUS_KV, { runLimit: limit });
+    return c.json(overview);
+  } catch (err) {
+    console.error('[admin-audit] overview failed:', err);
+    return c.json({ error: 'Failed to load audit overview' }, 500);
+  }
+});
+
+/**
+ * Validate a path segment that gets fed to KV-key construction. Tighter
+ * than just "non-empty": rejects slashes/colons/whitespace so a malicious
+ * caller can't synthesize a key outside the audit:* namespace.
+ *
+ * Userid pattern matches what the audit skill stores: Telegram numeric
+ * ids and the 'storia-orchestrator' literal use ASCII alphanumeric +
+ * '-' + '_'. Repo segments allow '.' for things like next.js.
+ */
+const SAFE_USERID_RE = /^[A-Za-z0-9_-]+$/;
+const SAFE_REPO_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
+const SAFE_FINDING_ID_RE = /^[a-z]+-[a-z0-9]+$/;
+
+function rejectIfUnsafe(...parts: { value: string; pattern: RegExp; label: string }[]) {
+  for (const p of parts) {
+    if (!p.pattern.test(p.value)) {
+      return `Invalid ${p.label}`;
+    }
+  }
+  return null;
+}
+
+// DELETE /api/admin/audit/subscriptions/:userId/:owner/:repo — unsubscribe
+adminApi.delete('/audit/subscriptions/:userId/:owner/:repo', async (c) => {
+  if (!c.env.NEXUS_KV) {
+    return c.json({ error: 'NEXUS_KV not bound' }, 503);
+  }
+  const userId = c.req.param('userId');
+  const owner = c.req.param('owner');
+  const repo = c.req.param('repo');
+  const bad = rejectIfUnsafe(
+    { value: userId, pattern: SAFE_USERID_RE, label: 'userId' },
+    { value: owner, pattern: SAFE_REPO_SEGMENT_RE, label: 'owner' },
+    { value: repo, pattern: SAFE_REPO_SEGMENT_RE, label: 'repo' },
+  );
+  if (bad) return c.json({ error: bad }, 400);
+
+  try {
+    const removed = await deleteAuditSubscription(c.env.NEXUS_KV, userId, owner, repo);
+    return c.json({ removed });
+  } catch (err) {
+    console.error('[admin-audit] delete subscription failed:', err);
+    return c.json({ error: 'Failed to delete subscription' }, 500);
+  }
+});
+
+// DELETE /api/admin/audit/suppressions/:userId/:owner/:repo/:findingId — un-suppress
+adminApi.delete('/audit/suppressions/:userId/:owner/:repo/:findingId', async (c) => {
+  if (!c.env.NEXUS_KV) {
+    return c.json({ error: 'NEXUS_KV not bound' }, 503);
+  }
+  const userId = c.req.param('userId');
+  const owner = c.req.param('owner');
+  const repo = c.req.param('repo');
+  const findingId = c.req.param('findingId');
+  const bad = rejectIfUnsafe(
+    { value: userId, pattern: SAFE_USERID_RE, label: 'userId' },
+    { value: owner, pattern: SAFE_REPO_SEGMENT_RE, label: 'owner' },
+    { value: repo, pattern: SAFE_REPO_SEGMENT_RE, label: 'repo' },
+    { value: findingId, pattern: SAFE_FINDING_ID_RE, label: 'findingId' },
+  );
+  if (bad) return c.json({ error: bad }, 400);
+
+  try {
+    const result = await removeSuppression(c.env.NEXUS_KV, userId, owner, repo, findingId);
+    return c.json(result);
+  } catch (err) {
+    console.error('[admin-audit] delete suppression failed:', err);
+    return c.json({ error: 'Failed to delete suppression' }, 500);
   }
 });
 
