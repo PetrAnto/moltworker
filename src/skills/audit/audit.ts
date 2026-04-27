@@ -37,6 +37,7 @@ import {
   getAuditSubscription,
   deleteAuditSubscription,
   listUserSubscriptions,
+  linkRunToSubscription,
   type AuditSubscription,
 } from './cache';
 import { extractSnippets } from './extractor/extractor';
@@ -549,6 +550,18 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   // is unavailable, the user just can't `export` later — the inline
   // result still shows the top-5 + run id.
   await cacheAuditRun(request.env.NEXUS_KV, request.userId, run);
+
+  // If a subscription exists for this (user, repo), write back the new
+  // runId so the admin tab can link sub → latest run. Runs unconditionally
+  // for any /audit run completion (scheduled or interactive); a missing
+  // subscription is the common no-op case. See cache.ts:linkRunToSubscription.
+  await linkRunToSubscription(
+    request.env.NEXUS_KV,
+    request.userId,
+    profile.owner,
+    profile.repo,
+    run.runId,
+  );
 
   return {
     skillId: 'audit',
