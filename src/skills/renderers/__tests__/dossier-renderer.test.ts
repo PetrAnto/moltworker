@@ -140,6 +140,72 @@ describe('Telegram dossier renderer', () => {
     expect(text).toContain('<b>Recommendation:</b> choose A');
   });
 
+  it('renders the attempts diagnostic block when sources failed', () => {
+    // Mirrors the production case: classifier asked for 3 sources, only
+    // Brave succeeded, the other two dropped — user sees exactly which
+    // and why, so the next thin dossier is self-diagnosing.
+    const dossier: NexusDossier = {
+      query: 'q',
+      mode: 'full',
+      synthesis: 'body',
+      evidence: [
+        { source: 'Brave Search', data: 'x', confidence: 'medium' },
+      ],
+      attempts: [
+        { source: 'webSearch', status: 'ok', durationMs: 420 },
+        { source: 'stackExchange', status: 'failed', reason: 'Stack Exchange: no matching questions', durationMs: 1800 },
+        { source: 'github', status: 'failed', reason: 'Error executing github_api: HTTP 401', durationMs: 250 },
+      ],
+      createdAt: new Date().toISOString(),
+    };
+
+    const chunks = renderForTelegram(makeDossierResult(dossier));
+    const text = chunks.map(c => c.text).join('\n');
+
+    expect(text).toContain('<b>Source attempts (1/3 succeeded):</b>');
+    expect(text).toContain('✗ stackExchange (1800ms): Stack Exchange: no matching questions');
+    expect(text).toContain('✗ github (250ms): Error executing github_api: HTTP 401');
+    // Successful sources are not enumerated in the diagnostics block —
+    // they're already in the Sources block above.
+    expect(text).not.toContain('✗ webSearch');
+  });
+
+  it('omits the attempts diagnostic block when every attempt succeeded', () => {
+    const dossier: NexusDossier = {
+      query: 'q',
+      mode: 'full',
+      synthesis: 'body',
+      evidence: [
+        { source: 'Brave Search', data: 'x', confidence: 'medium' },
+      ],
+      attempts: [
+        { source: 'webSearch', status: 'ok', durationMs: 420 },
+      ],
+      createdAt: new Date().toISOString(),
+    };
+
+    const chunks = renderForTelegram(makeDossierResult(dossier));
+    const text = chunks.map(c => c.text).join('\n');
+
+    expect(text).not.toContain('Source attempts');
+    expect(text).not.toContain('✗');
+  });
+
+  it('omits the attempts block when attempts field is missing (legacy cached dossier)', () => {
+    const dossier: NexusDossier = {
+      query: 'q',
+      mode: 'full',
+      synthesis: 'body',
+      evidence: [{ source: 'Brave Search', data: 'x', confidence: 'medium' }],
+      createdAt: new Date().toISOString(),
+    };
+
+    const chunks = renderForTelegram(makeDossierResult(dossier));
+    const text = chunks.map(c => c.text).join('\n');
+
+    expect(text).not.toContain('Source attempts');
+  });
+
   it('falls back to escaped body when data is missing', () => {
     const result: SkillResult = {
       skillId: 'nexus',
