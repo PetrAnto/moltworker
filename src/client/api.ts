@@ -62,10 +62,7 @@ export class AuthError extends Error {
   }
 }
 
-async function apiRequest<T>(
-  path: string,
-  options: globalThis.RequestInit = {}
-): Promise<T> {
+async function apiRequest<T>(path: string, options: globalThis.RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     credentials: 'include',
@@ -79,7 +76,7 @@ async function apiRequest<T>(
     throw new AuthError('Unauthorized - please log in via Cloudflare Access');
   }
 
-  const data = await response.json() as T & { error?: string };
+  const data = (await response.json()) as T & { error?: string };
 
   if (!response.ok) {
     throw new Error(data.error || `API error: ${response.status}`);
@@ -159,7 +156,6 @@ export async function getAcontextSessions(): Promise<AcontextSessionsResponse> {
   return apiRequest<AcontextSessionsResponse>('/acontext/sessions');
 }
 
-
 export interface AnalyticsOverview {
   totalTasks: number;
   successRate: number;
@@ -205,4 +201,85 @@ export async function fetchAnalyticsOverview(): Promise<AnalyticsOverview> {
 
 export async function fetchOrchestraAnalytics(): Promise<OrchestraAnalytics> {
   return apiRequest<OrchestraAnalytics>('/analytics/orchestra');
+}
+
+// ---------------------------------------------------------------------------
+// Audit admin tab (Phase 1, Slice B)
+// ---------------------------------------------------------------------------
+
+export interface AuditSubscriptionRow {
+  userId: string;
+  owner: string;
+  repo: string;
+  transport: 'telegram';
+  chatId: number;
+  branch?: string;
+  lens?: string;
+  depth: 'quick' | 'standard' | 'deep';
+  interval: 'daily' | 'weekly';
+  createdAt: string;
+  lastRunAt: string | null;
+  lastTaskId: string | null; // TaskProcessor task id of latest dispatch
+  lastRunId: string | null; // AuditRun.runId — populated by completion writeback
+  dispatchStartedAt?: string;
+}
+
+export interface AuditRunRow {
+  userId: string;
+  runId: string;
+  owner: string;
+  repo: string;
+  sha: string;
+  lenses: string[];
+  depth: string;
+  findings: number;
+  costUsd: number;
+  llmCalls: number;
+  tokensIn: number;
+  tokensOut: number;
+  durationMs: number;
+  createdAtMs: number | null;
+}
+
+export interface AuditSuppressionRow {
+  userId: string;
+  owner: string;
+  repo: string;
+  findingId: string;
+  at: string | null;
+}
+
+export interface AuditOverviewResponse {
+  subscriptions: AuditSubscriptionRow[];
+  recentRuns: AuditRunRow[];
+  suppressions: AuditSuppressionRow[];
+}
+
+export async function fetchAuditOverview(limit = 20): Promise<AuditOverviewResponse> {
+  return apiRequest<AuditOverviewResponse>(
+    `/audit/overview?limit=${encodeURIComponent(String(limit))}`,
+  );
+}
+
+export async function deleteAuditSubscription(
+  userId: string,
+  owner: string,
+  repo: string,
+): Promise<{ removed: boolean }> {
+  return apiRequest<{ removed: boolean }>(
+    `/audit/subscriptions/${encodeURIComponent(userId)}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function deleteAuditSuppression(
+  userId: string,
+  owner: string,
+  repo: string,
+  findingId: string,
+): Promise<{ removed: boolean; total: number }> {
+  return apiRequest<{ removed: boolean; total: number }>(
+    `/audit/suppressions/${encodeURIComponent(userId)}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(findingId)}`,
+    { method: 'DELETE' },
+  );
 }

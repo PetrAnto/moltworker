@@ -13,9 +13,13 @@ describe('admin acontext sessions route', () => {
     const app = new Hono<AppEnv>();
     app.route('/api', api);
 
-    const response = await app.request('http://localhost/api/admin/acontext/sessions', {
-      method: 'GET',
-    }, createMockEnv({ DEV_MODE: 'true' }));
+    const response = await app.request(
+      'http://localhost/api/admin/acontext/sessions',
+      {
+        method: 'GET',
+      },
+      createMockEnv({ DEV_MODE: 'true' }),
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -50,9 +54,13 @@ describe('admin acontext sessions route', () => {
     const app = new Hono<AppEnv>();
     app.route('/api', api);
 
-    const response = await app.request('http://localhost/api/admin/acontext/sessions', {
-      method: 'GET',
-    }, createMockEnv({ DEV_MODE: 'true', ACONTEXT_API_KEY: 'test-key' }));
+    const response = await app.request(
+      'http://localhost/api/admin/acontext/sessions',
+      {
+        method: 'GET',
+      },
+      createMockEnv({ DEV_MODE: 'true', ACONTEXT_API_KEY: 'test-key' }),
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -71,7 +79,6 @@ describe('admin acontext sessions route', () => {
     expect(listSessions).toHaveBeenCalledWith({ limit: 10, timeDesc: true });
   });
 });
-
 
 describe('admin analytics routes', () => {
   beforeEach(() => {
@@ -120,10 +127,18 @@ describe('admin analytics routes', () => {
 
     const list = vi.fn(async ({ prefix }: { prefix: string }) => {
       if (prefix === 'learnings/') {
-        return { objects: [{ key: 'learnings/u1/history.json' }], truncated: false, cursor: undefined };
+        return {
+          objects: [{ key: 'learnings/u1/history.json' }],
+          truncated: false,
+          cursor: undefined,
+        };
       }
       if (prefix === 'orchestra/') {
-        return { objects: [{ key: 'orchestra/u1/history.json' }], truncated: false, cursor: undefined };
+        return {
+          objects: [{ key: 'orchestra/u1/history.json' }],
+          truncated: false,
+          cursor: undefined,
+        };
       }
       return { objects: [], truncated: false, cursor: undefined };
     });
@@ -146,10 +161,14 @@ describe('admin analytics routes', () => {
     const app = new Hono<AppEnv>();
     app.route('/api', api);
 
-    const response = await app.request('http://localhost/api/admin/analytics/overview', { method: 'GET' }, createMockEnv({ DEV_MODE: 'true', MOLTBOT_BUCKET: createMockR2ForAnalytics() }));
+    const response = await app.request(
+      'http://localhost/api/admin/analytics/overview',
+      { method: 'GET' },
+      createMockEnv({ DEV_MODE: 'true', MOLTBOT_BUCKET: createMockR2ForAnalytics() }),
+    );
 
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
+    const json = (await response.json()) as any;
     expect(json.totalTasks).toBe(1);
     expect(json.successRate).toBe(100);
     expect(json.tasksByCategory.web_search).toBe(1);
@@ -164,10 +183,14 @@ describe('admin analytics routes', () => {
     const app = new Hono<AppEnv>();
     app.route('/api', api);
 
-    const response = await app.request('http://localhost/api/admin/analytics/orchestra', { method: 'GET' }, createMockEnv({ DEV_MODE: 'true', MOLTBOT_BUCKET: createMockR2ForAnalytics() }));
+    const response = await app.request(
+      'http://localhost/api/admin/analytics/orchestra',
+      { method: 'GET' },
+      createMockEnv({ DEV_MODE: 'true', MOLTBOT_BUCKET: createMockR2ForAnalytics() }),
+    );
 
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
+    const json = (await response.json()) as any;
     expect(json.tasks).toHaveLength(1);
     expect(json.tasks[0].repo).toBe('owner/repo');
     expect(json.tasks[0].status).toBe('completed');
@@ -185,14 +208,18 @@ describe('POST /api/skills/execute', () => {
     const app = new Hono<AppEnv>();
     app.route('/api', api);
 
-    const response = await app.request('http://localhost/api/skills/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ skillId: 'orchestra', subcommand: 'status' }),
-    }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'real-secret' }));
+    const response = await app.request(
+      'http://localhost/api/skills/execute',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skillId: 'orchestra', subcommand: 'status' }),
+      },
+      createMockEnv({ STORIA_MOLTWORKER_SECRET: 'real-secret' }),
+    );
 
     expect(response.status).toBe(401);
-    const json = await response.json() as any;
+    const json = (await response.json()) as any;
     expect(json.error).toBe('Unauthorized');
   });
 
@@ -201,17 +228,21 @@ describe('POST /api/skills/execute', () => {
     const app = new Hono<AppEnv>();
     app.route('/api', api);
 
-    const response = await app.request('http://localhost/api/skills/execute', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Storia-Secret': 'test-secret',
+    const response = await app.request(
+      'http://localhost/api/skills/execute',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Storia-Secret': 'test-secret',
+        },
+        body: JSON.stringify({ skillId: 'orchestra', subcommand: 'status', text: 'hello' }),
       },
-      body: JSON.stringify({ skillId: 'orchestra', subcommand: 'status', text: 'hello' }),
-    }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }));
+      createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }),
+    );
 
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
+    const json = (await response.json()) as any;
     expect(json.ok).toBe(true);
     expect(json.skillId).toBe('orchestra');
     expect(json.kind).toBe('orchestra');
@@ -224,17 +255,21 @@ describe('POST /api/skills/execute', () => {
     const app = new Hono<AppEnv>();
     app.route('/api', api);
 
-    const response = await app.request('http://localhost/api/skills/execute', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Storia-Secret': 'test-secret',
+    const response = await app.request(
+      'http://localhost/api/skills/execute',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Storia-Secret': 'test-secret',
+        },
+        body: JSON.stringify({ skillId: 'nonexistent', subcommand: 'test', text: 'test' }),
       },
-      body: JSON.stringify({ skillId: 'nonexistent', subcommand: 'test', text: 'test' }),
-    }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }));
+      createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }),
+    );
 
     expect(response.status).toBe(500);
-    const json = await response.json() as any;
+    const json = (await response.json()) as any;
     expect(json.ok).toBe(false);
     expect(json.kind).toBe('error');
     expect(json.body).toContain('Unknown skill');
@@ -245,17 +280,276 @@ describe('POST /api/skills/execute', () => {
     const app = new Hono<AppEnv>();
     app.route('/api', api);
 
-    const response = await app.request('http://localhost/api/skills/execute', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Storia-Secret': 'test-secret',
+    const response = await app.request(
+      'http://localhost/api/skills/execute',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Storia-Secret': 'test-secret',
+        },
+        body: JSON.stringify({ text: 'hello' }),
       },
-      body: JSON.stringify({ text: 'hello' }),
-    }, createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }));
+      createMockEnv({ STORIA_MOLTWORKER_SECRET: 'test-secret' }),
+    );
 
     expect(response.status).toBe(400);
-    const json = await response.json() as any;
+    const json = (await response.json()) as any;
     expect(json.error).toContain('Missing required fields');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit admin tab routes (Phase 1, Slice B)
+// ---------------------------------------------------------------------------
+
+describe('admin audit routes', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  function makeKV(initial: Record<string, { value: string; metadata?: unknown }> = {}) {
+    const store = new Map<string, string>();
+    const meta = new Map<string, unknown>();
+    for (const [k, v] of Object.entries(initial)) {
+      store.set(k, v.value);
+      if (v.metadata !== undefined) meta.set(k, v.metadata);
+    }
+    return {
+      get: vi.fn(async (k: string, type?: string) => {
+        const v = store.get(k);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(async (k: string, v: string, opts?: { metadata?: unknown }) => {
+        store.set(k, v);
+        if (opts?.metadata !== undefined) meta.set(k, opts.metadata);
+      }),
+      delete: vi.fn(async (k: string) => {
+        store.delete(k);
+        meta.delete(k);
+      }),
+      list: vi.fn(async (opts: { prefix?: string }) => ({
+        keys: [...store.keys()]
+          .filter((k) => k.startsWith(opts.prefix ?? ''))
+          .map((name) => ({ name, metadata: meta.get(name) })),
+        list_complete: true,
+      })),
+    } as unknown as KVNamespace;
+  }
+
+  it('GET /audit/overview returns 503 when NEXUS_KV is not bound', async () => {
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request(
+      'http://localhost/api/admin/audit/overview',
+      { method: 'GET' },
+      createMockEnv({ DEV_MODE: 'true' }),
+    );
+    expect(response.status).toBe(503);
+  });
+
+  it('GET /audit/overview aggregates subscriptions, runs, and suppressions', async () => {
+    const sub = {
+      userId: 'u1',
+      owner: 'octocat',
+      repo: 'demo',
+      transport: 'telegram',
+      chatId: 1,
+      depth: 'quick',
+      interval: 'weekly',
+      createdAt: '2026-01-01T00:00:00Z',
+      lastRunAt: null,
+      lastTaskId: null,
+      lastRunId: null,
+    };
+    const run = {
+      runId: 'r1',
+      repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
+      lenses: ['security'],
+      depth: 'quick',
+      findings: [],
+      telemetry: {
+        durationMs: 100,
+        llmCalls: 1,
+        tokensIn: 10,
+        tokensOut: 5,
+        costUsd: 0.01,
+        githubApiCalls: 1,
+      },
+    };
+    const kv = makeKV({
+      'audit:sub:u1:octocat/demo': { value: JSON.stringify(sub) },
+      'audit:run:u1:r1': {
+        value: JSON.stringify(run),
+        metadata: { createdAtMs: Date.now(), owner: 'octocat', repo: 'demo' },
+      },
+      'audit:suppressed:u1:octocat/demo:security-abc': {
+        value: JSON.stringify({ at: '2026-04-20T00:00:00Z' }),
+      },
+    });
+
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request(
+      'http://localhost/api/admin/audit/overview',
+      { method: 'GET' },
+      createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv }),
+    );
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as {
+      subscriptions: unknown[];
+      recentRuns: unknown[];
+      suppressions: unknown[];
+    };
+    expect(json.subscriptions).toHaveLength(1);
+    expect(json.recentRuns).toHaveLength(1);
+    expect(json.suppressions).toHaveLength(1);
+  });
+
+  it('DELETE /audit/subscriptions removes the subscription and reports removed=true', async () => {
+    const sub = {
+      userId: 'u1',
+      owner: 'octocat',
+      repo: 'demo',
+      transport: 'telegram',
+      chatId: 1,
+      depth: 'quick',
+      interval: 'weekly',
+      createdAt: 't',
+      lastRunAt: null,
+      lastTaskId: null,
+      lastRunId: null,
+    };
+    const kv = makeKV({ 'audit:sub:u1:octocat/demo': { value: JSON.stringify(sub) } });
+
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request(
+      'http://localhost/api/admin/audit/subscriptions/u1/octocat/demo',
+      { method: 'DELETE' },
+      createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ removed: true });
+  });
+
+  it('DELETE /audit/subscriptions rejects unsafe path segments (key injection guard)', async () => {
+    const kv = makeKV();
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    // Slash + colon are reserved for KV key construction. Hono URL-decodes
+    // before routing, so these end up as raw segment values.
+    const response = await app.request(
+      'http://localhost/api/admin/audit/subscriptions/u1/octocat/demo%3Aevil',
+      { method: 'DELETE' },
+      createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv }),
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it('DELETE /audit/suppressions un-suppresses a finding and reports the new total', async () => {
+    const kv = makeKV({
+      'audit:suppressed:u1:octocat/demo:security-abc': {
+        value: JSON.stringify({ at: '2026-04-20T00:00:00Z' }),
+      },
+      'audit:suppressed:u1:octocat/demo:types-xyz': {
+        value: JSON.stringify({ at: '2026-04-21T00:00:00Z' }),
+      },
+    });
+
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request(
+      'http://localhost/api/admin/audit/suppressions/u1/octocat/demo/security-abc',
+      { method: 'DELETE' },
+      createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv }),
+    );
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as { removed: boolean; total: number };
+    expect(json.removed).toBe(true);
+    expect(json.total).toBe(1); // one suppression left for this repo
+  });
+
+  it('DELETE /audit/suppressions rejects malformed findingId', async () => {
+    const kv = makeKV();
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const response = await app.request(
+      'http://localhost/api/admin/audit/suppressions/u1/octocat/demo/NOT-A-VALID-ID',
+      { method: 'DELETE' },
+      createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv }),
+    );
+    expect(response.status).toBe(400);
+  });
+
+  // GPT review #4: a UI double-click should produce a clean second
+  // response, not a 500 or an inconsistent state. Both DELETEs return
+  // 200 with `removed: false` when the target is already gone.
+  it('DELETE /audit/subscriptions is idempotent under double-click', async () => {
+    const sub = {
+      userId: 'u1',
+      owner: 'octocat',
+      repo: 'demo',
+      transport: 'telegram',
+      chatId: 1,
+      depth: 'quick',
+      interval: 'weekly',
+      createdAt: 't',
+      lastRunAt: null,
+      lastTaskId: null,
+      lastRunId: null,
+    };
+    const kv = makeKV({ 'audit:sub:u1:octocat/demo': { value: JSON.stringify(sub) } });
+
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const url = 'http://localhost/api/admin/audit/subscriptions/u1/octocat/demo';
+    const env = createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv });
+
+    const first = await app.request(url, { method: 'DELETE' }, env);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ removed: true });
+
+    const second = await app.request(url, { method: 'DELETE' }, env);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({ removed: false });
+  });
+
+  it('DELETE /audit/suppressions is idempotent under double-click', async () => {
+    const kv = makeKV({
+      'audit:suppressed:u1:octocat/demo:security-abc': {
+        value: JSON.stringify({ at: '2026-04-20T00:00:00Z' }),
+      },
+    });
+
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const url = 'http://localhost/api/admin/audit/suppressions/u1/octocat/demo/security-abc';
+    const env = createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv });
+
+    const first = await app.request(url, { method: 'DELETE' }, env);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ removed: true, total: 0 });
+
+    const second = await app.request(url, { method: 'DELETE' }, env);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({ removed: false, total: 0 });
   });
 });

@@ -68,18 +68,48 @@ export function runCacheKey(userId: string, runId: string): string {
   return `${RUN_PREFIX}${userId}:${runId}`;
 }
 
+/**
+ * KV metadata attached to every persisted AuditRun. Lets the admin
+ * tab sort keys by recency via `kv.list({...}).keys[].metadata`
+ * without fetching every value. AuditRun itself carries no timestamp
+ * field; rather than amending that schema we keep the timestamp
+ * alongside the key so runs from older code (no metadata) still load
+ * correctly — they just sort at the bottom of recency lists.
+ */
+export interface AuditRunMetadata {
+  createdAtMs: number;
+  owner: string;
+  repo: string;
+}
+
+/**
+ * Persist an AuditRun for /audit export <runId>.
+ *
+ * Returns `true` if the put succeeded, `false` otherwise (no KV bound,
+ * or the write threw). Callers gate downstream linkage on this so a
+ * failed run-cache write doesn't leave a subscription pointing at a
+ * runId that nothing can resolve.
+ */
 export async function cacheAuditRun(
   kv: KVNamespace | undefined,
   userId: string,
   run: AuditRun,
-): Promise<void> {
-  if (!kv) return;
+): Promise<boolean> {
+  if (!kv) return false;
   try {
+    const meta: AuditRunMetadata = {
+      createdAtMs: Date.now(),
+      owner: run.repo.owner,
+      repo: run.repo.name,
+    };
     await kv.put(runCacheKey(userId, run.runId), JSON.stringify(run), {
       expirationTtl: RUN_TTL_SECONDS,
+      metadata: meta,
     });
+    return true;
   } catch (err) {
     console.warn('[Audit] cacheAuditRun failed:', err instanceof Error ? err.message : err);
+    return false;
   }
 }
 
@@ -424,7 +454,7 @@ export interface AuditSubscription {
  * accept-then-update sequence and short enough that a real crash
  * doesn't freeze the subscription forever.
  */
-export const DISPATCH_INFLIGHT_GRACE_MS = 10 * 60 * 1000;
+export const DISPATCH_IN_FLIGHT_GRACE_MS = 10 * 60 * 1000;
 
 export function subscriptionKey(userId: string, owner: string, repo: string): string {
   return `${SUB_PREFIX}${userId}:${owner.toLowerCase()}/${repo.toLowerCase()}`;
@@ -501,10 +531,15 @@ export async function listAllSubscriptions(
 async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<AuditSubscription[]> {
   const out: AuditSubscription[] = [];
   let cursor: string | undefined;
+  // Defensive page cap: keeps worst-case latency predictable on a
+  // pathologically large keyspace and matches listRecentRuns /
+  // listAllSuppressions for consistency. 5 pages × KV's 1000-key
+  // default = ~5000 subs, far beyond any realistic deployment.
+  const MAX_PAGES = 5;
   try {
-    for (;;) {
-      const page = await kv.list({ prefix, cursor });
-      for (const k of page.keys) {
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await kv.list({ prefix, cursor });
+      for (const k of res.keys) {
         try {
           const sub = (await kv.get(k.name, 'json')) as AuditSubscription | null;
           if (sub) out.push(sub);
@@ -517,8 +552,8 @@ async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<Audit
           );
         }
       }
-      if (page.list_complete) break;
-      cursor = page.cursor;
+      if (res.list_complete) break;
+      cursor = res.cursor;
       if (!cursor) break;
     }
   } catch (err) {
@@ -530,6 +565,48 @@ async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<Audit
   return out;
 }
 
+/**
+ * If a subscription exists for (userId, owner, repo), write the freshly
+ * completed AuditRun's runId into its `lastRunId` field and clear any
+ * lingering in-flight marker.
+ *
+ * Called at the end of every successful audit (whether dispatched by
+ * cron or invoked manually) so the admin tab can link a subscription
+ * to the persisted audit:run:{userId}:{runId} record. Returns true if a
+ * sub was found and updated, false if none existed (the common case
+ * for one-off /audit invocations on a non-tracked repo).
+ *
+ * Best-effort: KV failures log a warning but do not throw — the audit
+ * itself has already succeeded and we don't want to fail the user-
+ * visible result over admin-tab cosmetics.
+ */
+export async function linkRunToSubscription(
+  kv: KVNamespace | undefined,
+  userId: string,
+  owner: string,
+  repo: string,
+  runId: string,
+): Promise<boolean> {
+  if (!kv) return false;
+  try {
+    const sub = await getAuditSubscription(kv, userId, owner, repo);
+    if (!sub) return false;
+    await setAuditSubscription(kv, {
+      ...sub,
+      lastRunId: runId,
+      // Defensive: if the audit completed under an in-flight marker
+      // that the cron path didn't manage to clear (rare — only happens
+      // if setAuditSubscription failed at clear time), drop it now so
+      // the next cron tick isn't blocked.
+      dispatchStartedAt: undefined,
+    });
+    return true;
+  } catch (err) {
+    console.warn('[Audit] linkRunToSubscription failed:', err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Returns true if the subscription is due to run again at `nowMs`. */
@@ -539,7 +616,7 @@ export function isSubscriptionDue(sub: AuditSubscription, nowMs: number): boolea
   // AuditSubscription.dispatchStartedAt for the race-window discussion.
   if (sub.dispatchStartedAt) {
     const startedMs = Date.parse(sub.dispatchStartedAt);
-    if (!Number.isNaN(startedMs) && nowMs - startedMs < DISPATCH_INFLIGHT_GRACE_MS) {
+    if (!Number.isNaN(startedMs) && nowMs - startedMs < DISPATCH_IN_FLIGHT_GRACE_MS) {
       return false;
     }
     // Stale marker (>= grace window): treat as a crashed dispatcher and
@@ -550,4 +627,198 @@ export function isSubscriptionDue(sub: AuditSubscription, nowMs: number): boolea
   if (Number.isNaN(lastMs)) return true; // corrupt timestamp → run anyway
   const intervalMs = sub.interval === 'daily' ? DAY_MS : 7 * DAY_MS;
   return nowMs - lastMs >= intervalMs;
+}
+
+// ---------------------------------------------------------------------------
+// Admin tab support — read-only aggregators across users
+// ---------------------------------------------------------------------------
+//
+// The admin tab is operator-scoped (CF Access protected) so it sees every
+// user's data. These helpers do prefix scans over the existing namespaces
+// — no new storage shape, no parallel index. Reuse over invent.
+
+/** One row in the admin tab's "Recent runs" table. */
+export interface AuditRunSummary {
+  userId: string;
+  runId: string;
+  owner: string;
+  repo: string;
+  sha: string;
+  lenses: string[];
+  depth: string;
+  findings: number;
+  costUsd: number;
+  llmCalls: number;
+  tokensIn: number;
+  tokensOut: number;
+  durationMs: number;
+  createdAtMs: number | null; // null for runs persisted before metadata was added
+}
+
+/** One row in the admin tab's "Suppressed findings" table. */
+export interface SuppressionEntry {
+  userId: string;
+  owner: string;
+  repo: string;
+  findingId: string;
+  at: string | null;
+}
+
+/**
+ * List the most-recent N AuditRuns across all users.
+ *
+ * Uses the metadata written by cacheAuditRun() to sort by recency
+ * without fetching every value, then materializes the top `limit` rows.
+ * Older runs (pre-metadata) get `createdAtMs = null` and sort to the
+ * end — they remain visible but lose their relative ordering.
+ */
+export async function listRecentRuns(
+  kv: KVNamespace | undefined,
+  limit = 20,
+): Promise<AuditRunSummary[]> {
+  if (!kv) return [];
+
+  const candidates: { name: string; meta: AuditRunMetadata | null }[] = [];
+  let cursor: string | undefined;
+  // Bound the scan: at most ~5 pages × KV's default page size keeps the
+  // worst-case latency predictable. Runs have a 7-day TTL so the live
+  // keyspace stays small in practice.
+  const MAX_PAGES = 5;
+  try {
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await kv.list<AuditRunMetadata>({ prefix: RUN_PREFIX, cursor });
+      for (const k of res.keys) {
+        candidates.push({ name: k.name, meta: k.metadata ?? null });
+      }
+      if (res.list_complete) break;
+      cursor = res.cursor;
+      if (!cursor) break;
+    }
+  } catch (err) {
+    console.warn('[Audit] listRecentRuns scan failed:', err instanceof Error ? err.message : err);
+    return [];
+  }
+
+  // Sort: keys with metadata first (most-recent → oldest), then unstamped
+  // ones in arbitrary list order at the end.
+  candidates.sort((a, b) => {
+    const am = a.meta?.createdAtMs ?? -Infinity;
+    const bm = b.meta?.createdAtMs ?? -Infinity;
+    return bm - am;
+  });
+
+  const rows: AuditRunSummary[] = [];
+  for (const c of candidates.slice(0, limit)) {
+    // Key shape: audit:run:{userId}:{runId}
+    const tail = c.name.slice(RUN_PREFIX.length);
+    const sep = tail.indexOf(':');
+    if (sep < 0) continue;
+    const userId = tail.slice(0, sep);
+    const runId = tail.slice(sep + 1);
+    let run: AuditRun | null = null;
+    try {
+      run = (await kv.get(c.name, 'json')) as AuditRun | null;
+    } catch {
+      // Skip on read failure rather than aborting the whole list.
+      continue;
+    }
+    if (!run) continue;
+    rows.push({
+      userId,
+      runId,
+      owner: run.repo.owner,
+      repo: run.repo.name,
+      sha: run.repo.sha,
+      lenses: [...run.lenses],
+      depth: run.depth,
+      findings: run.findings.length,
+      costUsd: run.telemetry.costUsd,
+      llmCalls: run.telemetry.llmCalls,
+      tokensIn: run.telemetry.tokensIn,
+      tokensOut: run.telemetry.tokensOut,
+      durationMs: run.telemetry.durationMs,
+      createdAtMs: c.meta?.createdAtMs ?? null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * List every suppression entry across all users. Each KV key carries a
+ * tiny JSON value `{at: ISO}`; we fetch it for the timestamp and parse
+ * the (userId, owner, repo, findingId) triple from the key itself.
+ */
+export async function listAllSuppressions(
+  kv: KVNamespace | undefined,
+): Promise<SuppressionEntry[]> {
+  if (!kv) return [];
+  const out: SuppressionEntry[] = [];
+  let cursor: string | undefined;
+  const MAX_PAGES = 5;
+  try {
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await kv.list({ prefix: SUPPRESS_PREFIX, cursor });
+      for (const k of res.keys) {
+        // Key shape: audit:suppressed:{userId}:{owner}/{repo}:{findingId}
+        const tail = k.name.slice(SUPPRESS_PREFIX.length);
+        const sepUser = tail.indexOf(':');
+        if (sepUser < 0) continue;
+        const userId = tail.slice(0, sepUser);
+        const afterUser = tail.slice(sepUser + 1);
+        const sepRepo = afterUser.indexOf(':');
+        if (sepRepo < 0) continue;
+        const repoSlug = afterUser.slice(0, sepRepo);
+        const findingId = afterUser.slice(sepRepo + 1);
+        const slash = repoSlug.indexOf('/');
+        if (slash < 0) continue;
+        const owner = repoSlug.slice(0, slash);
+        const repo = repoSlug.slice(slash + 1);
+
+        let at: string | null = null;
+        try {
+          const v = (await kv.get(k.name, 'json')) as { at?: string } | null;
+          at = v?.at ?? null;
+        } catch {
+          // Best-effort: an unreadable suppression entry should not stop
+          // the rest of the listing. Surface what we can.
+        }
+        out.push({ userId, owner, repo, findingId, at });
+      }
+      if (res.list_complete) break;
+      cursor = res.cursor;
+      if (!cursor) break;
+    }
+  } catch (err) {
+    console.warn(
+      '[Audit] listAllSuppressions scan failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return out;
+}
+
+/**
+ * Aggregated payload the /_admin/audit tab fetches in one round-trip.
+ * Each section reuses the canonical KV namespace for its data type;
+ * the admin tab does not introduce a parallel storage convention.
+ */
+export interface AuditOverview {
+  subscriptions: AuditSubscription[];
+  recentRuns: AuditRunSummary[];
+  suppressions: SuppressionEntry[];
+}
+
+export async function getAuditOverview(
+  kv: KVNamespace | undefined,
+  options: { runLimit?: number } = {},
+): Promise<AuditOverview> {
+  if (!kv) {
+    return { subscriptions: [], recentRuns: [], suppressions: [] };
+  }
+  const [subscriptions, recentRuns, suppressions] = await Promise.all([
+    listAllSubscriptions(kv),
+    listRecentRuns(kv, options.runLimit ?? 20),
+    listAllSuppressions(kv),
+  ]);
+  return { subscriptions, recentRuns, suppressions };
 }

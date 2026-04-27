@@ -1,0 +1,77 @@
+===
+audit overview returns the empty shape on a fresh deployment
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s "$WORKER_URL/api/admin/audit/overview" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.subscriptions is array
+* result.recentRuns is array
+* result.suppressions is array
+
+===
+audit overview honors the limit query param
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s "$WORKER_URL/api/admin/audit/overview?limit=5" | jq '.recentRuns | length'
+---
+{{ count: number }}
+---
+where
+* count <= 5
+
+===
+delete non-existent subscription is idempotent (returns removed=false, not 404)
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+./curl-auth -s -X DELETE "$WORKER_URL/api/admin/audit/subscriptions/e2e-user/octocat/no-such-repo" | jq .
+---
+{{ result: json object }}
+---
+where
+* result.removed == false
+
+===
+delete subscription with key-injection attempt is rejected (400)
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+# %3A is URL-encoded ':' — admin path-segment validation must reject so
+# the segment can't synthesize a key outside the audit:* namespace.
+HTTP_CODE=$(./curl-auth -s -o /dev/null -w "%{http_code}" -X DELETE "$WORKER_URL/api/admin/audit/subscriptions/e2e-user/octocat/demo%3Aevil")
+echo "$HTTP_CODE"
+---
+{{ code: number }}
+---
+where
+* code == 400
+
+===
+delete suppression with malformed findingId is rejected (400)
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+HTTP_CODE=$(./curl-auth -s -o /dev/null -w "%{http_code}" -X DELETE "$WORKER_URL/api/admin/audit/suppressions/e2e-user/octocat/demo/NOT-A-VALID-ID")
+echo "$HTTP_CODE"
+---
+{{ code: number }}
+---
+where
+* code == 400
+
+===
+admin SPA serves the Audit tab route
+%require
+===
+WORKER_URL=$(cat "$CCTR_FIXTURE_DIR/worker-url.txt")
+# /_admin/audit is handled client-side; the worker serves index.html
+# for any /_admin/* path so the SPA can route to AuditPage.
+./curl-auth -s -o /dev/null -w "%{http_code}" "$WORKER_URL/_admin/audit"
+---
+{{ code: number }}
+---
+where
+* code == 200
