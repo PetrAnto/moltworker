@@ -22,7 +22,7 @@
 
 import type { SkillRequest, SkillResult, SkillMeta } from '../types';
 import type { AuditFinding, AuditPlan, AuditRun, Depth, Lens, RepoProfile } from './types';
-import { MVP_LENSES, findingPriority, isLens, isDepth } from './types';
+import { MVP_LENSES, findingPriority, isLens, isDepth, isFindingId } from './types';
 import { scout, fetchFileContents, parseRepoCoords } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
 import {
@@ -466,6 +466,12 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   let llmCalls = 0;
   let promptTokens = 0;
   let completionTokens = 0;
+  // Aggregate sanitizer notices across lenses so the run record can
+  // surface "the pre-prompt pre-pass redacted N item(s)" — see
+  // AuditRunSanitization in types.ts. Notices include path attribution
+  // so the operator can see where injection attempts came from, not
+  // just a counter on telemetry.
+  const allSanitizationNotices: import('./sanitize').SanitizeNotice[] = [];
   for (const lens of plan.lenses) {
     const lensPaths = new Set(plan.selections[lens]);
     const lensSnippets = extracted.snippets.filter(
@@ -485,6 +491,9 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       completionTokens += result.telemetry.tokens.completion;
     }
     findings.push(...result.findings);
+    if (result.sanitizationNotices.length > 0) {
+      allSanitizationNotices.push(...result.sanitizationNotices);
+    }
   }
 
   // Apply per-repo suppressions. We persist ALL validated findings (so
@@ -511,12 +520,28 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     return findingPriority(b) - findingPriority(a);
   });
 
+  // Build the sanitization summary for the run record. Cap samples at 5
+  // to keep the persisted record bounded under adversarial inputs (a
+  // hostile repo could plant thousands of injection markers; the count
+  // captures everything but we only show a few representative samples).
+  const sanitization =
+    allSanitizationNotices.length > 0
+      ? {
+          count: allSanitizationNotices.length,
+          // Dedup by (kind, label, path) so a snippet with the same marker
+          // repeated 50 times shows once. Order preserved → first occurrence
+          // wins, which biases samples toward earlier-scanned files.
+          samples: dedupSanitizationSamples(allSanitizationNotices).slice(0, 5),
+        }
+      : undefined;
+
   const run: AuditRun = {
     runId: crypto.randomUUID(),
     repo: { owner: profile.owner, name: profile.repo, sha: profile.sha },
     lenses: plan.lenses,
     depth: plan.depth,
     findings: ranked,
+    sanitization,
     telemetry: {
       durationMs: Date.now() - ctx.start,
       llmCalls,
@@ -809,11 +834,53 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
     }
   }
 
+  appendSanitizationSummary(lines, run.sanitization);
+
   const t = run.telemetry;
   lines.push(
     `Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`,
   );
   return lines.join('\n');
+}
+
+/**
+ * Render the pre-prompt sanitizer's summary into a runs body. Shared by
+ * formatRun (Telegram top-5 view) and formatRunFull (/audit export) so
+ * the operator sees the same masking summary in both places. Silent
+ * when no notices were raised — the steady-state run report has no
+ * extra noise.
+ */
+function appendSanitizationSummary(lines: string[], s: AuditRun['sanitization']): void {
+  if (!s || s.count === 0) return;
+  lines.push(`🛡️ Pre-prompt sanitizer redacted ${s.count} item(s) before LLM analysis:`);
+  for (const sample of s.samples) {
+    const where = sample.path ? ` @ ${sample.path}` : '';
+    lines.push(`  - ${sample.label}${where}`);
+  }
+  if (s.count > s.samples.length) {
+    lines.push(`  … +${s.count - s.samples.length} more (samples capped to ${s.samples.length}).`);
+  }
+  lines.push('');
+}
+
+/**
+ * De-duplicate sanitizer notices by (kind, label, path) so a single
+ * marker repeated many times in one file shows up once. Order is
+ * preserved so the first-seen occurrences (typically earlier in the
+ * scan, i.e. higher in the directory) become the samples.
+ */
+function dedupSanitizationSamples(
+  notices: ReadonlyArray<{ kind: string; label: string; path?: string }>,
+): Array<{ kind: string; label: string; path?: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ kind: string; label: string; path?: string }> = [];
+  for (const n of notices) {
+    const key = `${n.kind}|${n.label}|${n.path ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ kind: n.kind, label: n.label, path: n.path });
+  }
+  return out;
 }
 
 /**
@@ -999,7 +1066,7 @@ export async function resolveFix(
   if (!UUID_RE.test(runId)) {
     return { ok: false, error: `Not a valid run id: "${runId.slice(0, 80)}"` };
   }
-  if (!/^[a-z]+-[a-z0-9]+$/.test(findingId)) {
+  if (!isFindingId(findingId)) {
     return { ok: false, error: `Not a valid finding id: "${findingId.slice(0, 80)}"` };
   }
   const run = await getCachedAuditRun(kv, userId, runId);
@@ -1103,9 +1170,9 @@ async function handleSuppress(
     return errorResult(`Not a valid run id: "${runId.slice(0, 80)}"`);
   }
   // findingId shape comes from validator.ts: `${lens}-${rolling-hash-base36}`.
-  // Tight pattern below — rejects anything that doesn't look like one of our
-  // own ids (defense against stale/forged callbacks).
-  if (!/^[a-z]+-[a-z0-9]+$/.test(findingId)) {
+  // Validator lives in types.ts (FINDING_ID_RE) so audit.ts, api.ts, and any
+  // future caller share one definition — defense against stale/forged callbacks.
+  if (!isFindingId(findingId)) {
     return errorResult(`Not a valid finding id: "${findingId.slice(0, 80)}"`);
   }
 
@@ -1199,6 +1266,8 @@ function formatRunFull(run: AuditRun): string {
     lines.push('');
     suppressed.forEach((f, idx) => appendFinding(lines, f, idx + 1, true));
   }
+
+  appendSanitizationSummary(lines, run.sanitization);
 
   const t = run.telemetry;
   lines.push(

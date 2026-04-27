@@ -253,6 +253,12 @@ export interface AuditOverviewResponse {
   subscriptions: AuditSubscriptionRow[];
   recentRuns: AuditRunRow[];
   suppressions: AuditSuppressionRow[];
+  /** Per-section truncation flags. The server caps each scan to keep
+   *  admin-endpoint KV reads bounded; when a cap fires the UI can
+   *  surface a "showing first N of …" hint to the operator. */
+  truncated: {
+    suppressions: boolean;
+  };
 }
 
 export async function fetchAuditOverview(limit = 20): Promise<AuditOverviewResponse> {

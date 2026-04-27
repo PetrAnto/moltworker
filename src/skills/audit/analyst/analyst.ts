@@ -20,7 +20,7 @@ import { ANALYST_SYSTEM_PROMPT, lensUserPromptHeader, buildEvidenceBlock } from 
 import { validateAnalystResponse, type ValidatorIssue } from './validator';
 import type { AuditFinding, ExtractedSnippet, Lens, RepoProfile } from '../types';
 import type { MoltbotEnv } from '../../../types';
-import { sanitizeSnippets, sanitizeCodeScanningAlerts } from '../sanitize';
+import { sanitizeSnippets, sanitizeCodeScanningAlerts, type SanitizeNotice } from '../sanitize';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -48,6 +48,15 @@ export interface AnalyzeResult {
   /** Validator issues (paths the LLM forged, malformed entries, etc.).
    *  Surfaced for telemetry — non-empty doesn't mean failure. */
   issues: ValidatorIssue[];
+  /**
+   * Notices the pre-prompt sanitizer raised on this lens's evidence
+   * (snippets + code-scanning alerts). Empty array is the steady state.
+   * Returned alongside the count in telemetry so the audit handler can
+   * aggregate across lenses and surface samples in the AuditRun
+   * record (see AuditRunSanitization in types.ts) — operator visibility
+   * matters more than telemetry-only counters.
+   */
+  sanitizationNotices: SanitizeNotice[];
   telemetry: {
     durationMs: number;
     model: string;
@@ -55,10 +64,9 @@ export interface AnalyzeResult {
     llmCalled: boolean;
     tokens?: { prompt: number; completion: number };
     /** Count of injection / role-tag / base64 / zero-width notices the
-     *  pre-prompt sanitizer raised on this run's evidence. Zero is the
-     *  expected steady state; a non-zero count means a repo planted at
-     *  least one item we masked before the LLM saw it. Surfaced here so
-     *  the operator can spot sustained injection attempts across runs. */
+     *  pre-prompt sanitizer raised on this run's evidence. Mirrors
+     *  sanitizationNotices.length above, kept for back-compat with
+     *  callers that only read telemetry. */
     sanitizationNotices: number;
   };
 }
@@ -77,6 +85,7 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
     return {
       findings: [],
       issues: [],
+      sanitizationNotices: [],
       telemetry: {
         durationMs: Date.now() - start,
         model,
@@ -97,7 +106,8 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
   const { alerts: cleanAlerts, notices: alertNotices } = sanitizeCodeScanningAlerts(
     opts.profile.codeScanningAlerts ?? [],
   );
-  const sanitizationNotices = snippetNotices.length + alertNotices.length;
+  const sanitizationNoticeList = [...snippetNotices, ...alertNotices];
+  const sanitizationNotices = sanitizationNoticeList.length;
   if (sanitizationNotices > 0) {
     // One info line per run is enough — operators get the count via
     // telemetry; the log is for spot-debugging when the notice count
@@ -148,6 +158,7 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
     return {
       findings: [],
       issues: [{ kind: 'llm_call_failed', message }],
+      sanitizationNotices: sanitizationNoticeList,
       telemetry: {
         durationMs: Date.now() - start,
         model,
@@ -165,6 +176,7 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
   return {
     findings,
     issues,
+    sanitizationNotices: sanitizationNoticeList,
     telemetry: {
       durationMs: Date.now() - start,
       model,
