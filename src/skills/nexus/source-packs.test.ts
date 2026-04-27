@@ -57,19 +57,24 @@ describe('source registry', () => {
 });
 
 describe('synthesis prompts', () => {
-  // Both synth prompts must teach name-based citations and forbid index
-  // citations — the [Source N] form caused a single-source dossier to cite
-  // a hallucinated [Source 2] in production.
-  it('synthesize prompt forbids [Source N] index citations', () => {
-    expect(NEXUS_SYNTHESIZE_PROMPT).toMatch(/CITATION RULES/);
-    expect(NEXUS_SYNTHESIZE_PROMPT).toMatch(/source NAME/);
-    expect(NEXUS_SYNTHESIZE_PROMPT).toMatch(/Do NOT use index-style citations/);
+  // Both synth prompts must teach name-based citations. The previous
+  // [Source N] index format caused a single-source dossier to cite a
+  // hallucinated [Source 2] in production, and an over-strict rewrite
+  // ("Do NOT...") then made kimi26or return an empty synthesis. The
+  // current prompts use positive guidance only and rely on the user-prompt
+  // "Available sources: ..." line to anchor the LLM.
+  it('synthesize prompt teaches name-based citations', () => {
+    expect(NEXUS_SYNTHESIZE_PROMPT).toMatch(/Cite sources by name/);
+    expect(NEXUS_SYNTHESIZE_PROMPT).toMatch(/\[Brave Search\]/);
+    // Should NOT carry the prior over-strict "Do NOT" form that triggered
+    // empty completions; positive guidance is the contract now.
+    expect(NEXUS_SYNTHESIZE_PROMPT).not.toMatch(/Do NOT use index-style/);
   });
 
-  it('decision prompt forbids [Source N] index citations', () => {
-    expect(NEXUS_DECISION_PROMPT).toMatch(/CITATION RULES/);
-    expect(NEXUS_DECISION_PROMPT).toMatch(/source NAME/);
-    expect(NEXUS_DECISION_PROMPT).toMatch(/Do NOT use index-style citations/);
+  it('decision prompt teaches name-based citations', () => {
+    expect(NEXUS_DECISION_PROMPT).toMatch(/Cite sources by name/);
+    expect(NEXUS_DECISION_PROMPT).toMatch(/\[Brave Search\]/);
+    expect(NEXUS_DECISION_PROMPT).not.toMatch(/Do NOT use index-style/);
   });
 });
 

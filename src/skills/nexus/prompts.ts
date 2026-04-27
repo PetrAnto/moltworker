@@ -67,13 +67,9 @@ export const NEXUS_SYNTHESIZE_PROMPT = `Synthesize these research findings into 
 Structure your response as evidence-backed paragraphs. Cite sources inline.
 Flag any conflicting information. Be explicit about confidence.
 
-CITATION RULES:
-- Cite each claim with the source NAME in brackets, e.g. [Brave Search],
-  [OpenAlex], [GitHub]. Match the names exactly as they appear in the
-  evidence headers above each block.
-- Do NOT invent citations. If only one source is provided, every citation
-  must reference that single source.
-- Do NOT use index-style citations like [Source 1] or [1].
+Cite sources by name in brackets, matching the names at the top of each
+evidence block — e.g. [Brave Search], [OpenAlex], [GitHub]. Use only the
+source names you've been given.
 
 Respond with a JSON object:
 {
@@ -82,13 +78,9 @@ Respond with a JSON object:
 
 export const NEXUS_DECISION_PROMPT = `Analyze this topic as a decision. Gather evidence for and against, identify risks, and make a recommendation.
 
-CITATION RULES:
-- Cite each claim with the source NAME in brackets, e.g. [Brave Search],
-  [OpenAlex], [GitHub]. Match the names exactly as they appear in the
-  evidence headers above each block.
-- Do NOT invent citations. If only one source is provided, every citation
-  must reference that single source.
-- Do NOT use index-style citations like [Source 1] or [1].
+Cite sources by name in brackets, matching the names at the top of each
+evidence block — e.g. [Brave Search], [OpenAlex], [GitHub]. Use only the
+source names you've been given.
 
 Respond with a JSON object:
 {
