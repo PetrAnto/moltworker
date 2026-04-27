@@ -9,6 +9,8 @@
 import type { SkillResult } from '../types';
 import type { AuditFinding, AuditRun } from '../audit/types';
 import { isImageBrief, isVideoBrief, type ImageBrief, type VideoBrief } from '../lyra/media-types';
+import { isNexusDossier, type NexusDossier } from '../nexus/types';
+import { computeConfidence, confidenceLabel } from '../nexus/evidence';
 
 /** Telegram's message character limit. */
 const TELEGRAM_MAX_LENGTH = 4096;
@@ -137,12 +139,65 @@ function renderHeadlines(result: SkillResult): TelegramChunk {
 function renderDossier(result: SkillResult): TelegramChunk {
   const lines: string[] = [];
   lines.push('<b>Research Dossier</b>\n');
-  lines.push(escapeHtml(result.body));
+
+  // Prefer rendering from the structured dossier so source URLs go through
+  // explicit <a> tags. Telegram's auto-linker does NOT decode HTML entities
+  // inside an auto-linked URL, so escapeHtml-ing the raw body would surface
+  // literal "&amp;" inside ?query=...&tags= URLs and produce broken links.
+  const dossier = isNexusDossier(result.data) ? result.data : null;
+  if (dossier) {
+    lines.push(escapeHtml(`Research: ${dossier.query}`));
+    const confidence = confidenceLabel(computeConfidence(dossier.evidence));
+    lines.push(escapeHtml(`${confidence} (${dossier.evidence.length} sources, ${dossier.mode} mode)\n`));
+
+    lines.push(escapeHtml(dossier.synthesis));
+
+    if (dossier.decision) {
+      lines.push('');
+      lines.push('<b>--- Decision Analysis ---</b>');
+      if (dossier.decision.pros.length > 0) {
+        lines.push('\n<b>Pros:</b>');
+        dossier.decision.pros.forEach(p => lines.push(escapeHtml(`  + ${p}`)));
+      }
+      if (dossier.decision.cons.length > 0) {
+        lines.push('\n<b>Cons:</b>');
+        dossier.decision.cons.forEach(c => lines.push(escapeHtml(`  - ${c}`)));
+      }
+      if (dossier.decision.risks.length > 0) {
+        lines.push('\n<b>Risks:</b>');
+        dossier.decision.risks.forEach(r => lines.push(escapeHtml(`  ! ${r}`)));
+      }
+      lines.push(`\n<b>Recommendation:</b> ${escapeHtml(dossier.decision.recommendation)}`);
+    }
+
+    lines.push('\n<b>Sources:</b>');
+    lines.push(renderEvidenceLinks(dossier));
+  } else {
+    // Fallback when data is missing \u2014 best-effort plain-text body. URLs in
+    // this path may still be entity-mangled, but this branch shouldn't fire
+    // for normal nexus output.
+    lines.push(escapeHtml(result.body));
+  }
 
   const tel = result.telemetry;
-  lines.push(`\n<i>${tel.model} \u2022 ${tel.llmCalls} calls \u2022 ${(tel.durationMs / 1000).toFixed(1)}s</i>`);
+  lines.push(`\n<i>${escapeHtml(tel.model)} \u2022 ${tel.llmCalls} calls \u2022 ${(tel.durationMs / 1000).toFixed(1)}s</i>`);
 
   return { text: lines.join('\n'), parseMode: 'HTML' };
+}
+
+function renderEvidenceLinks(dossier: NexusDossier): string {
+  if (dossier.evidence.length === 0) return escapeHtml('No sources found.');
+  return dossier.evidence
+    .map(e => {
+      const head = `\u2022 ${escapeHtml(e.source)} (${escapeHtml(e.confidence)})`;
+      if (!e.url) return head;
+      // Anchor href values still need entity-escaping per the HTML spec \u2014
+      // and Telegram's HTML parser does decode &amp; back to & inside
+      // attributes. So we escape both the href attribute and the visible
+      // text identically.
+      return `${head} \u2014 <a href="${escapeAttr(e.url)}">${escapeHtml(e.url)}</a>`;
+    })
+    .join('\n');
 }
 
 function renderImageBrief(result: SkillResult): TelegramChunk {
@@ -294,6 +349,10 @@ function escapeHtml(text: string): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function escapeAttr(text: string): string {
+  return escapeHtml(text).replace(/"/g, '&quot;');
 }
 
 /**
