@@ -292,23 +292,33 @@ export async function fetchSources(
   env: MoltbotEnv,
   userId?: string,
 ): Promise<{ evidence: EvidenceItem[]; toolCalls: number }> {
-  const fetchers = sourceNames
-    .map(name => SOURCE_REGISTRY[name])
-    .filter((f): f is SourceFetcher => f !== undefined);
+  // Track which classifier-named source corresponds to each settled result
+  // so failure logs name the actual source (not just an index). Filter out
+  // unknown registry names but keep the parallel name list aligned with the
+  // fetchers list for the post-settle log.
+  const named = sourceNames
+    .map(name => ({ name, fn: SOURCE_REGISTRY[name] }))
+    .filter((f): f is { name: string; fn: SourceFetcher } => f.fn !== undefined);
 
-  if (fetchers.length === 0) {
+  const unknown = sourceNames.filter(n => !SOURCE_REGISTRY[n]);
+  if (unknown.length > 0) {
+    console.warn(`[Nexus] classifier asked for unknown sources, dropped: ${JSON.stringify(unknown)}`);
+  }
+
+  if (named.length === 0) {
     // Fallback: web search
-    fetchers.push(fetchWebSearch);
+    named.push({ name: 'webSearch', fn: fetchWebSearch });
   }
 
   const results = await Promise.allSettled(
-    fetchers.map(f => f(query, env, userId)),
+    named.map(n => n.fn(query, env, userId)),
   );
 
   const evidence: EvidenceItem[] = [];
   let toolCalls = 0;
 
-  for (const result of results) {
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
     toolCalls++;
     if (result.status === 'fulfilled') {
       evidence.push({
@@ -317,8 +327,13 @@ export async function fetchSources(
         data: result.value.data,
         confidence: result.value.confidence,
       });
+    } else {
+      // Graceful degradation — failed sources don't break the dossier, but
+      // log so we can tell whether a thin source list is "classifier picked
+      // narrowly" vs. "classifier picked broadly but everything 4xx'd".
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      console.warn(`[Nexus] source "${named[i].name}" failed: ${reason}`);
     }
-    // Rejected sources are silently skipped (graceful degradation)
   }
 
   return { evidence, toolCalls };

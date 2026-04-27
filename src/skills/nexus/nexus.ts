@@ -180,8 +180,14 @@ async function executeResearch(
     ? classification.sources
     : ['webSearch', 'wikipedia']; // Fallback
 
+  // Log so production debugging doesn't require simulate replay — when a
+  // dossier comes back with fewer sources than expected, the worker log
+  // shows which ones the classifier picked vs. which ones produced evidence.
+  console.log(`[Nexus] classifier picked sources for "${query.slice(0, 80)}": ${JSON.stringify(sourceNames)}`);
+
   // 3. Fetch sources in parallel
   const { evidence, toolCalls } = await fetchSources(query, sourceNames, request.env, request.userId);
+  console.log(`[Nexus] sources returned evidence: ${JSON.stringify(evidence.map(e => e.source))} (${evidence.length}/${sourceNames.length})`);
 
   if (evidence.length === 0) {
     return makeError(request, 'Could not retrieve any sources for this query. Try rephrasing.');

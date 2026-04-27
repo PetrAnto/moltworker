@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { isToolError, getAvailableSources } from './source-packs';
-import { NEXUS_CLASSIFY_PROMPT } from './prompts';
+import { NEXUS_CLASSIFY_PROMPT, NEXUS_SYNTHESIZE_PROMPT, NEXUS_DECISION_PROMPT } from './prompts';
 
 describe('isToolError', () => {
   it('matches the canonical "Error: ..." prefix', () => {
@@ -53,6 +53,23 @@ describe('source registry', () => {
     for (const name of sources) {
       expect(NEXUS_CLASSIFY_PROMPT).toContain(name);
     }
+  });
+});
+
+describe('synthesis prompts', () => {
+  // Both synth prompts must teach name-based citations and forbid index
+  // citations — the [Source N] form caused a single-source dossier to cite
+  // a hallucinated [Source 2] in production.
+  it('synthesize prompt forbids [Source N] index citations', () => {
+    expect(NEXUS_SYNTHESIZE_PROMPT).toMatch(/CITATION RULES/);
+    expect(NEXUS_SYNTHESIZE_PROMPT).toMatch(/source NAME/);
+    expect(NEXUS_SYNTHESIZE_PROMPT).toMatch(/Do NOT use index-style citations/);
+  });
+
+  it('decision prompt forbids [Source N] index citations', () => {
+    expect(NEXUS_DECISION_PROMPT).toMatch(/CITATION RULES/);
+    expect(NEXUS_DECISION_PROMPT).toMatch(/source NAME/);
+    expect(NEXUS_DECISION_PROMPT).toMatch(/Do NOT use index-style citations/);
   });
 });
 

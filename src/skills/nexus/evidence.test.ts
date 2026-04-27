@@ -47,14 +47,29 @@ describe('confidenceLabel', () => {
 });
 
 describe('formatEvidenceForLLM', () => {
-  it('formats evidence with source citations', () => {
+  it('formats evidence with name-based citation tokens', () => {
     const evidence: EvidenceItem[] = [
       { source: 'Wikipedia', url: 'https://wiki.example', data: 'Facts here', confidence: 'high' },
     ];
     const text = formatEvidenceForLLM(evidence);
-    expect(text).toContain('Source 1: Wikipedia');
+    // Citation token is the bracketed source name — what the synthesis
+    // LLM is told to mirror in its output. NOT [Source 1].
+    expect(text).toContain('[Wikipedia]');
     expect(text).toContain('https://wiki.example');
     expect(text).toContain('Facts here');
+    expect(text).not.toMatch(/\[Source\s+\d+/);
+  });
+
+  it('separates multiple sources and tags each by name', () => {
+    const evidence: EvidenceItem[] = [
+      { source: 'Brave Search', data: 'a', confidence: 'medium' },
+      { source: 'OpenAlex', data: 'b', confidence: 'high' },
+    ];
+    const text = formatEvidenceForLLM(evidence);
+    expect(text).toContain('[Brave Search]');
+    expect(text).toContain('[OpenAlex]');
+    expect(text).toContain('---');
+    expect(text).not.toMatch(/\[Source\s+\d+/);
   });
 });
 
