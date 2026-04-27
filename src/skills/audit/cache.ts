@@ -75,11 +75,9 @@ export async function cacheAuditRun(
 ): Promise<void> {
   if (!kv) return;
   try {
-    await kv.put(
-      runCacheKey(userId, run.runId),
-      JSON.stringify(run),
-      { expirationTtl: RUN_TTL_SECONDS },
-    );
+    await kv.put(runCacheKey(userId, run.runId), JSON.stringify(run), {
+      expirationTtl: RUN_TTL_SECONDS,
+    });
   } catch (err) {
     console.warn('[Audit] cacheAuditRun failed:', err instanceof Error ? err.message : err);
   }
@@ -346,4 +344,155 @@ export async function deleteFixDraft(
   } catch {
     // best-effort — TTL reaps if delete failed
   }
+}
+
+// ---------------------------------------------------------------------------
+// Audit subscriptions (Phase 1, Slice A — scheduled audits)
+// ---------------------------------------------------------------------------
+//
+// Storage layout:
+//   audit:sub:{userId}:{owner}/{repo}  →  AuditSubscription JSON
+//
+// One key per (user, repo). No TTL — subscriptions are explicit user
+// choices and shouldn't silently expire. The cron handler scans the
+// `audit:sub:` prefix on each 6h tick, dispatches due audits via the
+// existing TaskProcessor path, and updates `lastRunAt` / `lastRunId`
+// (which references runs in the existing `audit:run:` storage — no
+// parallel run schema).
+
+const SUB_PREFIX = 'audit:sub:';
+
+export interface AuditSubscription {
+  userId: string;
+  owner: string;
+  repo: string;
+  /** Where to deliver the report. Telegram-only for v1; the schema is
+   *  stable enough to add other transports later by extending the union. */
+  transport: 'telegram';
+  chatId: number;
+  /** Audit knobs — passed through to the dispatched run. */
+  branch?: string;
+  lens?: string; // single lens; undefined → all MVP lenses
+  depth: 'quick' | 'standard' | 'deep';
+  /** Cadence. Cron tick is 6h, so daily can drift up to ~6h late and
+   *  weekly up to ~6h late — accepted trade-off vs adding a tighter cron. */
+  interval: 'daily' | 'weekly';
+  createdAt: string; // ISO
+  lastRunAt: string | null; // ISO; null until first dispatch
+  lastRunId: string | null; // points into audit:run:{userId}:{runId}
+}
+
+export function subscriptionKey(userId: string, owner: string, repo: string): string {
+  return `${SUB_PREFIX}${userId}:${owner.toLowerCase()}/${repo.toLowerCase()}`;
+}
+
+export async function setAuditSubscription(
+  kv: KVNamespace | undefined,
+  sub: AuditSubscription,
+): Promise<boolean> {
+  if (!kv) return false;
+  try {
+    await kv.put(subscriptionKey(sub.userId, sub.owner, sub.repo), JSON.stringify(sub));
+    return true;
+  } catch (err) {
+    console.warn('[Audit] setAuditSubscription failed:', err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+
+export async function getAuditSubscription(
+  kv: KVNamespace | undefined,
+  userId: string,
+  owner: string,
+  repo: string,
+): Promise<AuditSubscription | null> {
+  if (!kv) return null;
+  try {
+    return (await kv.get(subscriptionKey(userId, owner, repo), 'json')) as AuditSubscription | null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteAuditSubscription(
+  kv: KVNamespace | undefined,
+  userId: string,
+  owner: string,
+  repo: string,
+): Promise<boolean> {
+  if (!kv) return false;
+  const key = subscriptionKey(userId, owner, repo);
+  try {
+    const existing = await kv.get(key);
+    if (existing === null) return false;
+    await kv.delete(key);
+    return true;
+  } catch (err) {
+    console.warn(
+      '[Audit] deleteAuditSubscription failed:',
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
+/** List one user's subscriptions. Used by /audit subs. */
+export async function listUserSubscriptions(
+  kv: KVNamespace | undefined,
+  userId: string,
+): Promise<AuditSubscription[]> {
+  if (!kv) return [];
+  const prefix = `${SUB_PREFIX}${userId}:`;
+  return readSubscriptions(kv, prefix);
+}
+
+/** List every subscription across all users. Used by the cron handler. */
+export async function listAllSubscriptions(
+  kv: KVNamespace | undefined,
+): Promise<AuditSubscription[]> {
+  if (!kv) return [];
+  return readSubscriptions(kv, SUB_PREFIX);
+}
+
+async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<AuditSubscription[]> {
+  const out: AuditSubscription[] = [];
+  let cursor: string | undefined;
+  try {
+    for (;;) {
+      const page = await kv.list({ prefix, cursor });
+      for (const k of page.keys) {
+        try {
+          const sub = (await kv.get(k.name, 'json')) as AuditSubscription | null;
+          if (sub) out.push(sub);
+        } catch (err) {
+          // Skip malformed entries rather than aborting the scan; the
+          // cron path needs to be robust to partial corruption.
+          console.warn(
+            `[Audit] readSubscriptions skip ${k.name}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+      if (page.list_complete) break;
+      cursor = page.cursor;
+      if (!cursor) break;
+    }
+  } catch (err) {
+    console.warn(
+      '[Audit] readSubscriptions list failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return out;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Returns true if the subscription is due to run again at `nowMs`. */
+export function isSubscriptionDue(sub: AuditSubscription, nowMs: number): boolean {
+  if (!sub.lastRunAt) return true;
+  const lastMs = Date.parse(sub.lastRunAt);
+  if (Number.isNaN(lastMs)) return true; // corrupt timestamp → run anyway
+  const intervalMs = sub.interval === 'daily' ? DAY_MS : 7 * DAY_MS;
+  return nowMs - lastMs >= intervalMs;
 }
