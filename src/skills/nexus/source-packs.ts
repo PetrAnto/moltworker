@@ -109,6 +109,151 @@ async function fetchFinance(query: string, env: MoltbotEnv, userId?: string): Pr
 }
 
 // ---------------------------------------------------------------------------
+// Extended sources — added 2026-04-27 to broaden coverage beyond the original
+// 7-source set. Each is keyless, JSON-friendly, and graceful-degrades via
+// isToolError() so a 4xx/5xx never inflates the final source count.
+// ---------------------------------------------------------------------------
+
+async function fetchStackExchange(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // /search/excerpts returns title + body excerpt + score per hit, which is
+  // higher signal for synthesis than just titles. Stack Overflow is the
+  // default site; Stack Exchange has 170+ sister sites (cooking, photography,
+  // math, writing, etc.) but cross-site search needs site-id and complicates
+  // the call — leave that to a future "site picker" pass.
+  const seUrl = `https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q=${encodeURIComponent(query)}&site=stackoverflow&pagesize=5`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: seUrl }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  if (/"items"\s*:\s*\[\s*\]/.test(result.content)) {
+    throw new Error('Stack Exchange: no matching questions');
+  }
+  return { data: result.content.slice(0, 3000), url: seUrl, source: 'Stack Exchange', confidence: 'high' };
+}
+
+async function fetchGitHub(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // Goes through github_api so the request carries our PAT and avoids the
+  // 60/hr unauth limit shared across all CF egress IPs. Repository search
+  // by stars is a reasonable default — relevant projects + descriptions +
+  // language for any tool/library/concept query.
+  const endpoint = `/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=5`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('github_api', { endpoint, method: 'GET' }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  if (/"total_count"\s*:\s*0\b/.test(result.content)) {
+    throw new Error('GitHub: no matching repositories');
+  }
+  const browseUrl = `https://github.com/search?q=${encodeURIComponent(query)}&type=repositories`;
+  return { data: result.content.slice(0, 3000), url: browseUrl, source: 'GitHub', confidence: 'high' };
+}
+
+async function fetchOpenAlex(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // OpenAlex polite-pool: include `mailto=` for faster service. No API key
+  // required for normal use. abstract_inverted_index would need decoding —
+  // skip for v1; titles + DOIs + citation counts are enough signal for the
+  // synthesis LLM.
+  const fields = 'title,doi,publication_year,cited_by_count,authorships,open_access';
+  const oaUrl = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per_page=5&select=${fields}&mailto=research@moltworker.dev`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: oaUrl }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  if (/"results"\s*:\s*\[\s*\]/.test(result.content)) {
+    throw new Error('OpenAlex: no matching works');
+  }
+  return { data: result.content.slice(0, 3000), url: oaUrl, source: 'OpenAlex', confidence: 'high' };
+}
+
+async function fetchArxiv(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // arXiv returns Atom XML, not JSON. fetchUrl's HTML stripper checks for
+  // <! / <html prefixes and skips raw <?xml documents — so we pass the Atom
+  // through as-is and the synthesis LLM parses titles/abstracts inline.
+  const arxivUrl = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=5`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: arxivUrl }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  // Atom uses <opensearch:totalResults>0</...> when nothing matches.
+  if (/<opensearch:totalResults[^>]*>0<\/opensearch:totalResults>/.test(result.content)) {
+    throw new Error('arXiv: no matching papers');
+  }
+  return { data: result.content.slice(0, 3000), url: arxivUrl, source: 'arXiv', confidence: 'high' };
+}
+
+async function fetchWikidata(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // wbsearchentities is the simplest Wikidata search — returns id+label+
+  // description per match. Avoids constructing SPARQL while still giving
+  // the synthesis LLM authoritative entity hooks (Q-IDs) it can cite.
+  const wdUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(query)}&language=en&format=json&limit=10&type=item`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: wdUrl }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  if (/"search"\s*:\s*\[\s*\]/.test(result.content)) {
+    throw new Error('Wikidata: no matching entities');
+  }
+  return { data: result.content.slice(0, 3000), url: wdUrl, source: 'Wikidata', confidence: 'high' };
+}
+
+async function fetchInternetArchive(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // advancedsearch covers texts, audio, video, images, web archives —
+  // everything IA hosts. fl[]= shapes the response down to the fields the
+  // LLM needs (saves tokens vs. the default verbose schema).
+  const fields = 'fl[]=identifier&fl[]=title&fl[]=description&fl[]=mediatype&fl[]=date';
+  const iaUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}&output=json&rows=10&${fields}`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: iaUrl }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  if (/"numFound"\s*:\s*0\b/.test(result.content)) {
+    throw new Error('Internet Archive: no matches');
+  }
+  return { data: result.content.slice(0, 3000), url: iaUrl, source: 'Internet Archive', confidence: 'medium' };
+}
+
+async function fetchWorldBank(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // World Bank's indicator-metadata search — returns indicator codes,
+  // names, sources, topics. For actual time-series the LLM would need a
+  // follow-up call with a specific indicator code, but for "is there a
+  // World Bank dataset on X" research questions the metadata is enough.
+  const wbUrl = `https://api.worldbank.org/v2/sources/2/indicators?format=json&search=${encodeURIComponent(query)}&per_page=10`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: wbUrl }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  // WB's v2 response is a 2-element array: [meta, items]. Empty data
+  // surfaces as `[ {...meta...}, [] ]` or `"total":0` in the meta.
+  if (/"total"\s*:\s*0\b/.test(result.content) || /,\s*\[\s*\]\s*\]\s*$/.test(result.content.trim())) {
+    throw new Error('World Bank: no matching indicators');
+  }
+  return { data: result.content.slice(0, 3000), url: wbUrl, source: 'World Bank', confidence: 'high' };
+}
+
+async function fetchSecEdgar(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // EDGAR's full-text search of EDGAR filings. Heads-up: SEC's fair access
+  // policy requires a User-Agent identifying the requester with a contact
+  // email; the shared MoltworkerBot UA may get rate-limited or blocked. If
+  // this source consistently fails, the fix is to extend fetch_url with
+  // per-call header overrides — left as a follow-up.
+  const secUrl = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(query)}&forms=10-K&hits=5`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: secUrl }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  if (/"total"\s*:\s*\{\s*"value"\s*:\s*0\b/.test(result.content)) {
+    throw new Error('SEC EDGAR: no matching filings');
+  }
+  return { data: result.content.slice(0, 3000), url: secUrl, source: 'SEC EDGAR', confidence: 'high' };
+}
+
+async function fetchBluesky(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+  // Bluesky's public AppView endpoint — no auth needed, generous rate.
+  // Picked over Mastodon because Mastodon's status search requires auth
+  // and per-instance rate limits are unpredictable from shared cloud IPs.
+  const bskyUrl = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=10`;
+  const ctx = buildSkillToolContext(env, userId);
+  const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: bskyUrl }), ctx);
+  if (isToolError(result.content)) throw new Error(result.content);
+  if (/"posts"\s*:\s*\[\s*\]/.test(result.content)) {
+    throw new Error('Bluesky: no matching posts');
+  }
+  return { data: result.content.slice(0, 3000), url: bskyUrl, source: 'Bluesky', confidence: 'low' };
+}
+
+// ---------------------------------------------------------------------------
 // Source pack registry
 // ---------------------------------------------------------------------------
 
@@ -122,6 +267,16 @@ const SOURCE_REGISTRY: Record<string, SourceFetcher> = {
   news: fetchNews,
   crypto: fetchCrypto,
   finance: fetchFinance,
+  // Extended sources (2026-04-27)
+  stackExchange: fetchStackExchange,
+  github: fetchGitHub,
+  openalex: fetchOpenAlex,
+  arxiv: fetchArxiv,
+  wikidata: fetchWikidata,
+  internetArchive: fetchInternetArchive,
+  worldBank: fetchWorldBank,
+  secEdgar: fetchSecEdgar,
+  bluesky: fetchBluesky,
 };
 
 /** Fetch URL directly (for dossier entity research). */
