@@ -20,6 +20,7 @@ import { ANALYST_SYSTEM_PROMPT, lensUserPromptHeader, buildEvidenceBlock } from 
 import { validateAnalystResponse, type ValidatorIssue } from './validator';
 import type { AuditFinding, ExtractedSnippet, Lens, RepoProfile } from '../types';
 import type { MoltbotEnv } from '../../../types';
+import { sanitizeSnippets, sanitizeCodeScanningAlerts } from '../sanitize';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -53,6 +54,12 @@ export interface AnalyzeResult {
     /** True iff at least one snippet was sent to the LLM (i.e. work happened). */
     llmCalled: boolean;
     tokens?: { prompt: number; completion: number };
+    /** Count of injection / role-tag / base64 / zero-width notices the
+     *  pre-prompt sanitizer raised on this run's evidence. Zero is the
+     *  expected steady state; a non-zero count means a repo planted at
+     *  least one item we masked before the LLM saw it. Surfaced here so
+     *  the operator can spot sustained injection attempts across runs. */
+    sanitizationNotices: number;
   };
 }
 
@@ -70,18 +77,49 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
     return {
       findings: [],
       issues: [],
-      telemetry: { durationMs: Date.now() - start, model, llmCalled: false },
+      telemetry: {
+        durationMs: Date.now() - start,
+        model,
+        llmCalled: false,
+        sanitizationNotices: 0,
+      },
     };
   }
 
-  const treePathEnum = new Set(opts.profile.tree.map(t => t.path));
+  // Pre-prompt sanitization. Snippet text and code-scanning-alert
+  // descriptions are both untrusted (they come from arbitrary GitHub
+  // repos), so we redact obvious prompt-injection markers before they
+  // hit the LLM. See src/skills/audit/sanitize.ts for the full ruleset
+  // and the conservative-by-default rationale. Notices are aggregated
+  // and counted in telemetry; the cleaned text is what enters the
+  // evidence block.
+  const { snippets: cleanSnippets, notices: snippetNotices } = sanitizeSnippets(opts.snippets);
+  const { alerts: cleanAlerts, notices: alertNotices } = sanitizeCodeScanningAlerts(
+    opts.profile.codeScanningAlerts ?? [],
+  );
+  const sanitizationNotices = snippetNotices.length + alertNotices.length;
+  if (sanitizationNotices > 0) {
+    // One info line per run is enough — operators get the count via
+    // telemetry; the log is for spot-debugging when the notice count
+    // jumps unexpectedly.
+    const summary = [...snippetNotices, ...alertNotices]
+      .map((n) => `${n.label}@${n.path ?? '-'}`)
+      .slice(0, 5)
+      .join(', ');
+    console.warn(
+      `[Analyst] sanitizer redacted ${sanitizationNotices} item(s) on ${opts.lens} lens: ${summary}` +
+        (sanitizationNotices > 5 ? ` (+${sanitizationNotices - 5} more)` : ''),
+    );
+  }
+
+  const treePathEnum = new Set(opts.profile.tree.map((t) => t.path));
   const userPrompt = [
     lensUserPromptHeader(opts.lens),
     '',
     buildEvidenceBlock({
-      treePathEnum: opts.profile.tree.map(t => t.path),
-      snippets: opts.snippets,
-      codeScanningAlerts: opts.profile.codeScanningAlerts,
+      treePathEnum: opts.profile.tree.map((t) => t.path),
+      snippets: cleanSnippets,
+      codeScanningAlerts: cleanAlerts,
     }),
   ].join('\n');
 
@@ -110,7 +148,12 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
     return {
       findings: [],
       issues: [{ kind: 'llm_call_failed', message }],
-      telemetry: { durationMs: Date.now() - start, model, llmCalled: true },
+      telemetry: {
+        durationMs: Date.now() - start,
+        model,
+        llmCalled: true,
+        sanitizationNotices,
+      },
     };
   }
 
@@ -122,6 +165,12 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
   return {
     findings,
     issues,
-    telemetry: { durationMs: Date.now() - start, model, llmCalled: true, tokens },
+    telemetry: {
+      durationMs: Date.now() - start,
+      model,
+      llmCalled: true,
+      tokens,
+      sanitizationNotices,
+    },
   };
 }
