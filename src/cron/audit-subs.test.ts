@@ -14,6 +14,7 @@ function makeSub(overrides: Partial<AuditSubscription> = {}): AuditSubscription 
     interval: 'weekly',
     createdAt: '2026-01-01T00:00:00Z',
     lastRunAt: null,
+    lastTaskId: null,
     lastRunId: null,
     ...overrides,
   };
@@ -117,10 +118,36 @@ describe('runScheduledAudits', () => {
     expect(body.skillRequest.text).toBe('octocat/demo');
     expect(body.skillRequest.flags.analyze).toBe('true');
 
-    // Stamped lastRunAt + lastRunId
+    // Stamped lastRunAt + lastTaskId; lastRunId stays null until the
+    // skill's completion path writes back the AuditRun.runId (Slice B).
     const stored = JSON.parse(store.get('audit:sub:user-1:octocat/demo')!) as AuditSubscription;
     expect(stored.lastRunAt).not.toBeNull();
-    expect(stored.lastRunId).toBeTruthy();
+    expect(stored.lastTaskId).toBeTruthy();
+    expect(stored.lastRunId).toBeNull();
+    // In-flight marker cleared on success.
+    expect(stored.dispatchStartedAt).toBeUndefined();
+  });
+
+  it('skips a sub that has a fresh dispatchStartedAt marker', async () => {
+    const fresh = new Date(Date.now() - 60 * 1000).toISOString(); // 1 min ago
+    const { env, dispatched } = makeEnv([makeSub({ lastRunAt: null, dispatchStartedAt: fresh })]);
+    const r = await runScheduledAudits(env);
+    expect(r.inspected).toBe(1);
+    expect(r.dispatched).toBe(0);
+    expect(r.skippedNotDue).toBe(1);
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it('clears the in-flight marker on dispatch failure so a later tick can retry', async () => {
+    const { env, store, setNextResponseStatus } = makeEnv([makeSub()]);
+    setNextResponseStatus(500);
+    await runScheduledAudits(env);
+    const stored = JSON.parse(store.get('audit:sub:user-1:octocat/demo')!) as AuditSubscription;
+    // Marker cleared even though the dispatch failed.
+    expect(stored.dispatchStartedAt).toBeUndefined();
+    // lastRunAt NOT stamped — this run did not succeed.
+    expect(stored.lastRunAt).toBeNull();
+    expect(stored.lastTaskId).toBeNull();
   });
 
   it('skips a subscription whose cadence has not elapsed', async () => {

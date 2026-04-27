@@ -4,12 +4,19 @@
  * Runs on the 6h cron tick. Scans the audit subscription store
  * (audit:sub:*), dispatches every subscription whose cadence has
  * elapsed via the existing TaskProcessor DO path, and stamps the
- * subscription with the new lastRunAt / lastRunId.
+ * subscription with the new lastRunAt / lastTaskId.
  *
  * Re-uses the same SkillTaskRequest shape that interactive
  * /audit … --analyze produces — see src/skills/audit/audit.ts
  * dispatchToDO. The only difference is the SkillRequest comes from
  * buildScheduledAuditRequest(sub), not user input.
+ *
+ * Idempotency is BEST-EFFORT, not strict. Two cron invocations that
+ * scan the same sub before either has written its dispatchStartedAt
+ * marker can both fire — KV is not CAS. The marker handles the more
+ * common "scheduled handler retried after a transient failure" case;
+ * strict once-only scheduling would require a Durable Object keyed
+ * per subscription, which is overkill for v1.
  */
 
 import type { MoltbotEnv } from '../types';
@@ -31,9 +38,13 @@ export interface RunResult {
 
 /**
  * Iterate every subscription in NEXUS_KV and dispatch any that are due.
- * Idempotent at the per-subscription level: lastRunAt is updated as
- * soon as the DO accepts the dispatch, so a re-running cron tick
- * (e.g. retried Worker invocation) does not duplicate-fire.
+ *
+ * Best-effort idempotent at the per-subscription level: each due sub is
+ * stamped with `dispatchStartedAt` *before* the DO fetch (so a parallel
+ * cron tick scanning the same sub after the marker write will see it as
+ * not-due via isSubscriptionDue), and `lastRunAt`/`lastTaskId` are
+ * written on accept. A truly concurrent pre-marker scan can still race
+ * — see the file header.
  */
 export async function runScheduledAudits(env: MoltbotEnv): Promise<RunResult> {
   const result: RunResult = { inspected: 0, dispatched: 0, skippedNotDue: 0, failed: 0 };
@@ -84,18 +95,21 @@ export async function runScheduledAudits(env: MoltbotEnv): Promise<RunResult> {
 }
 
 /**
- * Dispatch one due subscription. Stamps lastRunAt eagerly so that a
- * subsequent cron tick (or a manual retry) doesn't re-fire while the
- * first dispatch is still in flight.
+ * Dispatch one due subscription.
  *
- * `lastRunId` is set to the dispatch's taskId so /_admin/audit can
- * link a subscription to its most recent run. The full AuditRun
- * record is persisted by the audit skill itself via cacheAuditRun()
- * once the run completes — keyed by AuditRun.runId, which differs
- * from taskId. We deliberately store the taskId here as the linkage:
- * it's what the user sees in the "🔍 Audit started…" message and
- * what the admin tab will use to fetch the corresponding AuditRun
- * once the skill's keying for run-by-task is wired up in Slice B.
+ * Sequence:
+ *   1. Write dispatchStartedAt = now      (in-flight marker)
+ *   2. Fetch the DO with the SkillTaskRequest
+ *   3. On accept: write lastRunAt + lastTaskId, clear the marker
+ *   4. On failure: clear the marker so the next cron tick can retry
+ *
+ * Stores the dispatched `taskId` in `lastTaskId`, NOT `lastRunId`.
+ * `taskId` identifies a TaskProcessor run; `AuditRun.runId` identifies
+ * the persisted audit artefact and is minted inside the skill once
+ * Scout has resolved the SHA. The audit skill will write back
+ * `lastRunId` separately in Slice B once the completion path is wired
+ * up — until then `lastRunId` stays null and `lastTaskId` is the
+ * primary linkage for the admin tab.
  */
 async function dispatchScheduledAudit(
   env: MoltbotEnv,
@@ -104,6 +118,17 @@ async function dispatchScheduledAudit(
 ): Promise<void> {
   const taskProcessor = env.TASK_PROCESSOR!;
   const telegramToken = env.TELEGRAM_BOT_TOKEN!;
+
+  // 1. In-flight marker — written *before* the DO fetch so a parallel
+  // cron invocation scanning this sub after the put will see it as
+  // not-due. Doesn't help against a perfectly-concurrent scan that
+  // happens before either marker write lands; that race is documented
+  // in the file header.
+  const inFlight: AuditSubscription = {
+    ...sub,
+    dispatchStartedAt: new Date(nowMs).toISOString(),
+  };
+  await setAuditSubscription(env.NEXUS_KV, inFlight);
 
   // The skill request — equivalent to the user typing /audit run <repo> --analyze.
   const skillRequest = buildScheduledAuditRequest(
@@ -114,12 +139,15 @@ async function dispatchScheduledAudit(
 
   const taskId = crypto.randomUUID();
 
-  // DO routing key matches the deterministic key used by interactive
-  // dispatch (audit_do_key) shape — same user, same repo coords, but
-  // we don't know the SHA at this point so we let the skill compute
-  // its own DO key after Scout. Using a fresh DO id per scheduled
-  // dispatch is fine: dedupe is opportunistic, not a correctness
-  // requirement.
+  // DO routing key: scheduled dispatches use a fresh id per task.
+  // Interactive dispatch uses a deterministic key that includes the SHA
+  // (audit_do_key in audit.ts), but the cron path doesn't know the SHA
+  // yet — Scout resolves it inside the skill. The audit skill's own
+  // profile cache + content-addressed Scout dedupes redundant work
+  // across runs, so a fresh DO id per scheduled tick is acceptable.
+  // Future improvement (tracked in roadmap): deterministic DO key per
+  // (user, repo, intervalWindowStart) so two cron ticks in the same
+  // 6h window land on the same DO.
   const doId = taskProcessor.idFromName(
     `audit-sub:${sub.userId}:${sub.owner}/${sub.repo}:${taskId}`,
   );
@@ -145,11 +173,19 @@ async function dispatchScheduledAudit(
     cloudflareApiToken: env.CLOUDFLARE_API_TOKEN,
   };
 
-  const resp = await stub.fetch('https://do/process', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  let resp: Response;
+  try {
+    resp = await stub.fetch('https://do/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    // Clear the marker so a later tick can retry — leaving it set would
+    // freeze this sub for the full grace window.
+    await clearInFlightMarker(env, sub);
+    throw err;
+  }
 
   if (!resp.ok) {
     let detail = '';
@@ -158,18 +194,32 @@ async function dispatchScheduledAudit(
     } catch {
       /* ignore */
     }
+    await clearInFlightMarker(env, sub);
     throw new Error(`DO returned ${resp.status}${detail ? ` — ${detail}` : ''}`);
   }
 
-  // Stamp the subscription so the next cron tick sees it as not-due.
-  // Best-effort: a failed update only means the next tick may re-fire,
-  // which the audit skill itself will dedupe via its profile cache.
+  // Stamp the subscription on success: lastRunAt + lastTaskId, clear marker.
+  // Note: lastRunId stays null. The audit skill's completion path will
+  // populate it once Slice B wires the run-id writeback.
   const updated: AuditSubscription = {
     ...sub,
     lastRunAt: new Date(nowMs).toISOString(),
-    lastRunId: taskId,
+    lastTaskId: taskId,
+    dispatchStartedAt: undefined,
   };
   await setAuditSubscription(env.NEXUS_KV, updated);
+}
+
+async function clearInFlightMarker(env: MoltbotEnv, sub: AuditSubscription): Promise<void> {
+  try {
+    await setAuditSubscription(env.NEXUS_KV, { ...sub, dispatchStartedAt: undefined });
+  } catch (err) {
+    // Stale marker is recoverable (grace window expires); just log.
+    console.warn(
+      `[cron-audit-subs] failed to clear in-flight marker for ${sub.userId}:${sub.owner}/${sub.repo}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 // Local re-export so the wire-payload `env` cast above is type-safe
