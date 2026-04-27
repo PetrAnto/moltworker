@@ -1,0 +1,125 @@
+/* AuditPage — Slice B styling. Sections + tables, matching AdminPage's vibe. */
+
+.audit-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.audit-error {
+  background: #4a1f1f;
+  color: #ffd6d6;
+  border: 1px solid #7a3535;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.audit-section {
+  background: #1f2229;
+  border: 1px solid #2c3037;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+
+.audit-section .section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.audit-section h2 {
+  font-size: 1.05rem;
+  margin: 0;
+  color: #e6e9ef;
+}
+
+.audit-section .hint {
+  color: #8b96a8;
+  font-size: 0.9rem;
+}
+
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.audit-table th,
+.audit-table td {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid #2a2e36;
+  vertical-align: middle;
+}
+
+.audit-table th {
+  font-weight: 600;
+  color: #b8c0cc;
+  background: #1a1d23;
+  position: sticky;
+  top: 0;
+}
+
+.audit-table tbody tr:hover {
+  background: #232730;
+}
+
+.audit-repo {
+  font-weight: 500;
+  color: #e6e9ef;
+}
+
+.audit-meta {
+  color: #6f7787;
+  font-weight: 400;
+}
+
+.audit-flag {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem;
+  background: #3b3010;
+  color: #f0c356;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  vertical-align: middle;
+}
+
+.audit-action {
+  background: #2c3037;
+  color: #e6e9ef;
+  border: 1px solid #3a3f48;
+  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.audit-action:hover:not(:disabled) {
+  background: #353a44;
+}
+
+.audit-action.danger {
+  border-color: #5a2a2a;
+  color: #ffb3b3;
+}
+
+.audit-action.danger:hover:not(:disabled) {
+  background: #3a1f1f;
+}
+
+.audit-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 700px) {
+  .audit-section {
+    padding: 1rem;
+  }
+  .audit-table {
+    font-size: 0.78rem;
+  }
+}

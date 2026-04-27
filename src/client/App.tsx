@@ -1,11 +1,15 @@
 import AdminPage from './pages/AdminPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import AuditPage from './pages/AuditPage';
 import CockpitPage from './pages/CockpitPage';
 import './App.css';
 
-function getCurrentPage(pathname: string): 'admin' | 'analytics' | 'cockpit' {
+type Page = 'admin' | 'analytics' | 'audit' | 'cockpit';
+
+function getCurrentPage(pathname: string): Page {
   if (pathname.startsWith('/_admin/cockpit')) return 'cockpit';
   if (pathname.startsWith('/_admin/analytics')) return 'analytics';
+  if (pathname.startsWith('/_admin/audit')) return 'audit';
   return 'admin';
 }
 
@@ -28,8 +32,14 @@ export default function App() {
           <a className={page === 'admin' ? 'nav-link active' : 'nav-link'} href="/_admin/">
             Dashboard
           </a>
-          <a className={page === 'analytics' ? 'nav-link active' : 'nav-link'} href="/_admin/analytics">
+          <a
+            className={page === 'analytics' ? 'nav-link active' : 'nav-link'}
+            href="/_admin/analytics"
+          >
             Analytics
+          </a>
+          <a className={page === 'audit' ? 'nav-link active' : 'nav-link'} href="/_admin/audit">
+            Audit
           </a>
           <a className="nav-link" href="/_admin/cockpit">
             Cockpit
@@ -37,7 +47,13 @@ export default function App() {
         </nav>
       </header>
       <main className="app-main">
-        {page === 'analytics' ? <AnalyticsPage /> : <AdminPage />}
+        {page === 'analytics' ? (
+          <AnalyticsPage />
+        ) : page === 'audit' ? (
+          <AuditPage />
+        ) : (
+          <AdminPage />
+        )}
       </main>
     </div>
   );
