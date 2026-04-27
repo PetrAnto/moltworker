@@ -276,16 +276,35 @@ function makeRun(overrides: Partial<AuditRun> = {}): AuditRun {
   };
 }
 
-describe('cacheAuditRun metadata', () => {
-  it('writes createdAtMs + repo metadata alongside the value', async () => {
+describe('cacheAuditRun', () => {
+  it('returns true and writes createdAtMs + repo metadata on success', async () => {
     const { kv, metaStore } = makeKV();
     const run = makeRun({ runId: 'r1' });
-    await cacheAuditRun(kv, 'u1', run);
+    const ok = await cacheAuditRun(kv, 'u1', run);
+    expect(ok).toBe(true);
     const meta = metaStore.get('audit:run:u1:r1') as AuditRunMetadata | undefined;
     expect(meta).toBeDefined();
     expect(meta!.owner).toBe('octocat');
     expect(meta!.repo).toBe('demo');
     expect(typeof meta!.createdAtMs).toBe('number');
+  });
+
+  it('returns false when KV is missing (no throw)', async () => {
+    const ok = await cacheAuditRun(undefined, 'u1', makeRun());
+    expect(ok).toBe(false);
+  });
+
+  it('returns false when the underlying put throws', async () => {
+    // GPT review #1: callers gate writeback on this — a put failure
+    // must not leave a subscription pointing at a runId that nothing
+    // can resolve.
+    const kv = {
+      put: vi.fn(async () => {
+        throw new Error('kv unavailable');
+      }),
+    } as unknown as KVNamespace;
+    const ok = await cacheAuditRun(kv, 'u1', makeRun());
+    expect(ok).toBe(false);
   });
 });
 

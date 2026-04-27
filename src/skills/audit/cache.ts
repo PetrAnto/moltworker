@@ -82,12 +82,20 @@ export interface AuditRunMetadata {
   repo: string;
 }
 
+/**
+ * Persist an AuditRun for /audit export <runId>.
+ *
+ * Returns `true` if the put succeeded, `false` otherwise (no KV bound,
+ * or the write threw). Callers gate downstream linkage on this so a
+ * failed run-cache write doesn't leave a subscription pointing at a
+ * runId that nothing can resolve.
+ */
 export async function cacheAuditRun(
   kv: KVNamespace | undefined,
   userId: string,
   run: AuditRun,
-): Promise<void> {
-  if (!kv) return;
+): Promise<boolean> {
+  if (!kv) return false;
   try {
     const meta: AuditRunMetadata = {
       createdAtMs: Date.now(),
@@ -98,8 +106,10 @@ export async function cacheAuditRun(
       expirationTtl: RUN_TTL_SECONDS,
       metadata: meta,
     });
+    return true;
   } catch (err) {
     console.warn('[Audit] cacheAuditRun failed:', err instanceof Error ? err.message : err);
+    return false;
   }
 }
 
@@ -521,10 +531,15 @@ export async function listAllSubscriptions(
 async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<AuditSubscription[]> {
   const out: AuditSubscription[] = [];
   let cursor: string | undefined;
+  // Defensive page cap: keeps worst-case latency predictable on a
+  // pathologically large keyspace and matches listRecentRuns /
+  // listAllSuppressions for consistency. 5 pages × KV's 1000-key
+  // default = ~5000 subs, far beyond any realistic deployment.
+  const MAX_PAGES = 5;
   try {
-    for (;;) {
-      const page = await kv.list({ prefix, cursor });
-      for (const k of page.keys) {
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await kv.list({ prefix, cursor });
+      for (const k of res.keys) {
         try {
           const sub = (await kv.get(k.name, 'json')) as AuditSubscription | null;
           if (sub) out.push(sub);
@@ -537,8 +552,8 @@ async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<Audit
           );
         }
       }
-      if (page.list_complete) break;
-      cursor = page.cursor;
+      if (res.list_complete) break;
+      cursor = res.cursor;
       if (!cursor) break;
     }
   } catch (err) {

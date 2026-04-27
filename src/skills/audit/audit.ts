@@ -549,19 +549,22 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   // preventive artifacts + RCA prose) lives here. Best-effort: if KV
   // is unavailable, the user just can't `export` later — the inline
   // result still shows the top-5 + run id.
-  await cacheAuditRun(request.env.NEXUS_KV, request.userId, run);
+  const runCached = await cacheAuditRun(request.env.NEXUS_KV, request.userId, run);
 
-  // If a subscription exists for this (user, repo), write back the new
-  // runId so the admin tab can link sub → latest run. Runs unconditionally
-  // for any /audit run completion (scheduled or interactive); a missing
-  // subscription is the common no-op case. See cache.ts:linkRunToSubscription.
-  await linkRunToSubscription(
-    request.env.NEXUS_KV,
-    request.userId,
-    profile.owner,
-    profile.repo,
-    run.runId,
-  );
+  // Only update the subscription's lastRunId when the run was actually
+  // persisted. Otherwise we'd leave the sub pointing at a runId that
+  // nothing can resolve — bad for the admin tab and for /audit export.
+  // The cron's lastTaskId is independent and stamped earlier, so a
+  // failed cache here still leaves a debuggable trail.
+  if (runCached) {
+    await linkRunToSubscription(
+      request.env.NEXUS_KV,
+      request.userId,
+      profile.owner,
+      profile.repo,
+      run.runId,
+    );
+  }
 
   return {
     skillId: 'audit',
