@@ -494,4 +494,62 @@ describe('admin audit routes', () => {
     );
     expect(response.status).toBe(400);
   });
+
+  // GPT review #4: a UI double-click should produce a clean second
+  // response, not a 500 or an inconsistent state. Both DELETEs return
+  // 200 with `removed: false` when the target is already gone.
+  it('DELETE /audit/subscriptions is idempotent under double-click', async () => {
+    const sub = {
+      userId: 'u1',
+      owner: 'octocat',
+      repo: 'demo',
+      transport: 'telegram',
+      chatId: 1,
+      depth: 'quick',
+      interval: 'weekly',
+      createdAt: 't',
+      lastRunAt: null,
+      lastTaskId: null,
+      lastRunId: null,
+    };
+    const kv = makeKV({ 'audit:sub:u1:octocat/demo': { value: JSON.stringify(sub) } });
+
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const url = 'http://localhost/api/admin/audit/subscriptions/u1/octocat/demo';
+    const env = createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv });
+
+    const first = await app.request(url, { method: 'DELETE' }, env);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ removed: true });
+
+    const second = await app.request(url, { method: 'DELETE' }, env);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({ removed: false });
+  });
+
+  it('DELETE /audit/suppressions is idempotent under double-click', async () => {
+    const kv = makeKV({
+      'audit:suppressed:u1:octocat/demo:security-abc': {
+        value: JSON.stringify({ at: '2026-04-20T00:00:00Z' }),
+      },
+    });
+
+    const { api } = await import('./api');
+    const app = new Hono<AppEnv>();
+    app.route('/api', api);
+
+    const url = 'http://localhost/api/admin/audit/suppressions/u1/octocat/demo/security-abc';
+    const env = createMockEnv({ DEV_MODE: 'true', NEXUS_KV: kv });
+
+    const first = await app.request(url, { method: 'DELETE' }, env);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ removed: true, total: 0 });
+
+    const second = await app.request(url, { method: 'DELETE' }, env);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({ removed: false, total: 0 });
+  });
 });

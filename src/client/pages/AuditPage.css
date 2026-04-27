@@ -86,6 +86,11 @@
   vertical-align: middle;
 }
 
+.audit-flag.stale {
+  background: #4a1f1f;
+  color: #ffb3b3;
+}
+
 .audit-action {
   background: #2c3037;
   color: #e6e9ef;

@@ -35,6 +35,40 @@ function shortId(id: string | null | undefined, len = 8): string {
   return id.length > len ? `${id.slice(0, len)}…` : id;
 }
 
+/**
+ * Mirrors the server-side DISPATCH_IN_FLIGHT_GRACE_MS in cache.ts. If a
+ * dispatchStartedAt marker is older than this, the dispatcher is
+ * presumed crashed and the next cron tick will retry — surface that
+ * to the operator so a stuck-looking sub is visibly distinguishable
+ * from a normal in-flight one. Slight staleness here is fine; the
+ * cron path is the source of truth.
+ */
+const STALE_DISPATCH_MS = 10 * 60 * 1000;
+
+function dispatchBadge(
+  iso: string | undefined,
+  nowMs: number = Date.now(),
+): {
+  label: string;
+  cls: string;
+  title: string;
+} | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) {
+    return { label: 'in flight', cls: 'audit-flag', title: `Dispatch in flight since ${iso}` };
+  }
+  const ageMs = nowMs - t;
+  if (ageMs >= STALE_DISPATCH_MS) {
+    return {
+      label: 'stale dispatch',
+      cls: 'audit-flag stale',
+      title: `Dispatcher hasn’t reported back since ${iso} (>${Math.round(STALE_DISPATCH_MS / 60000)}m). Next cron tick will retry.`,
+    };
+  }
+  return { label: 'in flight', cls: 'audit-flag', title: `Dispatch in flight since ${iso}` };
+}
+
 function formatCost(usd: number): string {
   if (usd === 0) return '$0';
   if (usd < 0.01) return `$${usd.toFixed(4)}`;
@@ -109,6 +143,7 @@ export default function AuditPage() {
 
       <SubscriptionsSection
         subs={data?.subscriptions ?? []}
+        recentRuns={data?.recentRuns ?? []}
         loading={loading}
         actionInProgress={actionInProgress}
         onUnsubscribe={handleUnsubscribe}
@@ -128,15 +163,22 @@ export default function AuditPage() {
 
 function SubscriptionsSection({
   subs,
+  recentRuns,
   loading,
   actionInProgress,
   onUnsubscribe,
 }: {
   subs: AuditSubscriptionRow[];
+  recentRuns: AuditRunRow[];
   loading: boolean;
   actionInProgress: string | null;
   onUnsubscribe: (sub: AuditSubscriptionRow) => void;
 }) {
+  // GPT review #1: only display lastRunId when we can resolve it — the
+  // run may have aged out of the 7-day TTL since the writeback. The
+  // overview already returns recent runs, so we can answer this without
+  // a second KV round-trip.
+  const knownRunIds = new Set(recentRuns.map((r) => r.runId));
   return (
     <section className="audit-section">
       <div className="section-header">
@@ -167,17 +209,16 @@ function SubscriptionsSection({
             {subs.map((s) => {
               const key = `sub:${s.userId}:${s.owner}/${s.repo}`;
               const busy = actionInProgress === key;
+              const badge = dispatchBadge(s.dispatchStartedAt);
+              const runResolved = s.lastRunId !== null && knownRunIds.has(s.lastRunId);
               return (
                 <tr key={key}>
                   <td className="audit-repo">
                     {s.owner}/{s.repo}
                     {s.branch ? <span className="audit-meta"> @{s.branch}</span> : null}
-                    {s.dispatchStartedAt ? (
-                      <span
-                        className="audit-flag"
-                        title={`Dispatch in flight since ${s.dispatchStartedAt}`}
-                      >
-                        in flight
+                    {badge ? (
+                      <span className={badge.cls} title={badge.title}>
+                        {badge.label}
                       </span>
                     ) : null}
                   </td>
@@ -188,7 +229,18 @@ function SubscriptionsSection({
                   <td title={s.lastRunAt ?? ''}>{formatIsoAge(s.lastRunAt)}</td>
                   <td title={s.lastTaskId ?? ''}>{shortId(s.lastTaskId)}</td>
                   <td title={s.lastRunId ?? ''}>
-                    {s.lastRunId ? shortId(s.lastRunId) : <span className="audit-meta">—</span>}
+                    {s.lastRunId === null ? (
+                      <span className="audit-meta">—</span>
+                    ) : runResolved ? (
+                      shortId(s.lastRunId)
+                    ) : (
+                      <span
+                        className="audit-meta"
+                        title={`Run ${s.lastRunId} is no longer in the recent runs window (TTL ~7d)`}
+                      >
+                        expired
+                      </span>
+                    )}
                   </td>
                   <td>
                     <button
