@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isToolError, getAvailableSources } from './source-packs';
+import { isToolError, getAvailableSources, expandSourcePicks, CATEGORY_DEFAULTS } from './source-packs';
 import { NEXUS_CLASSIFY_PROMPT, NEXUS_SYNTHESIZE_PROMPT, NEXUS_DECISION_PROMPT } from './prompts';
 
 describe('isToolError', () => {
@@ -52,6 +52,72 @@ describe('source registry', () => {
     const sources = getAvailableSources();
     for (const name of sources) {
       expect(NEXUS_CLASSIFY_PROMPT).toContain(name);
+    }
+  });
+});
+
+describe('expandSourcePicks', () => {
+  it('backfills a thin classifier pick to >=3 sources for technical queries', () => {
+    // The bug we keep hitting: classifier returns ["webSearch"], dossier
+    // ends up single-source. Expansion must fan out to category defaults.
+    const expanded = expandSourcePicks('technical', ['webSearch']);
+    expect(expanded.length).toBeGreaterThanOrEqual(3);
+    expect(expanded).toContain('webSearch');
+    expect(expanded).toContain('stackExchange');
+    expect(expanded).toContain('github');
+  });
+
+  it('preserves classifier picks first (LLM intent wins)', () => {
+    const expanded = expandSourcePicks('technical', ['hackerNews', 'reddit']);
+    expect(expanded[0]).toBe('hackerNews');
+    expect(expanded[1]).toBe('reddit');
+    // Then the technical defaults backfill — webSearch, stackExchange, github
+    expect(expanded).toContain('webSearch');
+  });
+
+  it('dedups when classifier picks overlap with category defaults', () => {
+    const expanded = expandSourcePicks('technical', ['webSearch', 'stackExchange']);
+    const counts = expanded.reduce<Record<string, number>>((acc, n) => {
+      acc[n] = (acc[n] ?? 0) + 1;
+      return acc;
+    }, {});
+    for (const [name, count] of Object.entries(counts)) {
+      expect(count, `source ${name} appears ${count} times`).toBe(1);
+    }
+  });
+
+  it('caps the result at 5 sources', () => {
+    // Even with 8 classifier picks the cap should hold so we don't blow
+    // the subrequest budget.
+    const expanded = expandSourcePicks('topic', [
+      'webSearch', 'wikipedia', 'wikidata', 'news', 'hackerNews', 'reddit', 'bluesky', 'github',
+    ]);
+    expect(expanded.length).toBeLessThanOrEqual(5);
+  });
+
+  it('drops unknown source names from classifier output', () => {
+    const expanded = expandSourcePicks('technical', ['webSearch', 'fakeSource', 'github']);
+    expect(expanded).not.toContain('fakeSource');
+    expect(expanded).toContain('webSearch');
+    expect(expanded).toContain('github');
+  });
+
+  it('uses the fallback backbone when category is missing or unknown', () => {
+    const expandedUnknown = expandSourcePicks('mystery-category', []);
+    expect(expandedUnknown).toContain('webSearch');
+    expect(expandedUnknown.length).toBeGreaterThanOrEqual(3);
+
+    const expandedMissing = expandSourcePicks(undefined, []);
+    expect(expandedMissing).toContain('webSearch');
+    expect(expandedMissing.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('defines defaults for every category the classifier prompt advertises', () => {
+    // Cross-check: the classifier prompt advertises 8 categories. If we add
+    // a category there but forget defaults here, expansion silently falls
+    // back to the generic backbone.
+    for (const cat of ['entity', 'topic', 'market', 'decision', 'technical', 'academic', 'regulatory', 'historical']) {
+      expect(CATEGORY_DEFAULTS[cat], `missing defaults for category ${cat}`).toBeDefined();
     }
   });
 });
