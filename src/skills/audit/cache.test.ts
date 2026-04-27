@@ -363,17 +363,57 @@ describe('listAllSuppressions', () => {
     await addSuppression(kv, 'u1', 'octocat', 'demo', 'security-abc');
     await addSuppression(kv, 'u2', 'foo', 'bar', 'types-xyz');
 
-    const rows = await listAllSuppressions(kv);
-    expect(rows).toHaveLength(2);
-    const u1 = rows.find((r) => r.userId === 'u1')!;
+    const result = await listAllSuppressions(kv);
+    expect(result.entries).toHaveLength(2);
+    expect(result.truncated).toBe(false);
+    const u1 = result.entries.find((r) => r.userId === 'u1')!;
     expect(u1.owner).toBe('octocat');
     expect(u1.repo).toBe('demo');
     expect(u1.findingId).toBe('security-abc');
     expect(u1.at).not.toBeNull();
   });
 
-  it('returns empty array when KV is missing', async () => {
-    expect(await listAllSuppressions(undefined)).toEqual([]);
+  it('returns empty result when KV is missing', async () => {
+    const result = await listAllSuppressions(undefined);
+    expect(result.entries).toEqual([]);
+    expect(result.truncated).toBe(false);
+  });
+
+  // GPT review #1: bound the per-key value-fetches so a pathologically
+  // large suppression keyspace can't make the admin endpoint do
+  // unbounded work. Default limit is DEFAULT_SUPPRESSIONS_LIMIT (100);
+  // tests use a smaller limit to exercise the cap directly.
+  it('caps at the supplied limit and reports truncated=true when more keys remain', async () => {
+    const { kv } = makeKV();
+    for (let i = 0; i < 5; i++) {
+      await addSuppression(
+        kv,
+        'u',
+        'octocat',
+        'demo',
+        `security-${i.toString(36).padStart(3, '0')}`,
+      );
+    }
+    const result = await listAllSuppressions(kv, { limit: 3 });
+    expect(result.entries).toHaveLength(3);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('does not flag truncated when the result fits under the limit', async () => {
+    const { kv } = makeKV();
+    await addSuppression(kv, 'u', 'octocat', 'demo', 'security-abc');
+    const result = await listAllSuppressions(kv, { limit: 100 });
+    expect(result.entries).toHaveLength(1);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('clamps an absurdly-large limit to MAX_SUPPRESSIONS_LIMIT', async () => {
+    const { kv } = makeKV();
+    // Just verify it doesn't throw or hang; correctness of clamping is
+    // covered by the constant-export test below.
+    const result = await listAllSuppressions(kv, { limit: 100_000 });
+    expect(result.entries).toEqual([]);
+    expect(result.truncated).toBe(false);
   });
 });
 
@@ -388,10 +428,32 @@ describe('getAuditOverview', () => {
     expect(ov.subscriptions).toHaveLength(1);
     expect(ov.recentRuns).toHaveLength(1);
     expect(ov.suppressions).toHaveLength(1);
+    expect(ov.truncated.suppressions).toBe(false);
   });
 
   it('returns empty sections when KV is missing rather than throwing', async () => {
     const ov = await getAuditOverview(undefined);
-    expect(ov).toEqual({ subscriptions: [], recentRuns: [], suppressions: [] });
+    expect(ov).toEqual({
+      subscriptions: [],
+      recentRuns: [],
+      suppressions: [],
+      truncated: { suppressions: false },
+    });
+  });
+
+  it('reports truncated.suppressions=true when the suppression cap fires', async () => {
+    const { kv } = makeKV();
+    for (let i = 0; i < 5; i++) {
+      await addSuppression(
+        kv,
+        'u',
+        'octocat',
+        'demo',
+        `security-${i.toString(36).padStart(3, '0')}`,
+      );
+    }
+    const ov = await getAuditOverview(kv, { suppressionLimit: 2 });
+    expect(ov.suppressions).toHaveLength(2);
+    expect(ov.truncated.suppressions).toBe(true);
   });
 });

@@ -153,6 +153,7 @@ export default function AuditPage() {
 
       <SuppressionsSection
         sups={data?.suppressions ?? []}
+        truncated={data?.truncated.suppressions ?? false}
         loading={loading}
         actionInProgress={actionInProgress}
         onUnsuppress={handleUnsuppress}
@@ -320,11 +321,13 @@ function RecentRunsSection({ runs, loading }: { runs: AuditRunRow[]; loading: bo
 
 function SuppressionsSection({
   sups,
+  truncated,
   loading,
   actionInProgress,
   onUnsuppress,
 }: {
   sups: AuditSuppressionRow[];
+  truncated: boolean;
   loading: boolean;
   actionInProgress: string | null;
   onUnsuppress: (sup: AuditSuppressionRow) => void;
@@ -332,8 +335,18 @@ function SuppressionsSection({
   return (
     <section className="audit-section">
       <div className="section-header">
-        <h2>Suppressed Findings ({sups.length})</h2>
+        <h2>
+          Suppressed Findings ({sups.length}
+          {truncated ? '+' : ''})
+        </h2>
       </div>
+      {truncated ? (
+        <p className="hint">
+          ⚠️ Showing first {sups.length} entries — the suppression keyspace exceeds the admin scan
+          cap. Pass <code>?suppressionLimit=N</code>
+          (max 500) on the API call to widen the view.
+        </p>
+      ) : null}
       {loading ? (
         <p className="hint">Loading…</p>
       ) : sups.length === 0 ? (

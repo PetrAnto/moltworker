@@ -744,21 +744,54 @@ export async function listRecentRuns(
 }
 
 /**
- * List every suppression entry across all users. Each KV key carries a
+ * Default cap on how many suppression entries listAllSuppressions
+ * returns. Each entry costs one extra `kv.get` for the {at: ISO}
+ * timestamp on top of the list-page traversal — the cap bounds total
+ * KV reads on this admin endpoint to a predictable ceiling regardless
+ * of how large the suppression keyspace grows.
+ */
+export const DEFAULT_SUPPRESSIONS_LIMIT = 100;
+const MAX_SUPPRESSIONS_LIMIT = 500;
+
+/** Return wrapper that signals when the scan was capped, so the admin
+ *  tab can show a "showing first N of …" hint and the operator knows
+ *  the view is incomplete. */
+export interface ListAllSuppressionsResult {
+  entries: SuppressionEntry[];
+  truncated: boolean;
+}
+
+/**
+ * List suppression entries across all users. Each KV key carries a
  * tiny JSON value `{at: ISO}`; we fetch it for the timestamp and parse
  * the (userId, owner, repo, findingId) triple from the key itself.
+ *
+ * Bounded twice over: (a) the `kv.list` traversal stops at MAX_PAGES,
+ * (b) the per-key value-fetches stop once `limit` is reached.
+ * `truncated` is set if either limit fires with more keys still
+ * available — the admin tab surfaces that to the operator.
  */
 export async function listAllSuppressions(
   kv: KVNamespace | undefined,
-): Promise<SuppressionEntry[]> {
-  if (!kv) return [];
+  options: { limit?: number } = {},
+): Promise<ListAllSuppressionsResult> {
+  if (!kv) return { entries: [], truncated: false };
+  const limit = Math.min(
+    Math.max(options.limit ?? DEFAULT_SUPPRESSIONS_LIMIT, 1),
+    MAX_SUPPRESSIONS_LIMIT,
+  );
   const out: SuppressionEntry[] = [];
   let cursor: string | undefined;
   const MAX_PAGES = 5;
+  let truncated = false;
   try {
-    for (let page = 0; page < MAX_PAGES; page++) {
+    pageLoop: for (let page = 0; page < MAX_PAGES; page++) {
       const res = await kv.list({ prefix: SUPPRESS_PREFIX, cursor });
       for (const k of res.keys) {
+        if (out.length >= limit) {
+          truncated = true;
+          break pageLoop;
+        }
         // Key shape: audit:suppressed:{userId}:{owner}/{repo}:{findingId}
         const tail = k.name.slice(SUPPRESS_PREFIX.length);
         const sepUser = tail.indexOf(':');
@@ -787,6 +820,9 @@ export async function listAllSuppressions(
       if (res.list_complete) break;
       cursor = res.cursor;
       if (!cursor) break;
+      // If we exit the page loop because we hit MAX_PAGES with more
+      // keys still available, mark as truncated.
+      if (page === MAX_PAGES - 1 && !res.list_complete) truncated = true;
     }
   } catch (err) {
     console.warn(
@@ -794,31 +830,53 @@ export async function listAllSuppressions(
       err instanceof Error ? err.message : err,
     );
   }
-  return out;
+  return { entries: out, truncated };
 }
 
 /**
  * Aggregated payload the /_admin/audit tab fetches in one round-trip.
  * Each section reuses the canonical KV namespace for its data type;
  * the admin tab does not introduce a parallel storage convention.
+ *
+ * `truncated` reports per-section whether the scan hit a configured
+ * cap so the admin tab can show "showing first N of …" hints. Total
+ * KV reads per overview are bounded:
+ *   - subscriptions: up to 5 list pages × KV's 1000-key page size
+ *   - recentRuns:    same scan + up to `runLimit` per-key gets (≤100)
+ *   - suppressions:  same scan + up to `suppressionLimit` per-key gets (≤500)
  */
 export interface AuditOverview {
   subscriptions: AuditSubscription[];
   recentRuns: AuditRunSummary[];
   suppressions: SuppressionEntry[];
+  truncated: {
+    suppressions: boolean;
+  };
 }
 
 export async function getAuditOverview(
   kv: KVNamespace | undefined,
-  options: { runLimit?: number } = {},
+  options: { runLimit?: number; suppressionLimit?: number } = {},
 ): Promise<AuditOverview> {
   if (!kv) {
-    return { subscriptions: [], recentRuns: [], suppressions: [] };
+    return {
+      subscriptions: [],
+      recentRuns: [],
+      suppressions: [],
+      truncated: { suppressions: false },
+    };
   }
   const [subscriptions, recentRuns, suppressions] = await Promise.all([
     listAllSubscriptions(kv),
     listRecentRuns(kv, options.runLimit ?? 20),
-    listAllSuppressions(kv),
+    listAllSuppressions(kv, { limit: options.suppressionLimit }),
   ]);
-  return { subscriptions, recentRuns, suppressions };
+  return {
+    subscriptions,
+    recentRuns,
+    suppressions: suppressions.entries,
+    truncated: {
+      suppressions: suppressions.truncated,
+    },
+  };
 }
