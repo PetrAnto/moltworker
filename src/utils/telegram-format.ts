@@ -18,10 +18,7 @@
  * Must be called BEFORE inserting HTML tags.
  */
 export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /**
@@ -74,4 +71,32 @@ export function markdownToTelegramHtml(md: string): string {
   });
 
   return result;
+}
+
+/**
+ * Truncate Telegram HTML to at most `max` characters without cutting
+ * inside an opening `<…>` tag. Telegram's HTML parser rejects messages
+ * with malformed tags, which makes a naive `slice(max)` cut brittle:
+ * if the cut lands between `<` and `>`, the send fails and the caller
+ * has to fall back to plaintext (losing all formatting).
+ *
+ * Strategy: if the trailing prefix after the last `>` contains a `<`,
+ * the slice cut a tag in half. Drop that partial tag (slice back to
+ * the offending `<`). We don't try to balance unclosed `<b>`/`<i>`/etc.
+ * — Telegram tolerates those as long as the bytes themselves parse —
+ * but we DO refuse to ship a literal `<incomplete` fragment.
+ *
+ * Returns the original string when it's already ≤ max.
+ */
+export function safeTelegramHtmlChunk(html: string, max: number): string {
+  if (html.length <= max) return html;
+  const cut = html.slice(0, max);
+  // Find the last '<' and last '>' in the cut. If the '<' is later, we
+  // chopped a tag — back off to before it.
+  const lastOpen = cut.lastIndexOf('<');
+  const lastClose = cut.lastIndexOf('>');
+  if (lastOpen > lastClose) {
+    return cut.slice(0, lastOpen);
+  }
+  return cut;
 }

@@ -261,6 +261,14 @@ export interface AuditOverviewResponse {
     recentRuns: boolean;
     suppressions: boolean;
   };
+  /** Server-defined caps. Lets the UI render numeric thresholds
+   *  ('Show up to N', 'cap = N') without hard-coding them — when the
+   *  server raises a cap, the UI updates on the next fetch. */
+  caps: {
+    suppressionsDefault: number;
+    suppressionsMax: number;
+    recentRunsMax: number;
+  };
 }
 
 export interface FetchAuditOverviewOptions {

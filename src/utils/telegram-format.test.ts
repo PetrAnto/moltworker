@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { markdownToTelegramHtml } from './telegram-format';
+import { markdownToTelegramHtml, safeTelegramHtmlChunk } from './telegram-format';
 
 describe('markdownToTelegramHtml', () => {
   it('should convert bold', () => {
@@ -22,7 +22,9 @@ describe('markdownToTelegramHtml', () => {
   });
 
   it('should convert links', () => {
-    expect(markdownToTelegramHtml('[click](https://example.com)')).toBe('<a href="https://example.com">click</a>');
+    expect(markdownToTelegramHtml('[click](https://example.com)')).toBe(
+      '<a href="https://example.com">click</a>',
+    );
   });
 
   it('should convert strikethrough', () => {
@@ -75,5 +77,40 @@ describe('markdownToTelegramHtml', () => {
     expect(out).toContain('&lt;b&gt;Research Dossier&lt;/b&gt;');
     expect(out).toContain('&amp;b=2');
     expect(out).not.toContain('<b>Research Dossier</b>');
+  });
+});
+
+describe('safeTelegramHtmlChunk', () => {
+  it('returns the original string when shorter than max', () => {
+    expect(safeTelegramHtmlChunk('hello', 10)).toBe('hello');
+    expect(safeTelegramHtmlChunk('<b>x</b>', 100)).toBe('<b>x</b>');
+  });
+
+  it('slices cleanly when the cut lands outside any tag', () => {
+    const html = '<b>aaa</b>bbbbb';
+    expect(safeTelegramHtmlChunk(html, 12)).toBe('<b>aaa</b>bb');
+  });
+
+  it('backs off when the cut chops an opening tag', () => {
+    // Cut at index 7 lands after `hello <`, leaving an unclosed
+    // bracket. The helper backs off to before the dangling `<`.
+    const html = 'hello <b>world</b>';
+    expect(safeTelegramHtmlChunk(html, 7)).toBe('hello ');
+  });
+
+  it('backs off when the cut chops a closing tag', () => {
+    const html = '<b>aaa</b>tail';
+    // Cut at 8 leaves `<b>aaa</`; the trailing `</` has no matching
+    // `>` in the prefix so we drop it.
+    expect(safeTelegramHtmlChunk(html, 8)).toBe('<b>aaa');
+  });
+
+  it('does not corrupt a prefix with no tags', () => {
+    expect(safeTelegramHtmlChunk('plain text content', 10)).toBe('plain text');
+  });
+
+  it('keeps a whole tag intact when the cut lands right after `>`', () => {
+    const html = '<b>x</b> tail goes here';
+    expect(safeTelegramHtmlChunk(html, 8)).toBe('<b>x</b>');
   });
 });

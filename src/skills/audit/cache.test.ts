@@ -442,16 +442,26 @@ describe('getAuditOverview', () => {
       recentRuns: false,
       suppressions: false,
     });
+    // Server-defined caps surfaced to the client so the UI doesn't
+    // hard-code the same numbers (GPT review #4).
+    expect(ov.caps.suppressionsDefault).toBeGreaterThan(0);
+    expect(ov.caps.suppressionsMax).toBeGreaterThanOrEqual(ov.caps.suppressionsDefault);
+    expect(ov.caps.recentRunsMax).toBeGreaterThan(0);
   });
 
   it('returns empty sections when KV is missing rather than throwing', async () => {
     const ov = await getAuditOverview(undefined);
-    expect(ov).toEqual({
-      subscriptions: [],
-      recentRuns: [],
-      suppressions: [],
-      truncated: { subscriptions: false, recentRuns: false, suppressions: false },
+    expect(ov.subscriptions).toEqual([]);
+    expect(ov.recentRuns).toEqual([]);
+    expect(ov.suppressions).toEqual([]);
+    expect(ov.truncated).toEqual({
+      subscriptions: false,
+      recentRuns: false,
+      suppressions: false,
     });
+    // Caps must still be present even when KV is unbound — UI uses
+    // them on the empty-state render.
+    expect(ov.caps).toBeDefined();
   });
 
   it('reports truncated.recentRuns=true when the run scan produces more candidates than runLimit', async () => {
