@@ -6,18 +6,86 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { getSandbox, type Sandbox as SandboxClass } from '@cloudflare/sandbox';
-import { createOpenRouterClient, parseSSEStream, type ChatMessage, type ResponseFormat } from '../openrouter/client';
-import { executeTool, AVAILABLE_TOOLS, githubReadFile, encodeGitHubPath, type ToolContext, type ToolCall, type WorkspaceFile, TOOLS_WITHOUT_BROWSER, getToolsForPhase, modelSupportsTools, type ToolCapabilities } from '../openrouter/tools';
-import { getModelId, getModel, getProvider, getProviderConfig, getReasoningParam, buildFallbackReasoningParam, detectReasoningLevel, isReasoningMandatoryError, getFreeToolModels, categorizeModel, clampMaxTokens, getTemperature, isAnthropicModel, registerDynamicModels, blockModels, getOrchestraRecommendations, type Provider, type ReasoningLevel, type ModelCategory } from '../openrouter/models';
+import {
+  createOpenRouterClient,
+  parseSSEStream,
+  type ChatMessage,
+  type ResponseFormat,
+} from '../openrouter/client';
+import {
+  executeTool,
+  AVAILABLE_TOOLS,
+  githubReadFile,
+  encodeGitHubPath,
+  type ToolContext,
+  type ToolCall,
+  type WorkspaceFile,
+  TOOLS_WITHOUT_BROWSER,
+  getToolsForPhase,
+  modelSupportsTools,
+  type ToolCapabilities,
+} from '../openrouter/tools';
+import {
+  getModelId,
+  getModel,
+  getProvider,
+  getProviderConfig,
+  getReasoningParam,
+  buildFallbackReasoningParam,
+  detectReasoningLevel,
+  isReasoningMandatoryError,
+  getFreeToolModels,
+  categorizeModel,
+  clampMaxTokens,
+  getTemperature,
+  isAnthropicModel,
+  registerDynamicModels,
+  blockModels,
+  getOrchestraRecommendations,
+  type Provider,
+  type ReasoningLevel,
+  type ModelCategory,
+} from '../openrouter/models';
 import { recordUsage, formatCostFooter, type TokenUsage } from '../openrouter/costs';
 import { injectCacheControl } from '../openrouter/prompt-cache';
-import { buildAnthropicRequest, buildAnthropicHeaders, parseAnthropicSSEStream } from '../openrouter/anthropic-direct';
-import { markdownToTelegramHtml } from '../utils/telegram-format';
-import { extractLearning, storeLearning, storeLastTaskSummary, storeSessionSummary, type SessionSummary } from '../openrouter/learnings';
-import { loadUserMemory, storeMemoryFact, buildExtractionPrompt, parseExtractionResponse, MIN_EXTRACTION_LENGTH, EXTRACTION_DEBOUNCE_MS } from '../openrouter/memory';
+import {
+  buildAnthropicRequest,
+  buildAnthropicHeaders,
+  parseAnthropicSSEStream,
+} from '../openrouter/anthropic-direct';
+import { markdownToTelegramHtml, safeTelegramHtmlChunk } from '../utils/telegram-format';
+import {
+  extractLearning,
+  storeLearning,
+  storeLastTaskSummary,
+  storeSessionSummary,
+  type SessionSummary,
+} from '../openrouter/learnings';
+import {
+  loadUserMemory,
+  storeMemoryFact,
+  buildExtractionPrompt,
+  parseExtractionResponse,
+  MIN_EXTRACTION_LENGTH,
+  EXTRACTION_DEBOUNCE_MS,
+} from '../openrouter/memory';
 import { extractFilePaths, extractGitHubContext } from '../utils/file-path-extractor';
 import { UserStorage } from '../openrouter/storage';
-import { parseOrchestraResult, validateOrchestraResult, storeOrchestraTask, appendOrchestraEvent, parseDraftBlocks, formatDraftPreview, type OrchestraTask, type OrchestraEvent, type OrchestraExecutionProfile, type RuntimeRiskProfile, createRuntimeRiskProfile, updateRuntimeRisk, formatRuntimeRisk } from '../orchestra/orchestra';
+import {
+  parseOrchestraResult,
+  validateOrchestraResult,
+  storeOrchestraTask,
+  appendOrchestraEvent,
+  parseDraftBlocks,
+  formatDraftPreview,
+  type OrchestraTask,
+  type OrchestraEvent,
+  type OrchestraExecutionProfile,
+  type RuntimeRiskProfile,
+  createRuntimeRiskProfile,
+  updateRuntimeRisk,
+  formatRuntimeRisk,
+} from '../orchestra/orchestra';
 import { releaseRepoLock } from '../concurrency/branch-lock';
 import { appendScratchpad } from '../orchestra/scratchpad';
 import { runSkill } from '../skills/runtime';
@@ -27,23 +95,64 @@ import type { SkillRequest, SkillResult } from '../skills/types';
 import { createAcontextClient, toOpenAIMessages } from '../acontext/client';
 import { estimateTokens, compressContextBudgeted, sanitizeToolPairs } from './context-budget';
 import { checkPhaseBudget, PhaseBudgetExceededError, getPhaseBudget } from './phase-budget';
-import { validateToolResult, createToolErrorTracker, trackToolError, generateCompletionWarning, adjustConfidence, isTransientApiError, isPermanentApiError, type ToolErrorTracker } from '../guardrails/tool-validator';
-import { createWebSearchLimiter, parseWebSearchLimiterConfig } from '../rate-limit/web-search-limiter';
+import {
+  validateToolResult,
+  createToolErrorTracker,
+  trackToolError,
+  generateCompletionWarning,
+  adjustConfidence,
+  isTransientApiError,
+  isPermanentApiError,
+  type ToolErrorTracker,
+} from '../guardrails/tool-validator';
+import {
+  createWebSearchLimiter,
+  parseWebSearchLimiterConfig,
+} from '../rate-limit/web-search-limiter';
 import { scanToolCallForRisks } from '../guardrails/destructive-op-guard';
-import { isExtractionTask, detectExtractionDetails, verifyExtraction, formatVerificationForContext, scanCrossFileReferences, type ExtractionCheck } from '../guardrails/extraction-verifier';
-import { shouldVerify, verifyWorkPhase, formatVerificationFailures } from '../guardrails/cove-verification';
+import {
+  isExtractionTask,
+  detectExtractionDetails,
+  verifyExtraction,
+  formatVerificationForContext,
+  scanCrossFileReferences,
+  type ExtractionCheck,
+} from '../guardrails/extraction-verifier';
+import {
+  shouldVerify,
+  verifyWorkPhase,
+  formatVerificationFailures,
+} from '../guardrails/cove-verification';
 import { computeRunHealth, formatHealthFooter } from '../guardrails/run-health';
-import { STRUCTURED_PLAN_PROMPT, parseStructuredPlan, prefetchPlanFiles, formatPlanSummary, awaitAndFormatPrefetchedFiles, type StructuredPlan } from './step-decomposition';
-import { formatProgressMessage, extractToolContext, shouldSendUpdate, type ProgressState } from './progress-formatter';
+import {
+  STRUCTURED_PLAN_PROMPT,
+  parseStructuredPlan,
+  prefetchPlanFiles,
+  formatPlanSummary,
+  awaitAndFormatPrefetchedFiles,
+  type StructuredPlan,
+} from './step-decomposition';
+import {
+  formatProgressMessage,
+  extractToolContext,
+  shouldSendUpdate,
+  type ProgressState,
+} from './progress-formatter';
 import { createSpeculativeExecutor } from './speculative-tools';
-import { selectReviewerModel, buildReviewMessages, parseReviewResponse, shouldUseMultiAgentReview } from '../openrouter/reviewer';
+import {
+  selectReviewerModel,
+  buildReviewMessages,
+  parseReviewResponse,
+  shouldUseMultiAgentReview,
+} from '../openrouter/reviewer';
 
 // Task phase type for structured task processing
 export type TaskPhase = 'plan' | 'work' | 'review';
 
 // Phase-aware prompts injected at each stage
 // Legacy free-form prompt (kept for reference, replaced by STRUCTURED_PLAN_PROMPT from step-decomposition)
-const PLAN_PHASE_PROMPT = 'Before starting, briefly outline your approach (2-3 bullet points): what tools you\'ll use and in what order. Then proceed immediately with execution.';
+const PLAN_PHASE_PROMPT =
+  "Before starting, briefly outline your approach (2-3 bullet points): what tools you'll use and in what order. Then proceed immediately with execution.";
 
 /**
  * Detect if the user's latest message is a simple query that doesn't need a planning phase.
@@ -52,7 +161,7 @@ const PLAN_PHASE_PROMPT = 'Before starting, briefly outline your approach (2-3 b
  */
 function isSimpleQuery(messages: ChatMessage[]): boolean {
   // Find the last user message (the actual query)
-  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
   if (!lastUserMsg) return false;
   const text = typeof lastUserMsg.content === 'string' ? lastUserMsg.content : '';
   // Skip plan-phase injection messages
@@ -61,10 +170,12 @@ function isSimpleQuery(messages: ChatMessage[]): boolean {
   const trimmed = text.trim();
 
   // Check for multi-step coding indicators
-  const complexPatterns = /\b(implement|refactor|create .+ (app|project|service)|build .+ (system|feature)|write .+ (test|code)|debug|fix .+ (bug|issue)|review .+ (code|pr)|analyze .+ (codebase|repo))\b/i;
+  const complexPatterns =
+    /\b(implement|refactor|create .+ (app|project|service)|build .+ (system|feature)|write .+ (test|code)|debug|fix .+ (bug|issue)|review .+ (code|pr)|analyze .+ (codebase|repo))\b/i;
   // Repo-analysis queries require reading multiple files — must go through planning phase
   // to pre-declare which files to read instead of reactive discovery loops
-  const repoAnalysisPatterns = /\b(top \d+ .*(files?|modules?|components?)|most important .*(files?|parts?)|summarize .*(repo|codebase|project)|overview .*(repo|codebase|project)|architecture|codebase structure|key files?)\b/i;
+  const repoAnalysisPatterns =
+    /\b(top \d+ .*(files?|modules?|components?)|most important .*(files?|parts?)|summarize .*(repo|codebase|project)|overview .*(repo|codebase|project)|architecture|codebase structure|key files?)\b/i;
 
   // Short messages (under 150 chars) that are conversational/lookup are simple
   if (trimmed.length < 150) {
@@ -80,22 +191,39 @@ function isSimpleQuery(messages: ChatMessage[]): boolean {
   if (trimmed.length >= 150) {
     const hasCodingTask = complexPatterns.test(trimmed) || repoAnalysisPatterns.test(trimmed);
     // Check for explicit file/repo references that indicate code work
-    const hasFileReferences = /\b(src\/|\.tsx?|\.jsx?|\.py|\.rs|\.go|\.vue|\.svelte|package\.json|tsconfig|\.config\.|README|CHANGELOG)\b/.test(trimmed);
-    const hasRepoActions = /\b(commit|push|pull request|PR|merge|branch|deploy|migration|endpoint|API route|database|schema)\b/i.test(trimmed);
+    const hasFileReferences =
+      /\b(src\/|\.tsx?|\.jsx?|\.py|\.rs|\.go|\.vue|\.svelte|package\.json|tsconfig|\.config\.|README|CHANGELOG)\b/.test(
+        trimmed,
+      );
+    const hasRepoActions =
+      /\b(commit|push|pull request|PR|merge|branch|deploy|migration|endpoint|API route|database|schema)\b/i.test(
+        trimmed,
+      );
     const hasCodeBlocks = /```[\s\S]*```/.test(trimmed);
     // Explicit repo context (e.g. "in the repo", "in the codebase", "in this project")
-    const hasRepoContext = /\b(in (the|this|my|our) (repo|codebase|project)|github\.com\/)\b/i.test(trimmed);
+    const hasRepoContext = /\b(in (the|this|my|our) (repo|codebase|project)|github\.com\/)\b/i.test(
+      trimmed,
+    );
 
-    if (!hasCodingTask && !hasFileReferences && !hasRepoActions && !hasCodeBlocks && !hasRepoContext) {
+    if (
+      !hasCodingTask &&
+      !hasFileReferences &&
+      !hasRepoActions &&
+      !hasCodeBlocks &&
+      !hasRepoContext
+    ) {
       return true;
     }
   }
 
   return false;
 }
-const REVIEW_PHASE_PROMPT = 'Before delivering your final answer, briefly verify: (1) Did you answer the complete question? (2) Are all data points current and accurate? (3) Is anything missing?';
-const CODING_REVIEW_PROMPT = 'Before delivering your final answer, verify with evidence:\n(1) Did you answer the complete question? Cite specific tool outputs or file contents that support your answer.\n(2) If you made code changes, did you verify them with the relevant tool (github_read_file, web_fetch, etc.)? Do NOT claim changes were made unless a tool confirmed it.\n(3) If you ran commands or created PRs, check the tool result — did it actually succeed? If a tool returned an error, say so.\n(4) For any claim about repository state (files exist, code works, tests pass), you MUST have observed it from a tool output in this session. Do not assert repo state from memory.\n(5) If you could not fully complete the task, say what remains and why — do not claim completion.\nLabel your confidence: High (tool-verified), Medium (partially verified), or Low (inferred without tool confirmation).';
-const ORCHESTRA_REVIEW_PROMPT = 'CRITICAL REVIEW — verify before reporting:\n(1) Did github_create_pr SUCCEED? Check the tool result — if it returned an error (422, 403, etc.), you MUST fix the issue and retry — push a fix commit to the SAME branch first (new branches fork from main and lose your prior work). Do NOT claim success if the PR was not created.\n(2) Does your ORCHESTRA_RESULT block contain a REAL PR URL (https://github.com/...)? If not, the task is NOT complete.\n(3) Did you update ROADMAP.md and WORK_LOG.md in the same PR?\n(4) INCOMPLETE REFACTOR CHECK — the #1 bot failure mode:\n    - If you created new module files (extracted code into separate files), did you ALSO:\n      a) Add import statements to the SOURCE file?\n      b) DELETE the original definitions (functions, constants, components, data arrays) from the source file?\n    - Check: did the source file\'s line count DROP significantly? If it barely changed or grew, you only added imports but never deleted the original code — the new modules are dead code duplicates.\n    - The task says "extract" or "split" — that means CREATE + IMPORT + DELETE in one PR. Not just create.\n    - Check the github_create_pr tool result for "INCOMPLETE REFACTOR" or "INCOMPLETE SPLIT" warnings.\n    - If the source file didn\'t shrink, go back and use patch action to DELETE the extracted definitions NOW.\n(5) CODE QUALITY SELF-CHECK — review the code you wrote for common bugs:\n    - Event handlers: if you added onKeyDown/onKeyPress, did you call e.preventDefault() for keys with default browser behavior (Space scrolls the page, Enter submits forms)?\n    - Imports: did you import everything you use? Did you remove imports for things you deleted?\n    - Props: if you added a new prop, does the parent component need to pass it? Check both sides.\n    - State: if you added useState/useEffect, are cleanup functions needed? Are dependencies correct?\n    - Edge cases: does the code handle empty/null/undefined inputs gracefully?\n    If you find an issue, fix it NOW by pushing a patch to the same branch.\n(6) SURROGATE TESTING CHECK — the #2 bot failure mode:\n    - If you created a new utility/module file to make functions testable, did you ALSO:\n      a) Update the PRODUCTION code (e.g. App.jsx) to import and USE the extracted functions?\n      b) DELETE the original inline logic from the production file?\n    - If tests only import from the new module but the app still uses inline code, you have "surrogate tests" — they verify a copy, not the running code. This is NOT acceptable.\n    - Fix: wire the extracted module into the production code NOW.\n(7) TEST FIXTURE REALISM CHECK:\n    - Do test fixtures use the REAL data shapes from the codebase? If production uses {en: 0.6, fr: 0.4}, tests MUST NOT use {english: 0.9, french: 0.3}.\n    - Read the actual production data files (e.g. destinations.js, config.js) and compare key names, value ranges, and object shapes against your test fixtures.\n    - If fixtures use invented keys or shapes, fix them NOW to match production data.\n(8) DEPENDENCY HYGIENE:\n    - Only add dependencies that are strictly required for the task. Do NOT add UI packages (e.g. @vitest/ui) when only headless testing was requested.\n    - If you added a dependency, verify it is actually imported somewhere in the code.\nIf any of these fail, fix the issue NOW before reporting.\n(9) FILE VERIFICATION CHECK:\n    - Did you re-read every file you modified using github_read_file to confirm changes are correct?\n    - Do all imports reference real, existing files/modules? Never assume a path is valid without checking.\n    - If you renamed or moved functions/types/variables, are ALL references updated?\n    - Successful file writes alone are NOT proof of correctness — verify the actual file content.\n    - If you skipped verification, do it NOW before reporting success.';
+const REVIEW_PHASE_PROMPT =
+  'Before delivering your final answer, briefly verify: (1) Did you answer the complete question? (2) Are all data points current and accurate? (3) Is anything missing?';
+const CODING_REVIEW_PROMPT =
+  'Before delivering your final answer, verify with evidence:\n(1) Did you answer the complete question? Cite specific tool outputs or file contents that support your answer.\n(2) If you made code changes, did you verify them with the relevant tool (github_read_file, web_fetch, etc.)? Do NOT claim changes were made unless a tool confirmed it.\n(3) If you ran commands or created PRs, check the tool result — did it actually succeed? If a tool returned an error, say so.\n(4) For any claim about repository state (files exist, code works, tests pass), you MUST have observed it from a tool output in this session. Do not assert repo state from memory.\n(5) If you could not fully complete the task, say what remains and why — do not claim completion.\nLabel your confidence: High (tool-verified), Medium (partially verified), or Low (inferred without tool confirmation).';
+const ORCHESTRA_REVIEW_PROMPT =
+  'CRITICAL REVIEW — verify before reporting:\n(1) Did github_create_pr SUCCEED? Check the tool result — if it returned an error (422, 403, etc.), you MUST fix the issue and retry — push a fix commit to the SAME branch first (new branches fork from main and lose your prior work). Do NOT claim success if the PR was not created.\n(2) Does your ORCHESTRA_RESULT block contain a REAL PR URL (https://github.com/...)? If not, the task is NOT complete.\n(3) Did you update ROADMAP.md and WORK_LOG.md in the same PR?\n(4) INCOMPLETE REFACTOR CHECK — the #1 bot failure mode:\n    - If you created new module files (extracted code into separate files), did you ALSO:\n      a) Add import statements to the SOURCE file?\n      b) DELETE the original definitions (functions, constants, components, data arrays) from the source file?\n    - Check: did the source file\'s line count DROP significantly? If it barely changed or grew, you only added imports but never deleted the original code — the new modules are dead code duplicates.\n    - The task says "extract" or "split" — that means CREATE + IMPORT + DELETE in one PR. Not just create.\n    - Check the github_create_pr tool result for "INCOMPLETE REFACTOR" or "INCOMPLETE SPLIT" warnings.\n    - If the source file didn\'t shrink, go back and use patch action to DELETE the extracted definitions NOW.\n(5) CODE QUALITY SELF-CHECK — review the code you wrote for common bugs:\n    - Event handlers: if you added onKeyDown/onKeyPress, did you call e.preventDefault() for keys with default browser behavior (Space scrolls the page, Enter submits forms)?\n    - Imports: did you import everything you use? Did you remove imports for things you deleted?\n    - Props: if you added a new prop, does the parent component need to pass it? Check both sides.\n    - State: if you added useState/useEffect, are cleanup functions needed? Are dependencies correct?\n    - Edge cases: does the code handle empty/null/undefined inputs gracefully?\n    If you find an issue, fix it NOW by pushing a patch to the same branch.\n(6) SURROGATE TESTING CHECK — the #2 bot failure mode:\n    - If you created a new utility/module file to make functions testable, did you ALSO:\n      a) Update the PRODUCTION code (e.g. App.jsx) to import and USE the extracted functions?\n      b) DELETE the original inline logic from the production file?\n    - If tests only import from the new module but the app still uses inline code, you have "surrogate tests" — they verify a copy, not the running code. This is NOT acceptable.\n    - Fix: wire the extracted module into the production code NOW.\n(7) TEST FIXTURE REALISM CHECK:\n    - Do test fixtures use the REAL data shapes from the codebase? If production uses {en: 0.6, fr: 0.4}, tests MUST NOT use {english: 0.9, french: 0.3}.\n    - Read the actual production data files (e.g. destinations.js, config.js) and compare key names, value ranges, and object shapes against your test fixtures.\n    - If fixtures use invented keys or shapes, fix them NOW to match production data.\n(8) DEPENDENCY HYGIENE:\n    - Only add dependencies that are strictly required for the task. Do NOT add UI packages (e.g. @vitest/ui) when only headless testing was requested.\n    - If you added a dependency, verify it is actually imported somewhere in the code.\nIf any of these fail, fix the issue NOW before reporting.\n(9) FILE VERIFICATION CHECK:\n    - Did you re-read every file you modified using github_read_file to confirm changes are correct?\n    - Do all imports reference real, existing files/modules? Never assume a path is valid without checking.\n    - If you renamed or moved functions/types/variables, are ALL references updated?\n    - Successful file writes alone are NOT proof of correctness — verify the actual file content.\n    - If you skipped verification, do it NOW before reporting success.';
 
 // Source-grounding guardrail — injected into coding/github tasks to prevent hallucination.
 // This is a strict instruction that the model MUST NOT fabricate claims about repo state.
@@ -205,14 +333,22 @@ type TaskCategory = 'coding' | 'reasoning' | 'general';
  * Detect what capability the task primarily needs from the user message.
  */
 function detectTaskCategory(messages: readonly ChatMessage[]): TaskCategory {
-  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
   if (!lastUserMsg || typeof lastUserMsg.content !== 'string') return 'general';
   const text = lastUserMsg.content.toLowerCase();
 
-  if (/\b(code|implement|debug|fix|refactor|function|class|script|deploy|build|test|coding|programming|pr\b|pull.?request|repository|repo\b|commit|merge|branch)\b/.test(text)) {
+  if (
+    /\b(code|implement|debug|fix|refactor|function|class|script|deploy|build|test|coding|programming|pr\b|pull.?request|repository|repo\b|commit|merge|branch)\b/.test(
+      text,
+    )
+  ) {
     return 'coding';
   }
-  if (/\b(research|analy[sz]e|compare|explain.{0,10}detail|reason|math|calculate|solve|prove|algorithm|investigate|comprehensive)\b/.test(text)) {
+  if (
+    /\b(research|analy[sz]e|compare|explain.{0,10}detail|reason|math|calculate|solve|prove|algorithm|investigate|comprehensive)\b/.test(
+      text,
+    )
+  ) {
     return 'reasoning';
   }
   return 'general';
@@ -225,7 +361,7 @@ function detectTaskCategory(messages: readonly ChatMessage[]): TaskCategory {
 function buildRotationOrder(
   currentAlias: string,
   freeToolModels: string[],
-  taskCategory: TaskCategory
+  taskCategory: TaskCategory,
 ): string[] {
   const preferred: string[] = [];
   const fallback: string[] = [];
@@ -395,16 +531,16 @@ export interface TaskRequest {
   openrouterKey: string;
   githubToken?: string;
   braveSearchKey?: string; // Brave Search (fallback web_search provider)
-  tavilyKey?: string;      // Tavily Search (preferred web_search provider — no credit card)
+  tavilyKey?: string; // Tavily Search (preferred web_search provider — no credit card)
   // Direct API keys (optional)
-  dashscopeKey?: string;   // For Qwen (DashScope/Alibaba)
-  moonshotKey?: string;    // For Kimi (Moonshot)
-  deepseekKey?: string;    // For DeepSeek
-  anthropicKey?: string;   // For Claude (Anthropic direct)
-  nvidiaKey?: string;      // For NVIDIA NIM free models
+  dashscopeKey?: string; // For Qwen (DashScope/Alibaba)
+  moonshotKey?: string; // For Kimi (Moonshot)
+  deepseekKey?: string; // For DeepSeek
+  anthropicKey?: string; // For Claude (Anthropic direct)
+  nvidiaKey?: string; // For NVIDIA NIM free models
   cloudflareApiToken?: string; // Cloudflare API token for Code Mode MCP
   // Auto-resume setting
-  autoResume?: boolean;    // If true, auto-resume on timeout
+  autoResume?: boolean; // If true, auto-resume on timeout
   // Reasoning level override (from think:LEVEL prefix)
   reasoningLevel?: ReasoningLevel;
   // Structured output format (from json: prefix)
@@ -683,9 +819,9 @@ export function getStreamPolicy(provider: string, idleTimeoutMs: number): Stream
     const hardTimeoutMs = 300_000;
     return {
       keepAliveIntervalMs,
-      persistIntervalMs: 30_000,                               // 2× keepalive — no drift
-      softSplitMs: hardTimeoutMs - 2 * keepAliveIntervalMs,    // 270s
-      softSplitToolMs: hardTimeoutMs - keepAliveIntervalMs,    // 285s
+      persistIntervalMs: 30_000, // 2× keepalive — no drift
+      softSplitMs: hardTimeoutMs - 2 * keepAliveIntervalMs, // 270s
+      softSplitToolMs: hardTimeoutMs - keepAliveIntervalMs, // 285s
       hardTimeoutMs,
     };
   }
@@ -717,7 +853,9 @@ const STREAM_SPLIT_MAX_MS = 120_000;
  * persisted in R2 checkpoints alongside messages.
  */
 /** @internal Exported for testing */
-export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & { messages: never[] } {
+export function taskForStorage(
+  task: TaskState,
+): Omit<TaskState, 'messages'> & { messages: never[] } {
   const { messages: _msgs, workPhaseContent: _wpc, structuredPlan: _sp, ...rest } = task;
   const result = { ...rest, messages: [] as never[] };
   // Guard against 128KB DO storage limit — truncate growable arrays if needed
@@ -727,7 +865,9 @@ export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & {
   let serialized = JSON.stringify(result);
   let serializedBytes = encoder.encode(serialized).byteLength;
   if (serializedBytes > MAX_DO_VALUE_BYTES * 0.8) {
-    console.log(`[TaskProcessor] WARNING: task storage near limit (${serializedBytes} bytes), trimming arrays`);
+    console.log(
+      `[TaskProcessor] WARNING: task storage near limit (${serializedBytes} bytes), trimming arrays`,
+    );
     // Trim the largest growable arrays to fit
     if (result.toolSignatures && result.toolSignatures.length > 20) {
       result.toolSignatures = result.toolSignatures.slice(-20);
@@ -739,7 +879,9 @@ export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & {
     serialized = JSON.stringify(result);
     serializedBytes = encoder.encode(serialized).byteLength;
     if (serializedBytes > MAX_DO_VALUE_BYTES * 0.8) {
-      console.log(`[TaskProcessor] WARNING: still near limit after trim (${serializedBytes} bytes), aggressive truncation`);
+      console.log(
+        `[TaskProcessor] WARNING: still near limit after trim (${serializedBytes} bytes), aggressive truncation`,
+      );
       if (result.toolSignatures && result.toolSignatures.length > 5) {
         result.toolSignatures = result.toolSignatures.slice(-5);
       }
@@ -749,12 +891,15 @@ export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & {
       // Final verification: ensure we're actually under the hard limit after aggressive trim
       const finalBytes = encoder.encode(JSON.stringify(result)).byteLength;
       if (finalBytes > MAX_DO_VALUE_BYTES) {
-        console.log(`[TaskProcessor] CRITICAL: still over hard limit after aggressive trim (${finalBytes} bytes), clearing arrays`);
+        console.log(
+          `[TaskProcessor] CRITICAL: still over hard limit after aggressive trim (${finalBytes} bytes), clearing arrays`,
+        );
         result.toolSignatures = [];
         result.lastToolErrors = [];
         // Truncate result text if it's the culprit
         if (result.result && encoder.encode(result.result).byteLength > 8000) {
-          result.result = result.result.slice(0, 2000) + '\n\n[... truncated for storage limit ...]';
+          result.result =
+            result.result.slice(0, 2000) + '\n\n[... truncated for storage limit ...]';
         }
       }
     }
@@ -763,7 +908,11 @@ export function taskForStorage(task: TaskState): Omit<TaskState, 'messages'> & {
 }
 
 /** Get the auto-resume limit based on model cost, task type, and execution profile */
-function getAutoResumeLimit(modelAlias: string, isOrchestra = false, profile?: OrchestraExecutionProfile): number {
+function getAutoResumeLimit(
+  modelAlias: string,
+  isOrchestra = false,
+  profile?: OrchestraExecutionProfile,
+): number {
   // Profile-driven cap takes precedence for orchestra tasks
   if (profile) {
     return profile.bounds.maxAutoResumes;
@@ -817,11 +966,16 @@ function parseProviderError(status: number, rawText: string): { status: number; 
 export function getWatchdogStuckThreshold(modelAlias: string): number {
   const isPaidModel = getModel(modelAlias)?.isFree !== true;
   const provider = getProvider(modelAlias);
-  const providerMultiplier = provider === 'moonshot' ? 2.5
-    : provider === 'deepseek' ? 1.8
-    : provider === 'dashscope' ? 1.5
-    : provider === 'anthropic' ? 1.5 // Was 3.0 — reduced since keepAliveSleep keeps storage fresh during pacing
-    : 1.0;
+  const providerMultiplier =
+    provider === 'moonshot'
+      ? 2.5
+      : provider === 'deepseek'
+        ? 1.8
+        : provider === 'dashscope'
+          ? 1.5
+          : provider === 'anthropic'
+            ? 1.5 // Was 3.0 — reduced since keepAliveSleep keeps storage fresh during pacing
+            : 1.0;
 
   const baseThreshold = isPaidModel ? STUCK_THRESHOLD_PAID_MS : STUCK_THRESHOLD_FREE_MS;
   // Max idle timeout for this provider (180s base * multiplier for paid, or 180s * multiplier for free)
@@ -838,7 +992,7 @@ export function getWatchdogStuckThreshold(modelAlias: string): number {
  * - Assistant messages without tool_calls and empty content: set to "(empty)"
  */
 function sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map(msg => {
+  return messages.map((msg) => {
     if (msg.role !== 'assistant') return msg;
     const content = msg.content;
     const isEmpty = content === '' || content === null || content === undefined;
@@ -866,7 +1020,7 @@ function sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
  * 3. Messages were restored from a checkpoint that didn't preserve reasoning
  */
 function ensureMoonshotReasoning(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map(msg => {
+  return messages.map((msg) => {
     if (msg.role !== 'assistant') return msg;
     if (!msg.tool_calls || msg.tool_calls.length === 0) return msg;
     if (msg.reasoning_content) return msg;
@@ -950,7 +1104,9 @@ export function truncateLargeToolResults(messages: ChatMessage[], maxChars: numb
     const parts: string[] = [];
     if (truncated > 0) parts.push(`truncated ${truncated} large result(s)`);
     if (deduplicated > 0) parts.push(`deduplicated ${deduplicated} repeated file read(s)`);
-    console.log(`[TaskProcessor] Resume optimization: ${parts.join(', ')} (threshold: ${maxChars} chars)`);
+    console.log(
+      `[TaskProcessor] Resume optimization: ${parts.join(', ')} (threshold: ${maxChars} chars)`,
+    );
   }
 }
 
@@ -975,7 +1131,11 @@ function extractFilePathFromArgs(argsJson: string): string | null {
  * - **Default**: First 15 + last 5 lines (original behavior)
  */
 /** @internal Exported for testing */
-export function truncateToolResultForResume(content: string, toolName: string, maxChars: number): string {
+export function truncateToolResultForResume(
+  content: string,
+  toolName: string,
+  maxChars: number,
+): string {
   const lines = content.split('\n');
   const totalLines = lines.length;
 
@@ -1044,8 +1204,12 @@ function extractRepoAndBranch(messages: readonly ChatMessage[]): {
     if (msg.role !== 'assistant' || !msg.tool_calls) continue;
     for (const tc of msg.tool_calls) {
       const name = tc.function.name;
-      if (name !== 'github_push_files' && name !== 'workspace_commit'
-          && name !== 'github_create_pr') continue;
+      if (
+        name !== 'github_push_files' &&
+        name !== 'workspace_commit' &&
+        name !== 'github_create_pr'
+      )
+        continue;
       try {
         const args = JSON.parse(tc.function.arguments);
         if (args.owner && args.repo && args.branch) {
@@ -1055,7 +1219,9 @@ function extractRepoAndBranch(messages: readonly ChatMessage[]): {
           branch = args.branch.startsWith('bot/') ? args.branch : `bot/${args.branch}`;
           return { repoOwner, repoName, branch };
         }
-      } catch { /* ignore parse errors */ }
+      } catch {
+        /* ignore parse errors */
+      }
     }
   }
 
@@ -1128,13 +1294,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         if (new TextEncoder().encode(value).byteLength > MAX_STORAGE_VALUE_BYTES) {
           throw new Error(
             `File "${file.path}" exceeds 128KB storage limit (${Math.round(file.content.length / 1024)}KB). ` +
-            `Do NOT chunk the text. You must logically refactor this file into smaller discrete ` +
-            `functional modules (e.g., extract separate hooks, utilities, or sub-components) ` +
-            `and stage each module individually with workspace_write_file.`
+              `Do NOT chunk the text. You must logically refactor this file into smaller discrete ` +
+              `functional modules (e.g., extract separate hooks, utilities, or sub-components) ` +
+              `and stage each module individually with workspace_write_file.`,
           );
         }
         await storage.put(prefix + file.path, value);
-        console.log(`[TaskProcessor] Workspace: staged ${file.action} "${file.path}" (${file.content.length} chars) [persistent]`);
+        console.log(
+          `[TaskProcessor] Workspace: staged ${file.action} "${file.path}" (${file.content.length} chars) [persistent]`,
+        );
       },
       listFiles: async (): Promise<WorkspaceFile[]> => {
         const entries = await storage.list<string>({ prefix });
@@ -1150,7 +1318,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const entries = await storage.list({ prefix });
         if (entries.size > 0) {
           await storage.delete(Array.from(entries.keys()));
-          console.log(`[TaskProcessor] Workspace: cleared ${entries.size} staged file(s) [persistent]`);
+          console.log(
+            `[TaskProcessor] Workspace: cleared ${entries.size} staged file(s) [persistent]`,
+          );
         }
       },
     };
@@ -1173,7 +1343,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     let remaining = totalMs;
     while (remaining > 0) {
       const chunk = Math.min(remaining, INTERVAL);
-      await new Promise(r => setTimeout(r, chunk));
+      await new Promise((r) => setTimeout(r, chunk));
       remaining -= chunk;
       // Update heartbeat + storage to keep DO alive and prevent watchdog false alarm
       this.lastHeartbeatMs = Date.now();
@@ -1202,7 +1372,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (!githubToken) return;
 
     // Find the last user message
-    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
     if (!lastUser) return;
     const userText = typeof lastUser.content === 'string' ? lastUser.content : '';
 
@@ -1214,7 +1384,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const repo = extractGitHubContext(messages);
     if (!repo) return;
 
-    console.log(`[TaskProcessor] Pre-fetching ${paths.length} files from ${repo.owner}/${repo.repo}: ${paths.join(', ')}`);
+    console.log(
+      `[TaskProcessor] Pre-fetching ${paths.length} files from ${repo.owner}/${repo.repo}: ${paths.join(', ')}`,
+    );
 
     // Fire off all fetches in parallel (non-blocking)
     for (const filePath of paths) {
@@ -1224,12 +1396,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       if (this.prefetchPromises.has(prefetchKey)) continue;
 
       const fetchPromise = githubReadFile(repo.owner, repo.repo, filePath, undefined, githubToken)
-        .then(content => {
+        .then((content) => {
           console.log(`[TaskProcessor] Prefetched: ${prefetchKey} (${content.length} chars)`);
           return content;
         })
-        .catch(err => {
-          console.log(`[TaskProcessor] Prefetch failed: ${prefetchKey} — ${err instanceof Error ? err.message : String(err)}`);
+        .catch((err) => {
+          console.log(
+            `[TaskProcessor] Prefetch failed: ${prefetchKey} — ${err instanceof Error ? err.message : String(err)}`,
+          );
           return null;
         });
 
@@ -1243,13 +1417,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
   /** Check if a tool result indicates a rate limit (429/503) from an external API. */
   private isRateLimitError(content: string): boolean {
-    return /\bHTTP[_ ](?:429|503)\b/i.test(content)
-      || /\b(?:rate.?limit|too many requests|service unavailable)\b/i.test(content);
+    return (
+      /\bHTTP[_ ](?:429|503)\b/i.test(content) ||
+      /\b(?:rate.?limit|too many requests|service unavailable)\b/i.test(content)
+    );
   }
 
   private async executeToolWithCache(
     toolCall: ToolCall,
-    toolContext: ToolContext
+    toolContext: ToolContext,
   ): Promise<{ tool_call_id: string; content: string }> {
     const toolName = toolCall.function.name;
     const cacheKey = `${toolName}:${toolCall.function.arguments}`;
@@ -1267,7 +1443,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             // Store in normal cache for future hits with exact same args
             this.toolResultCache.set(cacheKey, content);
             this.prefetchHits++;
-            console.log(`[TaskProcessor] Prefetch HIT: ${prefetchKey} (${this.prefetchHits} total)`);
+            console.log(
+              `[TaskProcessor] Prefetch HIT: ${prefetchKey} (${this.prefetchHits} total)`,
+            );
             return { tool_call_id: toolCall.id, content };
           }
         }
@@ -1281,7 +1459,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       const cached = this.toolResultCache.get(cacheKey);
       if (cached !== undefined) {
         this.toolCacheHits++;
-        console.log(`[TaskProcessor] Tool cache HIT: ${toolName} (${this.toolResultCache.size} entries)`);
+        console.log(
+          `[TaskProcessor] Tool cache HIT: ${toolName} (${this.toolResultCache.size} entries)`,
+        );
         return { tool_call_id: toolCall.id, content: cached };
       }
 
@@ -1298,7 +1478,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Destructive operation guard (Phase 7A.3): block critical/high-risk tool calls
     const riskCheck = scanToolCallForRisks(toolCall);
     if (riskCheck.blocked) {
-      console.log(`[TaskProcessor] BLOCKED destructive op: ${toolName} — ${riskCheck.flags.map(f => f.category).join(', ')}`);
+      console.log(
+        `[TaskProcessor] BLOCKED destructive op: ${toolName} — ${riskCheck.flags.map((f) => f.category).join(', ')}`,
+      );
       return { tool_call_id: toolCall.id, content: riskCheck.message! };
     }
 
@@ -1316,10 +1498,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         if (!this.isRateLimitError(result.content)) break;
         const jitter = Math.floor(Math.random() * 2000); // 0-2s random jitter
         const delay = (retry + 1) * 3000 + jitter; // 3-5s, 6-8s
-        console.log(`[TaskProcessor] Tool ${toolName} rate-limited, retrying in ${delay}ms (${retry + 1}/${maxToolRetries})`);
+        console.log(
+          `[TaskProcessor] Tool ${toolName} rate-limited, retrying in ${delay}ms (${retry + 1}/${maxToolRetries})`,
+        );
         // Keep heartbeat alive during backoff to prevent watchdog false alarms
         this.lastHeartbeatMs = Date.now();
-        await new Promise(r => setTimeout(r, delay));
+        await new Promise((r) => setTimeout(r, delay));
         this.lastHeartbeatMs = Date.now();
         result = await executeTool(toolCall, toolContext);
       }
@@ -1327,7 +1511,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       if (isCacheable && this.shouldCacheToolResult(result.content)) {
         this.toolResultCache.set(cacheKey, result.content);
         this.toolCacheMisses++;
-        console.log(`[TaskProcessor] Tool cache MISS: ${toolName} → stored (${this.toolResultCache.size} entries)`);
+        console.log(
+          `[TaskProcessor] Tool cache MISS: ${toolName} → stored (${this.toolResultCache.size} entries)`,
+        );
       }
 
       return { tool_call_id: result.tool_call_id, content: result.content };
@@ -1369,25 +1555,37 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * Update R2 orchestra history when a task fails.
    * Without this, failed tasks stay at 'started' forever in the history.
    */
-  private async updateOrchestraHistoryOnFailure(task: TaskState, failureReason: string): Promise<void> {
+  private async updateOrchestraHistoryOnFailure(
+    task: TaskState,
+    failureReason: string,
+  ): Promise<void> {
     if (!this.r2) return;
     try {
       // Detect if this was an orchestra task from the messages
-      const systemMsg = task.messages.find(m => m.role === 'system');
+      const systemMsg = task.messages.find((m) => m.role === 'system');
       const sysContent = typeof systemMsg?.content === 'string' ? systemMsg.content : '';
-      const isOrchestra = sysContent.includes('Orchestra INIT Mode') || sysContent.includes('Orchestra RUN Mode') || sysContent.includes('Orchestra REDO Mode') || sysContent.includes('Orchestra DO Mode');
+      const isOrchestra =
+        sysContent.includes('Orchestra INIT Mode') ||
+        sysContent.includes('Orchestra RUN Mode') ||
+        sysContent.includes('Orchestra REDO Mode') ||
+        sysContent.includes('Orchestra DO Mode');
       if (!isOrchestra) return;
 
-      const orchestraMode = sysContent.includes('Orchestra INIT Mode') ? 'init' as const
-        : sysContent.includes('Orchestra DO Mode') ? 'do' as const
-        : sysContent.includes('Orchestra REDO Mode') ? 'redo' as const : 'run' as const;
+      const orchestraMode = sysContent.includes('Orchestra INIT Mode')
+        ? ('init' as const)
+        : sysContent.includes('Orchestra DO Mode')
+          ? ('do' as const)
+          : sysContent.includes('Orchestra REDO Mode')
+            ? ('redo' as const)
+            : ('run' as const);
       const repoMatch = sysContent.match(/Full:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/);
       const repo = repoMatch ? repoMatch[1] : 'unknown/unknown';
-      const userMsg = task.messages.find(m => m.role === 'user');
+      const userMsg = task.messages.find((m) => m.role === 'user');
       const prompt = typeof userMsg?.content === 'string' ? userMsg.content : '';
 
       // Try to extract branch from task result or messages
-      const branchMatch = (task.result || '').match(/branch:\s*(\S+)/) || sysContent.match(/Branch:\s*`([^`]+)`/);
+      const branchMatch =
+        (task.result || '').match(/branch:\s*(\S+)/) || sysContent.match(/Branch:\s*`([^`]+)`/);
       const branch = branchMatch ? branchMatch[1] : '';
 
       const failedTask: OrchestraTask = {
@@ -1452,12 +1650,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // stale DO state from interfering with new code.
     const STALE_TASK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
     if (Date.now() - task.startTime > STALE_TASK_THRESHOLD_MS) {
-      console.log(`[TaskProcessor] Abandoning stale task (started ${Math.round((Date.now() - task.startTime) / 1000)}s ago)`);
+      console.log(
+        `[TaskProcessor] Abandoning stale task (started ${Math.round((Date.now() - task.startTime) / 1000)}s ago)`,
+      );
       task.status = 'failed';
-      task.error = 'Task abandoned: exceeded 1-hour lifetime (likely stale from previous deployment)';
+      task.error =
+        'Task abandoned: exceeded 1-hour lifetime (likely stale from previous deployment)';
       await this.doState.storage.put('task', taskForStorage(task));
-      try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
-      try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+      try {
+        await this.getWorkspaceManager(task.taskId).clear();
+      } catch {
+        /* best-effort */
+      }
+      try {
+        await this.doState.storage.delete(`originalMessages:${task.taskId}`);
+      } catch {
+        /* best-effort */
+      }
       // F.23: Release branch lock for stale tasks
       if (this.r2 && task.orchestraRepo) {
         releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
@@ -1477,17 +1686,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const actualSec = Math.round(wallClockElapsed / 1000);
         task.tierBudgetWarned = true;
         await this.doState.storage.put('task', taskForStorage(task));
-        console.log(`[TaskProcessor] Tier scope advisory: ${actualSec}s > ${expectedSec}s expected for "${tier}" tier`);
+        console.log(
+          `[TaskProcessor] Tier scope advisory: ${actualSec}s > ${expectedSec}s expected for "${tier}" tier`,
+        );
         this.emitOrchestraEvent(task, 'tier_scope_exceeded', {
-          tier, expectedMs: expectedBudget, actualMs: wallClockElapsed,
-          tools: task.toolsUsed.length, resumes: task.autoResumeCount ?? 0,
+          tier,
+          expectedMs: expectedBudget,
+          actualMs: wallClockElapsed,
+          tools: task.toolsUsed.length,
+          resumes: task.autoResumeCount ?? 0,
         });
         if (task.telegramToken) {
           await this.sendTelegramMessage(
-            task.telegramToken, task.chatId,
+            task.telegramToken,
+            task.chatId,
             `⏱️ Task running longer than expected for "${tier}" scope (${actualSec}s > ${expectedSec}s expected).\n` +
-            `${task.toolsUsed.length} tools, ${task.autoResumeCount ?? 0} resumes so far.\n` +
-            `💡 Consider a more capable model next time: ${this.getStallModelRecs()}`
+              `${task.toolsUsed.length} tools, ${task.autoResumeCount ?? 0} resumes so far.\n` +
+              `💡 Consider a more capable model next time: ${this.getStallModelRecs()}`,
           );
         }
       }
@@ -1499,7 +1714,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.yieldPending = false;
       await this.doState.storage.put('task', taskForStorage(task));
       const elapsed = Math.round((Date.now() - task.startTime) / 1000);
-      console.log(`[TaskProcessor] CPU budget yield resume — ${task.iterations} iterations, ${elapsed}s elapsed`);
+      console.log(
+        `[TaskProcessor] CPU budget yield resume — ${task.iterations} iterations, ${elapsed}s elapsed`,
+      );
 
       const taskRequest: TaskRequest = {
         taskId: task.taskId,
@@ -1535,26 +1752,28 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         prompt: task.prompt,
       };
 
-      this.doState.waitUntil(this.processTask(taskRequest).catch(async (error) => {
-        console.error('[TaskProcessor] Uncaught error in resumed processTask:', error);
-        try {
-          await this.doState.storage.deleteAlarm();
-          const failedTask = await this.doState.storage.get<TaskState>('task');
-          if (failedTask) {
-            failedTask.status = 'failed';
-            failedTask.error = `Resume error: ${error instanceof Error ? error.message : String(error)}`;
-            await this.doState.storage.put('task', taskForStorage(failedTask));
+      this.doState.waitUntil(
+        this.processTask(taskRequest).catch(async (error) => {
+          console.error('[TaskProcessor] Uncaught error in resumed processTask:', error);
+          try {
+            await this.doState.storage.deleteAlarm();
+            const failedTask = await this.doState.storage.get<TaskState>('task');
+            if (failedTask) {
+              failedTask.status = 'failed';
+              failedTask.error = `Resume error: ${error instanceof Error ? error.message : String(error)}`;
+              await this.doState.storage.put('task', taskForStorage(failedTask));
+            }
+            await this.sendTelegramMessageWithButtons(
+              taskRequest.telegramToken,
+              taskRequest.chatId,
+              `❌ Task crashed during resume: ${error instanceof Error ? error.message : 'Unknown error'}\n\n💡 Progress may be saved.`,
+              [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
+            );
+          } catch (notifyError) {
+            console.error('[TaskProcessor] Failed to notify about resume crash:', notifyError);
           }
-          await this.sendTelegramMessageWithButtons(
-            taskRequest.telegramToken,
-            taskRequest.chatId,
-            `❌ Task crashed during resume: ${error instanceof Error ? error.message : 'Unknown error'}\n\n💡 Progress may be saved.`,
-            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
-          );
-        } catch (notifyError) {
-          console.error('[TaskProcessor] Failed to notify about resume crash:', notifyError);
-        }
-      }));
+        }),
+      );
       return;
     }
 
@@ -1563,20 +1782,26 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // - isStreaming: 15s flush means lastUpdate goes stale quickly after eviction → 90s
     // - isRunning=false checked below: DO was evicted → use orphaned threshold
     const baseThreshold = getWatchdogStuckThreshold(task.modelAlias);
-    const orphanedThreshold = (getModel(task.modelAlias)?.isFree !== true)
-      ? ORPHANED_THRESHOLD_PAID_MS : ORPHANED_THRESHOLD_FREE_MS;
+    const orphanedThreshold =
+      getModel(task.modelAlias)?.isFree !== true
+        ? ORPHANED_THRESHOLD_PAID_MS
+        : ORPHANED_THRESHOLD_FREE_MS;
     const stuckThreshold = task.isStreaming
       ? Math.min(baseThreshold, 90_000)
       : Math.min(baseThreshold, orphanedThreshold);
     const elapsedMs = Date.now() - task.startTime;
     const elapsed = Math.round(elapsedMs / 1000);
-    console.log(`[TaskProcessor] Time since last update: ${timeSinceUpdate}ms, elapsed: ${elapsed}s (threshold: ${stuckThreshold / 1000}s${task.isStreaming ? ', streaming' : ''})`);
+    console.log(
+      `[TaskProcessor] Time since last update: ${timeSinceUpdate}ms, elapsed: ${elapsed}s (threshold: ${stuckThreshold / 1000}s${task.isStreaming ? ', streaming' : ''})`,
+    );
 
     // In-memory execution lock: if processTask() is still running in this DO instance,
     // the task is NOT stuck — it's just waiting on a slow external API call (await yields
     // the thread in cooperative multitasking). Do NOT spawn a concurrent processTask().
     if (this.isRunning) {
-      console.log('[TaskProcessor] processTask() still running (isRunning=true), rescheduling watchdog');
+      console.log(
+        '[TaskProcessor] processTask() still running (isRunning=true), rescheduling watchdog',
+      );
       await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
       return;
     }
@@ -1584,13 +1809,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Check in-memory heartbeat first (avoids false stuck detection when streaming
     // is active but task.lastUpdate in storage is stale because we stopped persisting
     // heartbeats to storage during streaming — see onProgress optimization).
-    const timeSinceHeartbeat = this.lastHeartbeatMs > 0
-      ? Date.now() - this.lastHeartbeatMs
-      : Infinity; // No heartbeat recorded → fall through to storage check
+    const timeSinceHeartbeat =
+      this.lastHeartbeatMs > 0 ? Date.now() - this.lastHeartbeatMs : Infinity; // No heartbeat recorded → fall through to storage check
 
     // If either the storage timestamp or in-memory heartbeat is recent, task is alive
     if (timeSinceUpdate < stuckThreshold || timeSinceHeartbeat < stuckThreshold) {
-      const source = timeSinceHeartbeat < timeSinceUpdate ? 'in-memory heartbeat' : 'storage lastUpdate';
+      const source =
+        timeSinceHeartbeat < timeSinceUpdate ? 'in-memory heartbeat' : 'storage lastUpdate';
       console.log(`[TaskProcessor] Task still active (${source}), rescheduling watchdog`);
       await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
       return;
@@ -1614,12 +1839,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     const resumeCount = task.autoResumeCount ?? 0;
-    const maxResumes = getAutoResumeLimit(task.modelAlias, task.isOrchestraTask, task.executionProfile);
+    const maxResumes = getAutoResumeLimit(
+      task.modelAlias,
+      task.isOrchestraTask,
+      task.executionProfile,
+    );
 
     // Check if auto-resume is enabled and under limit.
     // Direct-API models (DeepSeek, Moonshot, DashScope) may not have an OpenRouter key
     // — check for any provider key to avoid blocking auto-resume for direct providers.
-    const hasAnyProviderKey = !!(task.openrouterKey || task.deepseekKey || task.moonshotKey || task.dashscopeKey || task.anthropicKey || task.nvidiaKey);
+    const hasAnyProviderKey = !!(
+      task.openrouterKey ||
+      task.deepseekKey ||
+      task.moonshotKey ||
+      task.dashscopeKey ||
+      task.anthropicKey ||
+      task.nvidiaKey
+    );
     if (task.autoResume && resumeCount < maxResumes && task.telegramToken && hasAnyProviderKey) {
       // --- STALL DETECTION ---
       // Two layers:
@@ -1638,18 +1874,23 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Get the signatures added since last resume
         const recentSigs = task.toolSignatures.slice(-newTools);
         const priorSigs = new Set(task.toolSignatures.slice(0, -newTools));
-        allNewToolsDuplicate = recentSigs.every(sig => priorSigs.has(sig));
+        allNewToolsDuplicate = recentSigs.every((sig) => priorSigs.has(sig));
         if (allNewToolsDuplicate) {
-          console.log(`[TaskProcessor] All ${newTools} new tool calls are duplicates of prior calls`);
+          console.log(
+            `[TaskProcessor] All ${newTools} new tool calls are duplicates of prior calls`,
+          );
         }
       }
 
       // Allow duplicate reads after context compression — the model legitimately
       // needs to re-read files whose content was evicted during compression.
       // Only forgive duplicates once per compression event.
-      const compressedSinceLastResume = (task.lastCompressionToolCount ?? 0) > toolCountAtLastResume;
+      const compressedSinceLastResume =
+        (task.lastCompressionToolCount ?? 0) > toolCountAtLastResume;
       if (allNewToolsDuplicate && compressedSinceLastResume) {
-        console.log(`[TaskProcessor] Allowing duplicate tool calls: context was compressed since last resume (compression at tool #${task.lastCompressionToolCount})`);
+        console.log(
+          `[TaskProcessor] Allowing duplicate tool calls: context was compressed since last resume (compression at tool #${task.lastCompressionToolCount})`,
+        );
         allNewToolsDuplicate = false;
         // Clear compression marker so we don't forgive duplicates indefinitely
         task.lastCompressionToolCount = 0;
@@ -1658,7 +1899,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       if ((newTools === 0 || allNewToolsDuplicate) && resumeCount > 0 && !wasStreamingWhenEvicted) {
         noProgressResumes++;
         const reason = allNewToolsDuplicate ? 'duplicate tools' : 'no new tools';
-        console.log(`[TaskProcessor] No real progress since last resume: ${reason} (stall ${noProgressResumes}/${MAX_NO_PROGRESS_RESUMES})`);
+        console.log(
+          `[TaskProcessor] No real progress since last resume: ${reason} (stall ${noProgressResumes}/${MAX_NO_PROGRESS_RESUMES})`,
+        );
 
         if (noProgressResumes >= MAX_NO_PROGRESS_RESUMES) {
           const stallReason = `Task stalled: no progress across ${noProgressResumes} auto-resumes (${task.iterations} iterations, ${toolCountNow} tools)`;
@@ -1668,12 +1911,25 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           await this.doState.storage.put('task', taskForStorage(task));
 
           // Terminal state — clean up workspace staging to prevent storage leaks
-          try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
-      try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+          try {
+            await this.getWorkspaceManager(task.taskId).clear();
+          } catch {
+            /* best-effort */
+          }
+          try {
+            await this.doState.storage.delete(`originalMessages:${task.taskId}`);
+          } catch {
+            /* best-effort */
+          }
 
           // Update orchestra history so failed tasks don't stay at 'started' forever
           await this.updateOrchestraHistoryOnFailure(task, stallReason);
-          this.emitOrchestraEvent(task, 'stall_abort', { reason: stallReason, resumes: noProgressResumes, iterations: task.iterations, tools: toolCountNow });
+          this.emitOrchestraEvent(task, 'stall_abort', {
+            reason: stallReason,
+            resumes: noProgressResumes,
+            iterations: task.iterations,
+            tools: toolCountNow,
+          });
           // F.23: Release branch lock on stall abort
           if (this.r2 && task.orchestraRepo) {
             releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
@@ -1685,7 +1941,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               task.telegramToken,
               task.chatId,
               `🛑 Task stalled after ${noProgressResumes} resumes with no progress (${task.iterations} iter, ${toolCountNow} tools).${stallProgress}\n\n💡 Try a more capable model: ${this.getStallModelRecs()}\n\nProgress saved.`,
-              [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+              [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
             );
           }
           return;
@@ -1704,19 +1960,35 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // fires on user approval, much later. Firing this stall on a
       // draft task misreports progress and abandons a valid roadmap
       // mid-generation.
-      if (task.isOrchestraTask && resumeCount >= 3
-          && !task.toolsUsed.includes('github_create_pr')
-          && !wasStreamingWhenEvicted
-          && !task.isDraftInit) {
+      if (
+        task.isOrchestraTask &&
+        resumeCount >= 3 &&
+        !task.toolsUsed.includes('github_create_pr') &&
+        !wasStreamingWhenEvicted &&
+        !task.isDraftInit
+      ) {
         const orchStallReason = `Orchestra stall: ${resumeCount} resumes with ${toolCountNow} tools but no PR attempted`;
         console.log(`[TaskProcessor] ${orchStallReason}`);
         task.status = 'failed';
         task.error = `${orchStallReason}. Model stuck in read loop — try a more capable model.`;
         await this.doState.storage.put('task', taskForStorage(task));
-        try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
-        try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+        try {
+          await this.getWorkspaceManager(task.taskId).clear();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await this.doState.storage.delete(`originalMessages:${task.taskId}`);
+        } catch {
+          /* best-effort */
+        }
         await this.updateOrchestraHistoryOnFailure(task, orchStallReason);
-        this.emitOrchestraEvent(task, 'stall_abort', { reason: orchStallReason, resumes: resumeCount, tools: toolCountNow, orchestra: true });
+        this.emitOrchestraEvent(task, 'stall_abort', {
+          reason: orchStallReason,
+          resumes: resumeCount,
+          tools: toolCountNow,
+          orchestra: true,
+        });
         // F.23: Release branch lock on orchestra stall abort
         if (this.r2 && task.orchestraRepo) {
           releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
@@ -1727,7 +1999,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.telegramToken,
             task.chatId,
             `🛑 Orchestra stall: ${resumeCount} resumes, ${toolCountNow} tools, but no PR was ever attempted.${orchProgress}\n\n💡 Try: ${this.getStallModelRecs()}\n\nProgress saved.`,
-            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
           );
         }
         return;
@@ -1737,7 +2009,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       task.toolCountAtLastResume = toolCountNow;
       task.noProgressResumes = noProgressResumes;
 
-      console.log(`[TaskProcessor] Auto-resuming (attempt ${resumeCount + 1}/${maxResumes}, ${newTools} new tools since last resume)`);
+      console.log(
+        `[TaskProcessor] Auto-resuming (attempt ${resumeCount + 1}/${maxResumes}, ${newTools} new tools since last resume)`,
+      );
 
       // Update resume count
       task.autoResumeCount = resumeCount + 1;
@@ -1750,9 +2024,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       const resumeTools = newTools > 0 ? `, ${newTools} new tools` : '';
       const expectedResumes = task.executionProfile?.bounds.expectedResumes;
       const tier = task.executionProfile?.bounds.complexityTier;
-      const resumeAdvisory = (expectedResumes != null && tier && resumeCount + 1 > expectedResumes && !task.tierResumeWarned)
-        ? `\n⚠️ Exceeds "${tier}" scope expectation (${expectedResumes} resumes). Consider a stronger model next time.`
-        : '';
+      const resumeAdvisory =
+        expectedResumes != null &&
+        tier &&
+        resumeCount + 1 > expectedResumes &&
+        !task.tierResumeWarned
+          ? `\n⚠️ Exceeds "${tier}" scope expectation (${expectedResumes} resumes). Consider a stronger model next time.`
+          : '';
       if (resumeAdvisory) {
         task.tierResumeWarned = true;
         await this.doState.storage.put('task', taskForStorage(task));
@@ -1760,7 +2038,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       await this.sendTelegramMessage(
         task.telegramToken,
         task.chatId,
-        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}${resumeAdvisory}`
+        `🔄 Auto-resuming... (${resumeCount + 1}/${maxResumes})\n⏱️ ${elapsed}s elapsed, ${task.iterations} iterations${resumeTools}${resumeAdvisory}`,
       );
 
       // Reconstruct TaskRequest and trigger resume.
@@ -1770,10 +2048,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // processTask will overwrite these with checkpoint data from R2 if available,
       // but if no checkpoint exists yet (e.g. task died before first tool call),
       // having the originals prevents the model from losing all context.
-      const storedOriginalMessages = await this.doState.storage.get<ChatMessage[]>(`originalMessages:${task.taskId}`);
-      const resumeMessages = storedOriginalMessages && storedOriginalMessages.length > 0
-        ? storedOriginalMessages
-        : task.messages; // fallback to empty [] if originalMessages somehow missing
+      const storedOriginalMessages = await this.doState.storage.get<ChatMessage[]>(
+        `originalMessages:${task.taskId}`,
+      );
+      const resumeMessages =
+        storedOriginalMessages && storedOriginalMessages.length > 0
+          ? storedOriginalMessages
+          : task.messages; // fallback to empty [] if originalMessages somehow missing
       const taskRequest: TaskRequest = {
         taskId: task.taskId,
         chatId: task.chatId,
@@ -1818,34 +2099,43 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     }
 
     // Auto-resume disabled or limit reached - mark as failed and notify user
-    const failureReason = resumeCount >= maxResumes
-      ? `Auto-resume limit (${maxResumes}) reached after ${elapsed}s`
-      : `Task stopped unexpectedly after ${elapsed}s (no auto-resume)`;
+    const failureReason =
+      resumeCount >= maxResumes
+        ? `Auto-resume limit (${maxResumes}) reached after ${elapsed}s`
+        : `Task stopped unexpectedly after ${elapsed}s (no auto-resume)`;
     task.status = 'failed';
     task.error = failureReason;
     await this.doState.storage.put('task', taskForStorage(task));
 
     // Terminal state — clean up workspace staging to prevent storage leaks
-    try { await this.getWorkspaceManager(task.taskId).clear(); } catch { /* best-effort */ }
+    try {
+      await this.getWorkspaceManager(task.taskId).clear();
+    } catch {
+      /* best-effort */
+    }
 
     // Update orchestra history so failed tasks don't stay at 'started' forever
     await this.updateOrchestraHistoryOnFailure(task, failureReason);
-    this.emitOrchestraEvent(task, 'task_abort', { reason: failureReason, resumes: resumeCount, maxResumes, elapsed });
+    this.emitOrchestraEvent(task, 'task_abort', {
+      reason: failureReason,
+      resumes: resumeCount,
+      maxResumes,
+      elapsed,
+    });
     // F.23: Release branch lock on task abort
     if (this.r2 && task.orchestraRepo) {
       releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
     }
 
     if (task.telegramToken) {
-      const limitReachedMsg = resumeCount >= maxResumes
-        ? `\n\n⚠️ Auto-resume limit (${maxResumes}) reached.`
-        : '';
+      const limitReachedMsg =
+        resumeCount >= maxResumes ? `\n\n⚠️ Auto-resume limit (${maxResumes}) reached.` : '';
       const stopProgress = this.buildProgressSummary(task);
       await this.sendTelegramMessageWithButtons(
         task.telegramToken,
         task.chatId,
         `⚠️ Task stopped unexpectedly after ${elapsed}s (${task.iterations} iterations, ${task.toolsUsed.length} tools).${stopProgress}${limitReachedMsg}\n\n💡 Progress saved. Tap Resume to continue.`,
-        [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+        [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
       );
     }
   }
@@ -1877,7 +2167,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   /**
    * Truncate a tool result if it's too long
    */
-  private truncateToolResult(content: string, toolName: string, modelAlias?: string, batchSize = 1): string {
+  private truncateToolResult(
+    content: string,
+    toolName: string,
+    modelAlias?: string,
+    batchSize = 1,
+  ): string {
     const limit = this.getToolResultLimit(modelAlias, batchSize);
     if (content.length <= limit) {
       return content;
@@ -1933,7 +2228,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     slotName: string = 'latest',
     completed: boolean = false,
     phase?: TaskPhase,
-    modelAlias?: string
+    modelAlias?: string,
   ): Promise<void> {
     const checkpoint = {
       version: CHECKPOINT_VERSION,
@@ -1949,7 +2244,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     };
     const key = `checkpoints/${userId}/${slotName}.json`;
     await r2.put(key, JSON.stringify(checkpoint));
-    console.log(`[TaskProcessor] Saved checkpoint '${slotName}': ${iterations} iterations, ${messages.length} messages${completed ? ' (completed)' : ''}`);
+    console.log(
+      `[TaskProcessor] Saved checkpoint '${slotName}': ${iterations} iterations, ${messages.length} messages${completed ? ' (completed)' : ''}`,
+    );
   }
 
   /**
@@ -1961,8 +2258,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     r2: R2Bucket,
     userId: string,
     slotName: string = 'latest',
-    includeCompleted: boolean = false
-  ): Promise<{ messages: ChatMessage[]; toolsUsed: string[]; iterations: number; savedAt: number; taskPrompt?: string; completed?: boolean; phase?: TaskPhase } | null> {
+    includeCompleted: boolean = false,
+  ): Promise<{
+    messages: ChatMessage[];
+    toolsUsed: string[];
+    iterations: number;
+    savedAt: number;
+    taskPrompt?: string;
+    completed?: boolean;
+    phase?: TaskPhase;
+  } | null> {
     const key = `checkpoints/${userId}/${slotName}.json`;
     const obj = await r2.get(key);
     if (!obj) return null;
@@ -1971,7 +2276,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       const checkpoint = JSON.parse(await obj.text());
       // Skip checkpoints from incompatible versions to prevent crashes on resume
       if (checkpoint.version !== CHECKPOINT_VERSION) {
-        console.log(`[TaskProcessor] Skipping checkpoint '${slotName}': version ${checkpoint.version ?? 'none'} !== ${CHECKPOINT_VERSION}`);
+        console.log(
+          `[TaskProcessor] Skipping checkpoint '${slotName}': version ${checkpoint.version ?? 'none'} !== ${CHECKPOINT_VERSION}`,
+        );
         return null;
       }
       // Skip completed checkpoints unless explicitly requested (for /saveas)
@@ -1979,7 +2286,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         console.log(`[TaskProcessor] Skipping completed checkpoint '${slotName}'`);
         return null;
       }
-      console.log(`[TaskProcessor] Loaded checkpoint '${slotName}': ${checkpoint.iterations} iterations${checkpoint.completed ? ' (completed)' : ''}`);
+      console.log(
+        `[TaskProcessor] Loaded checkpoint '${slotName}': ${checkpoint.iterations} iterations${checkpoint.completed ? ' (completed)' : ''}`,
+      );
       return {
         messages: checkpoint.messages,
         toolsUsed: checkpoint.toolsUsed,
@@ -1999,7 +2308,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * Clear checkpoint from R2
    * @param slotName - Optional slot name (default: 'latest')
    */
-  private async clearCheckpoint(r2: R2Bucket, userId: string, slotName: string = 'latest'): Promise<void> {
+  private async clearCheckpoint(
+    r2: R2Bucket,
+    userId: string,
+    slotName: string = 'latest',
+  ): Promise<void> {
     const key = `checkpoints/${userId}/${slotName}.json`;
     await r2.delete(key);
   }
@@ -2016,13 +2329,21 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    * @param messages - Full conversation messages
    * @param keepRecent - Minimum recent messages to always keep (default: 6)
    */
-  private compressContext(messages: ChatMessage[], modelAlias: string, keepRecent: number = 6): ChatMessage[] {
+  private compressContext(
+    messages: ChatMessage[],
+    modelAlias: string,
+    keepRecent: number = 6,
+  ): ChatMessage[] {
     // Strip reasoning_content from older messages before compression.
     // Reasoning traces (Kimi/DeepSeek thinking) are never sent back to the model
     // and can be 5-10K tokens each, massively bloating context across iterations.
     // Keep only the most recent reasoning trace for continuity.
     const stripped = stripOldReasoningContent(messages);
-    const compressed = compressContextBudgeted(stripped, this.getContextBudget(modelAlias), keepRecent);
+    const compressed = compressContextBudgeted(
+      stripped,
+      this.getContextBudget(modelAlias),
+      keepRecent,
+    );
     // Ensure tool message pairs remain valid after compression
     return sanitizeToolPairs(compressed);
   }
@@ -2040,27 +2361,25 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
   ): Promise<string | null> {
     try {
       const client = createOpenRouterClient(openrouterKey, 'https://moltworker.dev');
-      const result = await client.chatCompletionStreamingWithTools(
-        reviewerAlias,
-        reviewMessages,
-        {
-          maxTokens: 4096,
-          temperature: 0.3, // Low temperature for focused review
-          // No tools — reviewer just analyzes text
-          idleTimeoutMs: 30000,
-          onProgress: () => {
-            // Keep watchdog alive during reviewer call (in-memory only)
-            this.lastHeartbeatMs = Date.now();
-          },
+      const result = await client.chatCompletionStreamingWithTools(reviewerAlias, reviewMessages, {
+        maxTokens: 4096,
+        temperature: 0.3, // Low temperature for focused review
+        // No tools — reviewer just analyzes text
+        idleTimeoutMs: 30000,
+        onProgress: () => {
+          // Keep watchdog alive during reviewer call (in-memory only)
+          this.lastHeartbeatMs = Date.now();
         },
-      );
+      });
 
       const content = result.choices?.[0]?.message?.content;
       if (!content) return null;
 
       // Track reviewer token usage
       if (result.usage) {
-        console.log(`[TaskProcessor] 5.1 Reviewer (${reviewerAlias}): ${result.usage.prompt_tokens}+${result.usage.completion_tokens} tokens`);
+        console.log(
+          `[TaskProcessor] 5.1 Reviewer (${reviewerAlias}): ${result.usage.prompt_tokens}+${result.usage.completion_tokens} tokens`,
+        );
       }
 
       return content;
@@ -2078,7 +2397,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // Look for the last meaningful assistant content (might exist from earlier iteration)
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
-      if (msg.role === 'assistant' && msg.content && typeof msg.content === 'string' && msg.content.trim().length > 100) {
+      if (
+        msg.role === 'assistant' &&
+        msg.content &&
+        typeof msg.content === 'string' &&
+        msg.content.trim().length > 100
+      ) {
         // Skip compression summaries (they start with "[Previous work:")
         if (msg.content.startsWith('[Previous work:')) continue;
         return `${msg.content.trim()}\n\n_(Recovered from partial response)_`;
@@ -2117,15 +2441,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.role === 'assistant') {
-        if (msg.content && typeof msg.content === 'string' && msg.content.trim().length > 10
-            && !msg.content.startsWith('[Previous work:') && !msg.content.startsWith('[SYSTEM')) {
+        if (
+          msg.content &&
+          typeof msg.content === 'string' &&
+          msg.content.trim().length > 10 &&
+          !msg.content.startsWith('[Previous work:') &&
+          !msg.content.startsWith('[SYSTEM')
+        ) {
           lastAssistantText = msg.content.trim().slice(0, 500);
         }
         if (msg.tool_calls && msg.tool_calls.length > 0) {
-          lastToolCalls = msg.tool_calls.map(tc => {
-            const args = typeof tc.function?.arguments === 'string'
-              ? tc.function.arguments.slice(0, 100)
-              : '';
+          lastToolCalls = msg.tool_calls.map((tc) => {
+            const args =
+              typeof tc.function?.arguments === 'string' ? tc.function.arguments.slice(0, 100) : '';
             return `${tc.function?.name || 'unknown'}(${args}${args.length >= 100 ? '...' : ''})`;
           });
         }
@@ -2151,7 +2479,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (lastToolResults.length > 0) {
       parts.push(`Last tool results (truncated): ${lastToolResults.join(' | ')}`);
     }
-    parts.push(`Total tools used so far: ${toolsUsed.length} (${[...new Set(toolsUsed)].join(', ')})`);
+    parts.push(
+      `Total tools used so far: ${toolsUsed.length} (${[...new Set(toolsUsed)].join(', ')})`,
+    );
 
     return parts.join('\n');
   }
@@ -2164,7 +2494,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    */
   private async processSkillTask(request: SkillTaskRequest): Promise<void> {
     const start = Date.now();
-    console.log(`[TaskProcessor] Starting skill task ${request.taskId} for skill ${request.skillRequest.skillId}`);
+    console.log(
+      `[TaskProcessor] Starting skill task ${request.taskId} for skill ${request.skillRequest.skillId}`,
+    );
 
     // Store minimal state for /status queries
     const skillState: TaskState = {
@@ -2229,12 +2561,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       skillState.result = result.body.slice(0, 5000);
       skillState.lastUpdate = Date.now();
       skillState.iterations = result.telemetry.llmCalls;
-      skillState.toolsUsed = Array.from({ length: result.telemetry.toolCalls }, (_, i) => `tool-${i + 1}`);
+      skillState.toolsUsed = Array.from(
+        { length: result.telemetry.toolCalls },
+        (_, i) => `tool-${i + 1}`,
+      );
       await this.doState.storage.put('task', skillState);
 
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
       console.log(`[TaskProcessor] Skill task ${request.taskId} completed in ${elapsed}s`);
-
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[TaskProcessor] Skill task ${request.taskId} failed:`, message);
@@ -2261,7 +2595,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const url = new URL(request.url);
 
     if (url.pathname === '/process' && request.method === 'POST') {
-      const payload = await request.json() as TaskProcessorPayload;
+      const payload = (await request.json()) as TaskProcessorPayload;
 
       // --- Skill task path (S3.7) ---
       if (isSkillTaskRequest(payload)) {
@@ -2280,11 +2614,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         });
         this.doState.waitUntil(skillPromise);
 
-        return new Response(JSON.stringify({
-          status: 'started',
-          taskId: payload.taskId,
-          kind: 'skill',
-        }), { headers: { 'Content-Type': 'application/json' } });
+        return new Response(
+          JSON.stringify({
+            status: 'started',
+            taskId: payload.taskId,
+            kind: 'skill',
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        );
       }
 
       // --- Existing chat/orchestra task path ---
@@ -2313,7 +2650,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             taskRequest.telegramToken,
             taskRequest.chatId,
             `❌ Task crashed: ${error instanceof Error ? error.message : 'Unknown error'}${crashProgress}\n\n💡 Progress may be saved.`,
-            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
           );
         } catch (notifyError) {
           console.error('[TaskProcessor] Failed to notify user:', notifyError);
@@ -2321,28 +2658,41 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       });
       this.doState.waitUntil(processPromise);
 
-      return new Response(JSON.stringify({
-        status: 'started',
-        taskId: taskRequest.taskId
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return new Response(
+        JSON.stringify({
+          status: 'started',
+          taskId: taskRequest.taskId,
+        }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
     }
 
     if (url.pathname === '/status' && request.method === 'GET') {
       const task = await this.doState.storage.get<TaskState>('task');
       if (!task) {
         return new Response(JSON.stringify({ status: 'not_found' }), {
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 'Content-Type': 'application/json' },
         });
       }
       // Strip secrets from status response — these are stored for alarm recovery
       // but must never be exposed via the status API
-      const { telegramToken, openrouterKey, githubToken, braveSearchKey, tavilyKey,
-              cloudflareApiToken, dashscopeKey, moonshotKey, deepseekKey, anthropicKey,
-              ...safeTask } = task;
+      const {
+        telegramToken,
+        openrouterKey,
+        githubToken,
+        braveSearchKey,
+        tavilyKey,
+        cloudflareApiToken,
+        dashscopeKey,
+        moonshotKey,
+        deepseekKey,
+        anthropicKey,
+        ...safeTask
+      } = task;
       return new Response(JSON.stringify(safeTask), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
       });
     }
 
@@ -2350,7 +2700,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Return usage data from the in-memory store
       const userId = url.searchParams.get('userId') || '';
       const days = parseInt(url.searchParams.get('days') || '1');
-      const { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } = await import('../openrouter/costs');
+      const { getUsage, getUsageRange, formatUsageSummary, formatWeekSummary } =
+        await import('../openrouter/costs');
 
       if (days > 1) {
         const records = getUsageRange(userId, days);
@@ -2381,7 +2732,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         try {
           const ws = this.getWorkspaceManager(task.taskId);
           await ws.clear();
-        } catch { /* best-effort */ }
+        } catch {
+          /* best-effort */
+        }
 
         // Try to send cancellation message
         if (task.telegramToken && task.chatId) {
@@ -2390,16 +2743,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           }
           const cancelElapsed = Math.round((Date.now() - task.startTime) / 1000);
           const cancelProgress = this.buildProgressSummary(task);
-          await this.sendTelegramMessage(task.telegramToken, task.chatId,
-            `🛑 Task cancelled after ${cancelElapsed}s (${task.iterations} iter, ${task.toolsUsed.length} tools).${cancelProgress}`);
+          await this.sendTelegramMessage(
+            task.telegramToken,
+            task.chatId,
+            `🛑 Task cancelled after ${cancelElapsed}s (${task.iterations} iter, ${task.toolsUsed.length} tools).${cancelProgress}`,
+          );
         }
 
         return new Response(JSON.stringify({ status: 'cancelled' }), {
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 'Content-Type': 'application/json' },
         });
       }
       return new Response(JSON.stringify({ status: 'not_processing', current: task?.status }), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
       });
     }
 
@@ -2410,7 +2766,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      const body = await request.json() as { instruction?: string };
+      const body = (await request.json()) as { instruction?: string };
       const instruction = body.instruction?.trim();
       if (!instruction) {
         return new Response(JSON.stringify({ error: 'Missing instruction' }), {
@@ -2421,9 +2777,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Queue the steering message in memory — processTask reads it on next iteration
       this.steerMessages.push(instruction);
       console.log(`[TaskProcessor] Steer message queued: "${instruction.slice(0, 80)}..."`);
-      return new Response(JSON.stringify({ status: 'steered', queued: this.steerMessages.length }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ status: 'steered', queued: this.steerMessages.length }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
     }
 
     return new Response('Not found', { status: 404 });
@@ -2453,7 +2812,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       this.prefetchPromises.clear();
       this.prefetchHits = 0;
     } else {
-      console.log(`[TaskProcessor] Preserving tool cache for resume (${this.toolResultCache.size} entries)`);
+      console.log(
+        `[TaskProcessor] Preserving tool cache for resume (${this.toolResultCache.size} entries)`,
+      );
       // If DO was evicted, in-memory cache is empty — will be rebuilt from checkpoint messages below
     }
 
@@ -2572,7 +2933,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const statusMessageId = await this.sendTelegramMessage(
       request.telegramToken,
       request.chatId,
-      skipPlan ? '⏳ 🔨 Working…' : '⏳ 📋 Planning…'
+      skipPlan ? '⏳ 🔨 Working…' : '⏳ 📋 Planning…',
     );
 
     // Store status message ID for cancel cleanup
@@ -2589,9 +2950,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (this.env.Sandbox) {
       try {
         const sleepAfter = this.env.SANDBOX_SLEEP_AFTER?.toLowerCase() || 'never';
-        const sandboxOptions = sleepAfter === 'never'
-          ? { keepAlive: true as const }
-          : { sleepAfter };
+        const sandboxOptions =
+          sleepAfter === 'never' ? { keepAlive: true as const } : { sleepAfter };
         sandbox = getSandbox(this.env.Sandbox, 'moltbot', sandboxOptions);
         console.log(`[TaskProcessor] Sandbox initialized for task ${task.taskId}`);
       } catch (err) {
@@ -2607,7 +2967,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       sandbox: !!sandbox && profileAllowsSandbox,
     };
     if (sandbox && !profileAllowsSandbox) {
-      console.log('[TaskProcessor] Sandbox available but profile says requiresSandbox=false — sandbox_exec removed from tool set');
+      console.log(
+        '[TaskProcessor] Sandbox available but profile says requiresSandbox=false — sandbox_exec removed from tool set',
+      );
     }
 
     // Build the web_search rate limiter (one per task invocation — per-task
@@ -2658,7 +3020,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         if (data) {
           if (data.models && Object.keys(data.models).length > 0) {
             registerDynamicModels(data.models);
-            console.log(`[TaskProcessor] Loaded ${Object.keys(data.models).length} dynamic models from R2`);
+            console.log(
+              `[TaskProcessor] Loaded ${Object.keys(data.models).length} dynamic models from R2`,
+            );
           }
           if (data.blocked && data.blocked.length > 0) {
             blockModels(data.blocked);
@@ -2691,14 +3055,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         task.modelAlias = 'auto';
       }
       await this.doState.storage.put('task', taskForStorage(task));
-      console.log(`[TaskProcessor] Model /${oldAlias} no longer available, pre-switching to /${task.modelAlias}`);
+      console.log(
+        `[TaskProcessor] Model /${oldAlias} no longer available, pre-switching to /${task.modelAlias}`,
+      );
       if (statusMessageId) {
         try {
           await this.editTelegramMessage(
-            request.telegramToken, request.chatId, statusMessageId,
-            `⚠️ /${oldAlias} unavailable. Using /${task.modelAlias} (free)`
+            request.telegramToken,
+            request.chatId,
+            statusMessageId,
+            `⚠️ /${oldAlias} unavailable. Using /${task.modelAlias} (free)`,
           );
-        } catch { /* non-fatal */ }
+        } catch {
+          /* non-fatal */
+        }
       }
     }
 
@@ -2708,7 +3078,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     const rotationOrder = buildRotationOrder(task.modelAlias, freeModels, taskCategory);
     let rotationIndex = 0;
     const MAX_FREE_ROTATIONS = rotationOrder.length;
-    console.log(`[TaskProcessor] Task category: ${taskCategory}, rotation order: ${rotationOrder.join(', ')} (${MAX_FREE_ROTATIONS} candidates)`);
+    console.log(
+      `[TaskProcessor] Task category: ${taskCategory}, rotation order: ${rotationOrder.join(', ')} (${MAX_FREE_ROTATIONS} candidates)`,
+    );
     let emptyContentRetries = 0;
     const MAX_EMPTY_RETRIES = 2;
     // Stall detection: consecutive iterations where model produces no tool calls
@@ -2768,7 +3140,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         task.toolsUsed = checkpoint.toolsUsed;
         // Accumulate total iterations across all resumes before resetting
-        task.totalIterations = (task.totalIterations ?? 0) + (checkpoint.iterations ?? task.iterations);
+        task.totalIterations =
+          (task.totalIterations ?? 0) + (checkpoint.iterations ?? task.iterations);
         // Reset iteration counter to 0 — give a fresh budget of maxIterations.
         // The checkpoint preserves conversation state and tool results, so work
         // isn't lost. Without this reset, resumed tasks immediately re-hit the
@@ -2791,7 +3164,11 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const resumeNoticePrefix = '[SYSTEM RESUME NOTICE]';
         for (let i = conversationMessages.length - 1; i >= 0; i--) {
           const msg = conversationMessages[i];
-          if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith(resumeNoticePrefix)) {
+          if (
+            msg.role === 'user' &&
+            typeof msg.content === 'string' &&
+            msg.content.startsWith(resumeNoticePrefix)
+          ) {
             conversationMessages.splice(i, 1);
           }
         }
@@ -2810,7 +3187,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // The marker is a stable prefix shared by builder and scanner so the two
         // paths can never diverge.
         const markerPresent = conversationMessages.some(
-          (m) => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(TRANSIENT_TOOL_ERROR_MARKER),
+          (m) =>
+            m.role === 'user' &&
+            typeof m.content === 'string' &&
+            m.content.startsWith(TRANSIENT_TOOL_ERROR_MARKER),
         );
         if (markerPresent) {
           transientToolErrorGuidanceSent = true;
@@ -2823,13 +3203,18 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             content: `${TRANSIENT_TOOL_ERROR_MARKER} — a tool returned a 5xx / origin-unreachable response earlier in this task. The backing service may still be unavailable. Avoid retrying tools that previously failed; prefer alternative tools (web_search, fetch_url) or answer from existing knowledge and clearly note that live data was unavailable.`,
           });
           transientToolErrorGuidanceSent = true;
-          console.log('[TaskProcessor] Re-injected transient-error guidance after checkpoint resume (flag set but marker missing in restored conversation)');
+          console.log(
+            '[TaskProcessor] Re-injected transient-error guidance after checkpoint resume (flag set but marker missing in restored conversation)',
+          );
         }
 
         // Build a "last action summary" from the conversation tail BEFORE compression.
         // This tells the model exactly what it was doing when interrupted, so it doesn't
         // waste iterations re-reading files to rediscover its own progress.
-        const lastActionSummary = this.buildLastActionSummary(conversationMessages, checkpoint.toolsUsed);
+        const lastActionSummary = this.buildLastActionSummary(
+          conversationMessages,
+          checkpoint.toolsUsed,
+        );
 
         conversationMessages.push({
           role: 'user',
@@ -2842,7 +3227,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             request.telegramToken,
             request.chatId,
             statusMessageId,
-            `⏳ 🔄 Resuming from checkpoint (${checkpoint.iterations} iterations)…`
+            `⏳ 🔄 Resuming from checkpoint (${checkpoint.iterations} iterations)…`,
           );
         }
         console.log(`[TaskProcessor] Resumed from checkpoint: ${checkpoint.iterations} iterations`);
@@ -2853,19 +3238,28 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           for (const msg of conversationMessages) {
             if (msg.role === 'assistant' && msg.tool_calls) {
               for (const tc of msg.tool_calls) {
-                toolCallMap.set(tc.id, { name: tc.function.name, arguments: tc.function.arguments });
+                toolCallMap.set(tc.id, {
+                  name: tc.function.name,
+                  arguments: tc.function.arguments,
+                });
               }
             }
             if (msg.role === 'tool' && msg.tool_call_id) {
               const tc = toolCallMap.get(msg.tool_call_id);
-              if (tc && typeof msg.content === 'string' && this.shouldCacheToolResult(msg.content)) {
+              if (
+                tc &&
+                typeof msg.content === 'string' &&
+                this.shouldCacheToolResult(msg.content)
+              ) {
                 const cacheKey = `${tc.name}:${tc.arguments}`;
                 this.toolResultCache.set(cacheKey, msg.content);
               }
             }
           }
           if (this.toolResultCache.size > 0) {
-            console.log(`[TaskProcessor] Rebuilt tool cache from checkpoint: ${this.toolResultCache.size} entries`);
+            console.log(
+              `[TaskProcessor] Rebuilt tool cache from checkpoint: ${this.toolResultCache.size} entries`,
+            );
           }
         }
 
@@ -2880,12 +3274,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         if (resumeTokens > resumeTargetBudget) {
           const beforeCount = conversationMessages.length;
           const compressed = sanitizeToolPairs(
-            compressContextBudgeted(conversationMessages, resumeTargetBudget, 8)
+            compressContextBudgeted(conversationMessages, resumeTargetBudget, 8),
           );
           conversationMessages.length = 0;
           conversationMessages.push(...compressed);
           const afterTokens = this.estimateTokens(conversationMessages);
-          console.log(`[TaskProcessor] Post-restore compression: ${beforeCount} → ${compressed.length} messages, ${resumeTokens} → ${afterTokens} tokens (target: ${resumeTargetBudget})`);
+          console.log(
+            `[TaskProcessor] Post-restore compression: ${beforeCount} → ${compressed.length} messages, ${resumeTokens} → ${afterTokens} tokens (target: ${resumeTargetBudget})`,
+          );
         }
       }
 
@@ -2894,20 +3290,30 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // and administrative instructions from the initial system prompt — this ensures
       // the model sees its remaining obligations on every single resume.
       if (task.autoResumeCount && task.autoResumeCount > 0) {
-        const sysMsg = conversationMessages.find(m => m.role === 'system');
+        const sysMsg = conversationMessages.find((m) => m.role === 'system');
         const sysTxt = typeof sysMsg?.content === 'string' ? sysMsg.content : '';
-        const isOrchResumed = sysTxt.includes('Orchestra RUN') || sysTxt.includes('Orchestra INIT') || sysTxt.includes('Orchestra REDO');
+        const isOrchResumed =
+          sysTxt.includes('Orchestra RUN') ||
+          sysTxt.includes('Orchestra INIT') ||
+          sysTxt.includes('Orchestra REDO');
         if (isOrchResumed) {
           const hasPr = task.toolsUsed.includes('github_create_pr');
-          const hasRoadmapPatch = conversationMessages.some(m =>
-            m.role === 'tool' && typeof m.content === 'string' && m.content.includes('ROADMAP.md')
+          const hasRoadmapPatch = conversationMessages.some(
+            (m) =>
+              m.role === 'tool' &&
+              typeof m.content === 'string' &&
+              m.content.includes('ROADMAP.md'),
           );
-          const hasWorkLogPatch = conversationMessages.some(m =>
-            m.role === 'tool' && typeof m.content === 'string' && m.content.includes('WORK_LOG.md')
+          const hasWorkLogPatch = conversationMessages.some(
+            (m) =>
+              m.role === 'tool' &&
+              typeof m.content === 'string' &&
+              m.content.includes('WORK_LOG.md'),
           );
 
           const pending: string[] = [];
-          if (!hasPr) pending.push('Create PR via github_create_pr (or workspace_commit + github_create_pr)');
+          if (!hasPr)
+            pending.push('Create PR via github_create_pr (or workspace_commit + github_create_pr)');
           if (!hasRoadmapPatch) pending.push('Update ROADMAP.md (mark task as [x] done)');
           if (!hasWorkLogPatch) pending.push('Update WORK_LOG.md (append new row)');
           if (!hasPr) pending.push('Output ORCHESTRA_RESULT block with real PR URL');
@@ -2917,7 +3323,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               role: 'user',
               content: `[SYSTEM: Pending Deliverables — you MUST complete ALL before finishing]\n${pending.map((p, i) => `${i + 1}. ${p}`).join('\n')}\n\nIMPORTANT: If extracting/splitting code, the source file MUST shrink (CREATE + IMPORT + DELETE in one PR). Do NOT output success until all deliverables are verified.\n\nContinue from where you left off. Do NOT restart repo discovery or re-read files you already know. Trust the context above and focus on completing these deliverables.`,
             });
-            console.log(`[TaskProcessor] Sticky context anchor injected: ${pending.length} pending deliverables (resume #${task.autoResumeCount})`);
+            console.log(
+              `[TaskProcessor] Sticky context anchor injected: ${pending.length} pending deliverables (resume #${task.autoResumeCount})`,
+            );
           }
         }
       }
@@ -2925,8 +3333,13 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
     // Inject source-grounding guardrail for coding/github tasks into the system message.
     // This prevents models from hallucinating repo state or claiming success without evidence.
-    if (taskCategory === 'coding' && conversationMessages.length > 0 && conversationMessages[0].role === 'system') {
-      const sysContent = typeof conversationMessages[0].content === 'string' ? conversationMessages[0].content : '';
+    if (
+      taskCategory === 'coding' &&
+      conversationMessages.length > 0 &&
+      conversationMessages[0].role === 'system'
+    ) {
+      const sysContent =
+        typeof conversationMessages[0].content === 'string' ? conversationMessages[0].content : '';
       if (!sysContent.includes('EVIDENCE RULES')) {
         conversationMessages[0] = {
           ...conversationMessages[0],
@@ -2940,9 +3353,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     if (!task.isOrchestraTask && conversationMessages.length > 0) {
       const sysMsg0 = conversationMessages[0];
       const sys0 = typeof sysMsg0?.content === 'string' ? sysMsg0.content : '';
-      if (sys0.includes('Orchestra RUN') || sys0.includes('Orchestra INIT') || sys0.includes('Orchestra REDO') || sys0.includes('Orchestra DRAFT') || sys0.includes('Orchestra REVIEW')) {
+      if (
+        sys0.includes('Orchestra RUN') ||
+        sys0.includes('Orchestra INIT') ||
+        sys0.includes('Orchestra REDO') ||
+        sys0.includes('Orchestra DRAFT') ||
+        sys0.includes('Orchestra REVIEW')
+      ) {
         task.isOrchestraTask = true;
-        if (sys0.includes('Orchestra DRAFT') || sys0.includes('Orchestra REVIEW') || request.isDraftInit) {
+        if (
+          sys0.includes('Orchestra DRAFT') ||
+          sys0.includes('Orchestra REVIEW') ||
+          request.isDraftInit
+        ) {
           task.isDraftInit = true;
         }
         await this.doState.storage.put('task', taskForStorage(task));
@@ -2962,7 +3385,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     this.startFilePrefetch(conversationMessages, request.githubToken);
 
     // Track cumulative token usage across all iterations
-    const totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
+    const totalUsage: TokenUsage = {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+    };
 
     // Anthropic rate limit pacing: track input tokens consumed in the current minute window
     let anthropicWindowStart = Date.now();
@@ -3019,18 +3447,29 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // 195s streaming with no eviction), so yield is only needed for very long
         // multi-iteration runs to prevent wall-clock staleness.
         // Only yield if R2 is available (needed to save/load checkpoint for resume).
-        const shouldYield = this.r2
-          && (task.iterations >= MAX_ITERATIONS_BEFORE_YIELD
-            || cumulativeActiveMs > MAX_ACTIVE_TIME_BEFORE_YIELD_MS)
-          && task.iterations > 0;
+        const shouldYield =
+          this.r2 &&
+          (task.iterations >= MAX_ITERATIONS_BEFORE_YIELD ||
+            cumulativeActiveMs > MAX_ACTIVE_TIME_BEFORE_YIELD_MS) &&
+          task.iterations > 0;
         if (shouldYield) {
-          console.log(`[TaskProcessor] CPU budget yield: ${task.iterations} iterations, ${Math.round(cumulativeActiveMs / 1000)}s active time`);
+          console.log(
+            `[TaskProcessor] CPU budget yield: ${task.iterations} iterations, ${Math.round(cumulativeActiveMs / 1000)}s active time`,
+          );
           // Save checkpoint to R2 — processTask loads from R2 on resume, so we
           // don't need to store messages in task state (which may exceed 128KB).
           await this.saveCheckpoint(
-            this.r2!, request.userId, request.taskId,
-            conversationMessages, task.toolsUsed, task.iterations,
-            request.prompt, 'latest', false, task.phase, task.modelAlias
+            this.r2!,
+            request.userId,
+            request.taskId,
+            conversationMessages,
+            task.toolsUsed,
+            task.iterations,
+            request.prompt,
+            'latest',
+            false,
+            task.phase,
+            task.modelAlias,
           );
           // Store minimal task state (no messages) with yield flag.
           // Reset stall counter: CPU yield proves real work happened, so if the
@@ -3073,7 +3512,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const iterStartTime = Date.now();
         let iterSleepMs = 0; // Track time spent sleeping (pacing, rate limit waits)
         let iterApiWallMs = 0; // Track time spent waiting on API (streaming is not CPU work)
-        console.log(`[TaskProcessor] Iteration ${task.iterations} START - tools: ${task.toolsUsed.length}, messages: ${conversationMessages.length}`);
+        console.log(
+          `[TaskProcessor] Iteration ${task.iterations} START - tools: ${task.toolsUsed.length}, messages: ${conversationMessages.length}`,
+        );
 
         // Note: Checkpoint is saved after tool execution, not before API call
         // This reduces CPU usage from redundant JSON.stringify operations
@@ -3105,16 +3546,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         }
 
         if (!apiKey) {
-          throw new Error(`No API key configured for provider: ${provider}. Set ${providerConfig.envKey} in Cloudflare.`);
+          throw new Error(
+            `No API key configured for provider: ${provider}. Set ${providerConfig.envKey} in Cloudflare.`,
+          );
         }
 
         // Build headers based on provider
-        const headers: Record<string, string> = provider === 'anthropic'
-          ? buildAnthropicHeaders(apiKey)
-          : {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-            };
+        const headers: Record<string, string> =
+          provider === 'anthropic'
+            ? buildAnthropicHeaders(apiKey)
+            : {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+              };
 
         // OpenRouter-specific headers
         if (provider === 'openrouter') {
@@ -3143,9 +3587,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           const elapsedInWindow = Date.now() - anthropicWindowStart;
           const ANTHROPIC_INPUT_TPM = 30000;
           const estimatedNext = this.estimateTokens(conversationMessages);
-          if (anthropicWindowTokens + estimatedNext > ANTHROPIC_INPUT_TPM * 0.85 && elapsedInWindow < 60000) {
+          if (
+            anthropicWindowTokens + estimatedNext > ANTHROPIC_INPUT_TPM * 0.85 &&
+            elapsedInWindow < 60000
+          ) {
             const waitMs = Math.min(60000 - elapsedInWindow + 2000, 65000);
-            console.log(`[TaskProcessor] Anthropic rate limit pacing: ${anthropicWindowTokens} tokens used in ${Math.round(elapsedInWindow / 1000)}s, next ~${estimatedNext} tokens — waiting ${Math.round(waitMs / 1000)}s`);
+            console.log(
+              `[TaskProcessor] Anthropic rate limit pacing: ${anthropicWindowTokens} tokens used in ${Math.round(elapsedInWindow / 1000)}s, next ~${estimatedNext} tokens — waiting ${Math.round(waitMs / 1000)}s`,
+            );
             task.lastUpdate = Date.now();
             await this.doState.storage.put('task', taskForStorage(task));
             iterSleepMs += waitMs; // Track sleep time for CPU budget accounting
@@ -3193,7 +3642,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         if (estimatedCtx > Math.floor(contextBudget * 0.92)) {
           const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
           if (compressed.length < conversationMessages.length) {
-            console.log(`[TaskProcessor] Preflight compression: ${conversationMessages.length}->${compressed.length} msgs (~${estimatedCtx} tokens, budget: ${contextBudget})`);
+            console.log(
+              `[TaskProcessor] Preflight compression: ${conversationMessages.length}->${compressed.length} msgs (~${estimatedCtx} tokens, budget: ${contextBudget})`,
+            );
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
           }
@@ -3212,33 +3663,43 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // (re-estimate after possible preflight compression)
         const estimatedCtxAfter = this.estimateTokens(conversationMessages);
         const isPaid = getModel(task.modelAlias)?.isFree !== true;
-        const baseTimeout = estimatedCtxAfter > 60000 ? 180000  // 3min for 60K+ tokens
-          : estimatedCtxAfter > 30000 ? 120000                  // 2min for 30K-60K tokens
-          : estimatedCtxAfter > 15000 ? 90000                   // 90s for 15K-30K tokens
-          : 45000;                                               // 45s default
+        const baseTimeout =
+          estimatedCtxAfter > 60000
+            ? 180000 // 3min for 60K+ tokens
+            : estimatedCtxAfter > 30000
+              ? 120000 // 2min for 30K-60K tokens
+              : estimatedCtxAfter > 15000
+                ? 90000 // 90s for 15K-30K tokens
+                : 45000; // 45s default
         // Provider-aware multiplier: some direct APIs (Moonshot/Kimi, DashScope/Qwen)
         // have high time-to-first-token due to deep reasoning. Without this, their
         // inter-chunk pauses exceed the idle timeout, causing STREAM_READ_TIMEOUT
         // on every iteration and exhausting auto-resume budget with minimal progress.
-        const providerMultiplier = provider === 'moonshot' ? 2.5
-          : provider === 'deepseek' ? 1.8
-          : provider === 'anthropic' ? 1.5  // Direct API: high TTFT + reasoning latency
-          : provider === 'dashscope' ? 1.5
-          : 1.0;
+        const providerMultiplier =
+          provider === 'moonshot'
+            ? 2.5
+            : provider === 'deepseek'
+              ? 1.8
+              : provider === 'anthropic'
+                ? 1.5 // Direct API: high TTFT + reasoning latency
+                : provider === 'dashscope'
+                  ? 1.5
+                  : 1.0;
         // Apply provider multiplier to both free and paid models — free direct
         // providers (DeepSeek, Moonshot) can also have long first-token delays.
         const scaledTimeout = baseTimeout * providerMultiplier;
         // Paid models: minimum 90s even for small contexts (they handle complex tasks)
         const idleTimeout = isPaid ? Math.max(scaledTimeout, 90000) : scaledTimeout;
         if (idleTimeout > 45000) {
-          console.log(`[TaskProcessor] Scaled idle timeout: ${idleTimeout / 1000}s (estimated ${estimatedCtxAfter} tokens, ${isPaid ? 'paid' : 'free'}${providerMultiplier > 1 ? `, ${provider} ×${providerMultiplier}` : ''})`);
+          console.log(
+            `[TaskProcessor] Scaled idle timeout: ${idleTimeout / 1000}s (estimated ${estimatedCtxAfter} tokens, ${isPaid ? 'paid' : 'free'}${providerMultiplier > 1 ? `, ${provider} ×${providerMultiplier}` : ''})`,
+          );
         }
 
         // 7B.1: Create speculative executor for this iteration
         // Safe read-only tools will be started during streaming, before the full response arrives
-        const specExec = createSpeculativeExecutor(
-          isToolCallParallelSafe,
-          (tc) => this.executeToolWithCache(tc, toolContext),
+        const specExec = createSpeculativeExecutor(isToolCallParallelSafe, (tc) =>
+          this.executeToolWithCache(tc, toolContext),
         );
 
         // Mutable reasoning override — set by the "reasoning mandatory" 400 handler
@@ -3248,7 +3709,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         for (let attempt = 1; attempt <= MAX_API_RETRIES; attempt++) {
           const apiCallStart = Date.now();
           try {
-            console.log(`[TaskProcessor] Starting API call (attempt ${attempt}/${MAX_API_RETRIES})...`);
+            console.log(
+              `[TaskProcessor] Starting API call (attempt ${attempt}/${MAX_API_RETRIES})...`,
+            );
 
             // Use streaming for OpenRouter to avoid response.text() hangs
             // SSE streaming reads chunks incrementally, bypassing the hang issue
@@ -3282,7 +3745,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                         progressCount++;
                         this.lastHeartbeatMs = Date.now();
                         if (progressCount % 100 === 0) {
-                          console.log(`[TaskProcessor] Streaming progress: ${progressCount} chunks received`);
+                          console.log(
+                            `[TaskProcessor] Streaming progress: ${progressCount} chunks received`,
+                          );
                         }
                       },
                       onToolCallReady: useTools ? specExec.onToolCallReady : undefined,
@@ -3300,22 +3765,33 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                         const effectiveTimeout = ctx.hasInFlightToolCalls
                           ? STREAM_SPLIT_MAX_MS
                           : STREAM_SPLIT_TIMEOUT_MS;
-                        console.log(`[TaskProcessor] Streaming keepalive (${progressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
+                        console.log(
+                          `[TaskProcessor] Streaming keepalive (${progressCount} chunks, ${Math.round(elapsed / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`,
+                        );
                         return elapsed < effectiveTimeout;
                       },
-                    }
+                    },
                   ),
                   new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error(`OpenRouter hard stream timeout (${Math.round(orHardTimeoutMs / 1000)}s)`)), orHardTimeoutMs)
+                    setTimeout(
+                      () =>
+                        reject(
+                          new Error(
+                            `OpenRouter hard stream timeout (${Math.round(orHardTimeoutMs / 1000)}s)`,
+                          ),
+                        ),
+                      orHardTimeoutMs,
+                    ),
                   ),
                 ]);
               } finally {
                 task.isStreaming = false;
               }
 
-              console.log(`[TaskProcessor] Streaming completed: ${progressCount} total chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);
+              console.log(
+                `[TaskProcessor] Streaming completed: ${progressCount} total chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`,
+              );
               break; // Success! Exit retry loop
-
             } else {
               // Non-OpenRouter providers: use SSE streaming
               // This prevents DO termination during long API calls
@@ -3329,7 +3805,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               if (provider === 'moonshot') {
                 sanitized = ensureMoonshotReasoning(sanitized);
               }
-              const finalMessages = isAnthropicModel(task.modelAlias) ? injectCacheControl(sanitized) : sanitized;
+              const finalMessages = isAnthropicModel(task.modelAlias)
+                ? injectCacheControl(sanitized)
+                : sanitized;
 
               // Build request body — Anthropic uses a different format (Messages API)
               let requestBody: Record<string, unknown>;
@@ -3337,8 +3815,12 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
               if (provider === 'anthropic') {
                 // Anthropic Messages API: different structure from OpenAI format
-                const reasoningLevel = request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
-                const reasoningParam = reasoningOverride || getReasoningParam(task.modelAlias, reasoningLevel) || undefined;
+                const reasoningLevel =
+                  request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
+                const reasoningParam =
+                  reasoningOverride ||
+                  getReasoningParam(task.modelAlias, reasoningLevel) ||
+                  undefined;
                 requestBody = buildAnthropicRequest({
                   modelId: getModelId(task.modelAlias),
                   messages: finalMessages,
@@ -3374,7 +3856,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 if (reasoningOverride) {
                   requestBody.reasoning = reasoningOverride;
                 } else {
-                  const reasoningLevel = request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
+                  const reasoningLevel =
+                    request.reasoningLevel ?? detectReasoningLevel(conversationMessages);
                   const reasoningParam = getReasoningParam(task.modelAlias, reasoningLevel);
                   if (reasoningParam) {
                     requestBody.reasoning = reasoningParam;
@@ -3405,7 +3888,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 clearTimeout(fetchTimeout);
                 clearInterval(preFetchHeartbeat);
                 if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
-                  throw new Error(`${provider} API timeout (${Math.round((idleTimeout + 30000) / 1000)}s) — connection aborted`);
+                  throw new Error(
+                    `${provider} API timeout (${Math.round((idleTimeout + 30000) / 1000)}s) — connection aborted`,
+                  );
                 }
                 throw fetchError;
               }
@@ -3414,7 +3899,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 clearInterval(preFetchHeartbeat);
                 const errorText = await response.text().catch(() => 'unknown error');
                 const providerErr = parseProviderError(response.status, errorText);
-                throw new Error(`${provider} API error (${providerErr.status}): ${providerErr.message}`);
+                throw new Error(
+                  `${provider} API error (${providerErr.status}): ${providerErr.message}`,
+                );
               }
 
               if (!response.body) {
@@ -3436,7 +3923,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   clearInterval(preFetchHeartbeat);
                 }
                 if (directProgressCount % 100 === 0) {
-                  console.log(`[TaskProcessor] ${provider} streaming: ${directProgressCount} chunks`);
+                  console.log(
+                    `[TaskProcessor] ${provider} streaming: ${directProgressCount} chunks`,
+                  );
                 }
               };
 
@@ -3453,7 +3942,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // output for auto-resume; the hard abort at 300s is the absolute safety net.
               const streamPolicy = getStreamPolicy(provider, idleTimeout);
               let lastPersistMs = Date.now();
-              const onKeepAlive = async (ctx: { hasInFlightToolCalls: boolean }): Promise<boolean> => {
+              const onKeepAlive = async (ctx: {
+                hasInFlightToolCalls: boolean;
+              }): Promise<boolean> => {
                 const now = Date.now();
                 task.lastUpdate = now;
 
@@ -3469,7 +3960,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 const effectiveTimeout = ctx.hasInFlightToolCalls
                   ? streamPolicy.softSplitToolMs
                   : streamPolicy.softSplitMs;
-                console.log(`[TaskProcessor] ${provider} keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s/${Math.round(effectiveTimeout / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`);
+                console.log(
+                  `[TaskProcessor] ${provider} keepalive (${directProgressCount} chunks, ${Math.round(elapsed / 1000)}s/${Math.round(effectiveTimeout / 1000)}s${ctx.hasInFlightToolCalls ? ', tool in-flight' : ''})`,
+                );
                 return elapsed < effectiveTimeout;
               };
 
@@ -3477,21 +3970,27 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
               // Anthropic: 300s (5 min). Others: 3× idle timeout, clamped 180s-300s.
               const hardStreamTimeoutMs = streamPolicy.hardTimeoutMs;
               const hardStreamTimeout = setTimeout(() => {
-                console.log(`[TaskProcessor] Hard stream timeout (${Math.round(hardStreamTimeoutMs / 1000)}s) — aborting`);
+                console.log(
+                  `[TaskProcessor] Hard stream timeout (${Math.round(hardStreamTimeoutMs / 1000)}s) — aborting`,
+                );
                 abortController.abort();
               }, hardStreamTimeoutMs);
 
               try {
                 if (provider === 'anthropic') {
                   result = await parseAnthropicSSEStream(
-                    response.body, idleTimeout, onStreamProgress,
+                    response.body,
+                    idleTimeout,
+                    onStreamProgress,
                     useTools ? specExec.onToolCallReady : undefined,
                     onKeepAlive,
                     streamPolicy.keepAliveIntervalMs,
                   );
                 } else {
                   result = await parseSSEStream(
-                    response.body, idleTimeout, onStreamProgress,
+                    response.body,
+                    idleTimeout,
+                    onStreamProgress,
                     useTools ? specExec.onToolCallReady : undefined,
                     onKeepAlive,
                   );
@@ -3502,13 +4001,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 task.isStreaming = false;
               }
 
-              console.log(`[TaskProcessor] ${provider} streaming complete: ${directProgressCount} chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`);
+              console.log(
+                `[TaskProcessor] ${provider} streaming complete: ${directProgressCount} chunks${specExec.startedCount() > 0 ? `, ${specExec.startedCount()} tools started speculatively` : ''}`,
+              );
               break; // Success!
             }
-
           } catch (apiError) {
             lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
-            console.log(`[TaskProcessor] API call failed (attempt ${attempt}): ${lastError.message}`);
+            console.log(
+              `[TaskProcessor] API call failed (attempt ${attempt}): ${lastError.message}`,
+            );
 
             // SEC-P1b: Save checkpoint on stream abort/timeout so watchdog resume
             // picks up from the last known good state instead of replaying from scratch.
@@ -3517,31 +4019,57 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             if (/timeout|abort|stream.?split|STREAM_READ_TIMEOUT/i.test(lastError.message)) {
               if (this.r2 && conversationMessages.length > 2) {
                 try {
-                  await this.saveCheckpoint(this.r2, request.userId, request.taskId,
-                    conversationMessages, task.toolsUsed, task.iterations, request.prompt,
-                    'latest', false, task.phase, task.modelAlias);
-                  console.log(`[TaskProcessor] Checkpoint saved after stream abort (${conversationMessages.length} msgs)`);
-                } catch { /* non-fatal */ }
+                  await this.saveCheckpoint(
+                    this.r2,
+                    request.userId,
+                    request.taskId,
+                    conversationMessages,
+                    task.toolsUsed,
+                    task.iterations,
+                    request.prompt,
+                    'latest',
+                    false,
+                    task.phase,
+                    task.modelAlias,
+                  );
+                  console.log(
+                    `[TaskProcessor] Checkpoint saved after stream abort (${conversationMessages.length} msgs)`,
+                  );
+                } catch {
+                  /* non-fatal */
+                }
               }
             }
 
             // 429 rate limit on paid model — distinguish daily vs per-minute limits.
             // Daily (TPD) limits won't reset with short waits — fail fast and suggest alternatives.
             // Per-minute (TPM/RPM) limits are transient — backoff and retry.
-            if (/\b429\b/.test(lastError.message) && !(getModel(task.modelAlias)?.isFree === true)) {
+            if (
+              /\b429\b/.test(lastError.message) &&
+              !(getModel(task.modelAlias)?.isFree === true)
+            ) {
               // Detect daily/quota limits: Moonshot uses "TPD rate limit", others may use similar patterns
-              const isDailyLimit = /\bTPD\b|tokens?.per.day|daily.*(limit|quota|cap)|quota.*exceeded/i.test(lastError.message);
+              const isDailyLimit =
+                /\bTPD\b|tokens?.per.day|daily.*(limit|quota|cap)|quota.*exceeded/i.test(
+                  lastError.message,
+                );
               if (isDailyLimit) {
-                console.log(`[TaskProcessor] 429 DAILY rate limit for ${task.modelAlias} — failing fast (no point retrying)`);
+                console.log(
+                  `[TaskProcessor] 429 DAILY rate limit for ${task.modelAlias} — failing fast (no point retrying)`,
+                );
                 // Surface a clear error so the user knows to switch models
-                lastError = new Error(`${task.modelAlias} daily token quota exceeded (${lastError.message}). Try /kimi (OpenRouter) or another model.`);
+                lastError = new Error(
+                  `${task.modelAlias} daily token quota exceeded (${lastError.message}). Try /kimi (OpenRouter) or another model.`,
+                );
                 break;
               }
 
               if (rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
                 rateLimitRetries++;
                 const waitSecs = Math.min(15 * Math.pow(2, rateLimitRetries - 1), 60);
-                console.log(`[TaskProcessor] 429 rate limit on paid model — waiting ${waitSecs}s (rate limit retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`);
+                console.log(
+                  `[TaskProcessor] 429 rate limit on paid model — waiting ${waitSecs}s (rate limit retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`,
+                );
                 // Keep heartbeat and storage alive during rate limit sleep
                 // to prevent watchdog from triggering false auto-resume
                 task.lastUpdate = Date.now();
@@ -3562,7 +4090,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             }
 
             // 400 content filter (DashScope/Alibaba) — deterministic, don't retry
-            if (/\b400\b/.test(lastError.message) && /inappropriate.?content|data_inspection_failed/i.test(lastError.message)) {
+            if (
+              /\b400\b/.test(lastError.message) &&
+              /inappropriate.?content|data_inspection_failed/i.test(lastError.message)
+            ) {
               console.log('[TaskProcessor] Content filter 400 — failing fast (will try rotation)');
               break;
             }
@@ -3572,23 +4103,34 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             // For direct API: set reasoningOverride so the next attempt includes it.
             if (/\b400\b/.test(lastError.message) && isReasoningMandatoryError(lastError.message)) {
               if (!reasoningOverride) {
-                console.log(`[TaskProcessor] Reasoning mandatory for ${task.modelAlias} — retrying with reasoning enabled`);
+                console.log(
+                  `[TaskProcessor] Reasoning mandatory for ${task.modelAlias} — retrying with reasoning enabled`,
+                );
                 reasoningOverride = buildFallbackReasoningParam(task.modelAlias);
                 continue; // Retry with reasoning injected (same attempt slot)
               }
               // Already tried with reasoning override — something else is wrong
-              console.log('[TaskProcessor] Already had reasoning override, still rejected — failing');
+              console.log(
+                '[TaskProcessor] Already had reasoning override, still rejected — failing',
+              );
               break;
             }
 
             // 400 "Input validation error" — context too large for provider.
             // Compress conversation and retry once instead of failing immediately.
-            if (/\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length|max.?tokens|maximum.?context|prompt is too long|reduce the length/i.test(lastError.message)) {
+            if (
+              /\b400\b/.test(lastError.message) &&
+              /input.?validation|too.?long|too.?many.?tokens|context.?length|max.?tokens|maximum.?context|prompt is too long|reduce the length/i.test(
+                lastError.message,
+              )
+            ) {
               const beforeLen = conversationMessages.length;
               const beforeTokens = this.estimateTokens(conversationMessages);
               const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
               const afterTokens = this.estimateTokens(compressed);
-              console.log(`[TaskProcessor] 400 Input validation — compressing context: ${beforeLen}→${compressed.length} msgs, ~${beforeTokens}→${afterTokens} tokens`);
+              console.log(
+                `[TaskProcessor] 400 Input validation — compressing context: ${beforeLen}→${compressed.length} msgs, ~${beforeTokens}→${afterTokens} tokens`,
+              );
 
               if (compressed.length < beforeLen || afterTokens < beforeTokens) {
                 // Context was compressible (fewer messages or fewer tokens) — replace and retry
@@ -3597,25 +4139,32 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                 continue; // Retry with compressed context (same attempt slot)
               }
               // Standard compression didn't help — try aggressive fallback (60% budget, keepRecent=2)
-              const forcedBudget = Math.max(8000, Math.floor(this.getContextBudget(task.modelAlias) * 0.6));
+              const forcedBudget = Math.max(
+                8000,
+                Math.floor(this.getContextBudget(task.modelAlias) * 0.6),
+              );
               const aggressivelyCompressed = sanitizeToolPairs(
-                compressContextBudgeted(conversationMessages, forcedBudget, 2)
+                compressContextBudgeted(conversationMessages, forcedBudget, 2),
               );
               const aggressiveTokens = this.estimateTokens(aggressivelyCompressed);
               if (aggressiveTokens < beforeTokens) {
-                console.log(`[TaskProcessor] Aggressive compression fallback: ~${beforeTokens}→${aggressiveTokens} tokens`);
+                console.log(
+                  `[TaskProcessor] Aggressive compression fallback: ~${beforeTokens}→${aggressiveTokens} tokens`,
+                );
                 conversationMessages.length = 0;
                 conversationMessages.push(...aggressivelyCompressed);
                 continue;
               }
               // Already minimal — nothing more to compress, fail fast
-              console.log('[TaskProcessor] Context already minimal, cannot compress further — failing');
+              console.log(
+                '[TaskProcessor] Context already minimal, cannot compress further — failing',
+              );
               break;
             }
 
             if (attempt < MAX_API_RETRIES) {
               console.log(`[TaskProcessor] Retrying in 2 seconds...`);
-              await new Promise(r => setTimeout(r, 2000));
+              await new Promise((r) => setTimeout(r, 2000));
               continue;
             }
             // All retries exhausted — don't throw yet, try model rotation below
@@ -3627,11 +4176,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
         // If API call failed after all retries, try rotating to another free model
         if (!result && lastError) {
-          const isRateLimited = /429|503|rate.?limit|overloaded|capacity|busy/i.test(lastError.message);
+          const isRateLimited = /429|503|rate.?limit|overloaded|capacity|busy/i.test(
+            lastError.message,
+          );
           const isQuotaExceeded = /\b402\b/.test(lastError.message);
           const isModelGone = /\b404\b/.test(lastError.message);
-          const isContentFilter = /inappropriate.?content|data_inspection_failed/i.test(lastError.message);
-          const isInputValidation = /\b400\b/.test(lastError.message) && /input.?validation|too.?long|too.?many.?tokens|context.?length/i.test(lastError.message);
+          const isContentFilter = /inappropriate.?content|data_inspection_failed/i.test(
+            lastError.message,
+          );
+          const isInputValidation =
+            /\b400\b/.test(lastError.message) &&
+            /input.?validation|too.?long|too.?many.?tokens|context.?length/i.test(
+              lastError.message,
+            );
           // SEC-P1: Classify transient vs permanent API errors.
           // Transient (502/503/504/timeout): worth rotating to another model.
           // Permanent (401/403/422): fail fast — rotating won't help.
@@ -3641,11 +4198,22 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // Fail fast on permanent errors — no point trying other models
           if (isPermanent && !isQuotaExceeded) {
-            console.log(`[TaskProcessor] Permanent API error (${lastError.message.slice(0, 100)}) — failing fast, no rotation`);
+            console.log(
+              `[TaskProcessor] Permanent API error (${lastError.message.slice(0, 100)}) — failing fast, no rotation`,
+            );
             throw lastError;
           }
 
-          if ((isRateLimited || isQuotaExceeded || isModelGone || isContentFilter || isInputValidation || isTransient) && currentIsFree && rotationIndex < MAX_FREE_ROTATIONS) {
+          if (
+            (isRateLimited ||
+              isQuotaExceeded ||
+              isModelGone ||
+              isContentFilter ||
+              isInputValidation ||
+              isTransient) &&
+            currentIsFree &&
+            rotationIndex < MAX_FREE_ROTATIONS
+          ) {
             // Use capability-aware rotation order (preferred category first, emergency core last)
             const nextAlias = rotationOrder[rotationIndex];
             rotationIndex++;
@@ -3655,18 +4223,34 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             task.lastUpdate = Date.now();
             await this.doState.storage.put('task', taskForStorage(task));
 
-            const reason = isInputValidation ? 'context too large (400)' : isContentFilter ? 'content filtered' : isModelGone ? 'unavailable (404)' : isTransient && !isRateLimited ? 'transient error' : 'busy';
-            const isEmergency = EMERGENCY_CORE_ALIASES.includes(nextAlias) && rotationIndex > MAX_FREE_ROTATIONS - EMERGENCY_CORE_ALIASES.length;
-            console.log(`[TaskProcessor] Rotating from /${prevAlias} to /${nextAlias} — ${reason} (${rotationIndex}/${MAX_FREE_ROTATIONS}${isEmergency ? ', emergency core' : ''}, task: ${taskCategory})`);
+            const reason = isInputValidation
+              ? 'context too large (400)'
+              : isContentFilter
+                ? 'content filtered'
+                : isModelGone
+                  ? 'unavailable (404)'
+                  : isTransient && !isRateLimited
+                    ? 'transient error'
+                    : 'busy';
+            const isEmergency =
+              EMERGENCY_CORE_ALIASES.includes(nextAlias) &&
+              rotationIndex > MAX_FREE_ROTATIONS - EMERGENCY_CORE_ALIASES.length;
+            console.log(
+              `[TaskProcessor] Rotating from /${prevAlias} to /${nextAlias} — ${reason} (${rotationIndex}/${MAX_FREE_ROTATIONS}${isEmergency ? ', emergency core' : ''}, task: ${taskCategory})`,
+            );
 
             // Notify user about model switch
             if (statusMessageId) {
               try {
                 await this.editTelegramMessage(
-                  request.telegramToken, request.chatId, statusMessageId,
-                  `🔄 /${prevAlias} ${reason}. Switching to /${nextAlias}... (${task.iterations} iter)`
+                  request.telegramToken,
+                  request.chatId,
+                  statusMessageId,
+                  `🔄 /${prevAlias} ${reason}. Switching to /${nextAlias}... (${task.iterations} iter)`,
                 );
-              } catch { /* non-fatal */ }
+              } catch {
+                /* non-fatal */
+              }
             }
 
             continue; // Retry the iteration with the new model
@@ -3674,12 +4258,16 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
 
           // Can't rotate — all models exhausted (including emergency core)
           if (isQuotaExceeded) {
-            const suggestions = EMERGENCY_CORE_ALIASES.map(a => `/${a}`).join(', ');
-            throw new Error(`All free models quota-exhausted (tried ${rotationIndex} rotations). Emergency core: ${suggestions}`);
+            const suggestions = EMERGENCY_CORE_ALIASES.map((a) => `/${a}`).join(', ');
+            throw new Error(
+              `All free models quota-exhausted (tried ${rotationIndex} rotations). Emergency core: ${suggestions}`,
+            );
           }
           if (isModelGone) {
-            const suggestions = EMERGENCY_CORE_ALIASES.map(a => `/${a}`).join(', ');
-            throw new Error(`All free models unavailable (tried ${rotationIndex} rotations). Emergency core: ${suggestions}`);
+            const suggestions = EMERGENCY_CORE_ALIASES.map((a) => `/${a}`).join(', ');
+            throw new Error(
+              `All free models unavailable (tried ${rotationIndex} rotations). Emergency core: ${suggestions}`,
+            );
           }
           throw lastError;
         }
@@ -3693,28 +4281,36 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // Track token usage and costs
         if (result.usage) {
           // Extract DeepSeek prefix cache metrics (automatic, no code changes needed to enable)
-          const cacheInfo = (result.usage.prompt_cache_hit_tokens !== undefined)
-            ? {
-                cacheHitTokens: result.usage.prompt_cache_hit_tokens,
-                cacheMissTokens: result.usage.prompt_cache_miss_tokens ?? result.usage.prompt_tokens,
-              }
-            : undefined;
+          const cacheInfo =
+            result.usage.prompt_cache_hit_tokens !== undefined
+              ? {
+                  cacheHitTokens: result.usage.prompt_cache_hit_tokens,
+                  cacheMissTokens:
+                    result.usage.prompt_cache_miss_tokens ?? result.usage.prompt_tokens,
+                }
+              : undefined;
 
           const iterationUsage = recordUsage(
             request.userId,
             task.modelAlias,
             result.usage.prompt_tokens,
             result.usage.completion_tokens,
-            cacheInfo
+            cacheInfo,
           );
           totalUsage.promptTokens += iterationUsage.promptTokens;
           totalUsage.completionTokens += iterationUsage.completionTokens;
           totalUsage.totalTokens += iterationUsage.totalTokens;
           totalUsage.costUsd += iterationUsage.costUsd;
-          totalUsage.cacheHitTokens = (totalUsage.cacheHitTokens ?? 0) + (iterationUsage.cacheHitTokens ?? 0);
-          totalUsage.cacheMissTokens = (totalUsage.cacheMissTokens ?? 0) + (iterationUsage.cacheMissTokens ?? 0);
-          const cacheLog = cacheInfo ? `, cache: ${cacheInfo.cacheHitTokens} hit/${cacheInfo.cacheMissTokens} miss` : '';
-          console.log(`[TaskProcessor] Usage: ${result.usage.prompt_tokens}+${result.usage.completion_tokens} tokens, $${iterationUsage.costUsd.toFixed(4)}${cacheLog}`);
+          totalUsage.cacheHitTokens =
+            (totalUsage.cacheHitTokens ?? 0) + (iterationUsage.cacheHitTokens ?? 0);
+          totalUsage.cacheMissTokens =
+            (totalUsage.cacheMissTokens ?? 0) + (iterationUsage.cacheMissTokens ?? 0);
+          const cacheLog = cacheInfo
+            ? `, cache: ${cacheInfo.cacheHitTokens} hit/${cacheInfo.cacheMissTokens} miss`
+            : '';
+          console.log(
+            `[TaskProcessor] Usage: ${result.usage.prompt_tokens}+${result.usage.completion_tokens} tokens, $${iterationUsage.costUsd.toFixed(4)}${cacheLog}`,
+          );
 
           // Track Anthropic input tokens for rate limit pacing
           if (provider === 'anthropic') {
@@ -3725,14 +4321,20 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         const choice = result.choices[0];
 
         // Handle finish_reason: length — tool_calls may be truncated with invalid JSON
-        if (choice.finish_reason === 'length' && choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+        if (
+          choice.finish_reason === 'length' &&
+          choice.message.tool_calls &&
+          choice.message.tool_calls.length > 0
+        ) {
           // Validate each tool_call's arguments — truncated streams produce incomplete JSON
-          const validToolCalls = choice.message.tool_calls.filter(tc => {
+          const validToolCalls = choice.message.tool_calls.filter((tc) => {
             try {
               JSON.parse(tc.function.arguments);
               return true;
             } catch {
-              console.log(`[TaskProcessor] Dropping truncated tool_call ${tc.function.name}: invalid JSON args`);
+              console.log(
+                `[TaskProcessor] Dropping truncated tool_call ${tc.function.name}: invalid JSON args`,
+              );
               return false;
             }
           });
@@ -3740,7 +4342,9 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
           if (validToolCalls.length === 0) {
             // All tool_calls truncated — compress and retry with nudge
             const truncatedToolName = choice.message.tool_calls[0]?.function?.name || 'unknown';
-            console.log(`[TaskProcessor] All tool_calls truncated (finish_reason: length, tool: ${truncatedToolName}) — compressing and retrying`);
+            console.log(
+              `[TaskProcessor] All tool_calls truncated (finish_reason: length, tool: ${truncatedToolName}) — compressing and retrying`,
+            );
             const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
@@ -3751,13 +4355,15 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
             // "ONE github_create_pr call" requirement and confuses the model.
             let truncNudge: string;
             if (truncatedToolName === 'github_create_pr') {
-              truncNudge = '[Your github_create_pr call was too large and got cut off. To fit within the output limit:\n'
-                + '1. Use "patch" action (not "update") for existing files — only send the changed lines, not the whole file\n'
-                + '2. For new files, keep content minimal — only include the necessary code\n'
-                + '3. If the PR has many files, prioritize the most important changes\n'
-                + 'Try the github_create_pr call again with these optimizations.]';
+              truncNudge =
+                '[Your github_create_pr call was too large and got cut off. To fit within the output limit:\n' +
+                '1. Use "patch" action (not "update") for existing files — only send the changed lines, not the whole file\n' +
+                '2. For new files, keep content minimal — only include the necessary code\n' +
+                '3. If the PR has many files, prioritize the most important changes\n' +
+                'Try the github_create_pr call again with these optimizations.]';
             } else {
-              truncNudge = '[Your last response was cut off. Please try again with a shorter tool call or break it into smaller steps.]';
+              truncNudge =
+                '[Your last response was cut off. Please try again with a shorter tool call or break it into smaller steps.]';
             }
             conversationMessages.push({
               role: 'user',
@@ -3775,19 +4381,28 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // block or a long explanation when output is truncated. Without this handler,
         // the truncated text is treated as a complete response and transitions to review
         // with a broken/missing PR URL.
-        if (choice.finish_reason === 'length' && (!choice.message.tool_calls || choice.message.tool_calls.length === 0)) {
-          const sysMsg = request.messages.find(m => m.role === 'system');
+        if (
+          choice.finish_reason === 'length' &&
+          (!choice.message.tool_calls || choice.message.tool_calls.length === 0)
+        ) {
+          const sysMsg = request.messages.find((m) => m.role === 'system');
           const sysContent = typeof sysMsg?.content === 'string' ? sysMsg.content : '';
-          const isOrch = sysContent.includes('Orchestra RUN') || sysContent.includes('Orchestra INIT') || sysContent.includes('Orchestra REDO');
+          const isOrch =
+            sysContent.includes('Orchestra RUN') ||
+            sysContent.includes('Orchestra INIT') ||
+            sysContent.includes('Orchestra REDO');
           if (isOrch && task.phase === 'work') {
-            console.log(`[TaskProcessor] Text-only truncation in orchestra work phase — nudging model to continue`);
+            console.log(
+              `[TaskProcessor] Text-only truncation in orchestra work phase — nudging model to continue`,
+            );
             conversationMessages.push({
               role: 'assistant',
               content: choice.message.content || '',
             });
             conversationMessages.push({
               role: 'user',
-              content: '[Your text response was cut off (output limit reached). Continue EXACTLY where you left off. If you were writing the ORCHESTRA_RESULT block, complete it now. If you haven\'t called github_create_pr yet, call it now using "patch" actions to keep the output small.]',
+              content:
+                '[Your text response was cut off (output limit reached). Continue EXACTLY where you left off. If you were writing the ORCHESTRA_RESULT block, complete it now. If you haven\'t called github_create_pr yet, call it now using "patch" actions to keep the output small.]',
             });
             continue;
           }
@@ -3798,19 +4413,26 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         // are valid complete tool calls, process them normally (they'll be executed
         // below). If there are none, nudge the model to continue.
         if (choice.finish_reason === 'stream_split') {
-          console.log(`[TaskProcessor] Stream split — ` +
-            `content: ${(choice.message.content || '').length} chars, ` +
-            `tools: ${choice.message.tool_calls?.length ?? 0}`);
+          console.log(
+            `[TaskProcessor] Stream split — ` +
+              `content: ${(choice.message.content || '').length} chars, ` +
+              `tools: ${choice.message.tool_calls?.length ?? 0}`,
+          );
 
           if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
             consecutiveEmptySplits++;
-            console.log(`[TaskProcessor] Empty stream split ${consecutiveEmptySplits}/${MAX_EMPTY_SPLITS_BAIL}`);
+            console.log(
+              `[TaskProcessor] Empty stream split ${consecutiveEmptySplits}/${MAX_EMPTY_SPLITS_BAIL}`,
+            );
 
             // Bail out if the model can't adapt after repeated splits
             if (consecutiveEmptySplits >= MAX_EMPTY_SPLITS_BAIL) {
-              console.log(`[TaskProcessor] Stream split death loop: ${consecutiveEmptySplits} consecutive empty splits — bailing out`);
+              console.log(
+                `[TaskProcessor] Stream split death loop: ${consecutiveEmptySplits} consecutive empty splits — bailing out`,
+              );
               task.status = 'failed';
-              task.error = `Model generates oversized tool calls that exceed streaming limits (${consecutiveEmptySplits} consecutive truncations). ` +
+              task.error =
+                `Model generates oversized tool calls that exceed streaming limits (${consecutiveEmptySplits} consecutive truncations). ` +
                 `The model keeps trying to write full file content instead of using patch action. Try a different model.`;
               task.result = `Stream split death loop: model cannot generate tool calls small enough to fit within streaming limits.`;
               await this.doState.storage.put('task', taskForStorage(task));
@@ -3819,8 +4441,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
                   task.telegramToken,
                   task.chatId,
                   `❌ Task failed: streaming death loop.\n\n${task.modelAlias} keeps generating tool calls too large for the stream limit (${consecutiveEmptySplits}× truncated).\n\n` +
-                  `This usually means the model is trying to write/rewrite a large file instead of using patch action.\n\n💡 Try: /deep, /sonnet, or /flash`,
-                  [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+                    `This usually means the model is trying to write/rewrite a large file instead of using patch action.\n\n💡 Try: /deep, /sonnet, or /flash`,
+                  [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
                 );
               }
               return;
@@ -3852,9 +4474,7 @@ YOU MUST CHANGE YOUR APPROACH:
 If you already created the new file and just need to patch the original, call github_create_pr now with action "patch" for the original file.]`;
             } else {
               // First split: gentle nudge
-              const tail = partialText.length > 300
-                ? partialText.slice(-300)
-                : partialText;
+              const tail = partialText.length > 300 ? partialText.slice(-300) : partialText;
               nudge = tail
                 ? `[Your response was cut short by a streaming limit. Your tool call was too large and got discarded. Use SMALLER tool calls — for existing files, use action "patch" with targeted find/replace pairs instead of writing full file content. Your last output ended with:\n\n${tail}\n\nContinue with a smaller operation.]`
                 : '[Your response was cut short by a streaming limit. Your tool call was too large and got discarded. Use SMALLER tool calls — for existing files, use action "patch" with targeted find/replace pairs instead of writing full file content. Call a tool now with a smaller payload.]';
@@ -3880,10 +4500,16 @@ If you already created the new file and just need to patch the original, call gi
           const structuredPlan = parseStructuredPlan(planContent);
           if (structuredPlan) {
             task.structuredPlan = structuredPlan;
-            console.log(`[TaskProcessor] Structured plan parsed: ${structuredPlan.steps.length} steps\n${formatPlanSummary(structuredPlan)}`);
+            console.log(
+              `[TaskProcessor] Structured plan parsed: ${structuredPlan.steps.length} steps\n${formatPlanSummary(structuredPlan)}`,
+            );
 
             // Pre-load all files referenced in the plan (merges into existing prefetch cache)
-            const planPrefetch = prefetchPlanFiles(structuredPlan, conversationMessages, request.githubToken);
+            const planPrefetch = prefetchPlanFiles(
+              structuredPlan,
+              conversationMessages,
+              request.githubToken,
+            );
             for (const [key, promise] of planPrefetch) {
               if (!this.prefetchPromises.has(key)) {
                 this.prefetchPromises.set(key, promise);
@@ -3903,11 +4529,15 @@ If you already created the new file and just need to patch the original, call gi
                   role: 'user',
                   content: injection.contextMessage,
                 });
-                console.log(`[TaskProcessor] 7B.4 file injection: ${injection.loadedCount} files loaded into context (${injection.skippedCount} skipped): ${injection.loadedFiles.join(', ')}`);
+                console.log(
+                  `[TaskProcessor] 7B.4 file injection: ${injection.loadedCount} files loaded into context (${injection.skippedCount} skipped): ${injection.loadedFiles.join(', ')}`,
+                );
               }
             }
           } else {
-            console.log('[TaskProcessor] No structured plan parsed from response (free-form fallback)');
+            console.log(
+              '[TaskProcessor] No structured plan parsed from response (free-form fallback)',
+            );
 
             // 7B.4: Even without a structured plan, inject any files from user-message prefetch (7B.3)
             if (this.prefetchPromises.size > 0) {
@@ -3917,13 +4547,17 @@ If you already created the new file and just need to patch the original, call gi
                   role: 'user',
                   content: injection.contextMessage,
                 });
-                console.log(`[TaskProcessor] 7B.4 file injection (free-form): ${injection.loadedCount} files loaded: ${injection.loadedFiles.join(', ')}`);
+                console.log(
+                  `[TaskProcessor] 7B.4 file injection (free-form): ${injection.loadedCount} files loaded: ${injection.loadedFiles.join(', ')}`,
+                );
               }
             }
           }
 
           await this.doState.storage.put('task', taskForStorage(task));
-          console.log(`[TaskProcessor] Phase transition: plan → work (iteration ${task.iterations})`);
+          console.log(
+            `[TaskProcessor] Phase transition: plan → work (iteration ${task.iterations})`,
+          );
         }
 
         // Check if model wants to call tools
@@ -3947,14 +4581,16 @@ If you already created the new file and just need to patch the original, call gi
             checkPhaseBudget(task.phase, phaseStartTime, provider);
           }
 
-          const toolNames = choice.message.tool_calls.map(tc => tc.function.name);
+          const toolNames = choice.message.tool_calls.map((tc) => tc.function.name);
           task.toolsUsed.push(...toolNames);
 
           // Safety: cap sandbox_exec calls per task to prevent infinite build/test loops
-          const sandboxCallCount = task.toolsUsed.filter(t => t === 'sandbox_exec').length;
+          const sandboxCallCount = task.toolsUsed.filter((t) => t === 'sandbox_exec').length;
           if (sandboxCallCount > MAX_SANDBOX_CALLS_PER_TASK) {
             // Strip sandbox_exec from this batch — let other tools proceed
-            const filtered = choice.message.tool_calls.filter(tc => tc.function.name !== 'sandbox_exec');
+            const filtered = choice.message.tool_calls.filter(
+              (tc) => tc.function.name !== 'sandbox_exec',
+            );
             if (filtered.length === 0) {
               // All calls were sandbox — inject a warning as if it were a tool result
               conversationMessages.push({
@@ -3970,12 +4606,16 @@ If you already created the new file and just need to patch the original, call gi
                   content: 'Skipped — sandbox limit reached.',
                 });
               }
-              console.log(`[TaskProcessor] Sandbox call limit (${MAX_SANDBOX_CALLS_PER_TASK}) reached for task ${task.taskId}`);
+              console.log(
+                `[TaskProcessor] Sandbox call limit (${MAX_SANDBOX_CALLS_PER_TASK}) reached for task ${task.taskId}`,
+              );
               continue;
             }
             // Some non-sandbox tools remain — replace tool_calls with filtered set
             // and add a sandbox limit warning for the blocked calls
-            const blockedCalls = choice.message.tool_calls.filter(tc => tc.function.name === 'sandbox_exec');
+            const blockedCalls = choice.message.tool_calls.filter(
+              (tc) => tc.function.name === 'sandbox_exec',
+            );
             choice.message.tool_calls = filtered;
             for (const blocked of blockedCalls) {
               conversationMessages.push({
@@ -4006,24 +4646,35 @@ If you already created the new file and just need to patch the original, call gi
 
           // Determine execution strategy: parallel (safe read-only tools) vs sequential (mutation tools)
           const modelInfo = getModel(task.modelAlias);
-          const allToolsSafe = choice.message.tool_calls.every(tc => isToolCallParallelSafe(tc));
-          const useParallel = allToolsSafe && modelInfo?.parallelCalls === true && choice.message.tool_calls.length > 1;
+          const allToolsSafe = choice.message.tool_calls.every((tc) => isToolCallParallelSafe(tc));
+          const useParallel =
+            allToolsSafe &&
+            modelInfo?.parallelCalls === true &&
+            choice.message.tool_calls.length > 1;
 
           const parallelStart = Date.now();
-          let toolResults: Array<{ toolName: string; toolResult: { tool_call_id: string; content: string } }>;
+          let toolResults: Array<{
+            toolName: string;
+            toolResult: { tool_call_id: string; content: string };
+          }>;
 
           // 7B.1: Count how many tools have speculative results already available
-          const speculativeHits = choice.message.tool_calls.filter(tc => specExec.getResult(tc.id)).length;
+          const speculativeHits = choice.message.tool_calls.filter((tc) =>
+            specExec.getResult(tc.id),
+          ).length;
           if (speculativeHits > 0) {
-            console.log(`[TaskProcessor] 7B.1: ${speculativeHits}/${choice.message.tool_calls.length} tool results from speculative execution`);
+            console.log(
+              `[TaskProcessor] 7B.1: ${speculativeHits}/${choice.message.tool_calls.length} tool results from speculative execution`,
+            );
           }
 
           if (useParallel) {
             // 7B.5: Show parallel tool names in progress
-            const parallelToolNames = choice.message.tool_calls.map(tc => tc.function.name);
-            currentTool = parallelToolNames.length > 1
-              ? parallelToolNames.slice(0, 3).join(', ')
-              : parallelToolNames[0];
+            const parallelToolNames = choice.message.tool_calls.map((tc) => tc.function.name);
+            currentTool =
+              parallelToolNames.length > 1
+                ? parallelToolNames.slice(0, 3).join(', ')
+                : parallelToolNames[0];
             currentToolContext = `${parallelToolNames.length} tools in parallel`;
             await sendProgressUpdate(true);
 
@@ -4037,14 +4688,19 @@ If you already created the new file and just need to patch the original, call gi
                 const specResult = specExec.getResult(toolCall.id);
                 if (specResult) {
                   const toolResult = await specResult;
-                  console.log(`[TaskProcessor] Tool ${toolName} from speculative cache in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
+                  console.log(
+                    `[TaskProcessor] Tool ${toolName} from speculative cache in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`,
+                  );
                   return { toolName, toolResult };
                 }
 
                 const toolPromise = this.executeToolWithCache(toolCall, toolContext);
                 let toolTimeoutId: ReturnType<typeof setTimeout>;
                 const toolTimeoutPromise = new Promise<never>((_, reject) => {
-                  toolTimeoutId = setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
+                  toolTimeoutId = setTimeout(
+                    () => reject(new Error(`Tool ${toolName} timeout (60s)`)),
+                    60000,
+                  );
                 });
                 try {
                   const toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
@@ -4052,7 +4708,7 @@ If you already created the new file and just need to patch the original, call gi
                 } finally {
                   clearTimeout(toolTimeoutId!);
                 }
-              })
+              }),
             );
 
             // Map settled results: fulfilled → value, rejected → error message
@@ -4061,7 +4717,8 @@ If you already created the new file and just need to patch the original, call gi
                 return outcome.value;
               }
               const toolCall = choice.message.tool_calls![idx];
-              const errorMsg = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+              const errorMsg =
+                outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
               return {
                 toolName: toolCall.function.name,
                 toolResult: {
@@ -4070,7 +4727,9 @@ If you already created the new file and just need to patch the original, call gi
                 },
               };
             });
-            console.log(`[TaskProcessor] ${toolResults.length} tools executed in parallel (allSettled) in ${Date.now() - parallelStart}ms`);
+            console.log(
+              `[TaskProcessor] ${toolResults.length} tools executed in parallel (allSettled) in ${Date.now() - parallelStart}ms`,
+            );
           } else {
             // Sequential path: mutation/unsafe tools or mixed batches
             toolResults = [];
@@ -4089,13 +4748,18 @@ If you already created the new file and just need to patch the original, call gi
               const specResult = specExec.getResult(toolCall.id);
               if (specResult) {
                 toolResult = await specResult;
-                console.log(`[TaskProcessor] Tool ${toolName} from speculative cache in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
+                console.log(
+                  `[TaskProcessor] Tool ${toolName} from speculative cache in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`,
+                );
               } else {
                 let seqTimeoutId: ReturnType<typeof setTimeout>;
                 try {
                   const toolPromise = this.executeToolWithCache(toolCall, toolContext);
                   const toolTimeoutPromise = new Promise<never>((_, reject) => {
-                    seqTimeoutId = setTimeout(() => reject(new Error(`Tool ${toolName} timeout (60s)`)), 60000);
+                    seqTimeoutId = setTimeout(
+                      () => reject(new Error(`Tool ${toolName} timeout (60s)`)),
+                      60000,
+                    );
                   });
                   toolResult = await Promise.race([toolPromise, toolTimeoutPromise]);
                 } catch (toolError) {
@@ -4106,12 +4770,16 @@ If you already created the new file and just need to patch the original, call gi
                 } finally {
                   clearTimeout(seqTimeoutId!);
                 }
-                console.log(`[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`);
+                console.log(
+                  `[TaskProcessor] Tool ${toolName} completed in ${Date.now() - toolStartTime}ms, result size: ${toolResult.content.length} chars`,
+                );
               }
 
               toolResults.push({ toolName, toolResult });
             }
-            console.log(`[TaskProcessor] ${toolResults.length} tools executed sequentially in ${Date.now() - parallelStart}ms`);
+            console.log(
+              `[TaskProcessor] ${toolResults.length} tools executed sequentially in ${Date.now() - parallelStart}ms`,
+            );
           }
 
           // 7B.5: Clear tool tracking after execution completes
@@ -4123,7 +4791,12 @@ If you already created the new file and just need to patch the original, call gi
           // prevents 5 large file reads from creating 130K chars of context.
           const batchSize = toolResults.length;
           for (const { toolName, toolResult } of toolResults) {
-            const truncatedContent = this.truncateToolResult(toolResult.content, toolName, task.modelAlias, batchSize);
+            const truncatedContent = this.truncateToolResult(
+              toolResult.content,
+              toolName,
+              task.modelAlias,
+              batchSize,
+            );
             conversationMessages.push({
               role: 'tool',
               content: truncatedContent,
@@ -4136,16 +4809,27 @@ If you already created the new file and just need to patch the original, call gi
             }
 
             // P2 guardrails: validate and track tool errors
-            const toolCall = choice.message.tool_calls!.find(tc => tc.id === toolResult.tool_call_id);
+            const toolCall = choice.message.tool_calls!.find(
+              (tc) => tc.id === toolResult.tool_call_id,
+            );
             const validation = validateToolResult(toolName, toolResult.content);
             if (validation.isError) {
-              trackToolError(toolErrorTracker, toolName, validation, task.iterations, toolCall?.function.arguments || '');
-              console.log(`[TaskProcessor] Tool error tracked: ${toolName} (${validation.errorType}, ${validation.severity})`);
+              trackToolError(
+                toolErrorTracker,
+                toolName,
+                validation,
+                task.iterations,
+                toolCall?.function.arguments || '',
+              );
+              console.log(
+                `[TaskProcessor] Tool error tracked: ${toolName} (${validation.errorType}, ${validation.severity})`,
+              );
               // Track last errors for user-facing messages
               if (!task.lastToolErrors) task.lastToolErrors = [];
               const shortError = toolResult.content.slice(0, 120).replace(/\n/g, ' ');
               task.lastToolErrors.push(`${toolName}: ${shortError}`);
-              if (task.lastToolErrors.length > 5) task.lastToolErrors = task.lastToolErrors.slice(-5);
+              if (task.lastToolErrors.length > 5)
+                task.lastToolErrors = task.lastToolErrors.slice(-5);
 
               // Track prefetch 404s for run health
               if (validation.errorType === 'not_found' && toolName === 'github_read_file') {
@@ -4183,7 +4867,9 @@ If you already created the new file and just need to patch the original, call gi
                   role: 'user',
                   content: buildTransientToolErrorGuidance(toolName),
                 });
-                console.log(`[TaskProcessor] Injected transient-error guidance after ${toolName} returned ${validation.errorType}`);
+                console.log(
+                  `[TaskProcessor] Injected transient-error guidance after ${toolName} returned ${validation.errorType}`,
+                );
               }
 
               // Error threshold guardrail: detect identical errors repeating
@@ -4191,7 +4877,9 @@ If you already created the new file and just need to patch the original, call gi
               if (errorSig === lastToolErrorSig) {
                 consecutiveIdenticalErrors++;
                 if (consecutiveIdenticalErrors >= MAX_IDENTICAL_ERRORS) {
-                  console.log(`[TaskProcessor] Error threshold hit: ${toolName} returned same error ${consecutiveIdenticalErrors} times — symmetrical pruning`);
+                  console.log(
+                    `[TaskProcessor] Error threshold hit: ${toolName} returned same error ${consecutiveIdenticalErrors} times — symmetrical pruning`,
+                  );
 
                   // Symmetrical pruning: surgically remove failed tool calls while
                   // maintaining tool_call_id parity required by the API.
@@ -4209,9 +4897,12 @@ If you already created the new file and just need to patch the original, call gi
 
                   // Pass 1: identify tool result messages that match the error pattern
                   for (const msg of conversationMessages) {
-                    if (msg.role === 'tool' && msg.tool_call_id &&
-                        typeof msg.content === 'string' &&
-                        msg.content.startsWith(failedErrorPrefix)) {
+                    if (
+                      msg.role === 'tool' &&
+                      msg.tool_call_id &&
+                      typeof msg.content === 'string' &&
+                      msg.content.startsWith(failedErrorPrefix)
+                    ) {
                       failedToolCallIds.add(msg.tool_call_id);
                     }
                   }
@@ -4226,8 +4917,11 @@ If you already created the new file and just need to patch the original, call gi
                       const msg = conversationMessages[i];
 
                       // Remove matching tool result messages
-                      if (msg.role === 'tool' && msg.tool_call_id &&
-                          failedToolCallIds.has(msg.tool_call_id)) {
+                      if (
+                        msg.role === 'tool' &&
+                        msg.tool_call_id &&
+                        failedToolCallIds.has(msg.tool_call_id)
+                      ) {
                         conversationMessages.splice(i, 1);
                         removedToolResults++;
                         continue;
@@ -4237,16 +4931,16 @@ If you already created the new file and just need to patch the original, call gi
                       if (msg.role === 'assistant' && msg.tool_calls) {
                         const before = msg.tool_calls.length;
                         msg.tool_calls = msg.tool_calls.filter(
-                          (tc: ToolCall) => !failedToolCallIds.has(tc.id)
+                          (tc: ToolCall) => !failedToolCallIds.has(tc.id),
                         );
 
                         if (msg.tool_calls.length < before) {
                           mutatedAssistantMsgs++;
                           // If tool_calls is now empty AND no text content, remove entire message
                           if (msg.tool_calls.length === 0) {
-                            const hasContent = msg.content && (typeof msg.content === 'string'
-                              ? msg.content.trim() !== ''
-                              : true);
+                            const hasContent =
+                              msg.content &&
+                              (typeof msg.content === 'string' ? msg.content.trim() !== '' : true);
                             if (!hasContent) {
                               conversationMessages.splice(i, 1);
                               removedAssistantMsgs++;
@@ -4259,7 +4953,9 @@ If you already created the new file and just need to patch the original, call gi
                       }
                     }
 
-                    console.log(`[TaskProcessor] Symmetrical prune: removed ${removedToolResults} tool results, mutated ${mutatedAssistantMsgs} assistant msgs (${removedAssistantMsgs} fully removed), pruned ${failedToolCallIds.size} ${failedToolName} call IDs`);
+                    console.log(
+                      `[TaskProcessor] Symmetrical prune: removed ${removedToolResults} tool results, mutated ${mutatedAssistantMsgs} assistant msgs (${removedAssistantMsgs} fully removed), pruned ${failedToolCallIds.size} ${failedToolName} call IDs`,
+                    );
                   }
 
                   // Append redirect prompt on the clean slate
@@ -4288,19 +4984,26 @@ If you already created the new file and just need to patch the original, call gi
                 if (toolName === 'github_read_file' && args.path) {
                   if (!task.filesRead) task.filesRead = [];
                   if (!task.filesRead.includes(args.path)) task.filesRead.push(args.path);
-                } else if ((toolName === 'workspace_write_file' || toolName === 'workspace_delete_file') && args.path) {
+                } else if (
+                  (toolName === 'workspace_write_file' || toolName === 'workspace_delete_file') &&
+                  args.path
+                ) {
                   if (!task.filesModified) task.filesModified = [];
                   if (!task.filesModified.includes(args.path)) task.filesModified.push(args.path);
                 } else if (toolName === 'github_create_pr' && args.changes) {
                   if (!task.filesModified) task.filesModified = [];
-                  const changes = typeof args.changes === 'string' ? JSON.parse(args.changes) : args.changes;
+                  const changes =
+                    typeof args.changes === 'string' ? JSON.parse(args.changes) : args.changes;
                   if (Array.isArray(changes)) {
                     for (const c of changes) {
-                      if (c.path && !task.filesModified.includes(c.path)) task.filesModified.push(c.path);
+                      if (c.path && !task.filesModified.includes(c.path))
+                        task.filesModified.push(c.path);
                     }
                   }
                 }
-              } catch { /* ignore parse errors for tracking */ }
+              } catch {
+                /* ignore parse errors for tracking */
+              }
             }
           }
 
@@ -4324,22 +5027,24 @@ If you already created the new file and just need to patch the original, call gi
             if (newLevel !== prevLevel) {
               // HIGH: inject caution message into context to make model more careful
               if (newLevel === 'high' || newLevel === 'critical') {
-                const cautionParts: string[] = [
-                  '⚠️ RUNTIME RISK ELEVATED:',
-                ];
+                const cautionParts: string[] = ['⚠️ RUNTIME RISK ELEVATED:'];
                 if (task.runtimeRisk.drift.driftDetected) {
                   cautionParts.push(`Scope drift detected: ${task.runtimeRisk.drift.driftReason}.`);
                 }
                 if (task.runtimeRisk.files.configFilesTouched.length > 0) {
-                  cautionParts.push(`Config files modified: ${task.runtimeRisk.files.configFilesTouched.join(', ')}.`);
+                  cautionParts.push(
+                    `Config files modified: ${task.runtimeRisk.files.configFilesTouched.join(', ')}.`,
+                  );
                 }
                 if (task.runtimeRisk.files.scopeExpanded) {
-                  cautionParts.push(`Task scope expanded from ${task.runtimeRisk.files.initialModifiedCount} to ${task.runtimeRisk.files.modifiedCount} files.`);
+                  cautionParts.push(
+                    `Task scope expanded from ${task.runtimeRisk.files.initialModifiedCount} to ${task.runtimeRisk.files.modifiedCount} files.`,
+                  );
                 }
                 cautionParts.push(
                   'Proceed carefully: verify each change is necessary. ' +
-                  'Do NOT modify config/build files unless the task explicitly requires it. ' +
-                  'Prefer minimal, targeted changes.',
+                    'Do NOT modify config/build files unless the task explicitly requires it. ' +
+                    'Prefer minimal, targeted changes.',
                 );
                 conversationMessages.push({
                   role: 'user',
@@ -4355,10 +5060,12 @@ If you already created the new file and just need to patch the original, call gi
                     request.telegramToken,
                     request.chatId,
                     `⚠️ High runtime risk detected for task ${task.taskId.slice(0, 8)}:\n` +
-                    formatRuntimeRisk(task.runtimeRisk) +
-                    '\n\nTask continues but review carefully before merging.',
+                      formatRuntimeRisk(task.runtimeRisk) +
+                      '\n\nTask continues but review carefully before merging.',
                   );
-                } catch { /* non-fatal */ }
+                } catch {
+                  /* non-fatal */
+                }
               }
 
               // Emit orchestra event for observability (high + critical)
@@ -4378,17 +5085,21 @@ If you already created the new file and just need to patch the original, call gi
           }
 
           // Invalid JSON args tracking: detect models that can't format tool calls
-          const invalidArgResults = toolResults.filter(
-            tr => tr.toolResult.content.startsWith('Error: Invalid JSON arguments:')
+          const invalidArgResults = toolResults.filter((tr) =>
+            tr.toolResult.content.startsWith('Error: Invalid JSON arguments:'),
           );
           if (invalidArgResults.length === toolResults.length && toolResults.length > 0) {
             // ALL tool calls in this iteration had invalid JSON
             consecutiveInvalidArgsIterations++;
             // Don't reset stall counter — invalid args don't count as progress
-            console.log(`[TaskProcessor] All ${toolResults.length} tool calls had invalid JSON args (${consecutiveInvalidArgsIterations}/${MAX_INVALID_ARGS_BAIL} before bail)`);
+            console.log(
+              `[TaskProcessor] All ${toolResults.length} tool calls had invalid JSON args (${consecutiveInvalidArgsIterations}/${MAX_INVALID_ARGS_BAIL} before bail)`,
+            );
 
             if (consecutiveInvalidArgsIterations >= MAX_INVALID_ARGS_BAIL) {
-              console.log(`[TaskProcessor] Bailing out: ${consecutiveInvalidArgsIterations} consecutive iterations with all-invalid tool call args`);
+              console.log(
+                `[TaskProcessor] Bailing out: ${consecutiveInvalidArgsIterations} consecutive iterations with all-invalid tool call args`,
+              );
               task.status = 'failed';
               task.error = `Model cannot format tool call arguments correctly (${consecutiveInvalidArgsIterations} consecutive failures). Try a more capable model like /flash, /sonnet, or /deep.`;
               task.result = `Tool calling failed: the model produced invalid JSON arguments for ${consecutiveInvalidArgsIterations} consecutive iterations. No tools were successfully executed.`;
@@ -4399,7 +5110,7 @@ If you already created the new file and just need to patch the original, call gi
                   task.telegramToken,
                   task.chatId,
                   `❌ Task failed: model can't format tool calls.\n\n${task.modelAlias} produced invalid JSON arguments ${consecutiveInvalidArgsIterations} times in a row.\n\n💡 Try a more capable model: /flash, /sonnet, or /deep`,
-                  [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+                  [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
                 );
               }
               return;
@@ -4428,10 +5139,13 @@ If you already created the new file and just need to patch the original, call gi
           }
           // Check for repeats: count how many times the most recent signature appears
           const lastSig = recentToolSignatures[recentToolSignatures.length - 1];
-          const repeatCount = recentToolSignatures.filter(s => s === lastSig).length;
+          const repeatCount = recentToolSignatures.filter((s) => s === lastSig).length;
           if (repeatCount >= MAX_SAME_TOOL_REPEATS) {
-            const toolName = choice.message.tool_calls![choice.message.tool_calls!.length - 1].function.name;
-            console.log(`[TaskProcessor] Same-tool loop detected: ${toolName} called ${repeatCount} times with identical args`);
+            const toolName =
+              choice.message.tool_calls![choice.message.tool_calls!.length - 1].function.name;
+            console.log(
+              `[TaskProcessor] Same-tool loop detected: ${toolName} called ${repeatCount} times with identical args`,
+            );
             // Inject a nudge to break the loop instead of hard-failing
             conversationMessages.push({
               role: 'user',
@@ -4449,23 +5163,28 @@ If you already created the new file and just need to patch the original, call gi
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
             task.lastCompressionToolCount = task.toolsUsed.length;
-            console.log(`[TaskProcessor] Compressed context: ${beforeCount} -> ${compressed.length} messages`);
+            console.log(
+              `[TaskProcessor] Compressed context: ${beforeCount} -> ${compressed.length} messages`,
+            );
           } else if (estimatedTokens > this.getContextBudget(task.modelAlias)) {
             // Force compression if tokens too high
             const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
             task.lastCompressionToolCount = task.toolsUsed.length;
-            console.log(`[TaskProcessor] Force compressed due to ${estimatedTokens} estimated tokens`);
+            console.log(
+              `[TaskProcessor] Force compressed due to ${estimatedTokens} estimated tokens`,
+            );
           }
 
           // Save checkpoint periodically (not every tool - saves CPU)
           // Trade-off: may lose up to N tool results on crash
           // Always save for the first few tool calls (CHECKPOINT_EARLY_THRESHOLD) so
           // small tasks are checkpointed before the watchdog alarm fires.
-          const shouldCheckpoint = task.toolsUsed.length <= CHECKPOINT_EARLY_THRESHOLD
-            || task.toolsUsed.length % CHECKPOINT_EVERY_N_TOOLS === 0
-            || isPaid; // Paid models: checkpoint every iteration to prevent losing expensive work
+          const shouldCheckpoint =
+            task.toolsUsed.length <= CHECKPOINT_EARLY_THRESHOLD ||
+            task.toolsUsed.length % CHECKPOINT_EVERY_N_TOOLS === 0 ||
+            isPaid; // Paid models: checkpoint every iteration to prevent losing expensive work
           if (this.r2 && shouldCheckpoint) {
             // Pre-checkpoint compression: ensure context is compact before R2 write.
             // Without this, early checkpoints (before COMPRESS_AFTER_TOOLS triggers)
@@ -4477,7 +5196,9 @@ If you already created the new file and just need to patch the original, call gi
               const compressed = this.compressContext(conversationMessages, task.modelAlias, 4);
               conversationMessages.length = 0;
               conversationMessages.push(...compressed);
-              console.log(`[TaskProcessor] Pre-checkpoint compression: ${beforeCount} -> ${compressed.length} messages (${preCheckpointTokens} tokens > 80% budget)`);
+              console.log(
+                `[TaskProcessor] Pre-checkpoint compression: ${beforeCount} -> ${compressed.length} messages (${preCheckpointTokens} tokens > 80% budget)`,
+              );
             }
             await this.saveCheckpoint(
               this.r2,
@@ -4490,7 +5211,7 @@ If you already created the new file and just need to patch the original, call gi
               'latest',
               false,
               task.phase,
-              request.modelAlias
+              request.modelAlias,
             );
           }
 
@@ -4509,16 +5230,23 @@ If you already created the new file and just need to patch the original, call gi
 
           const iterDurationMs = Date.now() - iterStartTime;
           const iterActiveMs = Math.max(0, iterDurationMs - iterSleepMs - iterApiWallMs);
-          console.log(`[TaskProcessor] Iteration ${task.iterations} COMPLETE - total time: ${iterDurationMs}ms (active: ${iterActiveMs}ms, api: ${iterApiWallMs}ms)`);
+          console.log(
+            `[TaskProcessor] Iteration ${task.iterations} COMPLETE - total time: ${iterDurationMs}ms (active: ${iterActiveMs}ms, api: ${iterApiWallMs}ms)`,
+          );
 
           // Accumulate active time for CPU budget tracking (excludes pacing sleeps)
           cumulativeActiveMs += iterActiveMs;
 
           // Check total tool call limit — prevents excessive API usage on runaway tasks.
           // Hard limit from model tier (free/paid) always enforced.
-          const maxTotalTools = (getModel(task.modelAlias)?.isFree === true) ? MAX_TOTAL_TOOLS_FREE : MAX_TOTAL_TOOLS_PAID;
+          const maxTotalTools =
+            getModel(task.modelAlias)?.isFree === true
+              ? MAX_TOTAL_TOOLS_FREE
+              : MAX_TOTAL_TOOLS_PAID;
           if (task.toolsUsed.length >= maxTotalTools) {
-            console.log(`[TaskProcessor] Total tool call limit reached: ${task.toolsUsed.length} >= ${maxTotalTools}`);
+            console.log(
+              `[TaskProcessor] Total tool call limit reached: ${task.toolsUsed.length} >= ${maxTotalTools}`,
+            );
             conversationMessages.push({
               role: 'user',
               content: `[SYSTEM] You have used ${task.toolsUsed.length} tool calls, which is the maximum allowed for this task. You MUST now provide your final answer using the information you have gathered so far. Do NOT call any more tools.`,
@@ -4527,9 +5255,15 @@ If you already created the new file and just need to patch the original, call gi
           // Soft tier advisory: if expected tool count exceeded, nudge the model to wrap up.
           // This doesn't block tools — it just encourages the model to be more focused.
           const expectedTools = task.executionProfile?.bounds.expectedTools;
-          if (expectedTools && task.toolsUsed.length === expectedTools && task.toolsUsed.length < maxTotalTools) {
+          if (
+            expectedTools &&
+            task.toolsUsed.length === expectedTools &&
+            task.toolsUsed.length < maxTotalTools
+          ) {
             const tier = task.executionProfile?.bounds.complexityTier ?? 'unknown';
-            console.log(`[TaskProcessor] Tier tool advisory: reached ${expectedTools} expected tools for "${tier}" scope`);
+            console.log(
+              `[TaskProcessor] Tier tool advisory: reached ${expectedTools} expected tools for "${tier}" scope`,
+            );
             conversationMessages.push({
               role: 'user',
               content: `[ADVISORY] You have used ${expectedTools} tool calls, which is the expected limit for a "${tier}" scope task. Try to wrap up soon — focus on completing the remaining work efficiently.`,
@@ -4546,26 +5280,44 @@ If you already created the new file and just need to patch the original, call gi
         // Stall if: (a) model never called tools, or (b) model stopped calling tools
         // for MAX_STALL_ITERATIONS consecutive iterations (even if it used tools earlier).
         // Higher threshold when tools were previously used — model may be composing a response.
-        const stallThreshold = task.toolsUsed.length === 0 ? MAX_STALL_ITERATIONS : MAX_STALL_ITERATIONS * 2;
+        const stallThreshold =
+          task.toolsUsed.length === 0 ? MAX_STALL_ITERATIONS : MAX_STALL_ITERATIONS * 2;
         if (consecutiveNoToolIterations >= stallThreshold) {
           // Model is generating text endlessly without using tools
-          console.log(`[TaskProcessor] Stall detected: ${consecutiveNoToolIterations} consecutive iterations with no tool calls (${task.toolsUsed.length} tools used total)`);
+          console.log(
+            `[TaskProcessor] Stall detected: ${consecutiveNoToolIterations} consecutive iterations with no tool calls (${task.toolsUsed.length} tools used total)`,
+          );
           const content = choice.message.content || '';
           if (content.trim()) {
             // Use whatever content we have as the final response
             task.status = 'completed';
-            task.result = content.trim() + '\n\n_(Model did not use tools — response may be incomplete)_';
+            task.result =
+              content.trim() + '\n\n_(Model did not use tools — response may be incomplete)_';
             await this.doState.storage.put('task', taskForStorage(task));
             await this.doState.storage.deleteAlarm();
-            try { await workspace.clear(); } catch { /* best-effort */ }
-            try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+            try {
+              await workspace.clear();
+            } catch {
+              /* best-effort */
+            }
+            try {
+              await this.doState.storage.delete(`originalMessages:${task.taskId}`);
+            } catch {
+              /* best-effort */
+            }
             if (statusMessageId) {
-              await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
+              await this.deleteTelegramMessage(
+                request.telegramToken,
+                request.chatId,
+                statusMessageId,
+              );
             }
             const elapsed = Math.round((Date.now() - task.startTime) / 1000);
             const modelInfo = `🤖 /${task.modelAlias}`;
-            await this.sendLongMessage(request.telegramToken, request.chatId,
-              `${task.result}\n\n${modelInfo} | ⏱️ ${elapsed}s (${(task.totalIterations ?? 0) + task.iterations} iter)`
+            await this.sendLongMessage(
+              request.telegramToken,
+              request.chatId,
+              `${task.result}\n\n${modelInfo} | ⏱️ ${elapsed}s (${(task.totalIterations ?? 0) + task.iterations} iter)`,
             );
             // Save assistant response to conversation history
             if (this.r2 && task.result) {
@@ -4573,7 +5325,10 @@ If you already created the new file and just need to patch the original, call gi
                 const storage = new UserStorage(this.r2);
                 await storage.addMessage(request.userId, 'assistant', task.result);
               } catch (e) {
-                console.error('[TaskProcessor] Failed to save assistant message to conversation:', e);
+                console.error(
+                  '[TaskProcessor] Failed to save assistant message to conversation:',
+                  e,
+                );
               }
             }
             return;
@@ -4584,13 +5339,18 @@ If you already created the new file and just need to patch the original, call gi
           await this.doState.storage.put('task', taskForStorage(task));
           await this.doState.storage.deleteAlarm();
           if (statusMessageId) {
-            await this.deleteTelegramMessage(request.telegramToken, request.chatId, statusMessageId);
+            await this.deleteTelegramMessage(
+              request.telegramToken,
+              request.chatId,
+              statusMessageId,
+            );
           }
           const noToolProgress = this.buildProgressSummary(task);
           await this.sendTelegramMessageWithButtons(
-            request.telegramToken, request.chatId,
+            request.telegramToken,
+            request.chatId,
             `🛑 Model stalled after ${task.iterations} iterations without using tools.${noToolProgress}\n\n💡 Try a more capable model: ${this.getStallModelRecs()}`,
-            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+            [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
           );
           return;
         }
@@ -4603,26 +5363,44 @@ If you already created the new file and just need to patch the original, call gi
         // like Qwen3 Coder that output JSON plans instead of calling tools.
         // Allow up to 2 nudges before giving up (stall detection handles the rest).
         if (hasContent && task.toolsUsed.length === 0 && consecutiveNoToolIterations <= 2) {
-          const systemMsg0chk = request.messages.find(m => m.role === 'system');
-          const sysTextChk = typeof systemMsg0chk?.content === 'string' ? systemMsg0chk.content : '';
-          const isOrchestraChk = sysTextChk.includes('Orchestra RUN Mode') || sysTextChk.includes('Orchestra INIT Mode') || sysTextChk.includes('Orchestra REDO Mode') || sysTextChk.includes('Orchestra DO Mode');
+          const systemMsg0chk = request.messages.find((m) => m.role === 'system');
+          const sysTextChk =
+            typeof systemMsg0chk?.content === 'string' ? systemMsg0chk.content : '';
+          const isOrchestraChk =
+            sysTextChk.includes('Orchestra RUN Mode') ||
+            sysTextChk.includes('Orchestra INIT Mode') ||
+            sysTextChk.includes('Orchestra REDO Mode') ||
+            sysTextChk.includes('Orchestra DO Mode');
           if (isOrchestraChk) {
-            console.log(`[TaskProcessor] Orchestra zero-tool nudge (attempt ${consecutiveNoToolIterations}): model returned text without calling any tools — nudging`);
+            console.log(
+              `[TaskProcessor] Orchestra zero-tool nudge (attempt ${consecutiveNoToolIterations}): model returned text without calling any tools — nudging`,
+            );
             conversationMessages.push({
               role: 'assistant',
               content: choice.message.content || '',
             });
             conversationMessages.push({
               role: 'user',
-              content: '[STOP PLANNING. You MUST call tools, not describe steps. Call github_read_file RIGHT NOW to read the roadmap. Do NOT output any text — only tool calls.]',
+              content:
+                '[STOP PLANNING. You MUST call tools, not describe steps. Call github_read_file RIGHT NOW to read the roadmap. Do NOT output any text — only tool calls.]',
             });
             // Save checkpoint before continuing — without this, a DO eviction after
             // a non-tool iteration (e.g. plan output) loses all conversation state
             // because checkpoints were only saved inside the tool execution block.
             if (this.r2) {
-              await this.saveCheckpoint(this.r2, request.userId, request.taskId,
-                conversationMessages, task.toolsUsed, task.iterations, request.prompt,
-                'latest', false, task.phase, request.modelAlias);
+              await this.saveCheckpoint(
+                this.r2,
+                request.userId,
+                request.taskId,
+                conversationMessages,
+                task.toolsUsed,
+                task.iterations,
+                request.prompt,
+                'latest',
+                false,
+                task.phase,
+                request.modelAlias,
+              );
             }
             continue;
           }
@@ -4639,22 +5417,37 @@ If you already created the new file and just need to patch the original, call gi
           // a. Try empty retries with aggressive compression
           if (emptyContentRetries < MAX_EMPTY_RETRIES) {
             emptyContentRetries++;
-            console.log(`[TaskProcessor] Empty content after ${task.toolsUsed.length} tools — retry ${emptyContentRetries}/${MAX_EMPTY_RETRIES}`);
+            console.log(
+              `[TaskProcessor] Empty content after ${task.toolsUsed.length} tools — retry ${emptyContentRetries}/${MAX_EMPTY_RETRIES}`,
+            );
 
             // Aggressively compress context before retry — keep only 2 recent messages
             const compressed = this.compressContext(conversationMessages, task.modelAlias, 2);
             conversationMessages.length = 0;
             conversationMessages.push(...compressed);
-            console.log(`[TaskProcessor] Aggressive compression before retry: ${conversationMessages.length} messages`);
+            console.log(
+              `[TaskProcessor] Aggressive compression before retry: ${conversationMessages.length} messages`,
+            );
 
             conversationMessages.push({
               role: 'user',
-              content: '[Your last response was empty. Please provide a concise answer based on the tool results above. Keep it brief and focused.]',
+              content:
+                '[Your last response was empty. Please provide a concise answer based on the tool results above. Keep it brief and focused.]',
             });
             if (this.r2) {
-              await this.saveCheckpoint(this.r2, request.userId, request.taskId,
-                conversationMessages, task.toolsUsed, task.iterations, request.prompt,
-                'latest', false, task.phase, request.modelAlias);
+              await this.saveCheckpoint(
+                this.r2,
+                request.userId,
+                request.taskId,
+                conversationMessages,
+                task.toolsUsed,
+                task.iterations,
+                request.prompt,
+                'latest',
+                false,
+                task.phase,
+                request.modelAlias,
+              );
             }
             continue;
           }
@@ -4671,15 +5464,21 @@ If you already created the new file and just need to patch the original, call gi
             emptyContentRetries = 0; // Reset retries for new model
             await this.doState.storage.put('task', taskForStorage(task));
 
-            console.log(`[TaskProcessor] Empty response rotation: /${prevAlias} → /${nextAlias} (${rotationIndex}/${MAX_FREE_ROTATIONS}, task: ${taskCategory})`);
+            console.log(
+              `[TaskProcessor] Empty response rotation: /${prevAlias} → /${nextAlias} (${rotationIndex}/${MAX_FREE_ROTATIONS}, task: ${taskCategory})`,
+            );
 
             if (statusMessageId) {
               try {
                 await this.editTelegramMessage(
-                  request.telegramToken, request.chatId, statusMessageId,
-                  `🔄 /${prevAlias} couldn't summarize results. Trying /${nextAlias}...`
+                  request.telegramToken,
+                  request.chatId,
+                  statusMessageId,
+                  `🔄 /${prevAlias} couldn't summarize results. Trying /${nextAlias}...`,
                 );
-              } catch { /* non-fatal */ }
+              } catch {
+                /* non-fatal */
+              }
             }
 
             // Compress for the new model
@@ -4689,13 +5488,16 @@ If you already created the new file and just need to patch the original, call gi
 
             conversationMessages.push({
               role: 'user',
-              content: '[Please provide a concise answer based on the tool results summarized above.]',
+              content:
+                '[Please provide a concise answer based on the tool results summarized above.]',
             });
             continue;
           }
 
           // c. All retries and rotations exhausted — will use fallback below
-          console.log(`[TaskProcessor] All empty response recovery exhausted — constructing fallback`);
+          console.log(
+            `[TaskProcessor] All empty response recovery exhausted — constructing fallback`,
+          );
         }
 
         // Phase transition: work → review when tools were used and model produced content
@@ -4706,36 +5508,55 @@ If you already created the new file and just need to patch the original, call gi
         // to continue working instead.
         const workIterations = task.iterations - (task.phaseStartIteration || 0);
         const contentText = choice.message.content || '';
-        const systemMsg0 = request.messages.find(m => m.role === 'system');
+        const systemMsg0 = request.messages.find((m) => m.role === 'system');
         const sysText = typeof systemMsg0?.content === 'string' ? systemMsg0.content : '';
-        const isOrchestraRun = sysText.includes('Orchestra RUN Mode') || sysText.includes('Orchestra INIT Mode') || sysText.includes('Orchestra REDO Mode') || sysText.includes('Orchestra DO Mode');
-        const looksIncomplete = /\b(unable to|could not|couldn't|not found|no .*(roadmap|file|task)|I (need|should) to .*(check|try|search|look|examine)|let me (try|check|search)|calling tools|please confirm|would you like|shall I|do you want me to|if you'?d like|awaiting.*confirm|let me know if|ready to (start|proceed|begin))\b/i.test(contentText);
+        const isOrchestraRun =
+          sysText.includes('Orchestra RUN Mode') ||
+          sysText.includes('Orchestra INIT Mode') ||
+          sysText.includes('Orchestra REDO Mode') ||
+          sysText.includes('Orchestra DO Mode');
+        const looksIncomplete =
+          /\b(unable to|could not|couldn't|not found|no .*(roadmap|file|task)|I (need|should) to .*(check|try|search|look|examine)|let me (try|check|search)|calling tools|please confirm|would you like|shall I|do you want me to|if you'?d like|awaiting.*confirm|let me know if|ready to (start|proceed|begin))\b/i.test(
+            contentText,
+          );
         // For orchestra tasks, also check if the required ORCHESTRA_RESULT: block is missing.
         // Only applies when the model hasn't yet called github_create_pr — once the PR
         // tool has been called, the model should be composing the result block, not
         // getting pushed back to work. Previous `toolsUsed.length < 8` heuristic broke
         // on resume because re-reads inflated the count past 8 without a PR being created.
-        const orchestraResultMissing = isOrchestraRun
-          && !contentText.includes('ORCHESTRA_RESULT:')
-          && !task.toolsUsed.includes('github_create_pr');
+        const orchestraResultMissing =
+          isOrchestraRun &&
+          !contentText.includes('ORCHESTRA_RESULT:') &&
+          !task.toolsUsed.includes('github_create_pr');
 
         // For orchestra tasks, require at least 3 work-phase iterations or non-failure content
         // before transitioning to review. This prevents premature review when the model
         // only tried one file path out of many.
-        if (hasContent && task.phase === 'work' && task.toolsUsed.length > 0
-            && isOrchestraRun && workIterations < 3 && (looksIncomplete || orchestraResultMissing)) {
+        if (
+          hasContent &&
+          task.phase === 'work' &&
+          task.toolsUsed.length > 0 &&
+          isOrchestraRun &&
+          workIterations < 3 &&
+          (looksIncomplete || orchestraResultMissing)
+        ) {
           // Check what specific progress is missing to give a targeted nudge
           const hasCalledCreatePr = task.toolsUsed.includes('github_create_pr');
-          const hasReadFiles = task.toolsUsed.some(t => t === 'github_read_file');
+          const hasReadFiles = task.toolsUsed.some((t) => t === 'github_read_file');
           let nudge: string;
           if (!hasReadFiles) {
-            nudge = '[CONTINUE] You need to READ the files first. Use github_read_file to read the source files you need to modify, then use github_create_pr to implement the changes. Do NOT just output a plan — call the tools NOW.';
+            nudge =
+              '[CONTINUE] You need to READ the files first. Use github_read_file to read the source files you need to modify, then use github_create_pr to implement the changes. Do NOT just output a plan — call the tools NOW.';
           } else if (!hasCalledCreatePr) {
-            nudge = '[CONTINUE] You have read the files — now IMPLEMENT the changes. Call github_create_pr with your file changes (use "create" for new files, "patch" for edits). Include ROADMAP.md and WORK_LOG.md updates in the SAME PR. Do NOT describe what you will do — call the tool NOW.';
+            nudge =
+              '[CONTINUE] You have read the files — now IMPLEMENT the changes. Call github_create_pr with your file changes (use "create" for new files, "patch" for edits). Include ROADMAP.md and WORK_LOG.md updates in the SAME PR. Do NOT describe what you will do — call the tool NOW.';
           } else {
-            nudge = '[CONTINUE] Your work is NOT complete — you MUST produce an ORCHESTRA_RESULT: block with the real PR URL that was returned by github_create_pr. Format:\nORCHESTRA_RESULT:\nbranch: {branch}\npr: {url}\nfiles: {files}\nsummary: {summary}';
+            nudge =
+              '[CONTINUE] Your work is NOT complete — you MUST produce an ORCHESTRA_RESULT: block with the real PR URL that was returned by github_create_pr. Format:\nORCHESTRA_RESULT:\nbranch: {branch}\npr: {url}\nfiles: {files}\nsummary: {summary}';
           }
-          console.log(`[TaskProcessor] Deferring work→review: orchestra task with only ${workIterations} work iterations (readFiles=${hasReadFiles}, createdPr=${hasCalledCreatePr}) — nudging model`);
+          console.log(
+            `[TaskProcessor] Deferring work→review: orchestra task with only ${workIterations} work iterations (readFiles=${hasReadFiles}, createdPr=${hasCalledCreatePr}) — nudging model`,
+          );
           conversationMessages.push({
             role: 'assistant',
             content: contentText,
@@ -4752,13 +5573,20 @@ If you already created the new file and just need to patch the original, call gi
           // 7A.1: CoVe verification — check tool results for unacknowledged failures
           // before transitioning to review. One retry allowed if failures detected.
           if (!task.coveRetried && shouldVerify(task.toolsUsed, taskCategory)) {
-            const verification = verifyWorkPhase(conversationMessages, choice.message.content || '');
+            const verification = verifyWorkPhase(
+              conversationMessages,
+              choice.message.content || '',
+            );
             if (!verification.passed) {
               task.coveRetried = true;
               await this.doState.storage.put('task', taskForStorage(task));
-              console.log(`[TaskProcessor] CoVe verification FAILED: ${verification.failures.length} issue(s) — retrying work phase`);
+              console.log(
+                `[TaskProcessor] CoVe verification FAILED: ${verification.failures.length} issue(s) — retrying work phase`,
+              );
               for (const f of verification.failures) {
-                console.log(`[TaskProcessor]   [${f.type}] ${f.tool}: ${f.message.substring(0, 100)}`);
+                console.log(
+                  `[TaskProcessor]   [${f.type}] ${f.tool}: ${f.message.substring(0, 100)}`,
+                );
               }
               // Inject the model's response + verification failures for retry
               conversationMessages.push({
@@ -4781,15 +5609,23 @@ If you already created the new file and just need to patch the original, call gi
           // before transitioning to review.
           // Detection uses persisted extractionMeta (survives resume truncation) with
           // message-based detection as the primary source on first encounter.
-          if (isOrchestraRun && (isExtractionTask(task.toolsUsed, conversationMessages) || task.extractionMeta) && request.githubToken) {
+          if (
+            isOrchestraRun &&
+            (isExtractionTask(task.toolsUsed, conversationMessages) || task.extractionMeta) &&
+            request.githubToken
+          ) {
             // Prefer message-based detection (freshest), fall back to persisted metadata
-            const extraction = detectExtractionDetails(conversationMessages) || (task.extractionMeta ? {
-              sourceFile: task.extractionMeta.sourceFile,
-              newFiles: task.extractionMeta.newFiles,
-              extractedNames: task.extractionMeta.extractedNames,
-              sourceInitialLineCount: task.extractionMeta.sourceInitialLineCount,
-              newFileLineCount: task.extractionMeta.newFileLineCount,
-            } as ExtractionCheck : null);
+            const extraction =
+              detectExtractionDetails(conversationMessages) ||
+              (task.extractionMeta
+                ? ({
+                    sourceFile: task.extractionMeta.sourceFile,
+                    newFiles: task.extractionMeta.newFiles,
+                    extractedNames: task.extractionMeta.extractedNames,
+                    sourceInitialLineCount: task.extractionMeta.sourceInitialLineCount,
+                    newFileLineCount: task.extractionMeta.newFileLineCount,
+                  } as ExtractionCheck)
+                : null);
             if (extraction) {
               // Resolve repo/branch: try persisted metadata first, fall back to message scan
               let repoOwner: string | null = task.extractionMeta?.repoOwner ?? null;
@@ -4822,7 +5658,13 @@ If you already created the new file and just need to patch the original, call gi
                   const token = request.githubToken;
                   const readFile = async (path: string): Promise<string | null> => {
                     try {
-                      return await githubReadFile(repoOwner, extractedRepo, path, extractedBranch, token);
+                      return await githubReadFile(
+                        repoOwner,
+                        extractedRepo,
+                        path,
+                        extractedBranch,
+                        token,
+                      );
                     } catch {
                       return null;
                     }
@@ -4833,13 +5675,15 @@ If you already created the new file and just need to patch the original, call gi
                       const resp = await fetch(url, {
                         headers: {
                           'User-Agent': 'MoltworkerBot/1.0',
-                          'Authorization': `Bearer ${token}`,
-                          'Accept': 'application/vnd.github.v3+json',
+                          Authorization: `Bearer ${token}`,
+                          Accept: 'application/vnd.github.v3+json',
                         },
                       });
                       if (!resp.ok) return [];
-                      const items = await resp.json() as Array<{ path: string; type: string }>;
-                      return Array.isArray(items) ? items.filter(i => i.type === 'file').map(i => i.path) : [];
+                      const items = (await resp.json()) as Array<{ path: string; type: string }>;
+                      return Array.isArray(items)
+                        ? items.filter((i) => i.type === 'file').map((i) => i.path)
+                        : [];
                     } catch {
                       return [];
                     }
@@ -4847,15 +5691,21 @@ If you already created the new file and just need to patch the original, call gi
                   const extractionResult = await verifyExtraction(extraction, readFile);
 
                   // Also run cross-file reference scan (lightweight — reads up to 5 sibling files)
-                  const crossFileWarnings = await scanCrossFileReferences(extraction, readFile, listFiles);
+                  const crossFileWarnings = await scanCrossFileReferences(
+                    extraction,
+                    readFile,
+                    listFiles,
+                  );
                   if (crossFileWarnings.length > 0) {
                     for (const w of crossFileWarnings) extractionResult.issues.push(w);
                     extractionResult.passed = false;
                     extractionResult.summary += '\n' + crossFileWarnings.join('\n');
                   }
 
-                  console.log(`[TaskProcessor] Extraction verification: ${extractionResult.passed ? 'PASSED' : 'ISSUES'} ` +
-                    `(${extractionResult.issues.length} issue(s)) for ${extraction.sourceFile}`);
+                  console.log(
+                    `[TaskProcessor] Extraction verification: ${extractionResult.passed ? 'PASSED' : 'ISSUES'} ` +
+                      `(${extractionResult.issues.length} issue(s)) for ${extraction.sourceFile}`,
+                  );
 
                   if (!extractionResult.passed && !task.extractionRetried) {
                     // BLOCKING: inject failures and let the model retry
@@ -4864,22 +5714,33 @@ If you already created the new file and just need to patch the original, call gi
                     // Escalate to a reasoning model if the current model lacks spatial reasoning
                     // capability. This prevents burning tokens retrying with an inadequate model.
                     const currentModel = getModel(task.modelAlias);
-                    const hasReasoning = currentModel?.reasoning === 'configurable' || currentModel?.reasoning === 'fixed';
+                    const hasReasoning =
+                      currentModel?.reasoning === 'configurable' ||
+                      currentModel?.reasoning === 'fixed';
                     if (!hasReasoning) {
                       const escalationTargets = ['sonnet', 'o4mini', 'deepseek'];
                       for (const target of escalationTargets) {
                         const candidate = getModel(target);
-                        if (candidate && candidate.supportsTools && (candidate.reasoning === 'configurable' || candidate.reasoning === 'fixed')) {
+                        if (
+                          candidate &&
+                          candidate.supportsTools &&
+                          (candidate.reasoning === 'configurable' ||
+                            candidate.reasoning === 'fixed')
+                        ) {
                           const prevAlias = task.modelAlias;
                           task.modelAlias = target;
-                          console.log(`[TaskProcessor] Extraction escalation: /${prevAlias} → /${target} (reasoning model for spatial fix)`);
+                          console.log(
+                            `[TaskProcessor] Extraction escalation: /${prevAlias} → /${target} (reasoning model for spatial fix)`,
+                          );
                           break;
                         }
                       }
                     }
 
                     await this.doState.storage.put('task', taskForStorage(task));
-                    console.log('[TaskProcessor] Extraction verification FAILED — retrying work phase');
+                    console.log(
+                      '[TaskProcessor] Extraction verification FAILED — retrying work phase',
+                    );
                     for (const issue of extractionResult.issues) {
                       console.log(`[TaskProcessor]   ${issue.substring(0, 120)}`);
                     }
@@ -4888,15 +5749,20 @@ If you already created the new file and just need to patch the original, call gi
                       content: choice.message.content || '',
                     });
                     // Determine if issues are purely stale-reference (import fix only)
-                    const hasStaleRefs = extractionResult.issues.some(i => i.includes('STALE REFERENCES'));
-                    const staleRefOnly = extractionResult.issues.every(i =>
-                      i.includes('STALE REFERENCES') || i.includes('import'));
+                    const hasStaleRefs = extractionResult.issues.some((i) =>
+                      i.includes('STALE REFERENCES'),
+                    );
+                    const staleRefOnly = extractionResult.issues.every(
+                      (i) => i.includes('STALE REFERENCES') || i.includes('import'),
+                    );
 
                     conversationMessages.push({
                       role: 'user',
-                      content: `[EXTRACTION VERIFICATION FAILED — FIX REQUIRED]\n` +
+                      content:
+                        `[EXTRACTION VERIFICATION FAILED — FIX REQUIRED]\n` +
                         `The deterministic post-edit file check found these issues on branch "${extractedBranch}":\n\n` +
-                        extractionResult.issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n') + '\n\n' +
+                        extractionResult.issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n') +
+                        '\n\n' +
                         (hasStaleRefs && staleRefOnly
                           ? `This is a SIMPLE import fix. Do NOT re-extract, re-create, or re-write files. ` +
                             `The ONLY fix needed is updating the import statement(s) in the consumer file(s) listed above. ` +
@@ -4922,7 +5788,9 @@ If you already created the new file and just need to patch the original, call gi
                     content: contextMsg,
                   });
                 } catch (verifyErr) {
-                  console.log(`[TaskProcessor] Extraction verification error (non-fatal): ${verifyErr}`);
+                  console.log(
+                    `[TaskProcessor] Extraction verification error (non-fatal): ${verifyErr}`,
+                  );
                 }
               }
             }
@@ -4937,50 +5805,71 @@ If you already created the new file and just need to patch the original, call gi
             const retryCount = task.validationRetryCount ?? 0;
             const hasPrCall = task.toolsUsed.includes('github_create_pr');
             const toolOutputs = conversationMessages
-              .filter(m => m.role === 'tool')
-              .map(m => typeof m.content === 'string' ? m.content : '');
-            const prSucceeded = toolOutputs.some(o => o.includes('Pull Request created successfully'));
-            const roadmapUpdated = toolOutputs.some(o =>
-              o.includes('ROADMAP.md') || (o.includes('Pull Request created') && o.includes('ROADMAP'))
+              .filter((m) => m.role === 'tool')
+              .map((m) => (typeof m.content === 'string' ? m.content : ''));
+            const prSucceeded = toolOutputs.some((o) =>
+              o.includes('Pull Request created successfully'),
             );
-            const workLogUpdated = toolOutputs.some(o =>
-              o.includes('WORK_LOG.md') || (o.includes('Pull Request created') && o.includes('WORK_LOG'))
+            const roadmapUpdated = toolOutputs.some(
+              (o) =>
+                o.includes('ROADMAP.md') ||
+                (o.includes('Pull Request created') && o.includes('ROADMAP')),
+            );
+            const workLogUpdated = toolOutputs.some(
+              (o) =>
+                o.includes('WORK_LOG.md') ||
+                (o.includes('Pull Request created') && o.includes('WORK_LOG')),
             );
 
             // For extraction tasks, also check that source file shrank
             const isExtraction = isExtractionTask(task.toolsUsed, conversationMessages);
-            const sourceShrank = !isExtraction || toolOutputs.some(o =>
-              /source.*shrank|line count.*drop|deleted.*from.*source|EXTRACTION.*PASS/i.test(o)
-            );
+            const sourceShrank =
+              !isExtraction ||
+              toolOutputs.some((o) =>
+                /source.*shrank|line count.*drop|deleted.*from.*source|EXTRACTION.*PASS/i.test(o),
+              );
 
             // Surrogate testing check: if test files were created alongside a new
             // utility module, verify the production file was updated to import it.
             // Pattern: model creates foo.js + foo.test.js but never patches App.jsx
             // to import from foo.js — tests verify a copy, not the running code.
             const allToolContent = conversationMessages
-              .map(m => typeof m.content === 'string' ? m.content : '')
+              .map((m) => (typeof m.content === 'string' ? m.content : ''))
               .join('\n');
             const createdTestFiles = /\.(test|spec)\.(js|ts|jsx|tsx)/.test(allToolContent);
-            const createdUtilModule = toolOutputs.some(o =>
-              /action.*create.*\.(js|ts)/.test(o) && !/\.(test|spec|config)\.(js|ts)/.test(o)
+            const createdUtilModule = toolOutputs.some(
+              (o) =>
+                /action.*create.*\.(js|ts)/.test(o) && !/\.(test|spec|config)\.(js|ts)/.test(o),
             );
-            const productionFilePatched = toolOutputs.some(o =>
-              /action.*patch/.test(o) && /import.*from/.test(o)
+            const productionFilePatched = toolOutputs.some(
+              (o) => /action.*patch/.test(o) && /import.*from/.test(o),
             );
-            const isSurrogateTesting = createdTestFiles && createdUtilModule && !productionFilePatched && !isExtraction;
+            const isSurrogateTesting =
+              createdTestFiles && createdUtilModule && !productionFilePatched && !isExtraction;
 
             const missing: string[] = [];
             if (!hasPrCall) missing.push('github_create_pr was never called — no PR exists');
-            else if (!prSucceeded) missing.push('github_create_pr was called but FAILED — check the error and retry');
-            if (!roadmapUpdated) missing.push('ROADMAP.md was not updated (task must be marked as [x] done)');
-            if (!workLogUpdated) missing.push('WORK_LOG.md was not updated (append a new row with your changes)');
-            if (isExtraction && !sourceShrank) missing.push('Source file did NOT shrink — you created the new file but FORGOT to DELETE the extracted code from the original. Use patch action to DELETE now.');
-            if (isSurrogateTesting) missing.push('SURROGATE TESTING: You created a new utility module and tests for it, but the PRODUCTION code (e.g. App.jsx) still has the SAME logic inline. You MUST patch the production file to import from your new module and DELETE the inline duplicates. Tests that verify a detached copy while the app runs different code are worthless.');
+            else if (!prSucceeded)
+              missing.push('github_create_pr was called but FAILED — check the error and retry');
+            if (!roadmapUpdated)
+              missing.push('ROADMAP.md was not updated (task must be marked as [x] done)');
+            if (!workLogUpdated)
+              missing.push('WORK_LOG.md was not updated (append a new row with your changes)');
+            if (isExtraction && !sourceShrank)
+              missing.push(
+                'Source file did NOT shrink — you created the new file but FORGOT to DELETE the extracted code from the original. Use patch action to DELETE now.',
+              );
+            if (isSurrogateTesting)
+              missing.push(
+                'SURROGATE TESTING: You created a new utility module and tests for it, but the PRODUCTION code (e.g. App.jsx) still has the SAME logic inline. You MUST patch the production file to import from your new module and DELETE the inline duplicates. Tests that verify a detached copy while the app runs different code are worthless.',
+              );
 
             if (missing.length > 0) {
               // Turn 2+: Abort — model is incapable of completing deliverables
               if (retryCount >= 2) {
-                console.log(`[TaskProcessor] Deliverable validation ABORT after ${retryCount} retries — marking FAILED_DELIVERABLE`);
+                console.log(
+                  `[TaskProcessor] Deliverable validation ABORT after ${retryCount} retries — marking FAILED_DELIVERABLE`,
+                );
                 task.status = 'failed';
                 task.error = `FAILED_DELIVERABLE: ${missing.length} deliverable(s) still missing after ${retryCount} retries: ${missing.join('; ')}`;
                 await this.doState.storage.put('task', taskForStorage(task));
@@ -4991,8 +5880,13 @@ If you already created the new file and just need to patch the original, call gi
 
               task.validationRetryCount = retryCount + 1;
               await this.doState.storage.put('task', taskForStorage(task));
-              this.emitOrchestraEvent(task, 'deliverable_retry', { attempt: retryCount + 1, missing });
-              console.log(`[TaskProcessor] Deliverable validation FAILED (attempt ${retryCount + 1}/2): ${missing.length} missing`);
+              this.emitOrchestraEvent(task, 'deliverable_retry', {
+                attempt: retryCount + 1,
+                missing,
+              });
+              console.log(
+                `[TaskProcessor] Deliverable validation FAILED (attempt ${retryCount + 1}/2): ${missing.length} missing`,
+              );
               for (const m of missing) console.log(`[TaskProcessor]   - ${m}`);
 
               conversationMessages.push({
@@ -5001,18 +5895,21 @@ If you already created the new file and just need to patch the original, call gi
               });
 
               // Escalating prompt: Turn 0 = reminder, Turn 1 = strict/uppercase
-              const prompt = retryCount === 0
-                ? `[DELIVERABLE VALIDATION FAILED — COMPLETE THESE NOW]\n` +
-                  `Your work is NOT done. The following required deliverables are missing:\n\n` +
-                  missing.map((m, i) => `${i + 1}. ${m}`).join('\n') + '\n\n' +
-                  `Fix ALL of these NOW. Include ROADMAP.md and WORK_LOG.md updates in the PR. ` +
-                  `After the PR is created successfully, output the ORCHESTRA_RESULT block with the real PR URL.`
-                : `[CRITICAL — FINAL ATTEMPT — TASK WILL BE MARKED FAILED IF YOU DO NOT COMPLY]\n` +
-                  `YOU HAVE FAILED TO COMPLETE REQUIRED DELIVERABLES. THIS IS YOUR LAST CHANCE.\n\n` +
-                  missing.map((m, i) => `${i + 1}. **${m.toUpperCase()}**`).join('\n') + '\n\n' +
-                  `CALL THE TOOLS NOW. Do NOT explain, do NOT plan, do NOT describe — EXECUTE.\n` +
-                  `If github_create_pr failed before, use a DIFFERENT branch name.\n` +
-                  `If ROADMAP.md/WORK_LOG.md are missing from the PR, add them as patch actions.`;
+              const prompt =
+                retryCount === 0
+                  ? `[DELIVERABLE VALIDATION FAILED — COMPLETE THESE NOW]\n` +
+                    `Your work is NOT done. The following required deliverables are missing:\n\n` +
+                    missing.map((m, i) => `${i + 1}. ${m}`).join('\n') +
+                    '\n\n' +
+                    `Fix ALL of these NOW. Include ROADMAP.md and WORK_LOG.md updates in the PR. ` +
+                    `After the PR is created successfully, output the ORCHESTRA_RESULT block with the real PR URL.`
+                  : `[CRITICAL — FINAL ATTEMPT — TASK WILL BE MARKED FAILED IF YOU DO NOT COMPLY]\n` +
+                    `YOU HAVE FAILED TO COMPLETE REQUIRED DELIVERABLES. THIS IS YOUR LAST CHANCE.\n\n` +
+                    missing.map((m, i) => `${i + 1}. **${m.toUpperCase()}**`).join('\n') +
+                    '\n\n' +
+                    `CALL THE TOOLS NOW. Do NOT explain, do NOT plan, do NOT describe — EXECUTE.\n` +
+                    `If github_create_pr failed before, use a DIFFERENT branch name.\n` +
+                    `If ROADMAP.md/WORK_LOG.md are missing from the PR, add them as patch actions.`;
 
               conversationMessages.push({
                 role: 'user',
@@ -5027,12 +5924,18 @@ If you already created the new file and just need to patch the original, call gi
 
           // 5.1: Multi-agent review — route to a different model for independent verification.
           // Only for complex tasks where a second opinion adds value.
-          const reviewerAlias = shouldUseMultiAgentReview(task.toolsUsed, taskCategory, task.iterations)
+          const reviewerAlias = shouldUseMultiAgentReview(
+            task.toolsUsed,
+            taskCategory,
+            task.iterations,
+          )
             ? selectReviewerModel(task.modelAlias, taskCategory)
             : null;
 
           if (reviewerAlias) {
-            console.log(`[TaskProcessor] 5.1 Multi-agent review: ${task.modelAlias} → ${reviewerAlias}`);
+            console.log(
+              `[TaskProcessor] 5.1 Multi-agent review: ${task.modelAlias} → ${reviewerAlias}`,
+            );
             task.phase = 'review';
             task.phaseStartIteration = task.iterations;
             task.reviewerAlias = reviewerAlias;
@@ -5045,14 +5948,24 @@ If you already created the new file and just need to patch the original, call gi
             await sendProgressUpdate(true);
 
             // Build focused review context and call reviewer model
-            const reviewMessages = buildReviewMessages(conversationMessages, task.workPhaseContent, taskCategory, isOrchestraRun);
+            const reviewMessages = buildReviewMessages(
+              conversationMessages,
+              task.workPhaseContent,
+              taskCategory,
+              isOrchestraRun,
+            );
             const reviewContent = await this.executeMultiAgentReview(
-              reviewerAlias, reviewMessages, request.openrouterKey, task,
+              reviewerAlias,
+              reviewMessages,
+              request.openrouterKey,
+              task,
             );
 
             if (reviewContent) {
               const reviewResult = parseReviewResponse(reviewContent, reviewerAlias);
-              console.log(`[TaskProcessor] 5.1 Review decision: ${reviewResult.decision} (by ${reviewerAlias})`);
+              console.log(
+                `[TaskProcessor] 5.1 Review decision: ${reviewResult.decision} (by ${reviewerAlias})`,
+              );
 
               // Quality gate: a reviewer "approve" on a near-empty work-phase
               // answer following a *transient* tool outage almost always means
@@ -5071,7 +5984,10 @@ If you already created the new file and just need to patch the original, call gi
               // a local variable so the gate stays correct when work and review
               // phases happen across separate processTask() invocations.
               const workLen = task.workPhaseContent.trim().length;
-              const thinApproval = reviewResult.decision === 'approve' && workLen < 100 && task.hadTransientToolError === true;
+              const thinApproval =
+                reviewResult.decision === 'approve' &&
+                workLen < 100 &&
+                task.hadTransientToolError === true;
 
               if (reviewResult.decision === 'approve' && !thinApproval) {
                 // Reviewer approved — use work-phase answer directly, skip self-review loop
@@ -5081,9 +5997,13 @@ If you already created the new file and just need to patch the original, call gi
                 // Thin approval: reviewer rubber-stamped a near-empty answer after
                 // tool failures. Keep the work-phase text but append a visible note
                 // so the user understands what happened.
-                console.log(`[TaskProcessor] 5.1 Thin approval overridden: workPhase=${workLen} chars, errors=${toolErrorTracker.totalErrors}`);
-                const note = '\n\n_⚠️ Note: Some tools returned errors during this request (service temporarily unavailable). The answer above is based on the model\'s existing knowledge; live data may be unavailable._';
-                task.result = (task.workPhaseContent.trim() || 'I was unable to complete this request.') + note;
+                console.log(
+                  `[TaskProcessor] 5.1 Thin approval overridden: workPhase=${workLen} chars, errors=${toolErrorTracker.totalErrors}`,
+                );
+                const note =
+                  "\n\n_⚠️ Note: Some tools returned errors during this request (service temporarily unavailable). The answer above is based on the model's existing knowledge; live data may be unavailable._";
+                task.result =
+                  (task.workPhaseContent.trim() || 'I was unable to complete this request.') + note;
                 task.status = 'completed';
               } else {
                 // Reviewer revised — use their version
@@ -5107,15 +6027,23 @@ If you already created the new file and just need to patch the original, call gi
             task.phaseStartIteration = task.iterations;
             phaseStartTime = Date.now();
             await this.doState.storage.put('task', taskForStorage(task));
-            console.log(`[TaskProcessor] Phase transition: work → review (iteration ${task.iterations})`);
+            console.log(
+              `[TaskProcessor] Phase transition: work → review (iteration ${task.iterations})`,
+            );
 
             // Select review prompt: orchestra > coding > general
-            const systemMsg = request.messages.find(m => m.role === 'system');
+            const systemMsg = request.messages.find((m) => m.role === 'system');
             const sysContent = typeof systemMsg?.content === 'string' ? systemMsg.content : '';
-            const isOrchestraTask = sysContent.includes('Orchestra INIT Mode') || sysContent.includes('Orchestra RUN Mode') || sysContent.includes('Orchestra REDO Mode') || sysContent.includes('Orchestra DO Mode');
-            const reviewPrompt = isOrchestraTask ? ORCHESTRA_REVIEW_PROMPT
-              : taskCategory === 'coding' ? CODING_REVIEW_PROMPT
-              : REVIEW_PHASE_PROMPT;
+            const isOrchestraTask =
+              sysContent.includes('Orchestra INIT Mode') ||
+              sysContent.includes('Orchestra RUN Mode') ||
+              sysContent.includes('Orchestra REDO Mode') ||
+              sysContent.includes('Orchestra DO Mode');
+            const reviewPrompt = isOrchestraTask
+              ? ORCHESTRA_REVIEW_PROMPT
+              : taskCategory === 'coding'
+                ? CODING_REVIEW_PROMPT
+                : REVIEW_PHASE_PROMPT;
 
             // Add the model's current response and inject review prompt
             conversationMessages.push({
@@ -5128,9 +6056,19 @@ If you already created the new file and just need to patch the original, call gi
             });
             // Checkpoint before review iteration — preserves work-phase output
             if (this.r2) {
-              await this.saveCheckpoint(this.r2, request.userId, request.taskId,
-                conversationMessages, task.toolsUsed, task.iterations, request.prompt,
-                'latest', false, task.phase, request.modelAlias);
+              await this.saveCheckpoint(
+                this.r2,
+                request.userId,
+                request.taskId,
+                conversationMessages,
+                task.toolsUsed,
+                task.iterations,
+                request.prompt,
+                'latest',
+                false,
+                task.phase,
+                request.modelAlias,
+              );
             }
             continue; // One more iteration for the review response
           }
@@ -5153,13 +6091,17 @@ If you already created the new file and just need to patch the original, call gi
           } else {
             // Review produced a revised answer — use the revision
             let content = reviewContent;
-            content = content.replace(/<tool_call>\s*\{[\s\S]*?(?:\}\s*<\/tool_call>|\}[\s\S]*$)/g, '').trim();
+            content = content
+              .replace(/<tool_call>\s*\{[\s\S]*?(?:\}\s*<\/tool_call>|\}[\s\S]*$)/g, '')
+              .trim();
             task.result = content || task.workPhaseContent;
           }
         } else {
           // Strip raw tool_call markup that weak models emit as text instead of using function calling
           let content = choice.message.content || 'No response generated.';
-          content = content.replace(/<tool_call>\s*\{[\s\S]*?(?:\}\s*<\/tool_call>|\}[\s\S]*$)/g, '').trim();
+          content = content
+            .replace(/<tool_call>\s*\{[\s\S]*?(?:\}\s*<\/tool_call>|\}[\s\S]*$)/g, '')
+            .trim();
           task.result = content || 'No response generated.';
         }
 
@@ -5171,23 +6113,35 @@ If you already created the new file and just need to patch the original, call gi
 
         // Log tool error stats for observability
         if (toolErrorTracker.totalErrors > 0) {
-          console.log(`[TaskProcessor] P2 guardrails: ${toolErrorTracker.totalErrors} tool errors (${toolErrorTracker.mutationErrors} mutation) across ${task.iterations} iterations`);
+          console.log(
+            `[TaskProcessor] P2 guardrails: ${toolErrorTracker.totalErrors} tool errors (${toolErrorTracker.mutationErrors} mutation) across ${task.iterations} iterations`,
+          );
         }
 
         // Append system confidence label for coding tasks if the model didn't include one.
         // Enhanced with P2 guardrails: mutation tool failures downgrade confidence.
         if (taskCategory === 'coding' && task.result && !task.result.includes('Confidence:')) {
           const hasToolEvidence = task.toolsUsed.length >= 2;
-          const hasGitActions = task.toolsUsed.some(t => t.startsWith('github_'));
-          const hadErrors = conversationMessages.some(m =>
-            m.role === 'tool' && typeof m.content === 'string' && /\b(error|failed|404|403|422|500)\b/i.test(m.content)
+          const hasGitActions = task.toolsUsed.some((t) => t.startsWith('github_'));
+          const hadErrors = conversationMessages.some(
+            (m) =>
+              m.role === 'tool' &&
+              typeof m.content === 'string' &&
+              /\b(error|failed|404|403|422|500)\b/i.test(m.content),
           );
-          let baseConfidence: 'High' | 'Medium' | 'Low' = hasToolEvidence && !hadErrors ? 'High'
-            : hasToolEvidence && hadErrors ? 'Medium'
-            : 'Low';
-          let reason = !hasToolEvidence ? 'few tool verifications'
-            : hadErrors ? 'some tool errors occurred'
-            : hasGitActions ? 'tool-verified with GitHub operations' : 'tool-verified';
+          let baseConfidence: 'High' | 'Medium' | 'Low' =
+            hasToolEvidence && !hadErrors
+              ? 'High'
+              : hasToolEvidence && hadErrors
+                ? 'Medium'
+                : 'Low';
+          let reason = !hasToolEvidence
+            ? 'few tool verifications'
+            : hadErrors
+              ? 'some tool errors occurred'
+              : hasGitActions
+                ? 'tool-verified with GitHub operations'
+                : 'tool-verified';
 
           // P2: adjust confidence based on structured tool error tracking
           const adjusted = adjustConfidence(baseConfidence, toolErrorTracker);
@@ -5212,8 +6166,16 @@ If you already created the new file and just need to patch the original, call gi
         await this.doState.storage.deleteAlarm();
 
         // Terminal state — clean up workspace staging to prevent storage leaks
-        try { await workspace.clear(); } catch { /* best-effort */ }
-        try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+        try {
+          await workspace.clear();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await this.doState.storage.delete(`originalMessages:${task.taskId}`);
+        } catch {
+          /* best-effort */
+        }
 
         // Save final checkpoint (marked as completed) so user can /saveas it
         if (this.r2) {
@@ -5228,14 +6190,14 @@ If you already created the new file and just need to patch the original, call gi
             'latest',
             true, // completed flag
             task.phase,
-            request.modelAlias
+            request.modelAlias,
           );
         }
 
         // Extract and store learning (non-blocking, failure-safe)
         if (this.r2) {
           try {
-            const userMsg = request.messages.find(m => m.role === 'user');
+            const userMsg = request.messages.find((m) => m.role === 'user');
             const userMessage = typeof userMsg?.content === 'string' ? userMsg.content : '';
             const learning = extractLearning({
               taskId: task.taskId,
@@ -5262,42 +6224,65 @@ If you already created the new file and just need to patch the original, call gi
               modelAlias: task.modelAlias,
             };
             await storeSessionSummary(this.r2, task.userId, sessionSummary);
-            console.log(`[TaskProcessor] Learning + session stored: ${learning.category}, ${learning.uniqueTools.length} unique tools`);
+            console.log(
+              `[TaskProcessor] Learning + session stored: ${learning.category}, ${learning.uniqueTools.length} unique tools`,
+            );
 
             // Extract memory facts from conversation (F.8 — non-blocking)
-            if (userMessage.length >= MIN_EXTRACTION_LENGTH && learning.category !== 'simple_chat') {
+            if (
+              userMessage.length >= MIN_EXTRACTION_LENGTH &&
+              learning.category !== 'simple_chat'
+            ) {
               try {
                 const existingMemory = await loadUserMemory(this.r2, task.userId);
                 const existingFacts = existingMemory?.facts || [];
                 // Debounce: skip if last extraction was recent
                 const lastExtraction = existingMemory?.updatedAt || 0;
                 if (Date.now() - lastExtraction > EXTRACTION_DEBOUNCE_MS) {
-                  const extractionPrompt = buildExtractionPrompt(userMessage, resultSummary, existingFacts);
+                  const extractionPrompt = buildExtractionPrompt(
+                    userMessage,
+                    resultSummary,
+                    existingFacts,
+                  );
                   // Use flash model via OpenRouter for cheap/fast extraction
-                  const extractionResp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                      'Authorization': `Bearer ${request.openrouterKey}`,
-                      'Content-Type': 'application/json',
+                  const extractionResp = await fetch(
+                    'https://openrouter.ai/api/v1/chat/completions',
+                    {
+                      method: 'POST',
+                      headers: {
+                        Authorization: `Bearer ${request.openrouterKey}`,
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify({
+                        model: 'google/gemini-3-flash-preview',
+                        messages: [{ role: 'user', content: extractionPrompt }],
+                        max_tokens: 512,
+                        temperature: 0.3,
+                      }),
                     },
-                    body: JSON.stringify({
-                      model: 'google/gemini-3-flash-preview',
-                      messages: [{ role: 'user', content: extractionPrompt }],
-                      max_tokens: 512,
-                      temperature: 0.3,
-                    }),
-                  });
+                  );
                   if (extractionResp.ok) {
-                    const extractionData = await extractionResp.json() as { choices: Array<{ message: { content: string } }> };
+                    const extractionData = (await extractionResp.json()) as {
+                      choices: Array<{ message: { content: string } }>;
+                    };
                     const extractedText = extractionData.choices?.[0]?.message?.content || '';
                     const facts = parseExtractionResponse(extractedText);
                     let storedCount = 0;
                     for (const { fact, category, confidence } of facts) {
-                      const res = await storeMemoryFact(this.r2, task.userId, fact, category, 'extracted', confidence);
+                      const res = await storeMemoryFact(
+                        this.r2,
+                        task.userId,
+                        fact,
+                        category,
+                        'extracted',
+                        confidence,
+                      );
                       if (res.stored) storedCount++;
                     }
                     if (storedCount > 0) {
-                      console.log(`[TaskProcessor] Memory: stored ${storedCount} new fact(s) for user ${task.userId}`);
+                      console.log(
+                        `[TaskProcessor] Memory: stored ${storedCount} new fact(s) for user ${task.userId}`,
+                      );
                     }
                   }
                 }
@@ -5336,7 +6321,9 @@ If you already created the new file and just need to patch the original, call gi
                 taskId: task.taskId,
                 modelAlias: task.modelAlias,
               });
-              console.log(`[TaskProcessor] Acontext session ${session.id}: ${stored} msgs stored, ${errors} errors`);
+              console.log(
+                `[TaskProcessor] Acontext session ${session.id}: ${stored} msgs stored, ${errors} errors`,
+              );
             }
           } catch (acErr) {
             console.error('[TaskProcessor] Failed to store Acontext session:', acErr);
@@ -5353,19 +6340,24 @@ If you already created the new file and just need to patch the original, call gi
             // construct a synthetic result so orchestra history gets updated
             if (!rawOrchestraResult) {
               const toolOutputs = conversationMessages
-                .filter(m => m.role === 'tool')
-                .map(m => typeof m.content === 'string' ? m.content : '');
-              const prSuccessOutput = toolOutputs.find(o => o.includes('Pull Request created successfully'));
+                .filter((m) => m.role === 'tool')
+                .map((m) => (typeof m.content === 'string' ? m.content : ''));
+              const prSuccessOutput = toolOutputs.find((o) =>
+                o.includes('Pull Request created successfully'),
+              );
               if (prSuccessOutput) {
                 const prUrlMatch = prSuccessOutput.match(/PR:\s*(https:\/\/github\.com\/[^\s]+)/);
                 const branchMatch = prSuccessOutput.match(/Branch:\s*(\S+)/);
                 if (prUrlMatch) {
-                  console.log('[TaskProcessor] Fallback orchestra result: extracted PR URL from tool output');
+                  console.log(
+                    '[TaskProcessor] Fallback orchestra result: extracted PR URL from tool output',
+                  );
                   rawOrchestraResult = {
                     branch: branchMatch ? branchMatch[1] : '',
                     prUrl: prUrlMatch[1],
                     files: [],
-                    summary: '(Auto-extracted from tool output — model did not produce ORCHESTRA_RESULT block)',
+                    summary:
+                      '(Auto-extracted from tool output — model did not produce ORCHESTRA_RESULT block)',
                   };
                 }
               }
@@ -5375,24 +6367,32 @@ If you already created the new file and just need to patch the original, call gi
               // Fix 3: Cross-reference tool results — detect phantom PRs where model
               // claims success but github_create_pr actually failed
               const fullTaskOutput = conversationMessages
-                .filter(m => m.role === 'tool')
-                .map(m => typeof m.content === 'string' ? m.content : '')
+                .filter((m) => m.role === 'tool')
+                .map((m) => (typeof m.content === 'string' ? m.content : ''))
                 .join('\n');
               const orchestraResult = validateOrchestraResult(rawOrchestraResult, fullTaskOutput);
 
               // Find the orchestra task entry to update (or create a new completed entry)
-              const systemMsg = request.messages.find(m => m.role === 'system');
+              const systemMsg = request.messages.find((m) => m.role === 'system');
               const systemContent = typeof systemMsg?.content === 'string' ? systemMsg.content : '';
-              const isOrchestra = systemContent.includes('Orchestra INIT Mode') || systemContent.includes('Orchestra RUN Mode') || systemContent.includes('Orchestra REDO Mode') || systemContent.includes('Orchestra DO Mode');
+              const isOrchestra =
+                systemContent.includes('Orchestra INIT Mode') ||
+                systemContent.includes('Orchestra RUN Mode') ||
+                systemContent.includes('Orchestra REDO Mode') ||
+                systemContent.includes('Orchestra DO Mode');
               if (isOrchestra) {
                 // Detect init vs run vs redo vs do from system prompt
-                const orchestraMode = systemContent.includes('Orchestra INIT Mode') ? 'init' as const
-                  : systemContent.includes('Orchestra DO Mode') ? 'do' as const
-                  : systemContent.includes('Orchestra REDO Mode') ? 'redo' as const : 'run' as const;
+                const orchestraMode = systemContent.includes('Orchestra INIT Mode')
+                  ? ('init' as const)
+                  : systemContent.includes('Orchestra DO Mode')
+                    ? ('do' as const)
+                    : systemContent.includes('Orchestra REDO Mode')
+                      ? ('redo' as const)
+                      : ('run' as const);
                 // Extract repo from system prompt
                 const repoMatch = systemContent.match(/Full:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/);
                 const repo = repoMatch ? repoMatch[1] : 'unknown/unknown';
-                const userMsg = request.messages.find(m => m.role === 'user');
+                const userMsg = request.messages.find((m) => m.role === 'user');
                 const prompt = typeof userMsg?.content === 'string' ? userMsg.content : '';
 
                 // Mark as failed if no valid PR URL — the model claimed success but didn't create a PR
@@ -5417,7 +6417,8 @@ If you already created the new file and just need to patch the original, call gi
                   failureReason = 'No PR created';
                 } else if (hasIncompleteRefactor) {
                   taskStatus = 'failed';
-                  failureReason = 'Incomplete refactor — new modules created but source file not updated (dead code)';
+                  failureReason =
+                    'Incomplete refactor — new modules created but source file not updated (dead code)';
                 } else if (hasAuditViolation) {
                   taskStatus = 'failed';
                   failureReason = 'Audit trail violation — attempted to delete work log entries';
@@ -5427,7 +6428,8 @@ If you already created the new file and just need to patch the original, call gi
                 } else if (hasNetDeletionWarning) {
                   // Net deletion warning doesn't auto-fail but is flagged prominently
                   taskStatus = 'completed';
-                  taskSummary = `⚠️ NET DELETION WARNING — review carefully. ${orchestraResult.summary || ''}`.trim();
+                  taskSummary =
+                    `⚠️ NET DELETION WARNING — review carefully. ${orchestraResult.summary || ''}`.trim();
                 } else {
                   taskStatus = 'completed';
                   taskSummary = orchestraResult.summary;
@@ -5443,7 +6445,9 @@ If you already created the new file and just need to patch the original, call gi
                 if (taskStatus === 'completed' && orchestraResult.prUrl && request.githubToken) {
                   try {
                     // Extract PR number from URL: https://github.com/owner/repo/pull/123
-                    const prMatch = orchestraResult.prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+                    const prMatch = orchestraResult.prUrl.match(
+                      /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/,
+                    );
                     if (prMatch) {
                       const [, prRepo, prNumber] = prMatch;
                       const prCheckResponse = await fetch(
@@ -5451,16 +6455,19 @@ If you already created the new file and just need to patch the original, call gi
                         {
                           headers: {
                             'User-Agent': 'MoltworkerBot/1.0',
-                            'Authorization': `Bearer ${request.githubToken}`,
-                            'Accept': 'application/vnd.github.v3+json',
+                            Authorization: `Bearer ${request.githubToken}`,
+                            Accept: 'application/vnd.github.v3+json',
                           },
                         },
                       );
                       if (!prCheckResponse.ok) {
-                        console.log(`[TaskProcessor] PR verification FAILED: ${orchestraResult.prUrl} → ${prCheckResponse.status}`);
+                        console.log(
+                          `[TaskProcessor] PR verification FAILED: ${orchestraResult.prUrl} → ${prCheckResponse.status}`,
+                        );
                         taskStatus = 'failed';
                         failureReason = `Phantom PR — claimed ${orchestraResult.prUrl} but GitHub returned ${prCheckResponse.status}`;
-                        taskSummary = `FAILED: ${failureReason}. ${orchestraResult.summary || ''}`.trim();
+                        taskSummary =
+                          `FAILED: ${failureReason}. ${orchestraResult.summary || ''}`.trim();
                         verifiedPrUrl = '';
                       } else {
                         console.log(`[TaskProcessor] PR verification OK: ${orchestraResult.prUrl}`);
@@ -5494,10 +6501,14 @@ If you already created the new file and just need to patch the original, call gi
                     const roadmapPath = task.orchestraRoadmapPath || 'ROADMAP.md';
                     await appendScratchpad(this.r2, task.userId, repo, roadmapPath, {
                       step: prompt.substring(0, 100) || orchestraResult.branch,
-                      summary: (taskSummary || `Completed: ${orchestraResult.files.join(', ')}`).substring(0, 150),
+                      summary: (
+                        taskSummary || `Completed: ${orchestraResult.files.join(', ')}`
+                      ).substring(0, 150),
                       timestamp: Date.now(),
                     });
-                  } catch { /* best-effort — scratchpad failure should never block task completion */ }
+                  } catch {
+                    /* best-effort — scratchpad failure should never block task completion */
+                  }
                 }
 
                 // Compute run health for event metadata
@@ -5510,18 +6521,32 @@ If you already created the new file and just need to patch the original, call gi
                   taskSucceeded: taskStatus === 'completed',
                   runtimeRisk: task.runtimeRisk,
                 });
-                this.emitOrchestraEvent(task, taskStatus === 'completed' ? 'task_complete' : 'task_abort', {
-                  repo, mode: orchestraMode, branch: orchestraResult.branch,
-                  prUrl: verifiedPrUrl, durationMs: Date.now() - task.startTime,
-                  runHealth: orchRunHealth.level,
-                  runHealthIssues: orchRunHealth.issues.length,
-                  resumes: orchResumeCount,
-                  ...(taskStatus !== 'completed' && failureReason ? { reason: failureReason } : {}),
-                });
-                const statusLabel = taskStatus === 'completed'
-                  ? (hasNetDeletionWarning ? 'completed (⚠️ net deletion)' : 'completed')
-                  : `FAILED (${failureReason})`;
-                console.log(`[TaskProcessor] Orchestra task ${statusLabel}: ${orchestraResult.branch} → ${orchestraResult.prUrl || 'none'}`);
+                this.emitOrchestraEvent(
+                  task,
+                  taskStatus === 'completed' ? 'task_complete' : 'task_abort',
+                  {
+                    repo,
+                    mode: orchestraMode,
+                    branch: orchestraResult.branch,
+                    prUrl: verifiedPrUrl,
+                    durationMs: Date.now() - task.startTime,
+                    runHealth: orchRunHealth.level,
+                    runHealthIssues: orchRunHealth.issues.length,
+                    resumes: orchResumeCount,
+                    ...(taskStatus !== 'completed' && failureReason
+                      ? { reason: failureReason }
+                      : {}),
+                  },
+                );
+                const statusLabel =
+                  taskStatus === 'completed'
+                    ? hasNetDeletionWarning
+                      ? 'completed (⚠️ net deletion)'
+                      : 'completed'
+                    : `FAILED (${failureReason})`;
+                console.log(
+                  `[TaskProcessor] Orchestra task ${statusLabel}: ${orchestraResult.branch} → ${orchestraResult.prUrl || 'none'}`,
+                );
               }
             }
           } catch (orchErr) {
@@ -5561,10 +6586,14 @@ If you already created the new file and just need to patch the original, call gi
                 try {
                   const locked = await storage.getOrchestraRepo(request.userId);
                   if (locked) draftRepo = locked;
-                } catch { /* best-effort fallback */ }
+                } catch {
+                  /* best-effort fallback */
+                }
               }
               if (!draftRepo) {
-                console.error('[TaskProcessor] Cannot store draft: no repo available (task.orchestraRepo empty, user has no locked orchestra repo)');
+                console.error(
+                  '[TaskProcessor] Cannot store draft: no repo available (task.orchestraRepo empty, user has no locked orchestra repo)',
+                );
                 if (task.telegramToken) {
                   await this.sendTelegramMessage(
                     task.telegramToken,
@@ -5576,7 +6605,9 @@ If you already created the new file and just need to patch the original, call gi
                 // actually locked — the lock is keyed by repo, so an empty
                 // task.orchestraRepo means nothing to release).
                 if (this.r2 && task.orchestraRepo) {
-                  releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+                  releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(
+                    () => {},
+                  );
                 }
                 return;
               }
@@ -5593,7 +6624,9 @@ If you already created the new file and just need to patch the original, call gi
                 task.orchestraRepo = draftRepo;
                 try {
                   await this.doState.storage.put('task', taskForStorage(task));
-                } catch { /* best-effort — draft storage proceeds regardless */ }
+                } catch {
+                  /* best-effort — draft storage proceeds regardless */
+                }
               }
 
               // ── Step 3: fetch the baseSha freshness marker ──
@@ -5609,15 +6642,18 @@ If you already created the new file and just need to patch the original, call gi
                     Accept: 'application/vnd.github.v3+json',
                     'User-Agent': 'moltworker-orchestra',
                   };
-                  const repoResp = await fetch(`https://api.github.com/repos/${owner}/${repoName}`, { headers: ghHeaders });
+                  const repoResp = await fetch(
+                    `https://api.github.com/repos/${owner}/${repoName}`,
+                    { headers: ghHeaders },
+                  );
                   if (repoResp.ok) {
-                    const repoData = await repoResp.json() as { default_branch: string };
+                    const repoData = (await repoResp.json()) as { default_branch: string };
                     const refResp = await fetch(
                       `https://api.github.com/repos/${owner}/${repoName}/git/ref/heads/${repoData.default_branch}`,
                       { headers: ghHeaders },
                     );
                     if (refResp.ok) {
-                      const refData = await refResp.json() as { object: { sha: string } };
+                      const refData = (await refResp.json()) as { object: { sha: string } };
                       baseSha = refData.object.sha;
                     }
                   }
@@ -5627,10 +6663,10 @@ If you already created the new file and just need to patch the original, call gi
               }
 
               // userPrompt: source from task.prompt (resume-durable) then
-                // fall back to request.prompt for the first-pass case.
-                // Without this fallback order, drafts finalized post-resume
-                // landed with userPrompt === '' (since resumed request.prompt
-                // was undefined before this patch).
+              // fall back to request.prompt for the first-pass case.
+              // Without this fallback order, drafts finalized post-resume
+              // landed with userPrompt === '' (since resumed request.prompt
+              // was undefined before this patch).
               await storage.setOrchestraDraft(request.userId, request.chatId, {
                 repo: draftRepo,
                 chatId: request.chatId,
@@ -5665,21 +6701,27 @@ If you already created the new file and just need to patch the original, call gi
                     { text: '📄 Full Preview', callback_data: 'orchdraft:full' },
                     { text: '❌ Cancel', callback_data: 'orchdraft:cancel' },
                   ],
-                ]
+                ],
               );
-              console.log(`[TaskProcessor] Draft init: stored roadmap draft (${draftBlocks.roadmap.length} chars) for user ${request.userId}`);
+              console.log(
+                `[TaskProcessor] Draft init: stored roadmap draft (${draftBlocks.roadmap.length} chars) for user ${request.userId}`,
+              );
             } catch (draftErr) {
               console.error('[TaskProcessor] Failed to store draft:', draftErr);
               // Fall through to normal response
             }
             // Clean up and return — skip normal final response
             if (this.r2 && task.orchestraRepo) {
-              releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(() => {});
+              releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(
+                () => {},
+              );
             }
             return;
           }
           // If draft blocks weren't found, fall through to normal response
-          console.log('[TaskProcessor] Draft init: DRAFT_ROADMAP block not found in response, falling back to normal flow');
+          console.log(
+            '[TaskProcessor] Draft init: DRAFT_ROADMAP block not found in response, falling back to normal flow',
+          );
         }
 
         // Build final response
@@ -5690,9 +6732,10 @@ If you already created the new file and just need to patch the original, call gi
         }
 
         const elapsed = Math.round((Date.now() - task.startTime) / 1000);
-        const modelInfo = task.modelAlias !== request.modelAlias
-          ? `🤖 /${task.modelAlias} (rotated from /${request.modelAlias})`
-          : `🤖 /${task.modelAlias}`;
+        const modelInfo =
+          task.modelAlias !== request.modelAlias
+            ? `🤖 /${task.modelAlias} (rotated from /${request.modelAlias})`
+            : `🤖 /${task.modelAlias}`;
         const cumulativeIter = (task.totalIterations ?? 0) + task.iterations;
         finalResponse += `\n\n${modelInfo} | ⏱️ ${elapsed}s (${cumulativeIter} iter)`;
         if (totalUsage.totalTokens > 0) {
@@ -5713,7 +6756,9 @@ If you already created the new file and just need to patch the original, call gi
           finalResponse += `\n${formatHealthFooter(runHealth, resumeCount)}`;
 
           // Log for observability
-          console.log(`[TaskProcessor] Run health: ${runHealth.level} (${runHealth.issues.length} issue(s), ${resumeCount} resumes)`);
+          console.log(
+            `[TaskProcessor] Run health: ${runHealth.level} (${runHealth.issues.length} issue(s), ${resumeCount} resumes)`,
+          );
         }
 
         // Send final result (split if too long)
@@ -5738,8 +6783,16 @@ If you already created the new file and just need to patch the original, call gi
         console.log(`[TaskProcessor] Task already failed: ${task.error}`);
 
         // Terminal state — clean up
-        try { await workspace.clear(); } catch { /* best-effort */ }
-        try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+        try {
+          await workspace.clear();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await this.doState.storage.delete(`originalMessages:${task.taskId}`);
+        } catch {
+          /* best-effort */
+        }
         await this.doState.storage.deleteAlarm();
 
         if (statusMessageId) {
@@ -5760,8 +6813,8 @@ If you already created the new file and just need to patch the original, call gi
           request.telegramToken,
           request.chatId,
           `❌ Task failed: ${task.error}${failProgress}\n\n` +
-          `${task.toolsUsed.length} tools used across ${(task.totalIterations ?? 0) + task.iterations} iterations.\n` +
-          formatHealthFooter(failRunHealth, failResumeCount),
+            `${task.toolsUsed.length} tools used across ${(task.totalIterations ?? 0) + task.iterations} iterations.\n` +
+            formatHealthFooter(failRunHealth, failResumeCount),
         );
       } else {
         // Hit iteration limit — save checkpoint so resume can continue from here
@@ -5777,7 +6830,7 @@ If you already created the new file and just need to patch the original, call gi
             'latest',
             false, // NOT completed — allow resume to pick this up
             task.phase,
-            request.modelAlias
+            request.modelAlias,
           );
         }
 
@@ -5786,8 +6839,16 @@ If you already created the new file and just need to patch the original, call gi
         await this.doState.storage.put('task', taskForStorage(task));
 
         // Terminal state — clean up workspace staging to prevent storage leaks
-        try { await workspace.clear(); } catch { /* best-effort */ }
-        try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+        try {
+          await workspace.clear();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await this.doState.storage.delete(`originalMessages:${task.taskId}`);
+        } catch {
+          /* best-effort */
+        }
 
         // Cancel watchdog alarm
         await this.doState.storage.deleteAlarm();
@@ -5810,14 +6871,15 @@ If you already created the new file and just need to patch the original, call gi
           request.telegramToken,
           request.chatId,
           `⚠️ Task reached iteration limit (${maxIterations}). ${task.toolsUsed.length} tools used across ${(task.totalIterations ?? 0) + task.iterations} iterations.${limitProgress}\n${formatHealthFooter(limitRunHealth, limitResumeCount)}\n\n💡 Progress saved. Tap Resume to continue from checkpoint.`,
-          [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+          [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
         );
       }
-
     } catch (error) {
       // Phase budget circuit breaker: save checkpoint and let watchdog auto-resume
       if (error instanceof PhaseBudgetExceededError) {
-        console.log(`[TaskProcessor] Phase budget exceeded: ${error.phase} (${error.elapsedMs}ms > ${error.budgetMs}ms)`);
+        console.log(
+          `[TaskProcessor] Phase budget exceeded: ${error.phase} (${error.elapsedMs}ms > ${error.budgetMs}ms)`,
+        );
         // Do NOT increment autoResumeCount here — the alarm handler owns that counter.
         // Previously both incremented it, causing double-counting (each cycle burned 2 slots).
         //
@@ -5847,7 +6909,7 @@ If you already created the new file and just need to patch the original, call gi
             'latest',
             false,
             task.phase,
-            task.modelAlias
+            task.modelAlias,
           );
         }
         // Schedule a fast alarm for quick auto-resume instead of waiting for
@@ -5861,8 +6923,16 @@ If you already created the new file and just need to patch the original, call gi
       task.error = error instanceof Error ? error.message : String(error);
 
       // Terminal state — clean up workspace staging to prevent storage leaks
-      try { await workspace.clear(); } catch { /* best-effort */ }
-      try { await this.doState.storage.delete(`originalMessages:${task.taskId}`); } catch { /* best-effort */ }
+      try {
+        await workspace.clear();
+      } catch {
+        /* best-effort */
+      }
+      try {
+        await this.doState.storage.delete(`originalMessages:${task.taskId}`);
+      } catch {
+        /* best-effort */
+      }
 
       // Wrap storage writes in try/catch to prevent zombie loops:
       // If the original error was QuotaExceededError, blindly calling storage.put
@@ -5871,7 +6941,10 @@ If you already created the new file and just need to patch the original, call gi
       try {
         await this.doState.storage.put('task', taskForStorage(task));
       } catch (storageErr) {
-        console.error('[TaskProcessor] Failed to persist error state, writing minimal fallback:', storageErr);
+        console.error(
+          '[TaskProcessor] Failed to persist error state, writing minimal fallback:',
+          storageErr,
+        );
         // Write a minimal task object that fits in any storage budget
         try {
           await this.doState.storage.put('task', {
@@ -5903,7 +6976,7 @@ If you already created the new file and just need to patch the original, call gi
       // Store failure learning (only if task made progress)
       if (this.r2 && task.iterations > 0) {
         try {
-          const userMsg = request.messages.find(m => m.role === 'user');
+          const userMsg = request.messages.find((m) => m.role === 'user');
           const userMessage = typeof userMsg?.content === 'string' ? userMsg.content : '';
           const learning = extractLearning({
             taskId: task.taskId,
@@ -5948,7 +7021,7 @@ If you already created the new file and just need to patch the original, call gi
           'latest',
           false,
           task.phase,
-          request.modelAlias
+          request.modelAlias,
         );
       }
 
@@ -5964,13 +7037,13 @@ If you already created the new file and just need to patch the original, call gi
           request.telegramToken,
           request.chatId,
           `❌ Task failed: ${task.error}${failProgress}\n\n💡 Progress saved (${(task.totalIterations ?? 0) + task.iterations} iterations).`,
-          [[{ text: '🔄 Resume', callback_data: 'resume:task' }]]
+          [[{ text: '🔄 Resume', callback_data: 'resume:task' }]],
         );
       } else {
         await this.sendTelegramMessage(
           request.telegramToken,
           request.chatId,
-          `❌ Task failed: ${task.error}`
+          `❌ Task failed: ${task.error}`,
         );
       }
     } finally {
@@ -5978,8 +7051,11 @@ If you already created the new file and just need to patch the original, call gi
       // F.23: Release branch-level concurrency lock for orchestra tasks.
       // Runs on all terminal paths (success, failure, error) to prevent deadlocks.
       if (this.r2 && task.orchestraRepo && task.status !== 'processing') {
-        releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch(err => {
-          console.error(`[TaskProcessor] Failed to release repo lock for ${task.orchestraRepo}:`, err);
+        releaseRepoLock(this.r2, task.userId, task.orchestraRepo, task.taskId).catch((err) => {
+          console.error(
+            `[TaskProcessor] Failed to release repo lock for ${task.orchestraRepo}:`,
+            err,
+          );
         });
       }
     }
@@ -5993,7 +7069,7 @@ If you already created the new file and just need to patch the original, call gi
       const recs = getOrchestraRecommendations();
       const top = [...recs.paid.slice(0, 2), ...recs.free.slice(0, 1)];
       if (top.length > 0) {
-        return top.map(r => `/${r.alias}`).join(', ');
+        return top.map((r) => `/${r.alias}`).join(', ');
       }
     } catch {
       // Fall through to default
@@ -6020,7 +7096,7 @@ If you already created the new file and just need to patch the original, call gi
         toolCounts.set(t, (toolCounts.get(t) || 0) + 1);
       }
       const toolSummary = [...toolCounts.entries()]
-        .map(([name, count]) => count > 1 ? `${name}×${count}` : name)
+        .map(([name, count]) => (count > 1 ? `${name}×${count}` : name))
         .join(', ');
       parts.push(`Tools: ${toolSummary}`);
     }
@@ -6028,9 +7104,10 @@ If you already created the new file and just need to patch the original, call gi
     // Files read
     if (task.filesRead && task.filesRead.length > 0) {
       const unique = [...new Set(task.filesRead)];
-      const display = unique.length <= 5
-        ? unique.join(', ')
-        : `${unique.slice(0, 4).join(', ')} +${unique.length - 4} more`;
+      const display =
+        unique.length <= 5
+          ? unique.join(', ')
+          : `${unique.slice(0, 4).join(', ')} +${unique.length - 4} more`;
       parts.push(`Files read: ${display}`);
     }
 
@@ -6069,10 +7146,19 @@ If you already created the new file and just need to patch the original, call gi
   ): Promise<number | null> {
     try {
       const parseMode = opts?.parseMode ?? 'HTML';
+      // rawHtml=true forwards renderer-produced Telegram HTML verbatim.
+      // Default path runs the input through markdownToTelegramHtml so
+      // skills that emit markdown still render correctly.
       const formatted = opts?.rawHtml ? text : markdownToTelegramHtml(text);
+      // safeTelegramHtmlChunk avoids slicing inside an opening tag — a
+      // naive `formatted.slice(0, 4000)` can chop `<b…` and force a
+      // fall through to plaintext, losing all the formatting silently.
+      // Applied to both the rawHtml and converted paths since both
+      // produce HTML strings whose tag boundaries we don't want to
+      // straddle.
       const body: Record<string, unknown> = {
         chat_id: chatId,
-        text: formatted.slice(0, 4000),
+        text: safeTelegramHtmlChunk(formatted, 4000),
         parse_mode: parseMode,
       };
       if (opts?.replyMarkup) body.reply_markup = opts.replyMarkup;
@@ -6083,7 +7169,11 @@ If you already created the new file and just need to patch the original, call gi
         body: JSON.stringify(body),
       });
 
-      const result = await response.json() as { ok: boolean; result?: { message_id: number }; description?: string };
+      const result = (await response.json()) as {
+        ok: boolean;
+        result?: { message_id: number };
+        description?: string;
+      };
       if (result.ok) {
         return result.result?.message_id || null;
       }
@@ -6101,9 +7191,15 @@ If you already created the new file and just need to patch the original, call gi
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fbBody),
       });
-      const fbResult = await fallback.json() as { ok: boolean; result?: { message_id: number }; description?: string };
+      const fbResult = (await fallback.json()) as {
+        ok: boolean;
+        result?: { message_id: number };
+        description?: string;
+      };
       if (!fbResult.ok) {
-        console.error(`[TaskProcessor] Telegram plaintext send also failed: ${fbResult.description}`);
+        console.error(
+          `[TaskProcessor] Telegram plaintext send also failed: ${fbResult.description}`,
+        );
       }
       return fbResult.ok ? fbResult.result?.message_id || null : null;
     } catch (err) {
@@ -6119,7 +7215,7 @@ If you already created the new file and just need to patch the original, call gi
     token: string,
     chatId: number,
     text: string,
-    buttons: Array<Array<{ text: string; callback_data: string }>>
+    buttons: Array<Array<{ text: string; callback_data: string }>>,
   ): Promise<number | null> {
     try {
       const html = markdownToTelegramHtml(text);
@@ -6128,7 +7224,7 @@ If you already created the new file and just need to patch the original, call gi
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: html.slice(0, 4000),
+          text: safeTelegramHtmlChunk(html, 4000),
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: buttons,
@@ -6136,7 +7232,11 @@ If you already created the new file and just need to patch the original, call gi
         }),
       });
 
-      const result = await response.json() as { ok: boolean; result?: { message_id: number }; description?: string };
+      const result = (await response.json()) as {
+        ok: boolean;
+        result?: { message_id: number };
+        description?: string;
+      };
       if (result.ok) {
         return result.result?.message_id || null;
       }
@@ -6155,9 +7255,15 @@ If you already created the new file and just need to patch the original, call gi
           },
         }),
       });
-      const fbResult = await fallback.json() as { ok: boolean; result?: { message_id: number }; description?: string };
+      const fbResult = (await fallback.json()) as {
+        ok: boolean;
+        result?: { message_id: number };
+        description?: string;
+      };
       if (!fbResult.ok) {
-        console.error(`[TaskProcessor] Telegram plaintext+buttons send also failed: ${fbResult.description}`);
+        console.error(
+          `[TaskProcessor] Telegram plaintext+buttons send also failed: ${fbResult.description}`,
+        );
       }
       return fbResult.ok ? fbResult.result?.message_id || null : null;
     } catch (err) {
@@ -6173,7 +7279,7 @@ If you already created the new file and just need to patch the original, call gi
     token: string,
     chatId: number,
     messageId: number,
-    text: string
+    text: string,
   ): Promise<void> {
     try {
       await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
@@ -6196,7 +7302,7 @@ If you already created the new file and just need to patch the original, call gi
   private async deleteTelegramMessage(
     token: string,
     chatId: number,
-    messageId: number
+    messageId: number,
   ): Promise<void> {
     try {
       await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
@@ -6215,11 +7321,7 @@ If you already created the new file and just need to patch the original, call gi
   /**
    * Send a long message (split into chunks if needed)
    */
-  private async sendLongMessage(
-    token: string,
-    chatId: number,
-    text: string
-  ): Promise<void> {
+  private async sendLongMessage(token: string, chatId: number, text: string): Promise<void> {
     const maxLength = 4000;
 
     if (text.length <= maxLength) {
@@ -6248,7 +7350,7 @@ If you already created the new file and just need to patch the original, call gi
       remaining = remaining.slice(splitIndex).trim();
 
       // Small delay between messages to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 }
