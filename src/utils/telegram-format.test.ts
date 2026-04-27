@@ -63,4 +63,17 @@ describe('markdownToTelegramHtml', () => {
   it('should handle plain text without markdown', () => {
     expect(markdownToTelegramHtml('hello world')).toBe('hello world');
   });
+
+  // Regression / contract: this helper escapes < > & before applying
+  // markdown rules, so feeding it ALREADY-rendered Telegram HTML mangles
+  // every tag into an entity. Anything coming out of the skill renderers
+  // (which produce finished HTML) must bypass this conversion — see
+  // TaskProcessor.sendTelegramMessage's `rawHtml` opt.
+  it('mangles pre-rendered HTML (callers must bypass for renderer output)', () => {
+    const html = '<b>Research Dossier</b>\n<a href="https://x?a=1&b=2">link</a>';
+    const out = markdownToTelegramHtml(html);
+    expect(out).toContain('&lt;b&gt;Research Dossier&lt;/b&gt;');
+    expect(out).toContain('&amp;b=2');
+    expect(out).not.toContain('<b>Research Dossier</b>');
+  });
 });
