@@ -778,6 +778,11 @@ export async function listRecentRuns(
  */
 export const DEFAULT_SUPPRESSIONS_LIMIT = 100;
 const MAX_SUPPRESSIONS_LIMIT = 500;
+/** Hard ceiling exposed to other modules (e.g. the admin route's clamp).
+ *  Single source of truth so api.ts and the overview response can't drift. */
+export const MAX_SUPPRESSIONS_LIMIT_EXPORT = MAX_SUPPRESSIONS_LIMIT;
+/** Same idea for the recent-runs limit. */
+export const MAX_RECENT_RUNS_LIMIT = 100;
 
 /** Alias for back-compat — same shape as the shared ListResult<SuppressionEntry>. */
 export type ListAllSuppressionsResult = ListResult<SuppressionEntry>;
@@ -879,18 +884,38 @@ export interface AuditOverview {
     recentRuns: boolean;
     suppressions: boolean;
   };
+  /**
+   * Server-defined caps mirrored to the client so the admin UI doesn't
+   * have to hard-code numeric constants. Lets us tighten/widen any of
+   * these from the server alone — no client redeploy needed for the
+   * UI to adjust its 'Show up to N' button or banner thresholds.
+   */
+  caps: {
+    /** Default suppression entries returned when no override is supplied. */
+    suppressionsDefault: number;
+    /** Hard ceiling the server will accept on ?suppressionLimit=N. */
+    suppressionsMax: number;
+    /** Hard ceiling the server will accept on ?limit=N (recent runs). */
+    recentRunsMax: number;
+  };
 }
 
 export async function getAuditOverview(
   kv: KVNamespace | undefined,
   options: { runLimit?: number; suppressionLimit?: number } = {},
 ): Promise<AuditOverview> {
+  const caps = {
+    suppressionsDefault: DEFAULT_SUPPRESSIONS_LIMIT,
+    suppressionsMax: MAX_SUPPRESSIONS_LIMIT,
+    recentRunsMax: MAX_RECENT_RUNS_LIMIT,
+  };
   if (!kv) {
     return {
       subscriptions: [],
       recentRuns: [],
       suppressions: [],
       truncated: { subscriptions: false, recentRuns: false, suppressions: false },
+      caps,
     };
   }
   const [subscriptions, recentRuns, suppressions] = await Promise.all([
@@ -907,5 +932,6 @@ export async function getAuditOverview(
       recentRuns: recentRuns.truncated,
       suppressions: suppressions.truncated,
     },
+    caps,
   };
 }

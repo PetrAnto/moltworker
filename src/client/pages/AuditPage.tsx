@@ -81,18 +81,21 @@ function formatDurationMs(ms: number): string {
   return `${(ms / 60_000).toFixed(1)}m`;
 }
 
-/** Default suppression cap matches the server's DEFAULT_SUPPRESSIONS_LIMIT. */
-const DEFAULT_SUPPRESSION_LIMIT = 100;
-/** Hard ceiling — same as the server's MAX_SUPPRESSIONS_LIMIT, exposed as a
- *  one-click "show all" widening. */
-const MAX_SUPPRESSION_LIMIT = 500;
+/**
+ * Fallback caps used before the first overview response lands. Once
+ * `data.caps` is available, all UI uses the server-defined values so
+ * we don't hard-code thresholds that could drift from cache.ts. These
+ * fallbacks just need to be reasonable defaults for the loading state.
+ */
+const FALLBACK_SUPPRESSION_DEFAULT = 100;
+const FALLBACK_SUPPRESSION_MAX = 500;
 
 export default function AuditPage() {
   const [data, setData] = useState<AuditOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
-  const [suppressionLimit, setSuppressionLimit] = useState<number>(DEFAULT_SUPPRESSION_LIMIT);
+  const [suppressionLimit, setSuppressionLimit] = useState<number>(FALLBACK_SUPPRESSION_DEFAULT);
 
   const refresh = useCallback(async () => {
     try {
@@ -170,8 +173,11 @@ export default function AuditPage() {
         actionInProgress={actionInProgress}
         onUnsuppress={handleUnsuppress}
         currentLimit={suppressionLimit}
-        canExpand={suppressionLimit < MAX_SUPPRESSION_LIMIT}
-        onExpand={() => setSuppressionLimit(MAX_SUPPRESSION_LIMIT)}
+        // Server-defined ceiling. Falls back to a sane default for the
+        // first render before the overview response lands.
+        maxLimit={data?.caps.suppressionsMax ?? FALLBACK_SUPPRESSION_MAX}
+        canExpand={suppressionLimit < (data?.caps.suppressionsMax ?? FALLBACK_SUPPRESSION_MAX)}
+        onExpand={() => setSuppressionLimit(data?.caps.suppressionsMax ?? FALLBACK_SUPPRESSION_MAX)}
       />
     </div>
   );
@@ -370,6 +376,7 @@ function SuppressionsSection({
   actionInProgress,
   onUnsuppress,
   currentLimit,
+  maxLimit,
   canExpand,
   onExpand,
 }: {
@@ -379,6 +386,7 @@ function SuppressionsSection({
   actionInProgress: string | null;
   onUnsuppress: (sup: AuditSuppressionRow) => void;
   currentLimit: number;
+  maxLimit: number;
   canExpand: boolean;
   onExpand: () => void;
 }) {
@@ -398,12 +406,12 @@ function SuppressionsSection({
           </p>
           {canExpand ? (
             <button className="audit-action" onClick={onExpand}>
-              Show up to {MAX_SUPPRESSION_LIMIT}
+              Show up to {maxLimit}
             </button>
           ) : (
             <p className="hint">
-              At the hard cap of {MAX_SUPPRESSION_LIMIT}. Further entries require a server-side
-              widening (raise <code>MAX_SUPPRESSIONS_LIMIT</code>).
+              At the hard cap of {maxLimit}. Further entries require a server-side widening (raise{' '}
+              <code>MAX_SUPPRESSIONS_LIMIT</code>).
             </p>
           )}
         </div>

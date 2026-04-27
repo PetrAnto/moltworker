@@ -19,6 +19,8 @@ import {
   getAuditOverview,
   deleteAuditSubscription,
   removeSuppression,
+  MAX_SUPPRESSIONS_LIMIT_EXPORT,
+  MAX_RECENT_RUNS_LIMIT,
 } from '../skills/audit/cache';
 import { FINDING_ID_RE } from '../skills/audit/types';
 
@@ -729,10 +731,12 @@ adminApi.get('/audit/overview', async (c) => {
     return c.json({ error: 'NEXUS_KV not bound — audit admin tab requires KV.' }, 503);
   }
   const limitRaw = c.req.query('limit');
-  const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 0, 1), 100) : 20;
+  const limit = limitRaw
+    ? Math.min(Math.max(parseInt(limitRaw, 10) || 0, 1), MAX_RECENT_RUNS_LIMIT)
+    : 20;
   const supLimitRaw = c.req.query('suppressionLimit');
   const suppressionLimit = supLimitRaw
-    ? Math.min(Math.max(parseInt(supLimitRaw, 10) || 0, 1), 500)
+    ? Math.min(Math.max(parseInt(supLimitRaw, 10) || 0, 1), MAX_SUPPRESSIONS_LIMIT_EXPORT)
     : undefined; // let cache.ts apply DEFAULT_SUPPRESSIONS_LIMIT
   try {
     const overview = await getAuditOverview(c.env.NEXUS_KV, {
