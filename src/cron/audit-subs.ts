@@ -66,7 +66,17 @@ export async function runScheduledAudits(env: MoltbotEnv): Promise<RunResult> {
   }
 
   const now = Date.now();
-  const subs = await listAllSubscriptions(env.NEXUS_KV);
+  const subsResult = await listAllSubscriptions(env.NEXUS_KV);
+  if (subsResult.truncated) {
+    // Defensive log: the page-cap kicked in, so some subs won't be
+    // dispatched on this tick. Realistic-load deployments never hit
+    // this; if they do, the operator should split workloads or raise
+    // MAX_PAGES in cache.ts (currently 5 × 1000 = 5000 subs).
+    console.warn(
+      '[cron-audit-subs] subscription scan truncated — some subs may not have been dispatched this tick',
+    );
+  }
+  const subs = subsResult.entries;
   result.inspected = subs.length;
 
   for (const sub of subs) {

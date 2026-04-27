@@ -852,7 +852,14 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
  */
 function appendSanitizationSummary(lines: string[], s: AuditRun['sanitization']): void {
   if (!s || s.count === 0) return;
-  lines.push(`🛡️ Pre-prompt sanitizer redacted ${s.count} item(s) before LLM analysis:`);
+  // Wording matters: a single source occurrence (e.g. an
+  // "IGNORE PREVIOUS INSTRUCTIONS" comment) can be redacted multiple
+  // times because the same snippet feeds the Analyst across multiple
+  // lenses (manifests + workflows reach every lens). The count is
+  // therefore "across lens evidence blocks", not "unique source
+  // occurrences" — making that explicit avoids confusion when an
+  // operator sees a count larger than the number of suspicious files.
+  lines.push(`🛡️ Pre-prompt sanitizer redacted ${s.count} item(s) across lens evidence blocks:`);
   for (const sample of s.samples) {
     const where = sample.path ? ` @ ${sample.path}` : '';
     lines.push(`  - ${sample.label}${where}`);
@@ -1481,12 +1488,15 @@ async function handleUnsubscribe(request: SkillRequest, start: number): Promise<
 }
 
 async function handleListSubs(request: SkillRequest, start: number): Promise<SkillResult> {
-  const subs = await listUserSubscriptions(request.env.NEXUS_KV, request.userId);
+  const { entries: subs, truncated } = await listUserSubscriptions(
+    request.env.NEXUS_KV,
+    request.userId,
+  );
 
   const body =
     subs.length === 0
       ? 'No active audit subscriptions.\n\nCreate one with /audit subscribe <owner/repo> [--daily|--weekly].'
-      : formatSubsList(subs);
+      : formatSubsList(subs, truncated);
 
   return {
     skillId: 'audit',
@@ -1497,19 +1507,26 @@ async function handleListSubs(request: SkillRequest, start: number): Promise<Ski
   };
 }
 
-function formatSubsList(subs: AuditSubscription[]): string {
+function formatSubsList(subs: AuditSubscription[], truncated = false): string {
   // Sort by created date so the user's mental model of "in the order I
   // added them" matches what's on screen. Subscriptions are tiny — at
   // most a few dozen per user — so we sort in-memory rather than
   // adding an indexed key.
   const ordered = [...subs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const lines: string[] = [`Active audit subscriptions (${ordered.length}):`, ''];
+  const headerSuffix = truncated ? '+' : '';
+  const lines: string[] = [`Active audit subscriptions (${ordered.length}${headerSuffix}):`, ''];
   for (const s of ordered) {
     const lensSummary = s.lens ?? 'all lenses';
     const last = s.lastRunAt ? `last run ${s.lastRunAt}` : 'never run';
     const branch = s.branch ? `, branch=${s.branch}` : '';
     lines.push(
       `• ${s.owner}/${s.repo} — ${s.interval}, ${lensSummary}, depth=${s.depth}${branch} — ${last}`,
+    );
+  }
+  if (truncated) {
+    lines.push('');
+    lines.push(
+      '⚠️ List truncated — your account has more subscriptions than the per-scan cap. Contact the operator if you expect to see more.',
     );
   }
   lines.push('');

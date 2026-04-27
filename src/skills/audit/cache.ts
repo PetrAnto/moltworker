@@ -510,27 +510,44 @@ export async function deleteAuditSubscription(
   }
 }
 
+/**
+ * Common shape returned by every admin-tab list helper. `truncated` is
+ * true when the underlying scan hit a page or per-result cap with more
+ * keys still available, so the admin tab can show a "showing first N"
+ * hint and the cron path can log a warning if a real keyspace ever
+ * outgrows the default cap.
+ */
+export interface ListResult<T> {
+  entries: T[];
+  truncated: boolean;
+}
+
 /** List one user's subscriptions. Used by /audit subs. */
 export async function listUserSubscriptions(
   kv: KVNamespace | undefined,
   userId: string,
-): Promise<AuditSubscription[]> {
-  if (!kv) return [];
+): Promise<ListResult<AuditSubscription>> {
+  if (!kv) return { entries: [], truncated: false };
   const prefix = `${SUB_PREFIX}${userId}:`;
   return readSubscriptions(kv, prefix);
 }
 
-/** List every subscription across all users. Used by the cron handler. */
+/** List every subscription across all users. Used by the cron handler
+ *  and the admin overview. */
 export async function listAllSubscriptions(
   kv: KVNamespace | undefined,
-): Promise<AuditSubscription[]> {
-  if (!kv) return [];
+): Promise<ListResult<AuditSubscription>> {
+  if (!kv) return { entries: [], truncated: false };
   return readSubscriptions(kv, SUB_PREFIX);
 }
 
-async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<AuditSubscription[]> {
-  const out: AuditSubscription[] = [];
+async function readSubscriptions(
+  kv: KVNamespace,
+  prefix: string,
+): Promise<ListResult<AuditSubscription>> {
+  const entries: AuditSubscription[] = [];
   let cursor: string | undefined;
+  let truncated = false;
   // Defensive page cap: keeps worst-case latency predictable on a
   // pathologically large keyspace and matches listRecentRuns /
   // listAllSuppressions for consistency. 5 pages × KV's 1000-key
@@ -542,7 +559,7 @@ async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<Audit
       for (const k of res.keys) {
         try {
           const sub = (await kv.get(k.name, 'json')) as AuditSubscription | null;
-          if (sub) out.push(sub);
+          if (sub) entries.push(sub);
         } catch (err) {
           // Skip malformed entries rather than aborting the scan; the
           // cron path needs to be robust to partial corruption.
@@ -555,6 +572,9 @@ async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<Audit
       if (res.list_complete) break;
       cursor = res.cursor;
       if (!cursor) break;
+      // Hit MAX_PAGES with more keys still available — flag for the
+      // admin tab + cron warning path.
+      if (page === MAX_PAGES - 1) truncated = true;
     }
   } catch (err) {
     console.warn(
@@ -562,7 +582,7 @@ async function readSubscriptions(kv: KVNamespace, prefix: string): Promise<Audit
       err instanceof Error ? err.message : err,
     );
   }
-  return out;
+  return { entries, truncated };
 }
 
 /**
@@ -675,11 +695,12 @@ export interface SuppressionEntry {
 export async function listRecentRuns(
   kv: KVNamespace | undefined,
   limit = 20,
-): Promise<AuditRunSummary[]> {
-  if (!kv) return [];
+): Promise<ListResult<AuditRunSummary>> {
+  if (!kv) return { entries: [], truncated: false };
 
   const candidates: { name: string; meta: AuditRunMetadata | null }[] = [];
   let cursor: string | undefined;
+  let scanTruncated = false;
   // Bound the scan: at most ~5 pages × KV's default page size keeps the
   // worst-case latency predictable. Runs have a 7-day TTL so the live
   // keyspace stays small in practice.
@@ -693,10 +714,11 @@ export async function listRecentRuns(
       if (res.list_complete) break;
       cursor = res.cursor;
       if (!cursor) break;
+      if (page === MAX_PAGES - 1) scanTruncated = true;
     }
   } catch (err) {
     console.warn('[Audit] listRecentRuns scan failed:', err instanceof Error ? err.message : err);
-    return [];
+    return { entries: [], truncated: false };
   }
 
   // Sort: keys with metadata first (most-recent → oldest), then unstamped
@@ -707,7 +729,11 @@ export async function listRecentRuns(
     return bm - am;
   });
 
-  const rows: AuditRunSummary[] = [];
+  // Truncated if either the page scan dropped keys (scanTruncated) or
+  // there were more sortable candidates than the per-result limit.
+  const truncated = scanTruncated || candidates.length > limit;
+
+  const entries: AuditRunSummary[] = [];
   for (const c of candidates.slice(0, limit)) {
     // Key shape: audit:run:{userId}:{runId}
     const tail = c.name.slice(RUN_PREFIX.length);
@@ -723,7 +749,7 @@ export async function listRecentRuns(
       continue;
     }
     if (!run) continue;
-    rows.push({
+    entries.push({
       userId,
       runId,
       owner: run.repo.owner,
@@ -740,7 +766,7 @@ export async function listRecentRuns(
       createdAtMs: c.meta?.createdAtMs ?? null,
     });
   }
-  return rows;
+  return { entries, truncated };
 }
 
 /**
@@ -753,13 +779,8 @@ export async function listRecentRuns(
 export const DEFAULT_SUPPRESSIONS_LIMIT = 100;
 const MAX_SUPPRESSIONS_LIMIT = 500;
 
-/** Return wrapper that signals when the scan was capped, so the admin
- *  tab can show a "showing first N of …" hint and the operator knows
- *  the view is incomplete. */
-export interface ListAllSuppressionsResult {
-  entries: SuppressionEntry[];
-  truncated: boolean;
-}
+/** Alias for back-compat — same shape as the shared ListResult<SuppressionEntry>. */
+export type ListAllSuppressionsResult = ListResult<SuppressionEntry>;
 
 /**
  * List suppression entries across all users. Each KV key carries a
@@ -774,13 +795,13 @@ export interface ListAllSuppressionsResult {
 export async function listAllSuppressions(
   kv: KVNamespace | undefined,
   options: { limit?: number } = {},
-): Promise<ListAllSuppressionsResult> {
+): Promise<ListResult<SuppressionEntry>> {
   if (!kv) return { entries: [], truncated: false };
   const limit = Math.min(
     Math.max(options.limit ?? DEFAULT_SUPPRESSIONS_LIMIT, 1),
     MAX_SUPPRESSIONS_LIMIT,
   );
-  const out: SuppressionEntry[] = [];
+  const entries: SuppressionEntry[] = [];
   let cursor: string | undefined;
   const MAX_PAGES = 5;
   let truncated = false;
@@ -788,7 +809,7 @@ export async function listAllSuppressions(
     pageLoop: for (let page = 0; page < MAX_PAGES; page++) {
       const res = await kv.list({ prefix: SUPPRESS_PREFIX, cursor });
       for (const k of res.keys) {
-        if (out.length >= limit) {
+        if (entries.length >= limit) {
           truncated = true;
           break pageLoop;
         }
@@ -815,7 +836,7 @@ export async function listAllSuppressions(
           // Best-effort: an unreadable suppression entry should not stop
           // the rest of the listing. Surface what we can.
         }
-        out.push({ userId, owner, repo, findingId, at });
+        entries.push({ userId, owner, repo, findingId, at });
       }
       if (res.list_complete) break;
       cursor = res.cursor;
@@ -830,7 +851,7 @@ export async function listAllSuppressions(
       err instanceof Error ? err.message : err,
     );
   }
-  return { entries: out, truncated };
+  return { entries, truncated };
 }
 
 /**
@@ -849,7 +870,13 @@ export interface AuditOverview {
   subscriptions: AuditSubscription[];
   recentRuns: AuditRunSummary[];
   suppressions: SuppressionEntry[];
+  /** Per-section truncation flags. Each is true when the corresponding
+   *  scan hit a configured cap with more keys still available, so the
+   *  admin tab can show "showing first N of …" hints and an operator
+   *  doesn't get a silently incomplete view. */
   truncated: {
+    subscriptions: boolean;
+    recentRuns: boolean;
     suppressions: boolean;
   };
 }
@@ -863,7 +890,7 @@ export async function getAuditOverview(
       subscriptions: [],
       recentRuns: [],
       suppressions: [],
-      truncated: { suppressions: false },
+      truncated: { subscriptions: false, recentRuns: false, suppressions: false },
     };
   }
   const [subscriptions, recentRuns, suppressions] = await Promise.all([
@@ -872,10 +899,12 @@ export async function getAuditOverview(
     listAllSuppressions(kv, { limit: options.suppressionLimit }),
   ]);
   return {
-    subscriptions,
-    recentRuns,
+    subscriptions: subscriptions.entries,
+    recentRuns: recentRuns.entries,
     suppressions: suppressions.entries,
     truncated: {
+      subscriptions: subscriptions.truncated,
+      recentRuns: recentRuns.truncated,
       suppressions: suppressions.truncated,
     },
   };
