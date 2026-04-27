@@ -91,6 +91,18 @@
   color: #ffb3b3;
 }
 
+.audit-truncated-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.audit-truncated-banner .hint {
+  margin: 0;
+}
+
 .audit-action {
   background: #2c3037;
   color: #e6e9ef;

@@ -81,15 +81,22 @@ function formatDurationMs(ms: number): string {
   return `${(ms / 60_000).toFixed(1)}m`;
 }
 
+/** Default suppression cap matches the server's DEFAULT_SUPPRESSIONS_LIMIT. */
+const DEFAULT_SUPPRESSION_LIMIT = 100;
+/** Hard ceiling — same as the server's MAX_SUPPRESSIONS_LIMIT, exposed as a
+ *  one-click "show all" widening. */
+const MAX_SUPPRESSION_LIMIT = 500;
+
 export default function AuditPage() {
   const [data, setData] = useState<AuditOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [suppressionLimit, setSuppressionLimit] = useState<number>(DEFAULT_SUPPRESSION_LIMIT);
 
   const refresh = useCallback(async () => {
     try {
-      const overview = await fetchAuditOverview(50);
+      const overview = await fetchAuditOverview({ limit: 50, suppressionLimit });
       setData(overview);
       setError(null);
     } catch (err) {
@@ -101,7 +108,7 @@ export default function AuditPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [suppressionLimit]);
 
   useEffect(() => {
     refresh();
@@ -144,12 +151,17 @@ export default function AuditPage() {
       <SubscriptionsSection
         subs={data?.subscriptions ?? []}
         recentRuns={data?.recentRuns ?? []}
+        truncated={data?.truncated.subscriptions ?? false}
         loading={loading}
         actionInProgress={actionInProgress}
         onUnsubscribe={handleUnsubscribe}
       />
 
-      <RecentRunsSection runs={data?.recentRuns ?? []} loading={loading} />
+      <RecentRunsSection
+        runs={data?.recentRuns ?? []}
+        truncated={data?.truncated.recentRuns ?? false}
+        loading={loading}
+      />
 
       <SuppressionsSection
         sups={data?.suppressions ?? []}
@@ -157,6 +169,9 @@ export default function AuditPage() {
         loading={loading}
         actionInProgress={actionInProgress}
         onUnsuppress={handleUnsuppress}
+        currentLimit={suppressionLimit}
+        canExpand={suppressionLimit < MAX_SUPPRESSION_LIMIT}
+        onExpand={() => setSuppressionLimit(MAX_SUPPRESSION_LIMIT)}
       />
     </div>
   );
@@ -165,12 +180,14 @@ export default function AuditPage() {
 function SubscriptionsSection({
   subs,
   recentRuns,
+  truncated,
   loading,
   actionInProgress,
   onUnsubscribe,
 }: {
   subs: AuditSubscriptionRow[];
   recentRuns: AuditRunRow[];
+  truncated: boolean;
   loading: boolean;
   actionInProgress: string | null;
   onUnsubscribe: (sub: AuditSubscriptionRow) => void;
@@ -183,8 +200,18 @@ function SubscriptionsSection({
   return (
     <section className="audit-section">
       <div className="section-header">
-        <h2>Active Subscriptions ({subs.length})</h2>
+        <h2>
+          Active Subscriptions ({subs.length}
+          {truncated ? '+' : ''})
+        </h2>
       </div>
+      {truncated ? (
+        <p className="hint">
+          ⚠️ Subscription scan hit the per-page cap — some subs may be missing from this view and
+          would also be skipped on the cron tick. Investigate via <code>wrangler kv:key list</code>{' '}
+          on prefix <code>audit:sub:</code>.
+        </p>
+      ) : null}
       {loading ? (
         <p className="hint">Loading…</p>
       ) : subs.length === 0 ? (
@@ -262,12 +289,29 @@ function SubscriptionsSection({
   );
 }
 
-function RecentRunsSection({ runs, loading }: { runs: AuditRunRow[]; loading: boolean }) {
+function RecentRunsSection({
+  runs,
+  truncated,
+  loading,
+}: {
+  runs: AuditRunRow[];
+  truncated: boolean;
+  loading: boolean;
+}) {
   return (
     <section className="audit-section">
       <div className="section-header">
-        <h2>Recent Runs ({runs.length})</h2>
+        <h2>
+          Recent Runs ({runs.length}
+          {truncated ? '+' : ''})
+        </h2>
       </div>
+      {truncated ? (
+        <p className="hint">
+          ⚠️ More runs exist than the recency cap allows. Pass <code>?limit=N</code> on the API call
+          (max 100) to widen the view.
+        </p>
+      ) : null}
       {loading ? (
         <p className="hint">Loading…</p>
       ) : runs.length === 0 ? (
@@ -325,12 +369,18 @@ function SuppressionsSection({
   loading,
   actionInProgress,
   onUnsuppress,
+  currentLimit,
+  canExpand,
+  onExpand,
 }: {
   sups: AuditSuppressionRow[];
   truncated: boolean;
   loading: boolean;
   actionInProgress: string | null;
   onUnsuppress: (sup: AuditSuppressionRow) => void;
+  currentLimit: number;
+  canExpand: boolean;
+  onExpand: () => void;
 }) {
   return (
     <section className="audit-section">
@@ -341,11 +391,22 @@ function SuppressionsSection({
         </h2>
       </div>
       {truncated ? (
-        <p className="hint">
-          ⚠️ Showing first {sups.length} entries — the suppression keyspace exceeds the admin scan
-          cap. Pass <code>?suppressionLimit=N</code>
-          (max 500) on the API call to widen the view.
-        </p>
+        <div className="audit-truncated-banner">
+          <p className="hint">
+            ⚠️ Showing first {sups.length} entries (cap = {currentLimit}). The suppression keyspace
+            has more.
+          </p>
+          {canExpand ? (
+            <button className="audit-action" onClick={onExpand}>
+              Show up to {MAX_SUPPRESSION_LIMIT}
+            </button>
+          ) : (
+            <p className="hint">
+              At the hard cap of {MAX_SUPPRESSION_LIMIT}. Further entries require a server-side
+              widening (raise <code>MAX_SUPPRESSIONS_LIMIT</code>).
+            </p>
+          )}
+        </div>
       ) : null}
       {loading ? (
         <p className="hint">Loading…</p>
