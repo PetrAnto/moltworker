@@ -14,7 +14,10 @@ vi.mock('../llm', () => ({
   selectSkillModel: vi.fn((req: string | undefined, def: string) => req ?? def),
 }));
 
-import { handleAudit, audit_do_key, buildOrchestraTask, buildFixSummary, resolveFix } from './audit';
+import {
+  handleAudit, audit_do_key, buildOrchestraTask, buildFixSummary, resolveFix,
+  buildScheduledAuditRequest,
+} from './audit';
 import { parseRepoCoords, encodeRepoPath } from './scout';
 import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
@@ -2706,5 +2709,325 @@ describe('FIX_TOKEN_RE shape (closes PR 514 follow-up #3)', () => {
     ['suppression-key path', 'audit:fixdraft:user'],
   ])('rejects %s', (_label, bad) => {
     expect(FIX_TOKEN_RE.test(bad)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// /audit subscribe | unsubscribe | subs (Phase 1, Slice A)
+// ---------------------------------------------------------------------------
+
+describe('/audit subscribe', () => {
+  function kvWithStore() {
+    const store = new Map<string, string>();
+    const kv = {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = store.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(async (key: string, value: string) => {
+        store.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        store.delete(key);
+      }),
+      list: vi.fn(async (opts: { prefix?: string }) => {
+        const prefix = opts.prefix ?? '';
+        return {
+          keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })),
+          list_complete: true,
+        };
+      }),
+    } as unknown as KVNamespace;
+    return { kv, store };
+  }
+
+  function makeSubReq(overrides: Partial<SkillRequest> = {}): SkillRequest {
+    return {
+      skillId: 'audit',
+      subcommand: 'subscribe',
+      text: 'octocat/hello-world',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      chatId: 1234,
+      env: {
+        NEXUS_KV: undefined as unknown as KVNamespace,
+        GITHUB_TOKEN: 'tok',
+      } as unknown as MoltbotEnv,
+      ...overrides,
+    };
+  }
+
+  it('creates a subscription with sane defaults (weekly, quick, all lenses)', async () => {
+    const { kv, store } = kvWithStore();
+    const result = await handleAudit(makeSubReq({
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/Subscribed octocat\/hello-world/);
+    expect(result.body).toMatch(/weekly/);
+
+    const stored = JSON.parse(store.get('audit:sub:user-1:octocat/hello-world')!);
+    expect(stored.interval).toBe('weekly');
+    expect(stored.depth).toBe('quick');
+    expect(stored.lens).toBeUndefined();
+    expect(stored.chatId).toBe(1234);
+    expect(stored.lastRunAt).toBeNull();
+  });
+
+  it('honors --daily, --lens, --depth, --branch', async () => {
+    const { kv, store } = kvWithStore();
+    await handleAudit(makeSubReq({
+      flags: { daily: 'true', lens: 'security', depth: 'standard', branch: 'main' },
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    const stored = JSON.parse(store.get('audit:sub:user-1:octocat/hello-world')!);
+    expect(stored.interval).toBe('daily');
+    expect(stored.lens).toBe('security');
+    expect(stored.depth).toBe('standard');
+    expect(stored.branch).toBe('main');
+  });
+
+  it('rejects unknown lens', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(makeSubReq({
+      flags: { lens: 'nonsense' },
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Unknown --lens/);
+  });
+
+  it('rejects unknown depth', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(makeSubReq({
+      flags: { depth: 'extreme' },
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Unknown --depth/);
+  });
+
+  it('rejects when transport is not telegram', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(makeSubReq({
+      transport: 'web',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Telegram-only/);
+  });
+
+  it('rejects when chatId is missing', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(makeSubReq({
+      chatId: undefined,
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/chat context/);
+  });
+
+  it('rejects when no repo is provided', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(makeSubReq({
+      text: '',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Usage:/);
+  });
+
+  it('preserves lastRunAt/lastRunId when an existing subscription is updated', async () => {
+    const { kv, store } = kvWithStore();
+    // Pre-seed an existing subscription that has already run once.
+    const seeded = {
+      userId: 'user-1',
+      owner: 'octocat',
+      repo: 'hello-world',
+      transport: 'telegram',
+      chatId: 1234,
+      depth: 'quick',
+      interval: 'weekly',
+      createdAt: '2026-01-01T00:00:00Z',
+      lastRunAt: '2026-04-10T00:00:00Z',
+      lastRunId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    };
+    store.set('audit:sub:user-1:octocat/hello-world', JSON.stringify(seeded));
+
+    const result = await handleAudit(makeSubReq({
+      flags: { daily: 'true' },
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    }));
+    expect(result.body).toMatch(/Updated/);
+    const updated = JSON.parse(store.get('audit:sub:user-1:octocat/hello-world')!);
+    expect(updated.interval).toBe('daily');
+    expect(updated.createdAt).toBe(seeded.createdAt);    // unchanged
+    expect(updated.lastRunAt).toBe(seeded.lastRunAt);    // unchanged
+    expect(updated.lastRunId).toBe(seeded.lastRunId);    // unchanged
+  });
+});
+
+describe('/audit unsubscribe', () => {
+  it('removes an existing subscription', async () => {
+    const store = new Map<string, string>();
+    const seeded = {
+      userId: 'user-1', owner: 'octocat', repo: 'demo', transport: 'telegram',
+      chatId: 1, depth: 'quick', interval: 'weekly', createdAt: 't', lastRunAt: null, lastRunId: null,
+    };
+    store.set('audit:sub:user-1:octocat/demo', JSON.stringify(seeded));
+    const kv = {
+      get: vi.fn(async (k: string) => store.get(k) ?? null),
+      delete: vi.fn(async (k: string) => { store.delete(k); }),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'unsubscribe',
+      text: 'octocat/demo',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    } as SkillRequest);
+
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/Unsubscribed/);
+    expect(store.has('audit:sub:user-1:octocat/demo')).toBe(false);
+  });
+
+  it('returns a friendly message when nothing is subscribed', async () => {
+    const kv = {
+      get: vi.fn(async () => null),
+      delete: vi.fn(),
+    } as unknown as KVNamespace;
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'unsubscribe',
+      text: 'octocat/demo',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    } as SkillRequest);
+
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/No active subscription/);
+  });
+
+  it('rejects when no repo is given', async () => {
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'unsubscribe',
+      text: '',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: {} as KVNamespace } as unknown as MoltbotEnv,
+    } as SkillRequest);
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Usage:/);
+  });
+});
+
+describe('/audit subs (list)', () => {
+  it('returns an empty-state message when there are no subscriptions', async () => {
+    const kv = {
+      list: vi.fn(async () => ({ keys: [], list_complete: true })),
+    } as unknown as KVNamespace;
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'subs',
+      text: '',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    } as SkillRequest);
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/No active audit subscriptions/);
+  });
+
+  it('lists user subscriptions sorted by createdAt', async () => {
+    const store = new Map<string, string>();
+    store.set(
+      'audit:sub:user-1:b/b',
+      JSON.stringify({
+        userId: 'user-1', owner: 'b', repo: 'b', transport: 'telegram', chatId: 1,
+        depth: 'quick', interval: 'daily', createdAt: '2026-02-01T00:00:00Z',
+        lastRunAt: '2026-04-20T00:00:00Z', lastRunId: 'rid',
+      }),
+    );
+    store.set(
+      'audit:sub:user-1:a/a',
+      JSON.stringify({
+        userId: 'user-1', owner: 'a', repo: 'a', transport: 'telegram', chatId: 1,
+        depth: 'standard', interval: 'weekly', createdAt: '2026-01-01T00:00:00Z',
+        lastRunAt: null, lastRunId: null, lens: 'security',
+      }),
+    );
+    const kv = {
+      get: vi.fn(async (k: string, type?: string) => {
+        const v = store.get(k);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      list: vi.fn(async (opts: { prefix?: string }) => ({
+        keys: [...store.keys()].filter(k => k.startsWith(opts.prefix ?? '')).map(name => ({ name })),
+        list_complete: true,
+      })),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'subs',
+      text: '',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    } as SkillRequest);
+
+    expect(result.kind).toBe('text');
+    // Older sub renders before newer one.
+    const aIdx = result.body.indexOf('a/a');
+    const bIdx = result.body.indexOf('b/b');
+    expect(aIdx).toBeGreaterThan(-1);
+    expect(bIdx).toBeGreaterThan(aIdx);
+    expect(result.body).toMatch(/never run/);              // a/a
+    expect(result.body).toMatch(/last run 2026-04-20/);    // b/b
+    expect(result.body).toMatch(/security/);               // a/a's lens
+  });
+});
+
+describe('buildScheduledAuditRequest', () => {
+  it('produces an --analyze SkillRequest matching subscription knobs', () => {
+    const sub = {
+      userId: 'u', owner: 'o', repo: 'r', transport: 'telegram' as const, chatId: 5,
+      depth: 'standard' as const, interval: 'daily' as const,
+      lens: 'security', branch: 'main',
+      createdAt: 't', lastRunAt: null, lastRunId: null,
+    };
+    const env = { NEXUS_KV: {} as KVNamespace } as unknown as MoltbotEnv;
+    const built = buildScheduledAuditRequest(sub, env, undefined);
+    expect(built.subcommand).toBe('run');
+    expect(built.text).toBe('o/r');
+    expect(built.flags).toEqual({ analyze: 'true', depth: 'standard', lens: 'security', branch: 'main' });
+    expect(built.userId).toBe('u');
+    expect(built.chatId).toBe(5);
+  });
+
+  it('omits lens/branch when subscription leaves them undefined', () => {
+    const built = buildScheduledAuditRequest(
+      {
+        userId: 'u', owner: 'o', repo: 'r', transport: 'telegram', chatId: 1,
+        depth: 'quick', interval: 'weekly',
+        createdAt: 't', lastRunAt: null, lastRunId: null,
+      },
+      {} as unknown as MoltbotEnv,
+      undefined,
+    );
+    expect(built.flags).toEqual({ analyze: 'true', depth: 'quick' });
   });
 });

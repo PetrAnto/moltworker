@@ -29,6 +29,9 @@ import {
   getCachedProfile, cacheProfile,
   cacheAuditRun, getCachedAuditRun,
   getSuppressedIds, addSuppression, removeSuppression,
+  setAuditSubscription, getAuditSubscription, deleteAuditSubscription,
+  listUserSubscriptions,
+  type AuditSubscription,
 } from './cache';
 import { extractSnippets } from './extractor/extractor';
 import { loadGrammar, loadRuntimeWasm } from './grammars/loader';
@@ -66,6 +69,15 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   }
   if (request.subcommand === 'fix') {
     return handleFix(request, start);
+  }
+  if (request.subcommand === 'subscribe') {
+    return handleSubscribe(request, start);
+  }
+  if (request.subcommand === 'unsubscribe') {
+    return handleUnsubscribe(request, start);
+  }
+  if (request.subcommand === 'subs') {
+    return handleListSubs(request, start);
   }
 
   // 1. Parse args
@@ -1087,4 +1099,191 @@ function errorResult(message: string): SkillResult {
     body: message,
     telemetry: { durationMs: 0, model: 'none', llmCalls: 0, toolCalls: 0 },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled audits — /audit subscribe | unsubscribe | subs
+// ---------------------------------------------------------------------------
+//
+// Storage: see src/skills/audit/cache.ts (audit:sub:* prefix in NEXUS_KV).
+// Dispatch: see src/index.ts scheduled() — the 6h cron tick scans
+// subscriptions and dispatches due ones via the existing TaskProcessor
+// path. The handlers here only manage the subscription itself.
+
+/**
+ * Build a SkillRequest equivalent to a manual `/audit <repo> --analyze`
+ * call, used by the cron handler when running a scheduled audit. Exposed
+ * for the cron-side test, kept here so the inputs/outputs of the
+ * subscription mechanism live in one place.
+ */
+export function buildScheduledAuditRequest(
+  sub: AuditSubscription,
+  env: SkillRequest['env'],
+  context: SkillRequest['context'],
+): SkillRequest {
+  const flags: Record<string, string> = { analyze: 'true', depth: sub.depth };
+  if (sub.lens) flags.lens = sub.lens;
+  if (sub.branch) flags.branch = sub.branch;
+
+  return {
+    skillId: 'audit',
+    subcommand: 'run',
+    text: `${sub.owner}/${sub.repo}`,
+    flags,
+    transport: sub.transport,
+    userId: sub.userId,
+    chatId: sub.chatId,
+    env,
+    context,
+  };
+}
+
+async function handleSubscribe(request: SkillRequest, start: number): Promise<SkillResult> {
+  const repoArg = request.text.trim().split(/\s+/)[0] ?? '';
+  if (!repoArg) {
+    return errorResult(
+      'Usage: /audit subscribe <owner/repo or URL> [--daily|--weekly] [--lens X] [--depth quick|standard|deep] [--branch <name>]',
+    );
+  }
+
+  const coords = parseRepoCoords(repoArg);
+  if (!coords) {
+    return errorResult(`Could not parse "${repoArg}" as a GitHub repo. Use owner/repo or a github.com URL.`);
+  }
+
+  // Cron only knows how to deliver to Telegram chats today. Reject from any
+  // other transport so we don't silently store a sub that will never fire.
+  if (request.transport !== 'telegram') {
+    return errorResult(
+      'Audit subscriptions are Telegram-only for now. Use the bot to subscribe.',
+    );
+  }
+  if (request.chatId === undefined) {
+    return errorResult(
+      'Audit subscriptions require a chat context — invoke /audit subscribe from a Telegram chat.',
+    );
+  }
+
+  // Cadence: --daily wins, otherwise default to weekly. We accept the
+  // --weekly flag for symmetry but treat its absence as the default.
+  const interval: AuditSubscription['interval'] = request.flags.daily === 'true' ? 'daily' : 'weekly';
+
+  const lens = parseLensFlag(request.flags.lens);
+  if (request.flags.lens && !lens) {
+    return errorResult(`Unknown --lens "${request.flags.lens}". Valid: ${MVP_LENSES.join(', ')}.`);
+  }
+  const depth = parseDepthFlag(request.flags.depth) ?? 'quick';
+  if (request.flags.depth && !parseDepthFlag(request.flags.depth)) {
+    return errorResult(`Unknown --depth "${request.flags.depth}". Valid: quick, standard, deep.`);
+  }
+
+  // Preserve lastRunAt/lastRunId on overwrite so editing the cadence
+  // doesn't accidentally re-trigger an audit that just ran.
+  const existing = await getAuditSubscription(
+    request.env.NEXUS_KV,
+    request.userId,
+    coords.owner,
+    coords.repo,
+  );
+
+  const sub: AuditSubscription = {
+    userId: request.userId,
+    owner: coords.owner,
+    repo: coords.repo,
+    transport: 'telegram',
+    chatId: request.chatId,
+    branch: request.flags.branch,
+    lens: lens ?? undefined,
+    depth,
+    interval,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    lastRunAt: existing?.lastRunAt ?? null,
+    lastRunId: existing?.lastRunId ?? null,
+  };
+
+  const ok = await setAuditSubscription(request.env.NEXUS_KV, sub);
+  if (!ok) {
+    return errorResult('Failed to persist subscription. KV may be unavailable; please retry shortly.');
+  }
+
+  const verb = existing ? 'Updated' : 'Subscribed';
+  const next = existing?.lastRunAt
+    ? `; next run when more than ${interval === 'daily' ? '24h' : '7d'} elapses since ${existing.lastRunAt}`
+    : '; first run on the next 6h cron tick';
+  const lensSummary = lens ?? 'all lenses';
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body:
+      `🔔 ${verb} ${coords.owner}/${coords.repo} for ${interval} audits ` +
+      `(${lensSummary}, depth=${depth}${sub.branch ? `, branch=${sub.branch}` : ''})${next}.\n\n` +
+      `View all subscriptions with /audit subs. Remove with /audit unsubscribe ${coords.owner}/${coords.repo}.`,
+    data: { subscribed: true, interval, depth, lens: lens ?? null },
+    telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
+  };
+}
+
+async function handleUnsubscribe(request: SkillRequest, start: number): Promise<SkillResult> {
+  const repoArg = request.text.trim().split(/\s+/)[0] ?? '';
+  if (!repoArg) {
+    return errorResult('Usage: /audit unsubscribe <owner/repo or URL>');
+  }
+
+  const coords = parseRepoCoords(repoArg);
+  if (!coords) {
+    return errorResult(`Could not parse "${repoArg}" as a GitHub repo. Use owner/repo or a github.com URL.`);
+  }
+
+  const removed = await deleteAuditSubscription(
+    request.env.NEXUS_KV,
+    request.userId,
+    coords.owner,
+    coords.repo,
+  );
+
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body: removed
+      ? `🔕 Unsubscribed from ${coords.owner}/${coords.repo}. No more scheduled audits will run.`
+      : `No active subscription found for ${coords.owner}/${coords.repo}.`,
+    data: { removed },
+    telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
+  };
+}
+
+async function handleListSubs(request: SkillRequest, start: number): Promise<SkillResult> {
+  const subs = await listUserSubscriptions(request.env.NEXUS_KV, request.userId);
+
+  const body = subs.length === 0
+    ? 'No active audit subscriptions.\n\nCreate one with /audit subscribe <owner/repo> [--daily|--weekly].'
+    : formatSubsList(subs);
+
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body,
+    data: { subscriptions: subs.length },
+    telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
+  };
+}
+
+function formatSubsList(subs: AuditSubscription[]): string {
+  // Sort by created date so the user's mental model of "in the order I
+  // added them" matches what's on screen. Subscriptions are tiny — at
+  // most a few dozen per user — so we sort in-memory rather than
+  // adding an indexed key.
+  const ordered = [...subs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const lines: string[] = [`Active audit subscriptions (${ordered.length}):`, ''];
+  for (const s of ordered) {
+    const lensSummary = s.lens ?? 'all lenses';
+    const last = s.lastRunAt ? `last run ${s.lastRunAt}` : 'never run';
+    const branch = s.branch ? `, branch=${s.branch}` : '';
+    lines.push(
+      `• ${s.owner}/${s.repo} — ${s.interval}, ${lensSummary}, depth=${s.depth}${branch} — ${last}`,
+    );
+  }
+  lines.push('');
+  lines.push('Remove one with /audit unsubscribe <owner/repo>.');
+  return lines.join('\n');
 }
