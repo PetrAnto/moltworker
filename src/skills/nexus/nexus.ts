@@ -14,7 +14,7 @@ import type { TaskProcessor } from '../../durable-objects/task-processor';
 import type { NexusDossier, SynthesisResponse, QueryClassification } from './types';
 import { isSynthesisResponse, isQueryClassification } from './types';
 import { callSkillLLM, selectSkillModel } from '../llm';
-import { fetchSources } from './source-packs';
+import { fetchSources, expandSourcePicks } from './source-packs';
 import { getCachedDossier, cacheDossier } from './cache';
 import { computeConfidence, confidenceLabel, formatEvidenceForLLM, formatEvidenceSummary } from './evidence';
 import { safeJsonParse } from '../validators';
@@ -176,14 +176,26 @@ async function executeResearch(
   llmCalls++;
 
   const classification = safeJsonParse<QueryClassification>(classifyResult.text);
-  const sourceNames = classification && isQueryClassification(classification)
+  const classifierPicks = classification && isQueryClassification(classification)
     ? classification.sources
-    : ['webSearch', 'wikipedia']; // Fallback
+    : ['webSearch', 'wikipedia']; // Fallback when classifier output isn't usable
+  const category = classification && isQueryClassification(classification)
+    ? classification.category
+    : undefined;
+
+  // Always expand the classifier's picks with category-default backbones so
+  // a thin pick (e.g. just ["webSearch"]) still fans out to complementary
+  // sources. Mitigates the single-source dossiers we saw in production
+  // when the classifier was conservative.
+  const sourceNames = expandSourcePicks(category, classifierPicks);
 
   // Log so production debugging doesn't require simulate replay — when a
   // dossier comes back with fewer sources than expected, the worker log
-  // shows which ones the classifier picked vs. which ones produced evidence.
-  console.log(`[Nexus] classifier picked sources for "${query.slice(0, 80)}": ${JSON.stringify(sourceNames)}`);
+  // shows what the classifier asked for and what we expanded it to.
+  console.log(
+    `[Nexus] category=${category ?? 'unknown'} classifierPicks=${JSON.stringify(classifierPicks)} ` +
+    `expanded=${JSON.stringify(sourceNames)}`,
+  );
 
   // 3. Fetch sources in parallel
   const { evidence, toolCalls } = await fetchSources(query, sourceNames, request.env, request.userId);

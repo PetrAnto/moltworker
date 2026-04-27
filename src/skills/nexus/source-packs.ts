@@ -343,3 +343,51 @@ export async function fetchSources(
 export function getAvailableSources(): string[] {
   return Object.keys(SOURCE_REGISTRY);
 }
+
+/**
+ * Default source backbone per query category. The classifier's picks come
+ * first (LLM intent wins), but we backfill from these defaults so a thin
+ * pick like ["webSearch"] still fans out to 3+ complementary sources.
+ *
+ * Webm — every category includes webSearch first, since it's the broadest
+ * keyless fallback and works for any query.
+ */
+export const CATEGORY_DEFAULTS: Record<string, string[]> = {
+  entity:     ['webSearch', 'wikipedia', 'wikidata'],
+  topic:      ['webSearch', 'wikipedia', 'news'],
+  market:     ['webSearch', 'finance', 'news'],
+  decision:   ['webSearch', 'stackExchange', 'hackerNews'],
+  technical:  ['webSearch', 'stackExchange', 'github'],
+  academic:   ['webSearch', 'openalex', 'arxiv'],
+  regulatory: ['webSearch', 'secEdgar', 'news'],
+  historical: ['webSearch', 'wikipedia', 'internetArchive'],
+};
+
+/** Backbone used when category is missing/unknown. */
+const FALLBACK_DEFAULTS = ['webSearch', 'wikipedia', 'hackerNews'];
+
+/** Maximum number of sources to fetch in parallel per dossier. */
+const MAX_SOURCES = 5;
+
+/**
+ * Expand the classifier's picks with category-appropriate defaults so the
+ * dossier always fans out to multiple complementary sources, even when the
+ * classifier returns a thin list or when individual sources fail at fetch
+ * time. Dedup preserves classifier intent (its picks come first), unknown
+ * names are dropped, and the result is capped to keep subrequest budget
+ * reasonable.
+ */
+export function expandSourcePicks(category: string | undefined, classifierPicks: string[]): string[] {
+  const defaults = (category && CATEGORY_DEFAULTS[category]) || FALLBACK_DEFAULTS;
+  const merged = [...classifierPicks, ...defaults];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const name of merged) {
+    if (seen.has(name)) continue;
+    if (!SOURCE_REGISTRY[name]) continue;
+    seen.add(name);
+    out.push(name);
+    if (out.length >= MAX_SOURCES) break;
+  }
+  return out;
+}
