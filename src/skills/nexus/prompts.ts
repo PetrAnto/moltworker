@@ -24,16 +24,43 @@ Categories:
 - market: about financial markets, crypto, stocks, economics
 - decision: comparing options or evaluating a choice
 - technical: about technology, programming, engineering
+- academic: about scientific research, scholarly literature, peer-reviewed work
+- regulatory: about laws, regulations, government data, corporate filings
+- historical: about events, archives, primary documents, long-form references
 
-Available source types: webSearch, wikipedia, hackerNews, reddit, news, crypto, finance
+Available source types:
+  webSearch        — Brave web search; broad fallback for any query
+  wikipedia        — Wikipedia summary; encyclopedic overview
+  wikidata         — structured entities, IDs, factual properties
+  hackerNews       — tech/startup community discussions
+  reddit           — community discussions (often blocked from cloud egress)
+  bluesky          — recent social posts, sentiment, real-time chatter
+  news             — current events
+  stackExchange    — Q&A on programming + 170 sister sites (math, cooking, photography, …)
+  github           — code repositories, projects, READMEs
+  openalex         — scholarly works across every academic domain (citations, OA links)
+  arxiv            — preprints (CS, physics, math, quant-bio, stats, econ); fresher than OpenAlex for AI/ML
+  internetArchive  — books, texts, audio, video, web archives, historical documents
+  worldBank        — country-level economic and development indicators
+  secEdgar         — US corporate filings (10-K, 10-Q, 8-K), insider data
+  crypto           — crypto prices, top coins, DEX data
+  finance          — generic finance web search
+
+Pick 2-4 most relevant sources. Some category guidance (combine across when useful):
+  - entity:     wikipedia, wikidata, webSearch (+ secEdgar if a US public company)
+  - topic:      wikipedia, webSearch, news, internetArchive
+  - market:     crypto, finance, news, webSearch
+  - decision:   webSearch, stackExchange, hackerNews, reddit
+  - technical:  stackExchange, github, hackerNews, webSearch
+  - academic:   openalex, arxiv, wikipedia
+  - regulatory: secEdgar, worldBank, news, webSearch
+  - historical: internetArchive, wikipedia, wikidata, webSearch
 
 Respond with a JSON object:
 {
   "category": "<category>",
   "sources": ["source1", "source2", "source3"]
-}
-
-Pick 2-4 most relevant sources for this query.`;
+}`;
 
 export const NEXUS_SYNTHESIZE_PROMPT = `Synthesize these research findings into a clear, well-sourced analysis.
 
