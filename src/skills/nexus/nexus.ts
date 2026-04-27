@@ -193,13 +193,17 @@ async function executeResearch(
     return makeError(request, 'Could not retrieve any sources for this query. Try rephrasing.');
   }
 
-  // 4. Synthesize
+  // 4. Synthesize. Pass the explicit source list so the LLM has nothing to
+  // extrapolate — single-source dossiers were producing a [Source 2]
+  // hallucination under the old [Source N] indexing, and the prior fix's
+  // strict "Do NOT" prompt got kimi26or to return an empty synthesis.
   const synthesizePrompt = mode === 'decision' ? NEXUS_DECISION_PROMPT : NEXUS_SYNTHESIZE_PROMPT;
   const evidenceText = formatEvidenceForLLM(evidence);
+  const availableSources = evidence.map(e => `[${e.source}]`).join(', ');
 
   const synthesisResult = await callSkillLLM({
     systemPrompt: `${systemPrompt}\n\n${synthesizePrompt}`,
-    userPrompt: `Research query: ${query}\n\nEvidence:\n${evidenceText}`,
+    userPrompt: `Research query: ${query}\n\nAvailable sources (use these names verbatim in citations): ${availableSources}\n\nEvidence:\n${evidenceText}`,
     modelAlias: model,
     responseFormat: { type: 'json_object' },
     env: request.env,
@@ -207,9 +211,20 @@ async function executeResearch(
   llmCalls++;
 
   const synthesis = safeJsonParse<SynthesisResponse>(synthesisResult.text);
-  const synthesisText = synthesis && isSynthesisResponse(synthesis)
+  let synthesisText = synthesis && isSynthesisResponse(synthesis)
     ? synthesis.synthesis
     : synthesisResult.text;
+
+  // Guard: an empty/whitespace synthesis renders as a blank dossier (just
+  // the heading and source list), which is invisible to the user. Log the
+  // raw LLM output once so the next occurrence is debuggable, then
+  // substitute a visible fallback message.
+  if (!synthesisText || !synthesisText.trim()) {
+    console.warn(
+      `[Nexus] empty synthesis returned by ${model}; raw response: ${JSON.stringify(synthesisResult.text).slice(0, 500)}`,
+    );
+    synthesisText = `(The model returned no synthesis for this query. ${evidence.length} source${evidence.length === 1 ? '' : 's'} were retrieved — try rephrasing the query or running again.)`;
+  }
 
   // 5. Build dossier
   const dossier: NexusDossier = {
