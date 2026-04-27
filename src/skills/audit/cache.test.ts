@@ -21,6 +21,7 @@ function makeSub(overrides: Partial<AuditSubscription> = {}): AuditSubscription 
     interval: 'weekly',
     createdAt: new Date('2026-04-01T00:00:00Z').toISOString(),
     lastRunAt: null,
+    lastTaskId: null,
     lastRunId: null,
     ...overrides,
   };
@@ -173,5 +174,20 @@ describe('isSubscriptionDue', () => {
 
   it('treats malformed lastRunAt as "due now" so a corrupt write doesn’t freeze a sub', () => {
     expect(isSubscriptionDue(makeSub({ lastRunAt: 'not a date' }), now)).toBe(true);
+  });
+
+  it('treats a fresh in-flight marker as not-due (cron skips it)', () => {
+    const fresh = new Date(now - 60 * 1000).toISOString(); // 1 min ago
+    // Even with no lastRunAt set, the in-flight marker prevents another
+    // cron invocation from re-dispatching.
+    expect(isSubscriptionDue(makeSub({ dispatchStartedAt: fresh }), now)).toBe(false);
+  });
+
+  it('ignores a stale in-flight marker (treated as crashed dispatcher)', () => {
+    // 11 minutes ago — past the 10-min grace window in cache.ts.
+    const stale = new Date(now - 11 * 60 * 1000).toISOString();
+    expect(isSubscriptionDue(makeSub({ dispatchStartedAt: stale, lastRunAt: null }), now)).toBe(
+      true,
+    );
   });
 });

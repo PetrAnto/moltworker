@@ -379,8 +379,52 @@ export interface AuditSubscription {
   interval: 'daily' | 'weekly';
   createdAt: string; // ISO
   lastRunAt: string | null; // ISO; null until first dispatch
-  lastRunId: string | null; // points into audit:run:{userId}:{runId}
+
+  /**
+   * The taskId of the most recent dispatch (== TaskProcessor task id). Set
+   * on every successful dispatch — see src/cron/audit-subs.ts.
+   *
+   * Distinct from `lastRunId`: a `taskId` identifies a TaskProcessor run,
+   * an `AuditRun.runId` identifies the persisted audit artefact. The
+   * cron path knows the former at dispatch time; the latter is minted
+   * inside the audit skill once Scout has resolved the SHA, and gets
+   * written here later (Slice B) so /_admin/audit can fetch the
+   * audit:run:{userId}:{runId} record directly.
+   */
+  lastTaskId: string | null;
+
+  /**
+   * The runId of the persisted AuditRun corresponding to lastTaskId, or
+   * null until the audit skill writes back its completion. Slice B will
+   * close that loop. Until then, the admin tab can still link a sub to
+   * its dispatch via lastTaskId; lastRunId stays null.
+   */
+  lastRunId: string | null;
+
+  /**
+   * ISO timestamp set immediately *before* a dispatch goes out, cleared
+   * after the lastRunAt/lastTaskId stamp lands. Used by the cron path to
+   * skip a sub that another invocation is already dispatching — the
+   * common case when a Worker scheduled handler is retried after a
+   * network blip and both invocations scan the sub list.
+   *
+   * KV is not CAS, so this is BEST-EFFORT: two truly concurrent reads can
+   * still both see `null` and dispatch. Strict once-only scheduling
+   * would need a Durable Object keyed per subscription. For v1 the
+   * window is small enough (cron ticks every 6h, scan + dispatch < 1s)
+   * that the marker covers the realistic race.
+   */
+  dispatchStartedAt?: string;
 }
+
+/**
+ * How long a `dispatchStartedAt` marker is honoured before being treated
+ * as stale (i.e. the original dispatcher crashed before writing
+ * lastRunAt). 10 minutes is comfortably longer than any plausible
+ * accept-then-update sequence and short enough that a real crash
+ * doesn't freeze the subscription forever.
+ */
+export const DISPATCH_INFLIGHT_GRACE_MS = 10 * 60 * 1000;
 
 export function subscriptionKey(userId: string, owner: string, repo: string): string {
   return `${SUB_PREFIX}${userId}:${owner.toLowerCase()}/${repo.toLowerCase()}`;
@@ -490,6 +534,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Returns true if the subscription is due to run again at `nowMs`. */
 export function isSubscriptionDue(sub: AuditSubscription, nowMs: number): boolean {
+  // If a dispatch is in flight (within the grace window), skip — another
+  // cron invocation is already handling this sub. See the comment on
+  // AuditSubscription.dispatchStartedAt for the race-window discussion.
+  if (sub.dispatchStartedAt) {
+    const startedMs = Date.parse(sub.dispatchStartedAt);
+    if (!Number.isNaN(startedMs) && nowMs - startedMs < DISPATCH_INFLIGHT_GRACE_MS) {
+      return false;
+    }
+    // Stale marker (>= grace window): treat as a crashed dispatcher and
+    // fall through to the cadence check.
+  }
   if (!sub.lastRunAt) return true;
   const lastMs = Date.parse(sub.lastRunAt);
   if (Number.isNaN(lastMs)) return true; // corrupt timestamp → run anyway
