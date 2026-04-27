@@ -2222,7 +2222,9 @@ describe('/audit export', () => {
         env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
       }),
     );
-    expect(result.body).toContain('Pre-prompt sanitizer redacted 7 item(s)');
+    expect(result.body).toContain(
+      'Pre-prompt sanitizer redacted 7 item(s) across lens evidence blocks',
+    );
     expect(result.body).toContain('ignore-previous-instructions @ src/bad.md');
     expect(result.body).toContain('fake-role-tag @ src/bad.md');
     expect(result.body).toContain('large-base64-blob @ src/blob.ts');

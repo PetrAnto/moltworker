@@ -133,13 +133,17 @@ describe('listUserSubscriptions', () => {
     await setAuditSubscription(kv, makeSub({ userId: 'a', owner: 'o2', repo: 'r2' }));
     await setAuditSubscription(kv, makeSub({ userId: 'b', owner: 'o3', repo: 'r3' }));
 
-    const subs = await listUserSubscriptions(kv, 'a');
-    expect(subs).toHaveLength(2);
-    expect(subs.map((s) => `${s.owner}/${s.repo}`).sort()).toEqual(['o1/r1', 'o2/r2']);
+    const result = await listUserSubscriptions(kv, 'a');
+    expect(result.entries).toHaveLength(2);
+    expect(result.truncated).toBe(false);
+    expect(result.entries.map((s) => `${s.owner}/${s.repo}`).sort()).toEqual(['o1/r1', 'o2/r2']);
   });
 
-  it('returns empty array when KV is missing', async () => {
-    expect(await listUserSubscriptions(undefined, 'a')).toEqual([]);
+  it('returns empty result when KV is missing', async () => {
+    expect(await listUserSubscriptions(undefined, 'a')).toEqual({
+      entries: [],
+      truncated: false,
+    });
   });
 });
 
@@ -148,16 +152,18 @@ describe('listAllSubscriptions', () => {
     const { kv } = makeKV();
     await setAuditSubscription(kv, makeSub({ userId: 'a', owner: 'o1', repo: 'r1' }));
     await setAuditSubscription(kv, makeSub({ userId: 'b', owner: 'o2', repo: 'r2' }));
-    const subs = await listAllSubscriptions(kv);
-    expect(subs).toHaveLength(2);
-    expect(new Set(subs.map((s) => s.userId))).toEqual(new Set(['a', 'b']));
+    const result = await listAllSubscriptions(kv);
+    expect(result.entries).toHaveLength(2);
+    expect(result.truncated).toBe(false);
+    expect(new Set(result.entries.map((s) => s.userId))).toEqual(new Set(['a', 'b']));
   });
 
   it('skips malformed entries rather than aborting', async () => {
     const { kv, store } = makeKV();
     await setAuditSubscription(kv, makeSub({ userId: 'a', owner: 'o1', repo: 'r1' }));
     store.set('audit:sub:b:o2/r2', '{not valid json');
-    const subs = await listAllSubscriptions(kv);
+    const result = await listAllSubscriptions(kv);
+    const subs = result.entries;
     // The good one survives even though the corrupt entry made `kv.get` throw.
     expect(subs).toHaveLength(1);
     expect(subs[0].owner).toBe('o1');
@@ -325,21 +331,24 @@ describe('listRecentRuns', () => {
       Date.now = original;
     }
 
-    const rows = await listRecentRuns(kv, 10);
+    const result = await listRecentRuns(kv, 10);
+    const rows = result.entries;
     expect(rows.map((r) => r.runId)).toEqual(['r-new', 'r-mid', 'r-old']);
     expect(rows[0].userId).toBe('u1');
     expect(rows[0].owner).toBe('octocat');
     expect(rows[0].repo).toBe('demo');
     expect(rows[0].costUsd).toBe(0.05);
+    expect(result.truncated).toBe(false);
   });
 
-  it('respects the limit parameter', async () => {
+  it('respects the limit parameter and reports truncated when more candidates exist', async () => {
     const { kv } = makeKV();
     for (let i = 0; i < 5; i++) {
       await cacheAuditRun(kv, 'u1', makeRun({ runId: `r-${i}` }));
     }
-    const rows = await listRecentRuns(kv, 2);
-    expect(rows).toHaveLength(2);
+    const result = await listRecentRuns(kv, 2);
+    expect(result.entries).toHaveLength(2);
+    expect(result.truncated).toBe(true);
   });
 
   it('places rows without metadata at the end (back-compat with older runs)', async () => {
@@ -347,13 +356,13 @@ describe('listRecentRuns', () => {
     // Pre-existing run written by older code path: no metadata.
     store.set('audit:run:u1:r-legacy', JSON.stringify(makeRun({ runId: 'r-legacy' })));
     await cacheAuditRun(kv, 'u1', makeRun({ runId: 'r-new' }));
-    const rows = await listRecentRuns(kv, 10);
-    expect(rows[0].runId).toBe('r-new');
-    expect(rows.find((r) => r.runId === 'r-legacy')).toBeDefined();
+    const result = await listRecentRuns(kv, 10);
+    expect(result.entries[0].runId).toBe('r-new');
+    expect(result.entries.find((r) => r.runId === 'r-legacy')).toBeDefined();
   });
 
-  it('returns empty array when KV is missing', async () => {
-    expect(await listRecentRuns(undefined, 10)).toEqual([]);
+  it('returns empty result when KV is missing', async () => {
+    expect(await listRecentRuns(undefined, 10)).toEqual({ entries: [], truncated: false });
   });
 });
 
@@ -428,7 +437,11 @@ describe('getAuditOverview', () => {
     expect(ov.subscriptions).toHaveLength(1);
     expect(ov.recentRuns).toHaveLength(1);
     expect(ov.suppressions).toHaveLength(1);
-    expect(ov.truncated.suppressions).toBe(false);
+    expect(ov.truncated).toEqual({
+      subscriptions: false,
+      recentRuns: false,
+      suppressions: false,
+    });
   });
 
   it('returns empty sections when KV is missing rather than throwing', async () => {
@@ -437,8 +450,19 @@ describe('getAuditOverview', () => {
       subscriptions: [],
       recentRuns: [],
       suppressions: [],
-      truncated: { suppressions: false },
+      truncated: { subscriptions: false, recentRuns: false, suppressions: false },
     });
+  });
+
+  it('reports truncated.recentRuns=true when the run scan produces more candidates than runLimit', async () => {
+    const { kv } = makeKV();
+    for (let i = 0; i < 5; i++) {
+      await cacheAuditRun(kv, 'u1', makeRun({ runId: `r-${i}` }));
+    }
+    const ov = await getAuditOverview(kv, { runLimit: 2 });
+    expect(ov.recentRuns).toHaveLength(2);
+    expect(ov.truncated.recentRuns).toBe(true);
+    expect(ov.truncated.subscriptions).toBe(false);
   });
 
   it('reports truncated.suppressions=true when the suppression cap fires', async () => {

@@ -257,14 +257,31 @@ export interface AuditOverviewResponse {
    *  admin-endpoint KV reads bounded; when a cap fires the UI can
    *  surface a "showing first N of …" hint to the operator. */
   truncated: {
+    subscriptions: boolean;
+    recentRuns: boolean;
     suppressions: boolean;
   };
 }
 
-export async function fetchAuditOverview(limit = 20): Promise<AuditOverviewResponse> {
-  return apiRequest<AuditOverviewResponse>(
-    `/audit/overview?limit=${encodeURIComponent(String(limit))}`,
-  );
+export interface FetchAuditOverviewOptions {
+  /** Max number of recent runs to materialize. Server clamps to 1-100. */
+  limit?: number;
+  /** Max number of suppression entries. Server clamps to 1-500. */
+  suppressionLimit?: number;
+}
+
+export async function fetchAuditOverview(
+  optsOrLimit: FetchAuditOverviewOptions | number = {},
+): Promise<AuditOverviewResponse> {
+  const opts: FetchAuditOverviewOptions =
+    typeof optsOrLimit === 'number' ? { limit: optsOrLimit } : optsOrLimit;
+  const params = new URLSearchParams();
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+  if (opts.suppressionLimit !== undefined) {
+    params.set('suppressionLimit', String(opts.suppressionLimit));
+  }
+  const qs = params.toString();
+  return apiRequest<AuditOverviewResponse>(`/audit/overview${qs ? `?${qs}` : ''}`);
 }
 
 export async function deleteAuditSubscription(
