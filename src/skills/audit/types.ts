@@ -10,15 +10,16 @@
 // ---------------------------------------------------------------------------
 
 /** Audit lenses. Only MVP set is wired in v0; the rest land post-MVP. */
-export type Lens =
-  | 'security'
-  | 'deps'
-  | 'types'
-  | 'tests'
-  | 'deadcode'
-  | 'perf';
+export type Lens = 'security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf';
 
-export const MVP_LENSES: ReadonlyArray<Lens> = ['security', 'deps', 'types', 'tests', 'deadcode', 'perf'];
+export const MVP_LENSES: ReadonlyArray<Lens> = [
+  'security',
+  'deps',
+  'types',
+  'tests',
+  'deadcode',
+  'perf',
+];
 
 /** Severity scale per finding. */
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
@@ -181,6 +182,25 @@ export interface AuditFinding {
   suppressed?: boolean;
 }
 
+/**
+ * Per-run summary of what the prompt-injection pre-pass redacted before
+ * the LLM saw the evidence (see src/skills/audit/sanitize.ts). Surfaced
+ * in the run record so /audit export and /_admin/audit can show what
+ * was masked, not just an internal counter on telemetry.
+ *
+ * `samples` is capped to a handful of representative entries even if
+ * many more were redacted — listing every match would balloon the run
+ * record in adversarial cases. `count` is the unbounded total.
+ */
+export interface AuditRunSanitization {
+  count: number;
+  samples: Array<{
+    kind: string;
+    label: string;
+    path?: string;
+  }>;
+}
+
 export interface AuditRun {
   runId: string;
   repo: { owner: string; name: string; sha: string };
@@ -195,6 +215,8 @@ export interface AuditRun {
     costUsd: number;
     githubApiCalls: number;
   };
+  /** Pre-prompt sanitizer summary. Omitted when nothing was redacted. */
+  sanitization?: AuditRunSanitization;
   /** Prior runId if this run was a delta against a cached profile. */
   cachedFrom?: string;
 }
@@ -212,6 +234,41 @@ export function isDepth(value: unknown): value is Depth {
 }
 
 // ---------------------------------------------------------------------------
+// Finding-id validation (single source of truth)
+// ---------------------------------------------------------------------------
+//
+// Findings are id'd as `${lens}-${stable-hash-base36}` by the Analyst
+// (see `stableId` in src/skills/audit/analyst/validator.ts). This regex
+// must accept everything `stableId` produces, plus stay tight enough to
+// reject obvious garbage from stale callbacks or path-injected admin
+// requests. ONE module owns the shape so audit.ts (suppress / unsuppress /
+// fix), api.ts (admin DELETE), and any future caller stay in sync.
+//
+// Shape: lowercase letters / digits, with at least one hyphen segment.
+// Examples that match:
+//   security-abc           — current MVP lenses
+//   deadcode-12fz          — base36 hash
+//   a11y-zzz               — future digit-bearing lens (e.g. accessibility)
+//   dep-runtime-xyz        — future multi-segment lens
+// Examples rejected:
+//   abc                    — missing hyphen (not a real finding shape)
+//   ABC-def                — uppercase
+//   -abc                   — leading hyphen
+//   security:abc           — colon (KV-key injection vector — see api.ts)
+
+export const FINDING_ID_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
+
+/**
+ * Note: returns plain `boolean`, not a `value is string` predicate. Call
+ * sites already have findingId typed as `string`, and a `value is string`
+ * negation would narrow the failure branch to `never` and break the
+ * `findingId.slice(0, 80)` formatting in error messages.
+ */
+export function isFindingId(value: unknown): boolean {
+  return typeof value === 'string' && FINDING_ID_RE.test(value);
+}
+
+// ---------------------------------------------------------------------------
 // Grammar manifest (R2-stored tree-sitter WASM grammars)
 // ---------------------------------------------------------------------------
 
@@ -219,14 +276,15 @@ export function isDepth(value: unknown): value is Depth {
  * Languages we ship MVP grammars for. Each entry has a corresponding
  * `audit/grammars/<lang>@<sha8>.wasm` blob in R2 and a manifest entry.
  */
-export type GrammarLanguage =
-  | 'typescript'
-  | 'tsx'
-  | 'javascript'
-  | 'python'
-  | 'go';
+export type GrammarLanguage = 'typescript' | 'tsx' | 'javascript' | 'python' | 'go';
 
-export const MVP_GRAMMARS: ReadonlyArray<GrammarLanguage> = ['typescript', 'tsx', 'javascript', 'python', 'go'];
+export const MVP_GRAMMARS: ReadonlyArray<GrammarLanguage> = [
+  'typescript',
+  'tsx',
+  'javascript',
+  'python',
+  'go',
+];
 
 /**
  * Per-language entry in the R2 manifest. Versioning is by content SHA so a
@@ -296,12 +354,12 @@ export const MAX_TREE_SITTER_RUNTIME_BYTES = 1 * 1024 * 1024;
 
 /** Categories the Extractor emits. The Analyst's prompts vary by kind. */
 export type SnippetKind =
-  | 'function'    // function declarations + methods
-  | 'class'       // class / interface / type alias declarations
-  | 'import'      // top-of-file imports — security/dep evidence
-  | 'export'      // public surface — types/deadcode evidence
-  | 'workflow'    // .github/workflows/*.yml — security lens, full file
-  | 'manifest';   // package.json/tsconfig.json/etc — verbatim, full file
+  | 'function' // function declarations + methods
+  | 'class' // class / interface / type alias declarations
+  | 'import' // top-of-file imports — security/dep evidence
+  | 'export' // public surface — types/deadcode evidence
+  | 'workflow' // .github/workflows/*.yml — security lens, full file
+  | 'manifest'; // package.json/tsconfig.json/etc — verbatim, full file
 
 export interface ExtractedSnippet {
   /** Path from RepoProfile.tree — the only paths the Analyst will ever
@@ -342,7 +400,12 @@ export function isGrammarLanguage(value: unknown): value is GrammarLanguage {
 
 /** Priority score per the design doc §6 — used for top-N display ranking. */
 export function findingPriority(f: AuditFinding): number {
-  const severityWeight: Record<Severity, number> = { critical: 1.0, high: 0.75, medium: 0.5, low: 0.25 };
+  const severityWeight: Record<Severity, number> = {
+    critical: 1.0,
+    high: 0.75,
+    medium: 0.5,
+    low: 0.25,
+  };
   // Without an LLM in v0, likelihood/blast-radius are derived heuristics; for now
   // collapse to a simple severity + confidence ranking. The Analyst will populate
   // the missing inputs in v1.

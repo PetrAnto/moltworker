@@ -20,6 +20,7 @@ import {
   deleteAuditSubscription,
   removeSuppression,
 } from '../skills/audit/cache';
+import { FINDING_ID_RE } from '../skills/audit/types';
 
 // CLI commands can take 10-15 seconds to complete due to WebSocket connection overhead
 const CLI_TIMEOUT_MS = 20000;
@@ -717,14 +718,27 @@ api.post('/skills/execute', async (c) => {
 // operations and Telegram operations remain consistent.
 
 // GET /api/admin/audit/overview — subscriptions + recent runs + suppressions
+//
+// Both `limit` (recent runs) and `suppressionLimit` (suppressions) are
+// hard-bounded to keep KV reads on this admin endpoint predictable,
+// even on deployments with large keyspaces. The response carries a
+// `truncated` block so the UI can show "showing first N of …" when a
+// cap fires. See cache.ts for the underlying scan limits.
 adminApi.get('/audit/overview', async (c) => {
   if (!c.env.NEXUS_KV) {
     return c.json({ error: 'NEXUS_KV not bound — audit admin tab requires KV.' }, 503);
   }
   const limitRaw = c.req.query('limit');
   const limit = limitRaw ? Math.min(Math.max(parseInt(limitRaw, 10) || 0, 1), 100) : 20;
+  const supLimitRaw = c.req.query('suppressionLimit');
+  const suppressionLimit = supLimitRaw
+    ? Math.min(Math.max(parseInt(supLimitRaw, 10) || 0, 1), 500)
+    : undefined; // let cache.ts apply DEFAULT_SUPPRESSIONS_LIMIT
   try {
-    const overview = await getAuditOverview(c.env.NEXUS_KV, { runLimit: limit });
+    const overview = await getAuditOverview(c.env.NEXUS_KV, {
+      runLimit: limit,
+      suppressionLimit,
+    });
     return c.json(overview);
   } catch (err) {
     console.error('[admin-audit] overview failed:', err);
@@ -743,7 +757,9 @@ adminApi.get('/audit/overview', async (c) => {
  */
 const SAFE_USERID_RE = /^[A-Za-z0-9_-]+$/;
 const SAFE_REPO_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
-const SAFE_FINDING_ID_RE = /^[a-z]+-[a-z0-9]+$/;
+// Single source of truth for finding-id shape lives in
+// src/skills/audit/types.ts so audit.ts and this admin route stay in sync.
+const SAFE_FINDING_ID_RE = FINDING_ID_RE;
 
 function rejectIfUnsafe(...parts: { value: string; pattern: RegExp; label: string }[]) {
   for (const p of parts) {

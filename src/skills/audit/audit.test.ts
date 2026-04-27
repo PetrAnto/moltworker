@@ -26,7 +26,7 @@ import { parseRepoCoords, encodeRepoPath } from './scout';
 import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { profileCacheKey } from './cache';
-import { findingPriority, isLens, isDepth } from './types';
+import { findingPriority, isLens, isDepth, isFindingId, FINDING_ID_RE } from './types';
 import { callSkillLLM } from '../llm';
 import type { AuditPlan, AuditRun, RepoProfile, AuditFinding, TreeEntry } from './types';
 import type { SkillRequest } from '../types';
@@ -247,6 +247,55 @@ describe('type guards', () => {
     expect(isDepth('standard')).toBe(true);
     expect(isDepth('deep')).toBe(true);
     expect(isDepth('shallow')).toBe(false);
+  });
+
+  // GPT review: single source of truth for finding-id shape. Both
+  // audit.ts (suppress/unsuppress/fix) and api.ts (admin DELETE) hit
+  // this validator, so the test catalog has to cover both the current
+  // MVP shape and the widening for future lens names.
+  describe('isFindingId', () => {
+    it.each([
+      ['security-abc', true],
+      ['deadcode-12fz', true], // base36 hash with digits
+      ['types-0', true],
+      ['a11y-zzz', true], // future digit-bearing lens
+      ['dep-runtime-abc', true], // future multi-segment lens
+      ['perf-deep-z9z', true],
+    ])('accepts %s', (id, expected) => {
+      expect(isFindingId(id)).toBe(expected);
+    });
+
+    it.each([
+      ['', 'empty'],
+      ['abc', 'no hyphen'],
+      ['-abc', 'leading hyphen'],
+      ['abc-', 'trailing hyphen'],
+      ['ABC-def', 'uppercase'],
+      ['security:abc', 'colon (KV-key injection)'],
+      ['security/abc', 'slash'],
+      ['security abc', 'whitespace'],
+      ['1abc-def', 'leading digit'],
+    ])('rejects %s (%s)', (id) => {
+      expect(isFindingId(id)).toBe(false);
+    });
+
+    it('rejects non-strings', () => {
+      expect(isFindingId(42)).toBe(false);
+      expect(isFindingId(undefined)).toBe(false);
+      expect(isFindingId(null)).toBe(false);
+      expect(isFindingId({})).toBe(false);
+    });
+
+    it('FINDING_ID_RE export matches isFindingId behavior', () => {
+      // The route layer uses the regex directly via FINDING_ID_RE; the
+      // function and the regex must agree on every test vector.
+      for (const id of ['security-abc', 'a11y-zzz', 'dep-runtime-x']) {
+        expect(FINDING_ID_RE.test(id)).toBe(true);
+      }
+      for (const id of ['ABC-def', 'security:abc', '']) {
+        expect(FINDING_ID_RE.test(id)).toBe(false);
+      }
+    });
   });
 });
 
@@ -2147,6 +2196,53 @@ describe('/audit export', () => {
     expect(result.body).toContain('name: secret-scan');
     // Run id is surfaced.
     expect(result.body).toContain(run.runId);
+  });
+
+  // GPT review #4: sanitization notices must be surfaced in the
+  // exported report, not just on telemetry. The Telegram top-5 view
+  // (formatRun) and the export view (formatRunFull) share the same
+  // appendSanitizationSummary helper.
+  it('renders the pre-prompt sanitization summary in the export when present', async () => {
+    const run = makeRun({
+      sanitization: {
+        count: 7,
+        samples: [
+          { kind: 'injection-masked', label: 'ignore-previous-instructions', path: 'src/bad.md' },
+          { kind: 'role-tag-masked', label: 'fake-role-tag', path: 'src/bad.md' },
+          { kind: 'base64-truncated', label: 'large-base64-blob', path: 'src/blob.ts' },
+        ],
+      },
+    });
+    const kv = kvWithRun('user-1', run);
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: run.runId,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.body).toContain('Pre-prompt sanitizer redacted 7 item(s)');
+    expect(result.body).toContain('ignore-previous-instructions @ src/bad.md');
+    expect(result.body).toContain('fake-role-tag @ src/bad.md');
+    expect(result.body).toContain('large-base64-blob @ src/blob.ts');
+    // Count > samples → trailer indicating samples were capped.
+    expect(result.body).toMatch(/\+4 more \(samples capped to 3\)/);
+  });
+
+  it('omits the sanitization section entirely when nothing was redacted', async () => {
+    const run = makeRun(); // no sanitization field
+    const kv = kvWithRun('user-1', run);
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: run.runId,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.body).not.toContain('Pre-prompt sanitizer');
+    expect(result.body).not.toContain('🛡');
   });
 
   it('rejects empty runId with usage hint', async () => {
