@@ -2209,10 +2209,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Run the skill
       const result = await runSkill(enrichedRequest);
 
-      // Render and send to Telegram
+      // Render and send to Telegram. Renderer chunks already carry finished
+      // Telegram HTML — pass them through verbatim (rawHtml) so the markdown
+      // conversion in sendTelegramMessage doesn't escape our <b>/<a> tags.
       const chunks = renderForTelegram(result);
       for (const chunk of chunks) {
-        await this.sendTelegramMessage(request.telegramToken, request.chatId, chunk.text);
+        const replyMarkup = chunk.replyMarkup
+          ? { inline_keyboard: chunk.replyMarkup }
+          : undefined;
+        await this.sendTelegramMessage(request.telegramToken, request.chatId, chunk.text, {
+          rawHtml: chunk.parseMode === 'HTML',
+          parseMode: chunk.parseMode,
+          replyMarkup,
+        });
       }
 
       // Mark completed
@@ -6040,24 +6049,38 @@ If you already created the new file and just need to patch the original, call gi
   }
 
   /**
-   * Send a message to Telegram
+   * Send a message to Telegram.
+   *
+   * By default, `text` is treated as Markdown-ish and run through
+   * markdownToTelegramHtml. Skills that already produce finished Telegram
+   * HTML (via the renderer) MUST pass `opts.rawHtml: true`, otherwise the
+   * conversion's escapeHtml() pass mangles their <b>/<a> tags into literal
+   * `&lt;b&gt;` text once Telegram decodes the entities.
    */
   private async sendTelegramMessage(
     token: string,
     chatId: number,
-    text: string
+    text: string,
+    opts?: {
+      rawHtml?: boolean;
+      parseMode?: 'HTML' | 'Markdown';
+      replyMarkup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+    },
   ): Promise<number | null> {
     try {
-      // Try HTML parse mode first for rendered markdown
-      const html = markdownToTelegramHtml(text);
+      const parseMode = opts?.parseMode ?? 'HTML';
+      const formatted = opts?.rawHtml ? text : markdownToTelegramHtml(text);
+      const body: Record<string, unknown> = {
+        chat_id: chatId,
+        text: formatted.slice(0, 4000),
+        parse_mode: parseMode,
+      };
+      if (opts?.replyMarkup) body.reply_markup = opts.replyMarkup;
+
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: html.slice(0, 4000),
-          parse_mode: 'HTML',
-        }),
+        body: JSON.stringify(body),
       });
 
       const result = await response.json() as { ok: boolean; result?: { message_id: number }; description?: string };
@@ -6065,16 +6088,18 @@ If you already created the new file and just need to patch the original, call gi
         return result.result?.message_id || null;
       }
 
-      console.error(`[TaskProcessor] Telegram HTML send failed: ${result.description}`);
+      console.error(`[TaskProcessor] Telegram ${parseMode} send failed: ${result.description}`);
 
-      // Fallback: send as plain text if HTML parsing failed
+      // Fallback: send as plain text if formatted parsing failed
+      const fbBody: Record<string, unknown> = {
+        chat_id: chatId,
+        text: text.slice(0, 4000),
+      };
+      if (opts?.replyMarkup) fbBody.reply_markup = opts.replyMarkup;
       const fallback = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: text.slice(0, 4000),
-        }),
+        body: JSON.stringify(fbBody),
       });
       const fbResult = await fallback.json() as { ok: boolean; result?: { message_id: number }; description?: string };
       if (!fbResult.ok) {
