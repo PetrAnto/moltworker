@@ -196,6 +196,42 @@ telegram.get('/info', async (c) => {
     WEB_SEARCH_ALLOWLIST_USERS: env.WEB_SEARCH_ALLOWLIST_USERS,
   });
 
+  // Surface webhook registration state so operators can verify that
+  // /telegram/setup has been re-run after enabling TELEGRAM_WEBHOOK_SECRET.
+  // Telegram doesn't echo the secret back, so we can only confirm a webhook
+  // is registered (with which URL) and whether our local secret is set —
+  // a successful real message delivery is the only end-to-end check.
+  let webhook: {
+    secret_configured: boolean;
+    registered_url: string | null;
+    pending_updates: number | null;
+    last_error_date: number | null;
+    last_error_message: string | null;
+  } = {
+    secret_configured: !!env.TELEGRAM_WEBHOOK_SECRET,
+    registered_url: null,
+    pending_updates: null,
+    last_error_date: null,
+    last_error_message: null,
+  };
+  if (env.TELEGRAM_BOT_TOKEN) {
+    const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
+    const info = await bot.getWebhookInfo();
+    if (info) {
+      // Redact the bot-token segment from the URL before returning it —
+      // /info has the same trust class as /telegram/setup so it's not
+      // public, but we still don't want the token in admin UI screenshots.
+      const redactedUrl = info.url.replace(env.TELEGRAM_BOT_TOKEN, '***');
+      webhook = {
+        secret_configured: !!env.TELEGRAM_WEBHOOK_SECRET,
+        registered_url: redactedUrl,
+        pending_updates: info.pending_update_count,
+        last_error_date: info.last_error_date ?? null,
+        last_error_message: info.last_error_message ?? null,
+      };
+    }
+  }
+
   return c.json({
     telegram_configured: !!env.TELEGRAM_BOT_TOKEN,
     openrouter_configured: !!env.OPENROUTER_API_KEY,
@@ -236,6 +272,7 @@ telegram.get('/info', async (c) => {
     },
     webhook_path: '/telegram/webhook/:token',
     setup_path: '/telegram/setup',
+    webhook,
   });
 });
 

@@ -48,9 +48,9 @@ Use the existing `0 */6 * * *` cron entry in `wrangler.jsonc`. No new DO, no new
   - `/audit subscribe <repo> [--weekly|--daily] [--lens=<lens>] [--depth=<depth>]`
   - `/audit unsubscribe <repo>`
   - `/audit subs` (list active subscriptions for the user)
-- KV schema in `NEXUS_KV` (matches existing audit cache pattern in `src/skills/audit/cache.ts:71`):
-  - `audit:sub:<userId>:<repo>` → `{ interval: "weekly"|"daily", lens, depth, lastRunAt, createdAt }`
-  - `audit:run:<userId>:<repo>:<timestamp>` (already used by `cacheAuditRun`)
+- KV schema in `NEXUS_KV`:
+  - `audit:sub:<userId>:<repo>` → `{ interval: "weekly"|"daily", lens, depth, lastRunId, lastRunAt, createdAt }` (new)
+  - **Reuse, do not duplicate**, the existing run storage at `audit:run:<userId>:<runId>` (`src/skills/audit/cache.ts:18` `RUN_PREFIX`, populated by `cacheAuditRun()`). Subscriptions store a `lastRunId` reference so admin UI lookups go through the existing `getCachedAuditRun()` path. Inventing a parallel `audit:run:<userId>:<repo>:<timestamp>` key would split the read paths used by `/audit export`.
 - New cron handler branch in `src/cron/handler.ts`:
   - On the 6h cron, scan `audit:sub:*` keys.
   - For each subscription where `now - lastRunAt >= interval`, dispatch via existing `dispatchToDO` (TaskProcessor) — same path slice 3 wired up.

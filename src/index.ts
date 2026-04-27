@@ -680,6 +680,23 @@ async function scheduled(
     })
   );
 
+  // === Scheduled audits (every 6 hours) ===
+  // Runs alongside the model-sync block below — independent paths, both
+  // expected to be cheap-or-fast. We waitUntil so model sync isn't
+  // blocked behind an unlucky audit dispatch.
+  if (cron === '0 */6 * * *') {
+    ctx.waitUntil(
+      (async () => {
+        const { runScheduledAudits } = await import('./cron/audit-subs');
+        try {
+          await runScheduledAudits(env);
+        } catch (err) {
+          console.error('[cron] scheduled audits failed:', err);
+        }
+      })(),
+    );
+  }
+
   // === Model catalog sync (every 6 hours) ===
   if (cron === '0 */6 * * *') {
     if (env.OPENROUTER_API_KEY) {

@@ -14,7 +14,14 @@ vi.mock('../llm', () => ({
   selectSkillModel: vi.fn((req: string | undefined, def: string) => req ?? def),
 }));
 
-import { handleAudit, audit_do_key, buildOrchestraTask, buildFixSummary, resolveFix } from './audit';
+import {
+  handleAudit,
+  audit_do_key,
+  buildOrchestraTask,
+  buildFixSummary,
+  resolveFix,
+  buildScheduledAuditRequest,
+} from './audit';
 import { parseRepoCoords, encodeRepoPath } from './scout';
 import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
@@ -86,8 +93,12 @@ function mockGitHub() {
     {
       match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
       body: {
-        default_branch: 'main', private: false, archived: false,
-        size: 1024, language: 'TypeScript', description: 'demo',
+        default_branch: 'main',
+        private: false,
+        archived: false,
+        size: 1024,
+        language: 'TypeScript',
+        description: 'demo',
       },
     },
     {
@@ -107,7 +118,8 @@ function mockGitHub() {
       body: {
         encoding: 'base64',
         content: btoa('{"name":"x"}'),
-        sha: 'a1', size: 200,
+        sha: 'a1',
+        size: 200,
       },
     },
     {
@@ -115,7 +127,8 @@ function mockGitHub() {
       body: {
         encoding: 'base64',
         content: btoa('{"compilerOptions":{"strict":true}}'),
-        sha: 'a2', size: 100,
+        sha: 'a2',
+        size: 100,
       },
     },
     // Code Scanning Alerts → 404 (disabled)
@@ -158,13 +171,22 @@ describe('encodeRepoPath (Contents API URL fix)', () => {
 
 describe('parseRepoCoords', () => {
   it('parses owner/repo shorthand', () => {
-    expect(parseRepoCoords('octocat/hello-world')).toEqual({ owner: 'octocat', repo: 'hello-world' });
+    expect(parseRepoCoords('octocat/hello-world')).toEqual({
+      owner: 'octocat',
+      repo: 'hello-world',
+    });
   });
   it('parses https github URL', () => {
-    expect(parseRepoCoords('https://github.com/octocat/hello-world')).toEqual({ owner: 'octocat', repo: 'hello-world' });
+    expect(parseRepoCoords('https://github.com/octocat/hello-world')).toEqual({
+      owner: 'octocat',
+      repo: 'hello-world',
+    });
   });
   it('parses URL with .git suffix', () => {
-    expect(parseRepoCoords('https://github.com/octocat/hello-world.git')).toEqual({ owner: 'octocat', repo: 'hello-world' });
+    expect(parseRepoCoords('https://github.com/octocat/hello-world.git')).toEqual({
+      owner: 'octocat',
+      repo: 'hello-world',
+    });
   });
   it('rejects non-github URLs', () => {
     expect(parseRepoCoords('https://gitlab.com/foo/bar')).toBeNull();
@@ -233,17 +255,29 @@ describe('type guards', () => {
 // ---------------------------------------------------------------------------
 
 describe('findingPriority', () => {
-  const mkFinding = (severity: AuditFinding['severity'], confidence: AuditFinding['confidence']): AuditFinding => ({
-    id: 'x', lens: 'security', severity, confidence,
+  const mkFinding = (
+    severity: AuditFinding['severity'],
+    confidence: AuditFinding['confidence'],
+  ): AuditFinding => ({
+    id: 'x',
+    lens: 'security',
+    severity,
+    confidence,
     evidence: [{ path: 'a', source: 'github' }],
-    symptom: '', rootCause: '', correctiveAction: '',
+    symptom: '',
+    rootCause: '',
+    correctiveAction: '',
     preventiveAction: { kind: 'lint', detail: '' },
   });
   it('ranks critical/high above low', () => {
-    expect(findingPriority(mkFinding('critical', 1.0))).toBeGreaterThan(findingPriority(mkFinding('low', 1.0)));
+    expect(findingPriority(mkFinding('critical', 1.0))).toBeGreaterThan(
+      findingPriority(mkFinding('low', 1.0)),
+    );
   });
   it('uses confidence as a tiebreaker', () => {
-    expect(findingPriority(mkFinding('high', 1.0))).toBeGreaterThan(findingPriority(mkFinding('high', 0.25)));
+    expect(findingPriority(mkFinding('high', 1.0))).toBeGreaterThan(
+      findingPriority(mkFinding('high', 0.25)),
+    );
   });
 });
 
@@ -253,7 +287,9 @@ describe('findingPriority', () => {
 
 describe('profileCacheKey', () => {
   it('includes owner/repo/sha and is case-normalized', () => {
-    expect(profileCacheKey('Octocat', 'Hello', 'abc123')).toBe('audit:profile:octocat/hello@abc123');
+    expect(profileCacheKey('Octocat', 'Hello', 'abc123')).toBe(
+      'audit:profile:octocat/hello@abc123',
+    );
   });
 });
 
@@ -361,7 +397,14 @@ describe('branch names with "/" (e.g. feature/audit-v1)', () => {
     installFetchMock([
       {
         match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
-        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
       },
       {
         match: (u) => /\/languages$/.test(u),
@@ -381,7 +424,8 @@ describe('branch names with "/" (e.g. feature/audit-v1)', () => {
       },
       {
         match: (u) => u.includes('/code-scanning/alerts'),
-        status: 404, body: {},
+        status: 404,
+        body: {},
       },
     ]);
 
@@ -396,7 +440,14 @@ describe('branch names with "/" (e.g. feature/audit-v1)', () => {
     installFetchMock([
       {
         match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
-        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
       },
       { match: (u) => /\/languages$/.test(u), body: {} },
       {
@@ -404,7 +455,7 @@ describe('branch names with "/" (e.g. feature/audit-v1)', () => {
         // GitHub returns an array when the ref name is treated as a prefix
         body: [
           { ref: 'refs/heads/feature/audit-v10', object: { sha: 'b'.repeat(40) } },
-          { ref: 'refs/heads/feature/audit-v1',  object: { sha: 'c'.repeat(40) } },
+          { ref: 'refs/heads/feature/audit-v1', object: { sha: 'c'.repeat(40) } },
         ],
       },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree: [] } },
@@ -423,7 +474,14 @@ describe('tree truncation', () => {
     installFetchMock([
       {
         match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
-        body: { default_branch: 'main', private: false, archived: false, size: 99999, language: 'TypeScript', description: null },
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 99999,
+          language: 'TypeScript',
+          description: null,
+        },
       },
       { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
       {
@@ -455,14 +513,22 @@ describe('tree truncation', () => {
 describe('Code Scanning alert pagination', () => {
   it('flags codeScanningAlertsTruncated when a full first page is returned', async () => {
     const fullPage = Array.from({ length: 50 }, (_, i) => ({
-      number: i, state: 'open' as const,
+      number: i,
+      state: 'open' as const,
       rule: { id: `rule-${i}`, severity: 'medium' },
       most_recent_instance: { location: { path: `src/x${i}.ts`, start_line: 1 } },
     }));
     installFetchMock([
       {
         match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
-        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
       },
       { match: (u) => /\/languages$/.test(u), body: {} },
       {
@@ -507,7 +573,14 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
     installFetchMock([
       {
         match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
-        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
       },
       { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
       {
@@ -521,7 +594,12 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
       },
       {
         match: (u) => u.includes('/contents/src/auth.ts'),
-        body: { encoding: 'base64', content: btoa(sourceContent), sha: 'a1', size: sourceContent.length },
+        body: {
+          encoding: 'base64',
+          content: btoa(sourceContent),
+          sha: 'a1',
+          size: sourceContent.length,
+        },
       },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
@@ -529,21 +607,32 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
     // LLM returns one valid security finding citing src/auth.ts.
     mockLLM.mockResolvedValue({
       text: JSON.stringify({
-        findings: [{
-          lens: 'security', severity: 'high', confidence: 0.75,
-          symptom: 'Hardcoded API token in login()',
-          rootCause: 'Secret committed to repo; CI lacks pre-commit secret scan',
-          correctiveAction: 'Move TOKEN to env var; rotate the leaked secret',
-          preventiveAction: { kind: 'ci', detail: 'Add gitleaks step to .github/workflows/ci.yml' },
-          evidence: [{ path: 'src/auth.ts', lines: '2-2', snippet: "const TOKEN = 'sk_live_…';" }],
-        }],
+        findings: [
+          {
+            lens: 'security',
+            severity: 'high',
+            confidence: 0.75,
+            symptom: 'Hardcoded API token in login()',
+            rootCause: 'Secret committed to repo; CI lacks pre-commit secret scan',
+            correctiveAction: 'Move TOKEN to env var; rotate the leaked secret',
+            preventiveAction: {
+              kind: 'ci',
+              detail: 'Add gitleaks step to .github/workflows/ci.yml',
+            },
+            evidence: [
+              { path: 'src/auth.ts', lines: '2-2', snippet: "const TOKEN = 'sk_live_…';" },
+            ],
+          },
+        ],
       }),
       tokens: { prompt: 800, completion: 200 },
     });
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'quick' },
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'quick' },
+      }),
+    );
 
     expect(result.kind).toBe('audit_run');
     const run = result.data as AuditRun;
@@ -563,10 +652,20 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
     installFetchMock([
       {
         match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
-        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
       },
       { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'c'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'c'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
       {
         match: (u) => u.includes('/contents/src/real.ts'),
@@ -577,20 +676,26 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
 
     mockLLM.mockResolvedValue({
       text: JSON.stringify({
-        findings: [{
-          lens: 'security', severity: 'high', confidence: 0.75,
-          symptom: 'Defect in a file that does not exist',
-          rootCause: 'Imaginary',
-          correctiveAction: 'N/A',
-          preventiveAction: { kind: 'lint', detail: 'rule body' },
-          evidence: [{ path: 'src/imaginary.ts', lines: '1-1', snippet: 'fake' }],
-        }],
+        findings: [
+          {
+            lens: 'security',
+            severity: 'high',
+            confidence: 0.75,
+            symptom: 'Defect in a file that does not exist',
+            rootCause: 'Imaginary',
+            correctiveAction: 'N/A',
+            preventiveAction: { kind: 'lint', detail: 'rule body' },
+            evidence: [{ path: 'src/imaginary.ts', lines: '1-1', snippet: 'fake' }],
+          },
+        ],
       }),
     });
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     const run = result.data as AuditRun;
     expect(run.findings).toEqual([]); // forged path → dropped
@@ -606,35 +711,66 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
     mockLLM.mockResolvedValue({
       text: JSON.stringify({
         findings: [
-          { lens: 'security', severity: 'high', confidence: 0.25,
+          {
+            lens: 'security',
+            severity: 'high',
+            confidence: 0.25,
             symptom: 'Speculative finding',
-            rootCause: 'Maybe', correctiveAction: 'Try',
+            rootCause: 'Maybe',
+            correctiveAction: 'Try',
             preventiveAction: { kind: 'doc', detail: '...' },
-            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }] },
-          { lens: 'security', severity: 'medium', confidence: 0.75,
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
+          },
+          {
+            lens: 'security',
+            severity: 'medium',
+            confidence: 0.75,
             symptom: 'Real-looking finding',
-            rootCause: 'Cause', correctiveAction: 'Fix',
+            rootCause: 'Cause',
+            correctiveAction: 'Fix',
             preventiveAction: { kind: 'lint', detail: 'rule' },
-            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }] },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
+          },
         ],
       }),
     });
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+      }),
+    );
     const run = result.data as AuditRun;
     expect(run.findings).toHaveLength(1);
     expect(run.findings[0].symptom).toBe('Real-looking finding');
@@ -651,9 +787,22 @@ describe('--analyze: GitHub Contents API URL encoding (path fix)', () => {
     // have %2F separators.
     const contentUrls: string[] = [];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       {
         match: (u) => /\/git\/trees\//.test(u),
         body: {
@@ -675,9 +824,11 @@ describe('--analyze: GitHub Contents API URL encoding (path fix)', () => {
     ]);
 
     mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
-    await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-    }));
+    await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+      }),
+    );
 
     // Every Contents URL must keep '/'  literal — that's the regression.
     for (const u of contentUrls) {
@@ -699,16 +850,31 @@ describe('--analyze: inline budget guard', () => {
       size: 100,
     }));
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/too large for inline/i);
     // LLM must NOT have been called (we refused before any work).
@@ -723,21 +889,52 @@ describe('--analyze: fetched-file SHA validation', () => {
       { path: 'src/auth.ts', type: 'blob', sha: 'TREE_SHA_AUTH', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
       // package.json: SHA matches → kept
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'TREE_SHA_PACKAGE', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: {
+          encoding: 'base64',
+          content: btoa('{"name":"x"}'),
+          sha: 'TREE_SHA_PACKAGE',
+          size: 30,
+        },
+      },
       // src/auth.ts: SHA disagrees → skipped
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'WRONG_SHA', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: {
+          encoding: 'base64',
+          content: btoa('export const x = 1;'),
+          sha: 'WRONG_SHA',
+          size: 30,
+        },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
     mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     // The user-visible body surfaces the mismatch warning.
     expect(result.body).toMatch(/SHA disagreed/);
@@ -751,12 +948,31 @@ describe('--analyze: preventive artifact formatting', () => {
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
@@ -769,20 +985,26 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2`;
     mockLLM.mockResolvedValue({
       text: JSON.stringify({
-        findings: [{
-          lens: 'security', severity: 'high', confidence: 0.75,
-          symptom: 'Hardcoded token',
-          rootCause: 'No pre-commit secret scan',
-          correctiveAction: 'Move to env',
-          preventiveAction: { kind: 'ci', detail: multiLineArtifact },
-          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
-        }],
+        findings: [
+          {
+            lens: 'security',
+            severity: 'high',
+            confidence: 0.75,
+            symptom: 'Hardcoded token',
+            rootCause: 'No pre-commit secret scan',
+            correctiveAction: 'Move to env',
+            preventiveAction: { kind: 'ci', detail: multiLineArtifact },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
+          },
+        ],
       }),
     });
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+      }),
+    );
     // The first line is preserved, kind is shown, and we point to /audit export
     // for the full artifact rather than truncating mid-content.
     expect(result.body).toContain('[ci]');
@@ -799,29 +1021,56 @@ jobs:
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'e'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'e'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
     mockLLM.mockResolvedValue({
       text: JSON.stringify({
-        findings: [{
-          lens: 'security', severity: 'high', confidence: 0.75,
-          symptom: 'X', rootCause: 'Y', correctiveAction: 'Z',
-          preventiveAction: { kind: 'lint', detail: 'no-eval rule with description' },
-          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
-        }],
+        findings: [
+          {
+            lens: 'security',
+            severity: 'high',
+            confidence: 0.75,
+            symptom: 'X',
+            rootCause: 'Y',
+            correctiveAction: 'Z',
+            preventiveAction: { kind: 'lint', detail: 'no-eval rule with description' },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
+          },
+        ],
       }),
     });
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+      }),
+    );
     expect(result.body).toContain('[lint] no-eval rule with description');
     expect(result.body).not.toMatch(/\/audit export/);
   });
@@ -841,20 +1090,41 @@ describe('--analyze: bundled-fallback runtime (slice 5 cold-start path)', () => 
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
     mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-      // No MOLTBOT_BUCKET → R2 path returns null → bundled fallback used
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+        // No MOLTBOT_BUCKET → R2 path returns null → bundled fallback used
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     expect(result.body).toContain('runtime: bundled');
   });
@@ -895,7 +1165,8 @@ describe('--analyze: bundled-fallback runtime (slice 5 cold-start path)', () => 
         if (key === 'audit/grammars/runtime@00000000.wasm') {
           return {
             json: async () => ({}),
-            arrayBuffer: async () => new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]).buffer,
+            arrayBuffer: async () =>
+              new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]).buffer,
           } as unknown as R2ObjectBody;
         }
         return null;
@@ -906,12 +1177,31 @@ describe('--analyze: bundled-fallback runtime (slice 5 cold-start path)', () => 
     } as unknown as R2Bucket;
 
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
     mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
@@ -921,10 +1211,16 @@ describe('--analyze: bundled-fallback runtime (slice 5 cold-start path)', () => 
     const loader = await import('./grammars/loader');
     loader._resetGrammarCachesForTesting();
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', MOLTBOT_BUCKET: fakeBucket } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          MOLTBOT_BUCKET: fakeBucket,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     // Used the bundled fallback (R2 was broken, not just unconfigured).
     expect(result.body).toContain('runtime: bundled');
@@ -945,12 +1241,31 @@ describe('--analyze: surfaces missing-grammar coverage warning', () => {
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
@@ -961,14 +1276,16 @@ describe('--analyze: surfaces missing-grammar coverage warning', () => {
     } as unknown as R2Bucket;
 
     mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-      env: {
-        GITHUB_TOKEN: 'tok',
-        OPENROUTER_API_KEY: 'k',
-        MOLTBOT_BUCKET: emptyBucket,
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          MOLTBOT_BUCKET: emptyBucket,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     // VITEST is set, so the runtime gate is bypassed and we get to the
     // extractor — which records "grammar 'typescript' unavailable" for
     // src/auth.ts. The handler surfaces that as a coverage warning.
@@ -987,15 +1304,31 @@ describe('--analyze: DO dispatch routing', () => {
   /** Build a tree large enough to exceed the inline envelope. */
   function bigTree() {
     return Array.from({ length: 60 }, (_, i) => ({
-      path: `src/auth/h${i}.ts`, type: 'blob' as const, sha: `s${i}`, size: 100,
+      path: `src/auth/h${i}.ts`,
+      type: 'blob' as const,
+      sha: `s${i}`,
+      size: 100,
     }));
   }
 
   function installBigRepoFetchMock() {
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree: bigTree() } },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
@@ -1003,22 +1336,27 @@ describe('--analyze: DO dispatch routing', () => {
 
   it('dispatches an oversize audit to the DO when TASK_PROCESSOR + telegram are available', async () => {
     installBigRepoFetchMock();
-    const stub = { fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started' }))) };
+    const stub = {
+      fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started' }))),
+    };
     const taskProcessor = {
       idFromName: vi.fn().mockReturnValue('do-id'),
       get: vi.fn().mockReturnValue(stub),
     };
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'telegram',
-      chatId: 12345,
-      context: { telegramToken: 'tg-token' },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: taskProcessor,
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'telegram',
+        chatId: 12345,
+        context: { telegramToken: 'tg-token' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: taskProcessor,
+        } as unknown as MoltbotEnv,
+      }),
+    );
 
     // Worker returns "started" immediately; the DO is what eventually
     // sends the report.
@@ -1038,22 +1376,27 @@ describe('--analyze: DO dispatch routing', () => {
 
   it('strips env from the wire payload (no live bindings serialized)', async () => {
     installBigRepoFetchMock();
-    const stub = { fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started' }))) };
+    const stub = {
+      fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'started' }))),
+    };
     const taskProcessor = {
       idFromName: vi.fn().mockReturnValue('do-id'),
       get: vi.fn().mockReturnValue(stub),
     };
 
-    await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'telegram',
-      chatId: 12345,
-      context: { telegramToken: 'tg-token' },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: taskProcessor,
-      } as unknown as MoltbotEnv,
-    }));
+    await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'telegram',
+        chatId: 12345,
+        context: { telegramToken: 'tg-token' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: taskProcessor,
+        } as unknown as MoltbotEnv,
+      }),
+    );
 
     const init = stub.fetch.mock.calls[0][1] as RequestInit;
     const payload = JSON.parse(init.body as string);
@@ -1070,16 +1413,19 @@ describe('--analyze: DO dispatch routing', () => {
 
   it('refuses oversize audits with no DO available (clear error)', async () => {
     installBigRepoFetchMock();
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'telegram',
-      chatId: 12345,
-      context: { telegramToken: 'tg-token' },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        // No TASK_PROCESSOR
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'telegram',
+        chatId: 12345,
+        context: { telegramToken: 'tg-token' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          // No TASK_PROCESSOR
+        } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/too large for inline/i);
     expect(mockLLM).not.toHaveBeenCalled();
@@ -1092,14 +1438,17 @@ describe('--analyze: DO dispatch routing', () => {
       idFromName: vi.fn().mockReturnValue('do-id'),
       get: vi.fn().mockReturnValue(stub),
     };
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'api', // not telegram → can't dispatch
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: taskProcessor,
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'api', // not telegram → can't dispatch
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: taskProcessor,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(stub.fetch).not.toHaveBeenCalled();
   });
@@ -1112,12 +1461,31 @@ describe('--analyze: DO dispatch routing', () => {
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
     mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
@@ -1128,16 +1496,19 @@ describe('--analyze: DO dispatch routing', () => {
       get: vi.fn().mockReturnValue(stub),
     };
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'quick' },
-      transport: 'telegram',
-      chatId: 12345,
-      context: { telegramToken: 'tg-token' },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: taskProcessor,
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'quick' },
+        transport: 'telegram',
+        chatId: 12345,
+        context: { telegramToken: 'tg-token' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: taskProcessor,
+        } as unknown as MoltbotEnv,
+      }),
+    );
 
     // Inline path used: result is an audit_run, not the "started" text.
     expect(result.kind).toBe('audit_run');
@@ -1160,16 +1531,19 @@ describe('--analyze: DO dispatch routing', () => {
       get: vi.fn().mockReturnValue(stub),
     };
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'telegram',
-      chatId: 12345,
-      context: { telegramToken: 'tg-token', runningInDO: true },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: taskProcessor,
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'telegram',
+        chatId: 12345,
+        context: { telegramToken: 'tg-token', runningInDO: true },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: taskProcessor,
+        } as unknown as MoltbotEnv,
+      }),
+    );
 
     // Inline path executed (audit_run kind, not "started" text).
     expect(result.kind).toBe('audit_run');
@@ -1182,16 +1556,19 @@ describe('--analyze: DO dispatch routing', () => {
     // arrived as {} after JSON serialization), audit must detect the
     // missing methods and refuse rather than crashing on .idFromName().
     installBigRepoFetchMock();
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'telegram',
-      chatId: 12345,
-      context: { telegramToken: 'tg-token' },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: {} as unknown, // hollow (post-JSON binding)
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'telegram',
+        chatId: 12345,
+        context: { telegramToken: 'tg-token' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: {} as unknown, // hollow (post-JSON binding)
+        } as unknown as MoltbotEnv,
+      }),
+    );
     // No DO available → refuse with clear message; never throws.
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/too large for inline/i);
@@ -1203,17 +1580,36 @@ describe('--analyze: DO dispatch routing', () => {
 // ---------------------------------------------------------------------------
 
 describe('audit_do_key — deterministic DO identity', () => {
-  function planFor(overrides: Partial<{ owner: string; repo: string; sha: string; lenses: ('security'|'deps'|'types'|'tests'|'deadcode'|'perf')[]; depth: 'quick'|'standard'|'deep' }> = {}) {
+  function planFor(
+    overrides: Partial<{
+      owner: string;
+      repo: string;
+      sha: string;
+      lenses: ('security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf')[];
+      depth: 'quick' | 'standard' | 'deep';
+    }> = {},
+  ) {
     return {
       profile: {
         owner: overrides.owner ?? 'octocat',
         repo: overrides.repo ?? 'demo',
         sha: overrides.sha ?? 'a'.repeat(40),
         defaultBranch: 'main',
-        meta: { private: false, archived: false, sizeKb: 0, primaryLanguage: 'TypeScript', languages: {}, description: null },
-        tree: [], manifests: [], codeScanningAlerts: [],
-        codeScanningAlertsTruncated: false, treeTruncated: false,
-        profileHash: 'h', collectedAt: 'now',
+        meta: {
+          private: false,
+          archived: false,
+          sizeKb: 0,
+          primaryLanguage: 'TypeScript',
+          languages: {},
+          description: null,
+        },
+        tree: [],
+        manifests: [],
+        codeScanningAlerts: [],
+        codeScanningAlertsTruncated: false,
+        treeTruncated: false,
+        profileHash: 'h',
+        collectedAt: 'now',
       },
       lenses: overrides.lenses ?? (['security'] as const),
       depth: overrides.depth ?? 'quick',
@@ -1246,8 +1642,9 @@ describe('audit_do_key — deterministic DO identity', () => {
   });
 
   it('produces different keys for different depths', () => {
-    expect(audit_do_key('u', planFor({ depth: 'quick' })))
-      .not.toBe(audit_do_key('u', planFor({ depth: 'deep' })));
+    expect(audit_do_key('u', planFor({ depth: 'quick' }))).not.toBe(
+      audit_do_key('u', planFor({ depth: 'deep' })),
+    );
   });
 });
 
@@ -1255,12 +1652,28 @@ describe('--analyze: DO dispatch status check (slice-3 hardening)', () => {
   /** Reuse the same big-tree fixture as the slice-3 dispatch tests. */
   function installBigRepoFetchMock() {
     const tree = Array.from({ length: 60 }, (_, i) => ({
-      path: `src/auth/h${i}.ts`, type: 'blob' as const, sha: `s${i}`, size: 100,
+      path: `src/auth/h${i}.ts`,
+      type: 'blob' as const,
+      sha: `s${i}`,
+      size: 100,
     }));
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
@@ -1276,16 +1689,19 @@ describe('--analyze: DO dispatch status check (slice-3 hardening)', () => {
       get: vi.fn().mockReturnValue(stub),
     };
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'telegram',
-      chatId: 12345,
-      context: { telegramToken: 'tg-token' },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: taskProcessor,
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'telegram',
+        chatId: 12345,
+        context: { telegramToken: 'tg-token' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: taskProcessor,
+        } as unknown as MoltbotEnv,
+      }),
+    );
 
     // Critical: do NOT report "Audit started" when the DO refused.
     expect(result.kind).toBe('error');
@@ -1304,17 +1720,20 @@ describe('--analyze: DO dispatch status check (slice-3 hardening)', () => {
       get: vi.fn().mockReturnValue(stub),
     };
 
-    await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'telegram',
-      chatId: 12345,
-      userId: 'user-42',
-      context: { telegramToken: 'tg-token' },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: taskProcessor,
-      } as unknown as MoltbotEnv,
-    }));
+    await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'telegram',
+        chatId: 12345,
+        userId: 'user-42',
+        context: { telegramToken: 'tg-token' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: taskProcessor,
+        } as unknown as MoltbotEnv,
+      }),
+    );
 
     // The id should embed (user, repo, sha, lens, depth) — NOT a UUID.
     const passedId = taskProcessor.idFromName.mock.calls[0][0];
@@ -1323,17 +1742,20 @@ describe('--analyze: DO dispatch status check (slice-3 hardening)', () => {
     expect(passedId).toContain('deep');
     // Not a random UUID — repeated calls produce the SAME id.
     taskProcessor.idFromName.mockClear();
-    await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      transport: 'telegram',
-      chatId: 12345,
-      userId: 'user-42',
-      context: { telegramToken: 'tg-token' },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        TASK_PROCESSOR: taskProcessor,
-      } as unknown as MoltbotEnv,
-    }));
+    await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        transport: 'telegram',
+        chatId: 12345,
+        userId: 'user-42',
+        context: { telegramToken: 'tg-token' },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          TASK_PROCESSOR: taskProcessor,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     const passedId2 = taskProcessor.idFromName.mock.calls[0][0];
     expect(passedId2).toBe(passedId);
   });
@@ -1375,12 +1797,28 @@ describe('--analyze: persists AuditRun to NEXUS_KV after completion (DO path)', 
     // flag when it invokes runSkill, contract tested in
     // build-skill-env.test.ts).
     const tree = Array.from({ length: 30 }, (_, i) => ({
-      path: `src/auth/h${i}.ts`, type: 'blob' as const, sha: `s${i}`, size: 100,
+      path: `src/auth/h${i}.ts`,
+      type: 'blob' as const,
+      sha: `s${i}`,
+      size: 100,
     }));
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
       // Per-file content fetches return 404 — the Analyst will short-circuit
       // (no snippets) but the run STILL gets persisted with its empty findings.
@@ -1396,22 +1834,27 @@ describe('--analyze: persists AuditRun to NEXUS_KV after completion (DO path)', 
         if (v === undefined) return null;
         return type === 'json' ? JSON.parse(v) : v;
       }),
-      put: vi.fn(async (key: string, value: string) => { kvStore.set(key, value); }),
+      put: vi.fn(async (key: string, value: string) => {
+        kvStore.set(key, value);
+      }),
     } as unknown as KVNamespace;
 
     // Simulate the DO context: runningInDO=true bypasses the inline-budget
     // guard AND the dispatcher. depth=deep would ordinarily refuse inline.
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security', depth: 'deep' },
-      userId: 'user-99',
-      transport: 'telegram',
-      chatId: 12345,
-      context: { telegramToken: 'tg', runningInDO: true },
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        NEXUS_KV: kv,
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'deep' },
+        userId: 'user-99',
+        transport: 'telegram',
+        chatId: 12345,
+        context: { telegramToken: 'tg', runningInDO: true },
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          NEXUS_KV: kv,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     const run = result.data as AuditRun;
 
@@ -1433,25 +1876,48 @@ describe('--analyze: persists AuditRun to NEXUS_KV after completion (DO path)', 
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
     mockLLM.mockResolvedValue({
       text: JSON.stringify({
-        findings: [{
-          lens: 'security', severity: 'high', confidence: 0.75,
-          symptom: 'Token leak',
-          rootCause: 'No secret scan',
-          correctiveAction: 'Rotate + env var',
-          preventiveAction: { kind: 'ci', detail: 'Add gitleaks step' },
-          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
-        }],
+        findings: [
+          {
+            lens: 'security',
+            severity: 'high',
+            confidence: 0.75,
+            symptom: 'Token leak',
+            rootCause: 'No secret scan',
+            correctiveAction: 'Rotate + env var',
+            preventiveAction: { kind: 'ci', detail: 'Add gitleaks step' },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'export' }],
+          },
+        ],
       }),
     });
 
@@ -1463,17 +1929,22 @@ describe('--analyze: persists AuditRun to NEXUS_KV after completion (DO path)', 
         if (type === 'json') return JSON.parse(v);
         return v;
       }),
-      put: vi.fn(async (key: string, value: string) => { kvStore.set(key, value); }),
+      put: vi.fn(async (key: string, value: string) => {
+        kvStore.set(key, value);
+      }),
     } as unknown as KVNamespace;
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-      userId: 'user-42',
-      env: {
-        GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k',
-        NEXUS_KV: kv,
-      } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+        userId: 'user-42',
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          NEXUS_KV: kv,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     const run = result.data as AuditRun;
 
@@ -1508,17 +1979,27 @@ describe('audit_run renderer: inline keyboard', () => {
         severity: 'high',
         confidence: 0.75,
         evidence: [{ path: 'src/x.ts', source: 'llm' as const }],
-        symptom: `s${i}`, rootCause: 'r', correctiveAction: 'c',
+        symptom: `s${i}`,
+        rootCause: 'r',
+        correctiveAction: 'c',
         preventiveAction: { kind: 'lint', detail: 'rule body' },
       })),
-      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+      telemetry: {
+        durationMs: 1,
+        llmCalls: 1,
+        tokensIn: 1,
+        tokensOut: 1,
+        costUsd: 0,
+        githubApiCalls: 1,
+      },
     };
   }
 
   it('emits one Fix/Suppress row per top-3 finding + a final Full report row', async () => {
     const { renderForTelegram } = await import('../renderers/telegram');
     const chunks = renderForTelegram({
-      skillId: 'audit', kind: 'audit_run',
+      skillId: 'audit',
+      kind: 'audit_run',
       body: 'short body',
       data: runWithFindings(5), // top-3 capped — test verifies the cap holds
       telemetry: { durationMs: 1, model: 'flash', llmCalls: 1, toolCalls: 1 },
@@ -1534,8 +2015,12 @@ describe('audit_run renderer: inline keyboard', () => {
       // immediate orchestra dispatch. Slice-4d safety fix.
       expect(rows[i][0].text).toMatch(/🔧 Prepare fix/);
       expect(rows[i][1].text).toMatch(/🔇 Suppress/);
-      expect(rows[i][0].callback_data).toBe(`audit:fix:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`);
-      expect(rows[i][1].callback_data).toBe(`audit:sup:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`);
+      expect(rows[i][0].callback_data).toBe(
+        `audit:fix:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`,
+      );
+      expect(rows[i][1].callback_data).toBe(
+        `audit:sup:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:security-fhash${i}`,
+      );
     }
     // Final Full report row
     expect(rows[3]).toHaveLength(1);
@@ -1546,18 +2031,22 @@ describe('audit_run renderer: inline keyboard', () => {
   it('omits the keyboard when there are no findings', async () => {
     const { renderForTelegram } = await import('../renderers/telegram');
     const chunks = renderForTelegram({
-      skillId: 'audit', kind: 'audit_run',
-      body: 'no defects', data: runWithFindings(0),
+      skillId: 'audit',
+      kind: 'audit_run',
+      body: 'no defects',
+      data: runWithFindings(0),
       telemetry: { durationMs: 1, model: 'flash', llmCalls: 1, toolCalls: 1 },
     });
     expect(chunks[0].replyMarkup).toBeUndefined();
   });
 
-  it('keeps every callback_data within Telegram\'s 64-byte hard cap', async () => {
+  it("keeps every callback_data within Telegram's 64-byte hard cap", async () => {
     const { renderForTelegram } = await import('../renderers/telegram');
     const chunks = renderForTelegram({
-      skillId: 'audit', kind: 'audit_run',
-      body: 'x', data: runWithFindings(3),
+      skillId: 'audit',
+      kind: 'audit_run',
+      body: 'x',
+      data: runWithFindings(3),
       telemetry: { durationMs: 1, model: 'flash', llmCalls: 1, toolCalls: 1 },
     });
     const rows = chunks[0].replyMarkup!;
@@ -1574,8 +2063,10 @@ describe('audit_run renderer: inline keyboard', () => {
   it('omits keyboard on audit_plan results (only audit_run gets controls)', async () => {
     const { renderForTelegram } = await import('../renderers/telegram');
     const chunks = renderForTelegram({
-      skillId: 'audit', kind: 'audit_plan',
-      body: 'plan body', data: { foo: 'bar' },
+      skillId: 'audit',
+      kind: 'audit_plan',
+      body: 'plan body',
+      data: { foo: 'bar' },
       telemetry: { durationMs: 1, model: 'none', llmCalls: 0, toolCalls: 0 },
     });
     expect(chunks[0].replyMarkup).toBeUndefined();
@@ -1608,17 +2099,33 @@ describe('/audit export', () => {
           lens: 'security',
           severity: 'high',
           confidence: 0.75,
-          evidence: [{ path: 'src/auth.ts', lines: '10-15', source: 'llm', snippet: 'const TOKEN = …', sha: 'a1' }],
+          evidence: [
+            {
+              path: 'src/auth.ts',
+              lines: '10-15',
+              source: 'llm',
+              snippet: 'const TOKEN = …',
+              sha: 'a1',
+            },
+          ],
           symptom: 'Hardcoded API token',
           rootCause: 'Missing pre-commit secret scan',
           correctiveAction: 'Rotate token; move to env var',
           preventiveAction: {
             kind: 'ci',
-            detail: 'name: secret-scan\non: [push]\njobs:\n  scan:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: gitleaks/gitleaks-action@v2',
+            detail:
+              'name: secret-scan\non: [push]\njobs:\n  scan:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: gitleaks/gitleaks-action@v2',
           },
         },
       ],
-      telemetry: { durationMs: 1234, llmCalls: 1, tokensIn: 800, tokensOut: 200, costUsd: 0.0007, githubApiCalls: 7 },
+      telemetry: {
+        durationMs: 1234,
+        llmCalls: 1,
+        tokensIn: 800,
+        tokensOut: 200,
+        costUsd: 0.0007,
+        githubApiCalls: 7,
+      },
       ...overrides,
     };
   }
@@ -1626,12 +2133,14 @@ describe('/audit export', () => {
   it('returns a full report from KV when given a valid runId', async () => {
     const run = makeRun();
     const kv = kvWithRun('user-1', run);
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: run.runId,
-      userId: 'user-1',
-      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: run.runId,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     // Full preventive artifact present (including the multi-line workflow yaml).
     expect(result.body).toContain('gitleaks/gitleaks-action@v2');
@@ -1641,44 +2150,50 @@ describe('/audit export', () => {
   });
 
   it('rejects empty runId with usage hint', async () => {
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: '',
-      userId: 'user-1',
-      env: { NEXUS_KV: kvWithRun('user-1', makeRun()) } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: '',
+        userId: 'user-1',
+        env: { NEXUS_KV: kvWithRun('user-1', makeRun()) } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/usage/i);
   });
 
   it('rejects malformed runId without hitting KV', async () => {
     const kv = kvWithRun('user-1', makeRun());
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: 'not a real id with spaces',
-      userId: 'user-1',
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: 'not a real id with spaces',
+        userId: 'user-1',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/not a valid run id/i);
     expect(kv.get).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['empty hex run', 'deadbeef'],                                            // too short, no dashes
-    ['all dashes', '--------'],                                               // matched the old loose regex
-    ['hex with spurious dashes', 'abc-----def'],                              // loose regex would accept
-    ['UUID with bad version digit', 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee'],  // v=c, must be 1-5
-    ['UUID with bad variant digit', 'aaaaaaaa-bbbb-4ccc-cddd-eeeeeeeeeeee'],  // var=c, must be 8-b
-    ['Wrong group lengths',         'aaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],   // 7 chars in first group
+    ['empty hex run', 'deadbeef'], // too short, no dashes
+    ['all dashes', '--------'], // matched the old loose regex
+    ['hex with spurious dashes', 'abc-----def'], // loose regex would accept
+    ['UUID with bad version digit', 'aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee'], // v=c, must be 1-5
+    ['UUID with bad variant digit', 'aaaaaaaa-bbbb-4ccc-cddd-eeeeeeeeeeee'], // var=c, must be 8-b
+    ['Wrong group lengths', 'aaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'], // 7 chars in first group
   ])('rejects %s as not a valid runId (strict UUID)', async (_label, badId) => {
     const kv = kvWithRun('user-1', makeRun());
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: badId,
-      userId: 'user-1',
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: badId,
+        userId: 'user-1',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/not a valid run id/i);
     expect(kv.get).not.toHaveBeenCalled();
@@ -1690,23 +2205,27 @@ describe('/audit export', () => {
     const realUuid = crypto.randomUUID();
     const run = makeRun({ runId: realUuid });
     const kv = kvWithRun('user-1', run);
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: realUuid,
-      userId: 'user-1',
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: realUuid,
+        userId: 'user-1',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
   });
 
   it('returns clear error when the run is not found (or expired)', async () => {
     const kv = kvWithRun('user-1', makeRun()); // has run for user-1, NOT user-2
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
-      userId: 'user-2', // different user → user-scoped key won't match
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        userId: 'user-2', // different user → user-scoped key won't match
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/no audit run found/i);
     expect(result.body).toMatch(/7 days/i);
@@ -1719,27 +2238,39 @@ describe('/audit export', () => {
     const run = makeRun({
       findings: [
         {
-          id: 'security-active1', lens: 'security', severity: 'high', confidence: 0.75,
+          id: 'security-active1',
+          lens: 'security',
+          severity: 'high',
+          confidence: 0.75,
           evidence: [{ path: 'src/auth.ts', source: 'llm' }],
           symptom: 'Active defect',
-          rootCause: 'r', correctiveAction: 'c',
+          rootCause: 'r',
+          correctiveAction: 'c',
           preventiveAction: { kind: 'lint', detail: 'rule' },
         },
         {
-          id: 'security-supp1', lens: 'security', severity: 'medium', confidence: 0.75,
+          id: 'security-supp1',
+          lens: 'security',
+          severity: 'medium',
+          confidence: 0.75,
           evidence: [{ path: 'src/auth.ts', source: 'llm' }],
           symptom: 'Previously suppressed defect',
-          rootCause: 'r', correctiveAction: 'c',
+          rootCause: 'r',
+          correctiveAction: 'c',
           preventiveAction: { kind: 'lint', detail: 'rule' },
           suppressed: true,
         },
       ],
     });
     const kv = kvWithRun('user-1', run);
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export', text: run.runId, userId: 'user-1',
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: run.runId,
+        userId: 'user-1',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     expect(result.body).toContain('Findings (1):'); // active count, not all
     expect(result.body).toContain('Active defect');
@@ -1753,13 +2284,15 @@ describe('/audit export', () => {
   it('returns JSON dump when --format json is set', async () => {
     const run = makeRun();
     const kv = kvWithRun('user-1', run);
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: run.runId,
-      userId: 'user-1',
-      flags: { format: 'json' },
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: run.runId,
+        userId: 'user-1',
+        flags: { format: 'json' },
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('text');
     // Body is parseable JSON with the same data.
     const parsed = JSON.parse(result.body);
@@ -1786,12 +2319,14 @@ describe('/audit export', () => {
       })),
     });
     const kv = kvWithRun('user-1', run);
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: run.runId,
-      userId: 'user-1',
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: run.runId,
+        userId: 'user-1',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.body.length).toBeGreaterThan(4096);
 
     const { renderForTelegram } = await import('../renderers/telegram');
@@ -1815,12 +2350,14 @@ describe('/audit export', () => {
         lens: 'security' as const,
         severity: 'high' as const,
         confidence: 0.75 as const,
-        evidence: [{
-          path: 'src/auth.ts',
-          lines: `${i * 10}-${i * 10 + 5}`,
-          source: 'llm' as const,
-          snippet: `const TOKEN_${i} = 'sk_...';\n// padding line ${i}`.repeat(2),
-        }],
+        evidence: [
+          {
+            path: 'src/auth.ts',
+            lines: `${i * 10}-${i * 10 + 5}`,
+            source: 'llm' as const,
+            snippet: `const TOKEN_${i} = 'sk_...';\n// padding line ${i}`.repeat(2),
+          },
+        ],
         symptom: `Hardcoded secret variant ${i}`,
         rootCause: `Repeated pattern: secret literal committed in handler ${i}; CI lacks pre-commit secret scan`,
         correctiveAction: `Rotate TOKEN_${i}; move to env var; redeploy`,
@@ -1843,12 +2380,14 @@ describe('/audit export', () => {
     });
     const kv = kvWithRun('user-1', run);
 
-    const result = await handleAudit(makeRequest({
-      subcommand: 'export',
-      text: run.runId,
-      userId: 'user-1',
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'export',
+        text: run.runId,
+        userId: 'user-1',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     // Sanity: the body really is oversize (otherwise this isn't testing
     // what we think it is).
@@ -1882,10 +2421,17 @@ describe('buildOrchestraTask', () => {
   function fixture(overrides: Partial<AuditFinding> = {}): AuditFinding {
     return {
       id: 'security-abc',
-      lens: 'security', severity: 'high', confidence: 0.75,
+      lens: 'security',
+      severity: 'high',
+      confidence: 0.75,
       evidence: [
-        { path: 'src/auth.ts', lines: '10-12', source: 'llm',
-          snippet: "const TOKEN = 'sk_live_…';\nreturn TOKEN;", sha: 'a1' },
+        {
+          path: 'src/auth.ts',
+          lines: '10-12',
+          source: 'llm',
+          snippet: "const TOKEN = 'sk_live_…';\nreturn TOKEN;",
+          sha: 'a1',
+        },
       ],
       symptom: 'Hardcoded API token in login()',
       rootCause: 'No pre-commit secret scan; TOKEN literal committed',
@@ -1901,9 +2447,17 @@ describe('buildOrchestraTask', () => {
     return {
       runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
       repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
-      lenses: ['security'], depth: 'quick',
+      lenses: ['security'],
+      depth: 'quick',
       findings: [fixture()],
-      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+      telemetry: {
+        durationMs: 1,
+        llmCalls: 1,
+        tokensIn: 1,
+        tokensOut: 1,
+        costUsd: 0,
+        githubApiCalls: 1,
+      },
     };
   }
 
@@ -1933,7 +2487,9 @@ describe('buildOrchestraTask', () => {
   });
 
   it('appends orchestraPatchBrief when present', () => {
-    const f = fixture({ orchestraPatchBrief: 'Touch only src/auth.ts; do not refactor neighboring files.' });
+    const f = fixture({
+      orchestraPatchBrief: 'Touch only src/auth.ts; do not refactor neighboring files.',
+    });
     const text = buildOrchestraTask(runFixture(), f);
     expect(text).toContain('Additional context:');
     expect(text).toContain('Touch only src/auth.ts');
@@ -1972,10 +2528,14 @@ describe('buildOrchestraTask', () => {
 describe('buildFixSummary (Prepare → Confirm UX)', () => {
   function f(): AuditFinding {
     return {
-      id: 'security-abc', lens: 'security', severity: 'high', confidence: 0.75,
+      id: 'security-abc',
+      lens: 'security',
+      severity: 'high',
+      confidence: 0.75,
       evidence: [{ path: 'src/auth.ts', source: 'llm' }],
       symptom: 'Hardcoded API token in login()',
-      rootCause: 'r', correctiveAction: 'Move TOKEN to env var',
+      rootCause: 'r',
+      correctiveAction: 'Move TOKEN to env var',
       preventiveAction: { kind: 'ci', detail: 'gitleaks step\nplus more lines' },
     };
   }
@@ -1983,8 +2543,17 @@ describe('buildFixSummary (Prepare → Confirm UX)', () => {
     return {
       runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
       repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
-      lenses: ['security'], depth: 'quick', findings: [f()],
-      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+      lenses: ['security'],
+      depth: 'quick',
+      findings: [f()],
+      telemetry: {
+        durationMs: 1,
+        llmCalls: 1,
+        tokensIn: 1,
+        tokensOut: 1,
+        costUsd: 0,
+        githubApiCalls: 1,
+      },
     };
   }
 
@@ -2003,7 +2572,11 @@ describe('buildFixSummary (Prepare → Confirm UX)', () => {
 
   it('escapes HTML special characters in user-controlled fields', () => {
     const finding = { ...f(), symptom: 'XSS via <script>alert(1)</script>' };
-    const run = { ...r(), findings: [finding], repo: { owner: '<owner>', name: '<repo>', sha: 'a'.repeat(40) } };
+    const run = {
+      ...r(),
+      findings: [finding],
+      repo: { owner: '<owner>', name: '<repo>', sha: 'a'.repeat(40) },
+    };
     const text = buildFixSummary(run, finding);
     expect(text).not.toContain('<script>'); // raw < must not appear
     expect(text).toContain('&lt;script&gt;');
@@ -2019,8 +2592,8 @@ describe('audit inline keyboard: prepare→confirm callback shape', () => {
     // grows. The fix prepare path still uses runId+findingId because the
     // draft doesn't exist yet at that point.
     const runId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'; // 36 chars
-    const findingId = 'security-zzzzzzz';                  // 16 chars (MVP worst case)
-    const token = '0123456789abcdef';                      // 16 hex chars
+    const findingId = 'security-zzzzzzz'; // 16 chars (MVP worst case)
+    const token = '0123456789abcdef'; // 16 hex chars
     // Prepare-shape verbs still take runId+findingId.
     for (const verb of ['fix', 'sup']) {
       const data = `audit:${verb}:${runId}:${findingId}`;
@@ -2050,15 +2623,29 @@ describe('resolveFix', () => {
   const run: AuditRun = {
     runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
     repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
-    lenses: ['security'], depth: 'quick',
-    findings: [{
-      id: 'security-abc',
-      lens: 'security', severity: 'high', confidence: 0.75,
-      evidence: [{ path: 'src/auth.ts', source: 'llm' }],
-      symptom: 's', rootCause: 'r', correctiveAction: 'c',
-      preventiveAction: { kind: 'lint', detail: 'rule' },
-    }],
-    telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+    lenses: ['security'],
+    depth: 'quick',
+    findings: [
+      {
+        id: 'security-abc',
+        lens: 'security',
+        severity: 'high',
+        confidence: 0.75,
+        evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+        symptom: 's',
+        rootCause: 'r',
+        correctiveAction: 'c',
+        preventiveAction: { kind: 'lint', detail: 'rule' },
+      },
+    ],
+    telemetry: {
+      durationMs: 1,
+      llmCalls: 1,
+      tokensIn: 1,
+      tokensOut: 1,
+      costUsd: 0,
+      githubApiCalls: 1,
+    },
   };
 
   it('returns ok:true with run+finding+taskText for a valid lookup', async () => {
@@ -2123,25 +2710,40 @@ describe('/audit fix (slash command)', () => {
   const run: AuditRun = {
     runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
     repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
-    lenses: ['security'], depth: 'quick',
-    findings: [{
-      id: 'security-abc',
-      lens: 'security', severity: 'high', confidence: 0.75,
-      evidence: [{ path: 'src/auth.ts', source: 'llm' }],
-      symptom: 'Hardcoded token', rootCause: 'No pre-commit scan',
-      correctiveAction: 'Move to env',
-      preventiveAction: { kind: 'ci', detail: 'gitleaks step' },
-    }],
-    telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+    lenses: ['security'],
+    depth: 'quick',
+    findings: [
+      {
+        id: 'security-abc',
+        lens: 'security',
+        severity: 'high',
+        confidence: 0.75,
+        evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+        symptom: 'Hardcoded token',
+        rootCause: 'No pre-commit scan',
+        correctiveAction: 'Move to env',
+        preventiveAction: { kind: 'ci', detail: 'gitleaks step' },
+      },
+    ],
+    telemetry: {
+      durationMs: 1,
+      llmCalls: 1,
+      tokensIn: 1,
+      tokensOut: 1,
+      costUsd: 0,
+      githubApiCalls: 1,
+    },
   };
 
   it('returns the orchestra dispatch command in the body for manual run', async () => {
-    const result = await handleAudit(makeRequest({
-      subcommand: 'fix',
-      text: `${run.runId} security-abc`,
-      userId: 'user-1',
-      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'fix',
+        text: `${run.runId} security-abc`,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('text');
     expect(result.body).toMatch(/Orchestra task ready/i);
     expect(result.body).toContain('/orch run');
@@ -2158,21 +2760,27 @@ describe('/audit fix (slash command)', () => {
   });
 
   it('rejects empty args with a usage hint', async () => {
-    const result = await handleAudit(makeRequest({
-      subcommand: 'fix', text: '', userId: 'user-1',
-      env: { NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'fix',
+        text: '',
+        userId: 'user-1',
+        env: { NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/usage/i);
   });
 
   it('surfaces resolveFix errors as audit error results', async () => {
-    const result = await handleAudit(makeRequest({
-      subcommand: 'fix',
-      text: `${run.runId} security-bogus`,
-      userId: 'user-1',
-      env: { NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'fix',
+        text: `${run.runId} security-bogus`,
+        userId: 'user-1',
+        env: { NEXUS_KV: kvWithRun(run) } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/not part of run/i);
   });
@@ -2195,12 +2803,16 @@ describe('/audit suppress + /audit unsuppress', () => {
         if (v === undefined) return null;
         return type === 'json' ? JSON.parse(v) : v;
       }),
-      put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
-      delete: vi.fn(async (key: string) => { store.delete(key); }),
+      put: vi.fn(async (key: string, value: string) => {
+        store.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        store.delete(key);
+      }),
       list: vi.fn(async ({ prefix }: { prefix: string }) => {
         const keys = [...store.keys()]
-          .filter(k => k.startsWith(prefix))
-          .map(name => ({ name }));
+          .filter((k) => k.startsWith(prefix))
+          .map((name) => ({ name }));
         return { keys, list_complete: true, cursor: undefined };
       }),
     } as unknown as KVNamespace;
@@ -2215,14 +2827,27 @@ describe('/audit suppress + /audit unsuppress', () => {
       repo: { owner: 'octocat', name: 'demo', sha: 'a'.repeat(40) },
       lenses: ['security'],
       depth: 'quick',
-      findings: [{
-        id: findingId,
-        lens: 'security', severity: 'high', confidence: 0.75,
-        evidence: [{ path: 'src/auth.ts', source: 'llm' }],
-        symptom: 's', rootCause: 'r', correctiveAction: 'c',
-        preventiveAction: { kind: 'lint', detail: 'rule' },
-      }],
-      telemetry: { durationMs: 1, llmCalls: 1, tokensIn: 1, tokensOut: 1, costUsd: 0, githubApiCalls: 1 },
+      findings: [
+        {
+          id: findingId,
+          lens: 'security',
+          severity: 'high',
+          confidence: 0.75,
+          evidence: [{ path: 'src/auth.ts', source: 'llm' }],
+          symptom: 's',
+          rootCause: 'r',
+          correctiveAction: 'c',
+          preventiveAction: { kind: 'lint', detail: 'rule' },
+        },
+      ],
+      telemetry: {
+        durationMs: 1,
+        llmCalls: 1,
+        tokensIn: 1,
+        tokensOut: 1,
+        costUsd: 0,
+        githubApiCalls: 1,
+      },
     };
     store.set(`audit:run:${userId}:${runId}`, JSON.stringify(run));
     return { runId, findingId, run };
@@ -2232,10 +2857,14 @@ describe('/audit suppress + /audit unsuppress', () => {
     const { kv, store } = makeKV();
     const { runId, findingId } = seedRun(store, 'user-1');
 
-    const result = await handleAudit(makeRequest({
-      subcommand: 'suppress', text: `${runId} ${findingId}`, userId: 'user-1',
-      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'suppress',
+        text: `${runId} ${findingId}`,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('text');
     expect(result.body).toMatch(/Suppressed/);
     expect(result.body).toContain(findingId);
@@ -2252,59 +2881,88 @@ describe('/audit suppress + /audit unsuppress', () => {
   it('is idempotent — second suppress of same id does not duplicate', async () => {
     const { kv, store } = makeKV();
     const { runId, findingId } = seedRun(store, 'user-1');
-    await handleAudit(makeRequest({
-      subcommand: 'suppress', text: `${runId} ${findingId}`, userId: 'user-1',
-      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
-    const second = await handleAudit(makeRequest({
-      subcommand: 'suppress', text: `${runId} ${findingId}`, userId: 'user-1',
-      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    await handleAudit(
+      makeRequest({
+        subcommand: 'suppress',
+        text: `${runId} ${findingId}`,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    const second = await handleAudit(
+      makeRequest({
+        subcommand: 'suppress',
+        text: `${runId} ${findingId}`,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(second.body).toMatch(/already on the suppression list/);
     // Still exactly one suppression key for this finding (idempotent put
     // is fine; we shouldn't have somehow created multiple keys).
-    const supKeys = [...store.keys()].filter(k => k.startsWith('audit:suppressed:user-1:octocat/demo:'));
+    const supKeys = [...store.keys()].filter((k) =>
+      k.startsWith('audit:suppressed:user-1:octocat/demo:'),
+    );
     expect(supKeys).toHaveLength(1);
   });
 
   it('unsuppress removes the id; second unsuppress is a no-op', async () => {
     const { kv, store } = makeKV();
     const { runId, findingId } = seedRun(store, 'user-1');
-    await handleAudit(makeRequest({
-      subcommand: 'suppress', text: `${runId} ${findingId}`, userId: 'user-1',
-      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
-    const removed = await handleAudit(makeRequest({
-      subcommand: 'unsuppress', text: `${runId} ${findingId}`, userId: 'user-1',
-      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    await handleAudit(
+      makeRequest({
+        subcommand: 'suppress',
+        text: `${runId} ${findingId}`,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    const removed = await handleAudit(
+      makeRequest({
+        subcommand: 'unsuppress',
+        text: `${runId} ${findingId}`,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(removed.body).toMatch(/Un-suppressed/);
     // The per-finding key was deleted (no zombie entries).
     const expectedKey = `audit:suppressed:user-1:octocat/demo:${findingId}`;
     expect(store.get(expectedKey)).toBeUndefined();
 
     // Second unsuppress: nothing to remove.
-    const noop = await handleAudit(makeRequest({
-      subcommand: 'unsuppress', text: `${runId} ${findingId}`, userId: 'user-1',
-      env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const noop = await handleAudit(
+      makeRequest({
+        subcommand: 'unsuppress',
+        text: `${runId} ${findingId}`,
+        userId: 'user-1',
+        env: { OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(noop.body).toMatch(/wasn't on the suppression list/);
   });
 
   it('rejects malformed runId / findingId without hitting KV', async () => {
     const { kv } = makeKV();
-    const r1 = await handleAudit(makeRequest({
-      subcommand: 'suppress', text: 'not-a-uuid security-x', userId: 'u',
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const r1 = await handleAudit(
+      makeRequest({
+        subcommand: 'suppress',
+        text: 'not-a-uuid security-x',
+        userId: 'u',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(r1.kind).toBe('error');
     expect(r1.body).toMatch(/not a valid run id/i);
 
-    const r2 = await handleAudit(makeRequest({
-      subcommand: 'suppress',
-      text: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee NOT_A_REAL_FINDING_ID',
-      userId: 'u', env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const r2 = await handleAudit(
+      makeRequest({
+        subcommand: 'suppress',
+        text: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee NOT_A_REAL_FINDING_ID',
+        userId: 'u',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(r2.kind).toBe('error');
     expect(r2.body).toMatch(/not a valid finding id/i);
     expect(kv.get).not.toHaveBeenCalled();
@@ -2313,11 +2971,14 @@ describe('/audit suppress + /audit unsuppress', () => {
   it('rejects when the run is not found (cross-user attempt)', async () => {
     const { kv, store } = makeKV();
     const { runId, findingId } = seedRun(store, 'user-1');
-    const result = await handleAudit(makeRequest({
-      subcommand: 'suppress', text: `${runId} ${findingId}`,
-      userId: 'user-2', // mismatched
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'suppress',
+        text: `${runId} ${findingId}`,
+        userId: 'user-2', // mismatched
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/no audit run found/i);
   });
@@ -2325,10 +2986,14 @@ describe('/audit suppress + /audit unsuppress', () => {
   it('rejects when the findingId is not part of the run', async () => {
     const { kv, store } = makeKV();
     const { runId } = seedRun(store, 'user-1');
-    const result = await handleAudit(makeRequest({
-      subcommand: 'suppress', text: `${runId} security-bogus`, userId: 'user-1',
-      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        subcommand: 'suppress',
+        text: `${runId} security-bogus`,
+        userId: 'user-1',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('error');
     expect(result.body).toMatch(/not part of run/i);
   });
@@ -2345,23 +3010,48 @@ describe('--analyze: surfaces suppression-read failures (fails LOUD, not silent)
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
     mockLLM.mockResolvedValue({
       text: JSON.stringify({
-        findings: [{
-          lens: 'security', severity: 'high', confidence: 0.75,
-          symptom: 'Some defect', rootCause: 'r', correctiveAction: 'c',
-          preventiveAction: { kind: 'lint', detail: 'rule' },
-          evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'x' }],
-        }],
+        findings: [
+          {
+            lens: 'security',
+            severity: 'high',
+            confidence: 0.75,
+            symptom: 'Some defect',
+            rootCause: 'r',
+            correctiveAction: 'c',
+            preventiveAction: { kind: 'lint', detail: 'rule' },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'x' }],
+          },
+        ],
       }),
     });
 
@@ -2373,14 +3063,22 @@ describe('--analyze: surfaces suppression-read failures (fails LOUD, not silent)
       get: vi.fn(async () => null),
       put: vi.fn(),
       delete: vi.fn(),
-      list: vi.fn(async () => { throw new Error('KV unavailable'); }),
+      list: vi.fn(async () => {
+        throw new Error('KV unavailable');
+      }),
     } as unknown as KVNamespace;
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-      userId: 'user-1',
-      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+        userId: 'user-1',
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          NEXUS_KV: kv,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     // Audit completes — finding is in the run as normal (no false drop).
     const run = result.data as AuditRun;
@@ -2398,12 +3096,31 @@ describe('--analyze: surfaces suppression-read failures (fails LOUD, not silent)
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
     mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
@@ -2416,11 +3133,17 @@ describe('--analyze: surfaces suppression-read failures (fails LOUD, not silent)
       list: vi.fn(async () => ({ keys: [], list_complete: true, cursor: undefined })),
     } as unknown as KVNamespace;
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-      userId: 'user-1',
-      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+        userId: 'user-1',
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          NEXUS_KV: kv,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     // No warning on the happy path.
     expect(result.body).not.toMatch(/Suppression list could not be read/);
@@ -2434,12 +3157,31 @@ describe('--analyze: applies per-repo suppression list before persist+display', 
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
     ];
     installFetchMock([
-      { match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u), body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null } },
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
+      },
       { match: (u) => /\/languages$/.test(u), body: {} },
-      { match: (u) => /\/git\/refs\/heads\//.test(u), body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
+      },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      { match: (u) => u.includes('/contents/package.json'), body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 } },
-      { match: (u) => u.includes('/contents/src/auth.ts'), body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
+      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
 
@@ -2450,10 +3192,16 @@ describe('--analyze: applies per-repo suppression list before persist+display', 
     mockLLM.mockResolvedValue({
       text: JSON.stringify({
         findings: [
-          { lens: 'security', severity: 'high', confidence: 0.75,
-            symptom, rootCause: 'r', correctiveAction: 'c',
+          {
+            lens: 'security',
+            severity: 'high',
+            confidence: 0.75,
+            symptom,
+            rootCause: 'r',
+            correctiveAction: 'c',
             preventiveAction: { kind: 'lint', detail: 'rule' },
-            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'TOKEN' }] },
+            evidence: [{ path: 'src/auth.ts', lines: '1-1', snippet: 'TOKEN' }],
+          },
         ],
       }),
     });
@@ -2469,26 +3217,41 @@ describe('--analyze: applies per-repo suppression list before persist+display', 
 
     const kvStore = new Map<string, string>();
     // One-key-per-finding suppression: the existence of the key is the signal.
-    kvStore.set(`audit:suppressed:user-1:octocat/hello-world:${expectedId}`, JSON.stringify({ at: 'now' }));
+    kvStore.set(
+      `audit:suppressed:user-1:octocat/hello-world:${expectedId}`,
+      JSON.stringify({ at: 'now' }),
+    );
     const kv = {
       get: vi.fn(async (key: string, type?: string) => {
         const v = kvStore.get(key);
         if (v === undefined) return null;
         return type === 'json' ? JSON.parse(v) : v;
       }),
-      put: vi.fn(async (key: string, value: string) => { kvStore.set(key, value); }),
-      delete: vi.fn(async (key: string) => { kvStore.delete(key); }),
+      put: vi.fn(async (key: string, value: string) => {
+        kvStore.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        kvStore.delete(key);
+      }),
       list: vi.fn(async ({ prefix }: { prefix: string }) => {
-        const keys = [...kvStore.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name }));
+        const keys = [...kvStore.keys()]
+          .filter((k) => k.startsWith(prefix))
+          .map((name) => ({ name }));
         return { keys, list_complete: true, cursor: undefined };
       }),
     } as unknown as KVNamespace;
 
-    const result = await handleAudit(makeRequest({
-      flags: { analyze: 'true', lens: 'security' },
-      userId: 'user-1',
-      env: { GITHUB_TOKEN: 'tok', OPENROUTER_API_KEY: 'k', NEXUS_KV: kv } as unknown as MoltbotEnv,
-    }));
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security' },
+        userId: 'user-1',
+        env: {
+          GITHUB_TOKEN: 'tok',
+          OPENROUTER_API_KEY: 'k',
+          NEXUS_KV: kv,
+        } as unknown as MoltbotEnv,
+      }),
+    );
     expect(result.kind).toBe('audit_run');
     const run = result.data as AuditRun;
 
@@ -2520,7 +3283,14 @@ describe('nested manifest discovery (monorepo support)', () => {
     installFetchMock([
       {
         match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
-        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+        body: {
+          default_branch: 'main',
+          private: false,
+          archived: false,
+          size: 1,
+          language: 'TypeScript',
+          description: null,
+        },
       },
       { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
       {
@@ -2542,7 +3312,7 @@ describe('nested manifest discovery (monorepo support)', () => {
     const r = await handleAudit(makeRequest());
     expect(r.kind).toBe('audit_plan');
     const plan = r.data as AuditPlan;
-    const fetchedPaths = plan.profile.manifests.map(m => m.path);
+    const fetchedPaths = plan.profile.manifests.map((m) => m.path);
     expect(fetchedPaths).toContain('package.json');
     expect(fetchedPaths).toContain('apps/web/package.json');
     expect(fetchedPaths).toContain('apps/api/package.json');
@@ -2566,8 +3336,12 @@ describe('fix dispatch draft tokens', () => {
         if (v === undefined) return null;
         return type === 'json' ? JSON.parse(v) : v;
       }),
-      put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
-      delete: vi.fn(async (key: string) => { store.delete(key); }),
+      put: vi.fn(async (key: string, value: string) => {
+        store.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        store.delete(key);
+      }),
     } as unknown as KVNamespace;
     return { kv, store };
   }
@@ -2588,8 +3362,10 @@ describe('fix dispatch draft tokens', () => {
       runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
       findingId: 'security-abc',
       taskText: 'Fix audit finding...\n\nMulti-line content with --flags and YAML.',
-      owner: 'octocat', repo: 'demo',
-      severity: 'high', lens: 'security',
+      owner: 'octocat',
+      repo: 'demo',
+      severity: 'high',
+      lens: 'security',
       createdAt: '2026-04-26T00:00:00.000Z',
     };
     await cacheFixDraft(kv, 'user-1', token, draft);
@@ -2613,8 +3389,13 @@ describe('fix dispatch draft tokens', () => {
     const { kv } = makeKV();
     const token = newFixDraftToken();
     await cacheFixDraft(kv, 'user-1', token, {
-      runId: 'r', findingId: 'f', taskText: 't',
-      owner: 'o', repo: 'r', severity: 'low', lens: 'tests',
+      runId: 'r',
+      findingId: 'f',
+      taskText: 't',
+      owner: 'o',
+      repo: 'r',
+      severity: 'low',
+      lens: 'tests',
       createdAt: 'now',
     });
     expect(await consumeFixDraft(kv, 'user-2', token)).toBeNull();
@@ -2623,11 +3404,19 @@ describe('fix dispatch draft tokens', () => {
   });
 
   it('deleteFixDraft is idempotent (cancel path)', async () => {
-    const { cacheFixDraft, deleteFixDraft, consumeFixDraft, newFixDraftToken } = await import('./cache');
+    const { cacheFixDraft, deleteFixDraft, consumeFixDraft, newFixDraftToken } =
+      await import('./cache');
     const { kv } = makeKV();
     const token = newFixDraftToken();
     await cacheFixDraft(kv, 'user-1', token, {
-      runId: 'r', findingId: 'f', taskText: 't', owner: 'o', repo: 'r', severity: 'low', lens: 'tests', createdAt: 'now',
+      runId: 'r',
+      findingId: 'f',
+      taskText: 't',
+      owner: 'o',
+      repo: 'r',
+      severity: 'low',
+      lens: 'tests',
+      createdAt: 'now',
     });
     await deleteFixDraft(kv, 'user-1', token);
     await deleteFixDraft(kv, 'user-1', token); // second call must not throw
@@ -2645,13 +3434,21 @@ describe('cacheFixDraft return value (closes PR 514 follow-up #1)', () => {
     const store = new Map<string, string>();
     const kv = {
       get: vi.fn(async () => null),
-      put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+      put: vi.fn(async (key: string, value: string) => {
+        store.set(key, value);
+      }),
       delete: vi.fn(),
     } as unknown as KVNamespace;
 
     const ok = await cacheFixDraft(kv, 'user-1', newFixDraftToken(), {
-      runId: 'r', findingId: 'f', taskText: 't', owner: 'o', repo: 'r',
-      severity: 'low', lens: 'tests', createdAt: 'now',
+      runId: 'r',
+      findingId: 'f',
+      taskText: 't',
+      owner: 'o',
+      repo: 'r',
+      severity: 'low',
+      lens: 'tests',
+      createdAt: 'now',
     });
     expect(ok).toBe(true);
     expect(store.size).toBe(1);
@@ -2661,13 +3458,21 @@ describe('cacheFixDraft return value (closes PR 514 follow-up #1)', () => {
     const { cacheFixDraft, newFixDraftToken } = await import('./cache');
     const kv = {
       get: vi.fn(async () => null),
-      put: vi.fn(async () => { throw new Error('KV unavailable'); }),
+      put: vi.fn(async () => {
+        throw new Error('KV unavailable');
+      }),
       delete: vi.fn(),
     } as unknown as KVNamespace;
 
     const ok = await cacheFixDraft(kv, 'user-1', newFixDraftToken(), {
-      runId: 'r', findingId: 'f', taskText: 't', owner: 'o', repo: 'r',
-      severity: 'low', lens: 'tests', createdAt: 'now',
+      runId: 'r',
+      findingId: 'f',
+      taskText: 't',
+      owner: 'o',
+      repo: 'r',
+      severity: 'low',
+      lens: 'tests',
+      createdAt: 'now',
     });
     expect(ok).toBe(false);
   });
@@ -2675,8 +3480,14 @@ describe('cacheFixDraft return value (closes PR 514 follow-up #1)', () => {
   it('returns false when KV is undefined', async () => {
     const { cacheFixDraft, newFixDraftToken } = await import('./cache');
     const ok = await cacheFixDraft(undefined, 'user-1', newFixDraftToken(), {
-      runId: 'r', findingId: 'f', taskText: 't', owner: 'o', repo: 'r',
-      severity: 'low', lens: 'tests', createdAt: 'now',
+      runId: 'r',
+      findingId: 'f',
+      taskText: 't',
+      owner: 'o',
+      repo: 'r',
+      severity: 'low',
+      lens: 'tests',
+      createdAt: 'now',
     });
     expect(ok).toBe(false);
   });
@@ -2696,15 +3507,405 @@ describe('FIX_TOKEN_RE shape (closes PR 514 follow-up #3)', () => {
   });
 
   it.each([
-    ['empty',                ''],
-    ['too short',            '0123456789abcde'],     // 15 chars
-    ['too long',             '0123456789abcdef0'],   // 17 chars
-    ['non-hex chars',        'gggggggggggggggg'],
-    ['runId shape',          'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],
-    ['hex with dashes',      '0123-4567-89ab-cdef'], // wrong shape
-    ['SQL-injection-y',      "0' OR 1=1--      "],
+    ['empty', ''],
+    ['too short', '0123456789abcde'], // 15 chars
+    ['too long', '0123456789abcdef0'], // 17 chars
+    ['non-hex chars', 'gggggggggggggggg'],
+    ['runId shape', 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],
+    ['hex with dashes', '0123-4567-89ab-cdef'], // wrong shape
+    ['SQL-injection-y', "0' OR 1=1--      "],
     ['suppression-key path', 'audit:fixdraft:user'],
   ])('rejects %s', (_label, bad) => {
     expect(FIX_TOKEN_RE.test(bad)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// /audit subscribe | unsubscribe | subs (Phase 1, Slice A)
+// ---------------------------------------------------------------------------
+
+describe('/audit subscribe', () => {
+  function kvWithStore() {
+    const store = new Map<string, string>();
+    const kv = {
+      get: vi.fn(async (key: string, type?: string) => {
+        const v = store.get(key);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      put: vi.fn(async (key: string, value: string) => {
+        store.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        store.delete(key);
+      }),
+      list: vi.fn(async (opts: { prefix?: string }) => {
+        const prefix = opts.prefix ?? '';
+        return {
+          keys: [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })),
+          list_complete: true,
+        };
+      }),
+    } as unknown as KVNamespace;
+    return { kv, store };
+  }
+
+  function makeSubReq(overrides: Partial<SkillRequest> = {}): SkillRequest {
+    return {
+      skillId: 'audit',
+      subcommand: 'subscribe',
+      text: 'octocat/hello-world',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      chatId: 1234,
+      env: {
+        NEXUS_KV: undefined as unknown as KVNamespace,
+        GITHUB_TOKEN: 'tok',
+      } as unknown as MoltbotEnv,
+      ...overrides,
+    };
+  }
+
+  it('creates a subscription with sane defaults (weekly, quick, all lenses)', async () => {
+    const { kv, store } = kvWithStore();
+    const result = await handleAudit(
+      makeSubReq({
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/Subscribed octocat\/hello-world/);
+    expect(result.body).toMatch(/weekly/);
+
+    const stored = JSON.parse(store.get('audit:sub:user-1:octocat/hello-world')!);
+    expect(stored.interval).toBe('weekly');
+    expect(stored.depth).toBe('quick');
+    expect(stored.lens).toBeUndefined();
+    expect(stored.chatId).toBe(1234);
+    expect(stored.lastRunAt).toBeNull();
+  });
+
+  it('honors --daily, --lens, --depth, --branch', async () => {
+    const { kv, store } = kvWithStore();
+    await handleAudit(
+      makeSubReq({
+        flags: { daily: 'true', lens: 'security', depth: 'standard', branch: 'main' },
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    const stored = JSON.parse(store.get('audit:sub:user-1:octocat/hello-world')!);
+    expect(stored.interval).toBe('daily');
+    expect(stored.lens).toBe('security');
+    expect(stored.depth).toBe('standard');
+    expect(stored.branch).toBe('main');
+  });
+
+  it('rejects unknown lens', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(
+      makeSubReq({
+        flags: { lens: 'nonsense' },
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Unknown --lens/);
+  });
+
+  it('rejects unknown depth', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(
+      makeSubReq({
+        flags: { depth: 'extreme' },
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Unknown --depth/);
+  });
+
+  it('rejects when transport is not telegram', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(
+      makeSubReq({
+        transport: 'web',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Telegram-only/);
+  });
+
+  it('rejects when chatId is missing', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(
+      makeSubReq({
+        chatId: undefined,
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/chat context/);
+  });
+
+  it('rejects when no repo is provided', async () => {
+    const { kv } = kvWithStore();
+    const result = await handleAudit(
+      makeSubReq({
+        text: '',
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Usage:/);
+  });
+
+  it('preserves lastRunAt/lastRunId when an existing subscription is updated', async () => {
+    const { kv, store } = kvWithStore();
+    // Pre-seed an existing subscription that has already run once.
+    const seeded = {
+      userId: 'user-1',
+      owner: 'octocat',
+      repo: 'hello-world',
+      transport: 'telegram',
+      chatId: 1234,
+      depth: 'quick',
+      interval: 'weekly',
+      createdAt: '2026-01-01T00:00:00Z',
+      lastRunAt: '2026-04-10T00:00:00Z',
+      lastTaskId: 'tt-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      lastRunId: null,
+    };
+    store.set('audit:sub:user-1:octocat/hello-world', JSON.stringify(seeded));
+
+    const result = await handleAudit(
+      makeSubReq({
+        flags: { daily: 'true' },
+        env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+      }),
+    );
+    expect(result.body).toMatch(/Updated/);
+    const updated = JSON.parse(store.get('audit:sub:user-1:octocat/hello-world')!);
+    expect(updated.interval).toBe('daily');
+    expect(updated.createdAt).toBe(seeded.createdAt); // unchanged
+    expect(updated.lastRunAt).toBe(seeded.lastRunAt); // unchanged
+    expect(updated.lastTaskId).toBe(seeded.lastTaskId); // unchanged
+    expect(updated.lastRunId).toBeNull(); // unchanged
+  });
+});
+
+describe('/audit unsubscribe', () => {
+  it('removes an existing subscription', async () => {
+    const store = new Map<string, string>();
+    const seeded = {
+      userId: 'user-1',
+      owner: 'octocat',
+      repo: 'demo',
+      transport: 'telegram',
+      chatId: 1,
+      depth: 'quick',
+      interval: 'weekly',
+      createdAt: 't',
+      lastRunAt: null,
+      lastTaskId: null,
+      lastRunId: null,
+    };
+    store.set('audit:sub:user-1:octocat/demo', JSON.stringify(seeded));
+    const kv = {
+      get: vi.fn(async (k: string) => store.get(k) ?? null),
+      delete: vi.fn(async (k: string) => {
+        store.delete(k);
+      }),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'unsubscribe',
+      text: 'octocat/demo',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    } as SkillRequest);
+
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/Unsubscribed/);
+    expect(store.has('audit:sub:user-1:octocat/demo')).toBe(false);
+  });
+
+  it('returns a friendly message when nothing is subscribed', async () => {
+    const kv = {
+      get: vi.fn(async () => null),
+      delete: vi.fn(),
+    } as unknown as KVNamespace;
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'unsubscribe',
+      text: 'octocat/demo',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    } as SkillRequest);
+
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/No active subscription/);
+  });
+
+  it('rejects when no repo is given', async () => {
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'unsubscribe',
+      text: '',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: {} as KVNamespace } as unknown as MoltbotEnv,
+    } as SkillRequest);
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/Usage:/);
+  });
+});
+
+describe('/audit subs (list)', () => {
+  it('returns an empty-state message when there are no subscriptions', async () => {
+    const kv = {
+      list: vi.fn(async () => ({ keys: [], list_complete: true })),
+    } as unknown as KVNamespace;
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'subs',
+      text: '',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    } as SkillRequest);
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/No active audit subscriptions/);
+  });
+
+  it('lists user subscriptions sorted by createdAt', async () => {
+    const store = new Map<string, string>();
+    store.set(
+      'audit:sub:user-1:b/b',
+      JSON.stringify({
+        userId: 'user-1',
+        owner: 'b',
+        repo: 'b',
+        transport: 'telegram',
+        chatId: 1,
+        depth: 'quick',
+        interval: 'daily',
+        createdAt: '2026-02-01T00:00:00Z',
+        lastRunAt: '2026-04-20T00:00:00Z',
+        lastTaskId: 'tid',
+        lastRunId: null,
+      }),
+    );
+    store.set(
+      'audit:sub:user-1:a/a',
+      JSON.stringify({
+        userId: 'user-1',
+        owner: 'a',
+        repo: 'a',
+        transport: 'telegram',
+        chatId: 1,
+        depth: 'standard',
+        interval: 'weekly',
+        createdAt: '2026-01-01T00:00:00Z',
+        lastRunAt: null,
+        lastTaskId: null,
+        lastRunId: null,
+        lens: 'security',
+      }),
+    );
+    const kv = {
+      get: vi.fn(async (k: string, type?: string) => {
+        const v = store.get(k);
+        if (v === undefined) return null;
+        return type === 'json' ? JSON.parse(v) : v;
+      }),
+      list: vi.fn(async (opts: { prefix?: string }) => ({
+        keys: [...store.keys()]
+          .filter((k) => k.startsWith(opts.prefix ?? ''))
+          .map((name) => ({ name })),
+        list_complete: true,
+      })),
+    } as unknown as KVNamespace;
+
+    const result = await handleAudit({
+      skillId: 'audit',
+      subcommand: 'subs',
+      text: '',
+      flags: {},
+      transport: 'telegram',
+      userId: 'user-1',
+      env: { NEXUS_KV: kv } as unknown as MoltbotEnv,
+    } as SkillRequest);
+
+    expect(result.kind).toBe('text');
+    // Older sub renders before newer one.
+    const aIdx = result.body.indexOf('a/a');
+    const bIdx = result.body.indexOf('b/b');
+    expect(aIdx).toBeGreaterThan(-1);
+    expect(bIdx).toBeGreaterThan(aIdx);
+    expect(result.body).toMatch(/never run/); // a/a
+    expect(result.body).toMatch(/last run 2026-04-20/); // b/b
+    expect(result.body).toMatch(/security/); // a/a's lens
+  });
+});
+
+describe('buildScheduledAuditRequest', () => {
+  it('produces an --analyze SkillRequest matching subscription knobs', () => {
+    const sub = {
+      userId: 'u',
+      owner: 'o',
+      repo: 'r',
+      transport: 'telegram' as const,
+      chatId: 5,
+      depth: 'standard' as const,
+      interval: 'daily' as const,
+      lens: 'security',
+      branch: 'main',
+      createdAt: 't',
+      lastRunAt: null,
+      lastTaskId: null,
+      lastRunId: null,
+    };
+    const env = { NEXUS_KV: {} as KVNamespace } as unknown as MoltbotEnv;
+    const built = buildScheduledAuditRequest(sub, env, undefined);
+    expect(built.subcommand).toBe('run');
+    expect(built.text).toBe('o/r');
+    expect(built.flags).toEqual({
+      analyze: 'true',
+      depth: 'standard',
+      lens: 'security',
+      branch: 'main',
+    });
+    expect(built.userId).toBe('u');
+    expect(built.chatId).toBe(5);
+  });
+
+  it('omits lens/branch when subscription leaves them undefined', () => {
+    const built = buildScheduledAuditRequest(
+      {
+        userId: 'u',
+        owner: 'o',
+        repo: 'r',
+        transport: 'telegram',
+        chatId: 1,
+        depth: 'quick',
+        interval: 'weekly',
+        createdAt: 't',
+        lastRunAt: null,
+        lastTaskId: null,
+        lastRunId: null,
+      },
+      {} as unknown as MoltbotEnv,
+      undefined,
+    );
+    expect(built.flags).toEqual({ analyze: 'true', depth: 'quick' });
   });
 });

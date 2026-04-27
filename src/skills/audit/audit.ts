@@ -26,9 +26,18 @@ import { MVP_LENSES, findingPriority, isLens, isDepth } from './types';
 import { scout, fetchFileContents, parseRepoCoords } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
 import {
-  getCachedProfile, cacheProfile,
-  cacheAuditRun, getCachedAuditRun,
-  getSuppressedIds, addSuppression, removeSuppression,
+  getCachedProfile,
+  cacheProfile,
+  cacheAuditRun,
+  getCachedAuditRun,
+  getSuppressedIds,
+  addSuppression,
+  removeSuppression,
+  setAuditSubscription,
+  getAuditSubscription,
+  deleteAuditSubscription,
+  listUserSubscriptions,
+  type AuditSubscription,
 } from './cache';
 import { extractSnippets } from './extractor/extractor';
 import { loadGrammar, loadRuntimeWasm } from './grammars/loader';
@@ -44,7 +53,8 @@ const INLINE_MAX_FILES = 25;
 export const AUDIT_META: SkillMeta = {
   id: 'audit',
   name: 'Audit',
-  description: 'Repo audit — root-cause analysis + corrective + preventive actions, no clone required',
+  description:
+    'Repo audit — root-cause analysis + corrective + preventive actions, no clone required',
   defaultModel: 'flash',
   subcommands: ['plan', 'run'],
 };
@@ -67,15 +77,28 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   if (request.subcommand === 'fix') {
     return handleFix(request, start);
   }
+  if (request.subcommand === 'subscribe') {
+    return handleSubscribe(request, start);
+  }
+  if (request.subcommand === 'unsubscribe') {
+    return handleUnsubscribe(request, start);
+  }
+  if (request.subcommand === 'subs') {
+    return handleListSubs(request, start);
+  }
 
   // 1. Parse args
   const repoArg = request.text.trim().split(/\s+/)[0] ?? '';
   if (!repoArg) {
-    return errorResult('Please provide a repo. Usage: /audit <owner/repo or URL> [--lens X] [--depth quick|standard|deep] [--branch <name>]');
+    return errorResult(
+      'Please provide a repo. Usage: /audit <owner/repo or URL> [--lens X] [--depth quick|standard|deep] [--branch <name>]',
+    );
   }
   const coords = parseRepoCoords(repoArg);
   if (!coords) {
-    return errorResult(`Could not parse "${repoArg}" as a GitHub repo. Use owner/repo or a github.com URL.`);
+    return errorResult(
+      `Could not parse "${repoArg}" as a GitHub repo. Use owner/repo or a github.com URL.`,
+    );
   }
 
   const lens = parseLensFlag(request.flags.lens);
@@ -101,14 +124,24 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   // Subsequent calls in the same run could be cached, but for the v0 plan-only
   // path the Scout is the only stage so we always run it.
   try {
-    const result = await scout({ owner: coords.owner, repo: coords.repo, branch, token: githubToken });
+    const result = await scout({
+      owner: coords.owner,
+      repo: coords.repo,
+      branch,
+      token: githubToken,
+    });
     profile = result.profile;
     apiCalls = result.apiCalls;
 
     // Once we have the SHA, peek the cache — if we have a fresh profile keyed
     // on the same SHA, prefer it (it may have richer manifest content collected
     // in a prior, deeper run). Otherwise persist this one.
-    const cached = await getCachedProfile(request.env.NEXUS_KV, profile.owner, profile.repo, profile.sha);
+    const cached = await getCachedProfile(
+      request.env.NEXUS_KV,
+      profile.owner,
+      profile.repo,
+      profile.sha,
+    );
     if (cached && cached.profileHash === profile.profileHash) {
       profile = cached;
       cachedFromSha = profile.sha;
@@ -116,7 +149,9 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
       await cacheProfile(request.env.NEXUS_KV, profile);
     }
   } catch (err) {
-    return errorResult(`Audit failed at Scout stage: ${err instanceof Error ? err.message : String(err)}`);
+    return errorResult(
+      `Audit failed at Scout stage: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   // 3. Build the plan — lens-filter + budget estimate
@@ -146,7 +181,13 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   // us fall through to runFullAudit with the inline budget guard relaxed.
   // From the worker, we either run inline (cheap audits) or dispatch to
   // the DO (long audits) — same pattern as /dossier.
-  return dispatchOrInline({ plan, request, apiCallsSoFar: apiCalls, cachedProfile: !!cachedFromSha, start });
+  return dispatchOrInline({
+    plan,
+    request,
+    apiCallsSoFar: apiCalls,
+    cachedProfile: !!cachedFromSha,
+    start,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -187,17 +228,18 @@ async function dispatchOrInline(ctx: RunFullAuditCtx): Promise<SkillResult> {
   const taskProcessor = request.env.TASK_PROCESSOR as
     | DurableObjectNamespace<TaskProcessor>
     | undefined;
-  const hasUsableDO = typeof taskProcessor?.idFromName === 'function'
-    && typeof taskProcessor?.get === 'function';
+  const hasUsableDO =
+    typeof taskProcessor?.idFromName === 'function' && typeof taskProcessor?.get === 'function';
 
   const telegramToken = request.context?.telegramToken;
   const chatId = request.chatId;
-  const canDispatch = hasUsableDO && request.transport === 'telegram' && !!telegramToken && !!chatId;
+  const canDispatch =
+    hasUsableDO && request.transport === 'telegram' && !!telegramToken && !!chatId;
 
   if (!canDispatch) {
     return errorResult(
       `Audit too large for inline execution: depth=${plan.depth}, ${selectedPaths.size} files selected (max inline: depth=quick + ${INLINE_MAX_FILES} files).\n` +
-      `Larger audits need the TaskProcessor DO + Telegram transport. Use --depth quick + --lens <single-lens> for the inline envelope.`,
+        `Larger audits need the TaskProcessor DO + Telegram transport. Use --depth quick + --lens <single-lens> for the inline envelope.`,
     );
   }
 
@@ -250,15 +292,23 @@ async function dispatchToDO(
     });
   } catch (err) {
     console.error('[Audit] DO dispatch failed:', err instanceof Error ? err.message : err);
-    return errorResult(`Audit dispatch failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+    return errorResult(
+      `Audit dispatch failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+    );
   }
   // The DO returns 200 + JSON on accept, anything else is a dispatch failure
   // we MUST surface — otherwise the user sees "Audit started" while the DO
   // never actually started. Read the body defensively (it may be empty).
   if (!resp.ok) {
     let detail = '';
-    try { detail = (await resp.text()).slice(0, 240); } catch { /* ignore */ }
-    return errorResult(`Audit dispatch failed: DO returned ${resp.status}${detail ? ` — ${detail}` : ''}`);
+    try {
+      detail = (await resp.text()).slice(0, 240);
+    } catch {
+      /* ignore */
+    }
+    return errorResult(
+      `Audit dispatch failed: DO returned ${resp.status}${detail ? ` — ${detail}` : ''}`,
+    );
   }
 
   const { profile } = plan;
@@ -310,7 +360,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   if (!insideDO && (plan.depth !== 'quick' || selectedPaths.size > INLINE_MAX_FILES)) {
     return errorResult(
       `Audit too large for inline execution: depth=${plan.depth}, ${selectedPaths.size} files selected (max inline: depth=quick + ${INLINE_MAX_FILES} files).\n` +
-      `Use --depth quick + --lens <single-lens>, or rely on the DO dispatch path.`,
+        `Use --depth quick + --lens <single-lens>, or rely on the DO dispatch path.`,
     );
   }
 
@@ -333,7 +383,11 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     if (r2.ok) {
       runtimeWasmBytes = r2.bytes;
       runtimeSource = 'r2';
-    } else if (r2.reason !== 'no_bucket' && r2.reason !== 'no_manifest' && r2.reason !== 'missing_runtime') {
+    } else if (
+      r2.reason !== 'no_bucket' &&
+      r2.reason !== 'no_manifest' &&
+      r2.reason !== 'missing_runtime'
+    ) {
       // 'no_bucket' / 'no_manifest' / 'missing_runtime' are routine
       // — the operator simply hasn't run audit:upload-grammars. The
       // remaining failure modes (sha_mismatch, oversize_*, missing_object)
@@ -345,33 +399,37 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   }
   if (!runtimeWasmBytes) {
     const bundled = await getBundledRuntimeWasm();
-    if (bundled) { runtimeWasmBytes = bundled.bytes; runtimeSource = 'bundled'; }
+    if (bundled) {
+      runtimeWasmBytes = bundled.bytes;
+      runtimeSource = 'bundled';
+    }
   }
   if (!runtimeWasmBytes && !isNodeTestEnv()) {
     return errorResult(
       'Audit analysis is not enabled in this build: tree-sitter runtime WASM is not present in either MOLTBOT_BUCKET or the bundled fallback. ' +
-      'Run `npm run audit:sync-runtime && npm run audit:upload-grammars` to populate both.',
+        'Run `npm run audit:sync-runtime && npm run audit:upload-grammars` to populate both.',
     );
   }
 
   // Fetch contents for the selected files (Scout pre-fetched manifests; the
   // Extractor doesn't itself call GitHub — keeps the data flow auditable).
-  const fetchResult = selectedPaths.size > 0
-    ? await fetchFileContents({
-        owner: profile.owner,
-        repo: profile.repo,
-        ref: profile.sha,
-        paths: [...selectedPaths],
-        token: request.env.GITHUB_TOKEN,
-      })
-    : { files: [], apiCalls: 0 };
+  const fetchResult =
+    selectedPaths.size > 0
+      ? await fetchFileContents({
+          owner: profile.owner,
+          repo: profile.repo,
+          ref: profile.sha,
+          paths: [...selectedPaths],
+          token: request.env.GITHUB_TOKEN,
+        })
+      : { files: [], apiCalls: 0 };
   const totalApiCalls = ctx.apiCallsSoFar + fetchResult.apiCalls;
 
   // Validate fetched-file SHA against the tree SHA. A mismatch is rare but
   // possible (symlinks, submodules, ref drift between calls). Skip files
   // that don't agree — the Analyst's evidence-bound contract relies on
   // path+content being internally consistent.
-  const treeSha = new Map(profile.tree.map(t => [t.path, t.sha] as const));
+  const treeSha = new Map(profile.tree.map((t) => [t.path, t.sha] as const));
   let shaMismatches = 0;
   const contentByPath = new Map<string, string>();
   for (const f of fetchResult.files) {
@@ -390,8 +448,8 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   const extractCtx = {
     profile,
     selections: [...selectedPaths]
-      .map(p => ({ path: p, content: contentByPath.get(p) ?? '' }))
-      .filter(s => s.content.length > 0),
+      .map((p) => ({ path: p, content: contentByPath.get(p) ?? '' }))
+      .filter((s) => s.content.length > 0),
     loadGrammar: (lang: Parameters<typeof loadGrammar>[1]) => loadGrammar(request.env, lang),
     parserBootstrap: runtimeWasmBytes
       ? { runtimeWasmBytes, requireRuntimeWasmBytes: true }
@@ -409,8 +467,8 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   let completionTokens = 0;
   for (const lens of plan.lenses) {
     const lensPaths = new Set(plan.selections[lens]);
-    const lensSnippets = extracted.snippets.filter(s =>
-      lensPaths.has(s.path) || s.kind === 'manifest' || s.kind === 'workflow',
+    const lensSnippets = extracted.snippets.filter(
+      (s) => lensPaths.has(s.path) || s.kind === 'manifest' || s.kind === 'workflow',
     );
     const result = await analyzeWithLens({
       profile,
@@ -434,12 +492,15 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   // `suppressed: true`. The default inline view + the keyboard's top-3
   // filter out suppressed; the export's "Suppressed" section shows them.
   const suppression = await getSuppressedIds(
-    request.env.NEXUS_KV, request.userId, profile.owner, profile.repo,
+    request.env.NEXUS_KV,
+    request.userId,
+    profile.owner,
+    profile.repo,
   );
   const annotated = findings
-    .filter(f => f.confidence >= 0.5)
-    .map(f => suppression.ids.has(f.id) ? { ...f, suppressed: true } : f);
-  const suppressedDropped = annotated.filter(f => f.suppressed).length;
+    .filter((f) => f.confidence >= 0.5)
+    .map((f) => (suppression.ids.has(f.id) ? { ...f, suppressed: true } : f));
+  const suppressedDropped = annotated.filter((f) => f.suppressed).length;
 
   // Sort by priority (severity × confidence). Suppressed findings rank
   // last so any caller that doesn't filter still pushes them to the
@@ -541,24 +602,30 @@ export function buildPlan(profile: RepoProfile, lenses: Lens[], depth: Depth): A
 
   for (const l of lenses) {
     const candidates = profile.tree
-      .filter(t => fileMatchesLens(t, l))
+      .filter((t) => fileMatchesLens(t, l))
       .sort((a, b) => (b.size ?? 0) - (a.size ?? 0)) // bigger files first as a crude signal
       .slice(0, budget.maxFilesPerLens);
-    selections[l] = candidates.map(t => t.path);
+    selections[l] = candidates.map((t) => t.path);
     if (candidates.length === 0) {
       notes.push(`No files matched the "${l}" lens — repo may not contain typical ${l} surfaces.`);
     }
   }
 
   if (profile.codeScanningAlerts.length > 0) {
-    const truncatedSuffix = profile.codeScanningAlertsTruncated ? ' (first page only — more may exist)' : '';
-    notes.push(`${profile.codeScanningAlerts.length} pre-existing GitHub Code Scanning alerts will be ingested as evidence${truncatedSuffix}.`);
+    const truncatedSuffix = profile.codeScanningAlertsTruncated
+      ? ' (first page only — more may exist)'
+      : '';
+    notes.push(
+      `${profile.codeScanningAlerts.length} pre-existing GitHub Code Scanning alerts will be ingested as evidence${truncatedSuffix}.`,
+    );
   } else {
     notes.push('No GitHub Code Scanning alerts available (feature disabled or no findings).');
   }
 
   if (profile.treeTruncated) {
-    notes.push('⚠️ GitHub tree response was truncated (>100k entries or >7 MB) — audit coverage is partial. Consider --scope to narrow.');
+    notes.push(
+      '⚠️ GitHub tree response was truncated (>100k entries or >7 MB) — audit coverage is partial. Consider --scope to narrow.',
+    );
   }
 
   if (profile.tree.length === 0) {
@@ -587,7 +654,9 @@ function formatPlan(plan: AuditPlan, ctx: { cached: boolean; apiCalls: number })
   const p = plan.profile;
   const lines: string[] = [];
   lines.push(`Audit plan: ${p.owner}/${p.repo}@${p.sha.slice(0, 7)} (${p.defaultBranch})`);
-  lines.push(`Stack: ${p.meta.primaryLanguage ?? 'unknown'} • ${p.tree.length} files • ${(p.meta.sizeKb / 1024).toFixed(1)} MiB`);
+  lines.push(
+    `Stack: ${p.meta.primaryLanguage ?? 'unknown'} • ${p.tree.length} files • ${(p.meta.sizeKb / 1024).toFixed(1)} MiB`,
+  );
   if (p.meta.archived) lines.push('⚠️ Repo is archived');
   if (p.meta.private) lines.push('🔒 Repo is private');
   lines.push('');
@@ -621,8 +690,12 @@ function formatPlan(plan: AuditPlan, ctx: { cached: boolean; apiCalls: number })
     lines.push('');
   }
 
-  lines.push(`Estimated cost: ~$${plan.estimate.costUsd.toFixed(2)} • ${plan.estimate.llmCalls} LLM calls • ~${plan.estimate.inputTokens.toLocaleString()} input tokens`);
-  lines.push(`GitHub API calls used: ${ctx.apiCalls}${ctx.cached ? ' (profile served from cache)' : ''}`);
+  lines.push(
+    `Estimated cost: ~$${plan.estimate.costUsd.toFixed(2)} • ${plan.estimate.llmCalls} LLM calls • ~${plan.estimate.inputTokens.toLocaleString()} input tokens`,
+  );
+  lines.push(
+    `GitHub API calls used: ${ctx.apiCalls}${ctx.cached ? ' (profile served from cache)' : ''}`,
+  );
   lines.push('');
   lines.push('This is the v0 plan-only output — Extractor + Analyst land in the next slice.');
 
@@ -665,26 +738,37 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
   const lines: string[] = [];
   lines.push(`Audit report: ${run.repo.owner}/${run.repo.name}@${run.repo.sha.slice(0, 7)}`);
   const runtimeNote = c.runtimeSource ? ` • runtime: ${c.runtimeSource}` : '';
-  lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${c.snippetCount} snippets analyzed${runtimeNote}`);
+  lines.push(
+    `Lenses: ${run.lenses.join(', ')} • depth: ${run.depth} • ${c.snippetCount} snippets analyzed${runtimeNote}`,
+  );
   if (c.r2RuntimeFailureReason) {
-    lines.push(`⚠️ R2 runtime unavailable: ${c.r2RuntimeFailureReason}. Used the bundled fallback. Run \`npm run audit:upload-grammars\` to fix the R2 runtime entry.`);
+    lines.push(
+      `⚠️ R2 runtime unavailable: ${c.r2RuntimeFailureReason}. Used the bundled fallback. Run \`npm run audit:upload-grammars\` to fix the R2 runtime entry.`,
+    );
   }
   if (c.missingGrammars.size > 0) {
     const langs = [...c.missingGrammars].sort().join(', ');
-    lines.push(`⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — run \`npm run audit:upload-grammars\` to enable.`);
+    lines.push(
+      `⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — run \`npm run audit:upload-grammars\` to enable.`,
+    );
   }
   if (c.otherParseErrors > 0) lines.push(`⚠️ ${c.otherParseErrors} file(s) had parse issues`);
-  if (c.shaMismatches > 0) lines.push(`⚠️ ${c.shaMismatches} file(s) skipped: fetched SHA disagreed with tree SHA`);
+  if (c.shaMismatches > 0)
+    lines.push(`⚠️ ${c.shaMismatches} file(s) skipped: fetched SHA disagreed with tree SHA`);
   if (c.suppressedDropped && c.suppressedDropped > 0) {
-    lines.push(`🔇 ${c.suppressedDropped} finding(s) suppressed by prior /audit suppress decisions for this repo.`);
+    lines.push(
+      `🔇 ${c.suppressedDropped} finding(s) suppressed by prior /audit suppress decisions for this repo.`,
+    );
   }
   if (c.suppressionReadError) {
-    lines.push(`⚠️ Suppression list could not be read (${c.suppressionReadError.slice(0, 120)}); previously suppressed findings may appear in this report. Retry to re-apply your suppressions.`);
+    lines.push(
+      `⚠️ Suppression list could not be read (${c.suppressionReadError.slice(0, 120)}); previously suppressed findings may appear in this report. Retry to re-apply your suppressions.`,
+    );
   }
   lines.push('');
 
   // Inline (top-N) view: suppressed findings are excluded.
-  const visible = run.findings.filter(f => !f.suppressed);
+  const visible = run.findings.filter((f) => !f.suppressed);
   if (visible.length === 0) {
     lines.push('No defects found that meet the precision threshold (confidence ≥ 0.5).');
   } else {
@@ -698,7 +782,9 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
       lines.push(`  Root cause: ${f.rootCause}`);
       lines.push(`  Fix: ${f.correctiveAction}`);
       lines.push(`  Prevent: ${formatPreventive(f.preventiveAction, run.runId)}`);
-      lines.push(`  Evidence: ${f.evidence.map(e => `${e.path}${e.lines ? `:${e.lines}` : ''}`).join(', ')}`);
+      lines.push(
+        `  Evidence: ${f.evidence.map((e) => `${e.path}${e.lines ? `:${e.lines}` : ''}`).join(', ')}`,
+      );
       lines.push('');
     }
     if (visible.length > topN.length) {
@@ -708,7 +794,9 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
   }
 
   const t = run.telemetry;
-  lines.push(`Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`);
+  lines.push(
+    `Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`,
+  );
   return lines.join('\n');
 }
 
@@ -722,7 +810,11 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
  * (lands with the Distiller slice).
  */
 function formatPreventive(prev: { kind: string; detail: string }, runId: string): string {
-  const firstLine = prev.detail.split('\n').find(l => l.trim().length > 0)?.trim() ?? '';
+  const firstLine =
+    prev.detail
+      .split('\n')
+      .find((l) => l.trim().length > 0)
+      ?.trim() ?? '';
   const more = prev.detail.includes('\n') || prev.detail.length > firstLine.length;
   const summary = firstLine.length > 200 ? firstLine.slice(0, 200) + '…' : firstLine;
   const exportHint = more ? ` (full artifact via /audit export ${runId})` : '';
@@ -754,7 +846,9 @@ async function handleExport(request: SkillRequest, start: number): Promise<Skill
 
   const run = await getCachedAuditRun(request.env.NEXUS_KV, request.userId, runId);
   if (!run) {
-    return errorResult(`No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`);
+    return errorResult(
+      `No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`,
+    );
   }
 
   const format = request.flags.format === 'json' ? 'json' : 'markdown';
@@ -803,7 +897,9 @@ export function buildOrchestraTask(run: AuditRun, finding: AuditFinding): string
   const lines: string[] = [];
   lines.push(`Fix audit finding in ${repo.owner}/${repo.name}@${repo.sha.slice(0, 7)}.`);
   lines.push('');
-  lines.push(`Severity: ${finding.severity} • Lens: ${finding.lens} • Confidence: ${finding.confidence}`);
+  lines.push(
+    `Severity: ${finding.severity} • Lens: ${finding.lens} • Confidence: ${finding.confidence}`,
+  );
   lines.push(`Symptom: ${finding.symptom}`);
   lines.push(`Root cause: ${finding.rootCause}`);
   lines.push('');
@@ -822,7 +918,11 @@ export function buildOrchestraTask(run: AuditRun, finding: AuditFinding): string
     if (e.snippet) {
       // First line of the snippet is the most identifying — keep the
       // orchestra prompt tight.
-      const firstLine = e.snippet.split('\n').find(s => s.trim().length > 0)?.trim() ?? '';
+      const firstLine =
+        e.snippet
+          .split('\n')
+          .find((s) => s.trim().length > 0)
+          ?.trim() ?? '';
       if (firstLine) lines.push(`    ${firstLine.slice(0, 200)}`);
     }
   }
@@ -838,14 +938,26 @@ export function buildOrchestraTask(run: AuditRun, finding: AuditFinding): string
   // LLM upstream. Closes GPT slice-4d review finding 3.
   lines.push('');
   lines.push('Constraints:');
-  lines.push('  - Work on a fresh branch and open a PR; never push directly to main / default branch.');
+  lines.push(
+    '  - Work on a fresh branch and open a PR; never push directly to main / default branch.',
+  );
   lines.push('  - Keep the patch minimal and scoped strictly to this finding.');
-  lines.push('  - Do not refactor unrelated code, reformat unaffected files, or change public APIs unless the corrective action explicitly requires it.');
-  lines.push('  - Add or update tests / CI controls for the preventive action above; do not skip the preventive half.');
-  lines.push('  - Cite this audit run id and finding id in the PR description so a follow-up audit can mark the finding fixed.');
-  lines.push('  - If the corrective action turns out to be wrong (root cause was misdiagnosed), STOP and reply with what you found instead of pushing speculative fixes.');
+  lines.push(
+    '  - Do not refactor unrelated code, reformat unaffected files, or change public APIs unless the corrective action explicitly requires it.',
+  );
+  lines.push(
+    '  - Add or update tests / CI controls for the preventive action above; do not skip the preventive half.',
+  );
+  lines.push(
+    '  - Cite this audit run id and finding id in the PR description so a follow-up audit can mark the finding fixed.',
+  );
+  lines.push(
+    '  - If the corrective action turns out to be wrong (root cause was misdiagnosed), STOP and reply with what you found instead of pushing speculative fixes.',
+  );
   lines.push('');
-  lines.push(`Audit run: ${run.runId}, finding id: ${finding.id} (cite both in the PR description so /audit can mark this finding fixed on the next run).`);
+  lines.push(
+    `Audit run: ${run.runId}, finding id: ${finding.id} (cite both in the PR description so /audit can mark this finding fixed on the next run).`,
+  );
   return lines.join('\n');
 }
 
@@ -881,7 +993,7 @@ export async function resolveFix(
       error: `No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`,
     };
   }
-  const finding = run.findings.find(f => f.id === findingId);
+  const finding = run.findings.find((f) => f.id === findingId);
   if (!finding) {
     return {
       ok: false,
@@ -902,13 +1014,27 @@ export function buildFixSummary(run: AuditRun, finding: AuditFinding): string {
   const lines: string[] = [];
   lines.push(`🔧 <b>Orchestra fix prepared</b>`);
   lines.push('');
-  lines.push(`<b>Repo:</b> ${escapeHtmlSafe(run.repo.owner)}/${escapeHtmlSafe(run.repo.name)}@${run.repo.sha.slice(0, 7)}`);
-  lines.push(`<b>Severity:</b> ${finding.severity.toUpperCase()} • <b>Lens:</b> ${finding.lens} • <b>Confidence:</b> ${finding.confidence}`);
+  lines.push(
+    `<b>Repo:</b> ${escapeHtmlSafe(run.repo.owner)}/${escapeHtmlSafe(run.repo.name)}@${run.repo.sha.slice(0, 7)}`,
+  );
+  lines.push(
+    `<b>Severity:</b> ${finding.severity.toUpperCase()} • <b>Lens:</b> ${finding.lens} • <b>Confidence:</b> ${finding.confidence}`,
+  );
   lines.push(`<b>Symptom:</b> ${escapeHtmlSafe(finding.symptom)}`);
   lines.push(`<b>Fix:</b> ${escapeHtmlSafe(finding.correctiveAction)}`);
-  lines.push(`<b>Preventive:</b> [${finding.preventiveAction.kind}] ${escapeHtmlSafe(finding.preventiveAction.detail.split('\n').find(l => l.trim().length > 0)?.trim().slice(0, 160) ?? '')}`);
+  lines.push(
+    `<b>Preventive:</b> [${finding.preventiveAction.kind}] ${escapeHtmlSafe(
+      finding.preventiveAction.detail
+        .split('\n')
+        .find((l) => l.trim().length > 0)
+        ?.trim()
+        .slice(0, 160) ?? '',
+    )}`,
+  );
   lines.push('');
-  lines.push(`Tap <b>✅ Dispatch fix</b> to send this to orchestra (it will open a PR; the task includes a "do not refactor unrelated code" constraint).`);
+  lines.push(
+    `Tap <b>✅ Dispatch fix</b> to send this to orchestra (it will open a PR; the task includes a "do not refactor unrelated code" constraint).`,
+  );
   lines.push(`Tap <b>❌ Cancel</b> to dismiss without dispatching.`);
   return lines.join('\n');
 }
@@ -971,7 +1097,9 @@ async function handleSuppress(
   // rejects cross-user attempts (different userId means different key).
   const run = await getCachedAuditRun(request.env.NEXUS_KV, request.userId, runId);
   if (!run) {
-    return errorResult(`No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`);
+    return errorResult(
+      `No audit run found with id ${runId} (it may have expired — runs are kept for 7 days).`,
+    );
   }
   // Sanity: the finding must actually exist in this run (active or
   // suppressed). Now that we persist suppressed findings with
@@ -979,13 +1107,21 @@ async function handleSuppress(
   // finding that has been suppressed before (the previous design lost
   // visibility of those — see GPT slice-4c review finding 3). Reject
   // only when the id was never in this run.
-  const findingExisted = run.findings.some(f => f.id === findingId);
+  const findingExisted = run.findings.some((f) => f.id === findingId);
   if (!findingExisted) {
-    return errorResult(`Finding ${findingId} is not part of run ${runId.slice(0, 8)}…. Use /audit export ${runId} to list this run's findings.`);
+    return errorResult(
+      `Finding ${findingId} is not part of run ${runId.slice(0, 8)}…. Use /audit export ${runId} to list this run's findings.`,
+    );
   }
 
   if (unsuppress) {
-    const r = await removeSuppression(request.env.NEXUS_KV, request.userId, run.repo.owner, run.repo.name, findingId);
+    const r = await removeSuppression(
+      request.env.NEXUS_KV,
+      request.userId,
+      run.repo.owner,
+      run.repo.name,
+      findingId,
+    );
     return {
       skillId: 'audit',
       kind: 'text',
@@ -997,7 +1133,13 @@ async function handleSuppress(
     };
   }
 
-  const r = await addSuppression(request.env.NEXUS_KV, request.userId, run.repo.owner, run.repo.name, findingId);
+  const r = await addSuppression(
+    request.env.NEXUS_KV,
+    request.userId,
+    run.repo.owner,
+    run.repo.name,
+    findingId,
+  );
   return {
     skillId: 'audit',
     kind: 'text',
@@ -1023,8 +1165,8 @@ function formatRunFull(run: AuditRun): string {
   lines.push(`Lenses: ${run.lenses.join(', ')} • depth: ${run.depth}`);
   lines.push('');
 
-  const active = run.findings.filter(f => !f.suppressed);
-  const suppressed = run.findings.filter(f => f.suppressed);
+  const active = run.findings.filter((f) => !f.suppressed);
+  const suppressed = run.findings.filter((f) => f.suppressed);
 
   if (active.length === 0) {
     lines.push('No active defects at confidence ≥ 0.5 (precision threshold).');
@@ -1035,13 +1177,17 @@ function formatRunFull(run: AuditRun): string {
   }
 
   if (suppressed.length > 0) {
-    lines.push(`Suppressed findings (${suppressed.length}) — listed for transparency; excluded from the inline view by your prior /audit suppress decisions:`);
+    lines.push(
+      `Suppressed findings (${suppressed.length}) — listed for transparency; excluded from the inline view by your prior /audit suppress decisions:`,
+    );
     lines.push('');
     suppressed.forEach((f, idx) => appendFinding(lines, f, idx + 1, true));
   }
 
   const t = run.telemetry;
-  lines.push(`Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`);
+  lines.push(
+    `Cost: $${t.costUsd.toFixed(2)} • ${t.llmCalls} LLM calls • ${t.tokensIn.toLocaleString()} → ${t.tokensOut.toLocaleString()} tokens • ${t.githubApiCalls} API calls • ${(t.durationMs / 1000).toFixed(1)}s`,
+  );
   return lines.join('\n');
 }
 
@@ -1087,4 +1233,201 @@ function errorResult(message: string): SkillResult {
     body: message,
     telemetry: { durationMs: 0, model: 'none', llmCalls: 0, toolCalls: 0 },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled audits — /audit subscribe | unsubscribe | subs
+// ---------------------------------------------------------------------------
+//
+// Storage: see src/skills/audit/cache.ts (audit:sub:* prefix in NEXUS_KV).
+// Dispatch: see src/index.ts scheduled() — the 6h cron tick scans
+// subscriptions and dispatches due ones via the existing TaskProcessor
+// path. The handlers here only manage the subscription itself.
+
+/**
+ * Build a SkillRequest equivalent to a manual `/audit <repo> --analyze`
+ * call, used by the cron handler when running a scheduled audit. Exposed
+ * for the cron-side test, kept here so the inputs/outputs of the
+ * subscription mechanism live in one place.
+ */
+export function buildScheduledAuditRequest(
+  sub: AuditSubscription,
+  env: SkillRequest['env'],
+  context: SkillRequest['context'],
+): SkillRequest {
+  const flags: Record<string, string> = { analyze: 'true', depth: sub.depth };
+  if (sub.lens) flags.lens = sub.lens;
+  if (sub.branch) flags.branch = sub.branch;
+
+  return {
+    skillId: 'audit',
+    subcommand: 'run',
+    text: `${sub.owner}/${sub.repo}`,
+    flags,
+    transport: sub.transport,
+    userId: sub.userId,
+    chatId: sub.chatId,
+    env,
+    context,
+  };
+}
+
+async function handleSubscribe(request: SkillRequest, start: number): Promise<SkillResult> {
+  const repoArg = request.text.trim().split(/\s+/)[0] ?? '';
+  if (!repoArg) {
+    return errorResult(
+      'Usage: /audit subscribe <owner/repo or URL> [--daily|--weekly] [--lens X] [--depth quick|standard|deep] [--branch <name>]',
+    );
+  }
+
+  const coords = parseRepoCoords(repoArg);
+  if (!coords) {
+    return errorResult(
+      `Could not parse "${repoArg}" as a GitHub repo. Use owner/repo or a github.com URL.`,
+    );
+  }
+
+  // Cron only knows how to deliver to Telegram chats today. Reject from any
+  // other transport so we don't silently store a sub that will never fire.
+  if (request.transport !== 'telegram') {
+    return errorResult('Audit subscriptions are Telegram-only for now. Use the bot to subscribe.');
+  }
+  if (request.chatId === undefined) {
+    return errorResult(
+      'Audit subscriptions require a chat context — invoke /audit subscribe from a Telegram chat.',
+    );
+  }
+
+  // Cadence: --daily wins, otherwise default to weekly. We accept the
+  // --weekly flag for symmetry but treat its absence as the default.
+  const interval: AuditSubscription['interval'] =
+    request.flags.daily === 'true' ? 'daily' : 'weekly';
+
+  const lens = parseLensFlag(request.flags.lens);
+  if (request.flags.lens && !lens) {
+    return errorResult(`Unknown --lens "${request.flags.lens}". Valid: ${MVP_LENSES.join(', ')}.`);
+  }
+  const depth = parseDepthFlag(request.flags.depth) ?? 'quick';
+  if (request.flags.depth && !parseDepthFlag(request.flags.depth)) {
+    return errorResult(`Unknown --depth "${request.flags.depth}". Valid: quick, standard, deep.`);
+  }
+
+  // Preserve cadence state on overwrite so editing the cadence doesn't
+  // accidentally re-trigger an audit that just ran. Also preserve any
+  // in-flight dispatch marker — clearing it here would race with a cron
+  // tick that's currently dispatching this sub.
+  const existing = await getAuditSubscription(
+    request.env.NEXUS_KV,
+    request.userId,
+    coords.owner,
+    coords.repo,
+  );
+
+  const sub: AuditSubscription = {
+    userId: request.userId,
+    owner: coords.owner,
+    repo: coords.repo,
+    transport: 'telegram',
+    chatId: request.chatId,
+    branch: request.flags.branch,
+    lens: lens ?? undefined,
+    depth,
+    interval,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    lastRunAt: existing?.lastRunAt ?? null,
+    lastTaskId: existing?.lastTaskId ?? null,
+    lastRunId: existing?.lastRunId ?? null,
+    dispatchStartedAt: existing?.dispatchStartedAt,
+  };
+
+  const ok = await setAuditSubscription(request.env.NEXUS_KV, sub);
+  if (!ok) {
+    return errorResult(
+      'Failed to persist subscription. KV may be unavailable; please retry shortly.',
+    );
+  }
+
+  const verb = existing ? 'Updated' : 'Subscribed';
+  const next = existing?.lastRunAt
+    ? `; next run when more than ${interval === 'daily' ? '24h' : '7d'} elapses since ${existing.lastRunAt}`
+    : '; first run on the next 6h cron tick';
+  const lensSummary = lens ?? 'all lenses';
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body:
+      `🔔 ${verb} ${coords.owner}/${coords.repo} for ${interval} audits ` +
+      `(${lensSummary}, depth=${depth}${sub.branch ? `, branch=${sub.branch}` : ''})${next}.\n\n` +
+      `View all subscriptions with /audit subs. Remove with /audit unsubscribe ${coords.owner}/${coords.repo}.`,
+    data: { subscribed: true, interval, depth, lens: lens ?? null },
+    telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
+  };
+}
+
+async function handleUnsubscribe(request: SkillRequest, start: number): Promise<SkillResult> {
+  const repoArg = request.text.trim().split(/\s+/)[0] ?? '';
+  if (!repoArg) {
+    return errorResult('Usage: /audit unsubscribe <owner/repo or URL>');
+  }
+
+  const coords = parseRepoCoords(repoArg);
+  if (!coords) {
+    return errorResult(
+      `Could not parse "${repoArg}" as a GitHub repo. Use owner/repo or a github.com URL.`,
+    );
+  }
+
+  const removed = await deleteAuditSubscription(
+    request.env.NEXUS_KV,
+    request.userId,
+    coords.owner,
+    coords.repo,
+  );
+
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body: removed
+      ? `🔕 Unsubscribed from ${coords.owner}/${coords.repo}. No more scheduled audits will run.`
+      : `No active subscription found for ${coords.owner}/${coords.repo}.`,
+    data: { removed },
+    telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
+  };
+}
+
+async function handleListSubs(request: SkillRequest, start: number): Promise<SkillResult> {
+  const subs = await listUserSubscriptions(request.env.NEXUS_KV, request.userId);
+
+  const body =
+    subs.length === 0
+      ? 'No active audit subscriptions.\n\nCreate one with /audit subscribe <owner/repo> [--daily|--weekly].'
+      : formatSubsList(subs);
+
+  return {
+    skillId: 'audit',
+    kind: 'text',
+    body,
+    data: { subscriptions: subs.length },
+    telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
+  };
+}
+
+function formatSubsList(subs: AuditSubscription[]): string {
+  // Sort by created date so the user's mental model of "in the order I
+  // added them" matches what's on screen. Subscriptions are tiny — at
+  // most a few dozen per user — so we sort in-memory rather than
+  // adding an indexed key.
+  const ordered = [...subs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const lines: string[] = [`Active audit subscriptions (${ordered.length}):`, ''];
+  for (const s of ordered) {
+    const lensSummary = s.lens ?? 'all lenses';
+    const last = s.lastRunAt ? `last run ${s.lastRunAt}` : 'never run';
+    const branch = s.branch ? `, branch=${s.branch}` : '';
+    lines.push(
+      `• ${s.owner}/${s.repo} — ${s.interval}, ${lensSummary}, depth=${s.depth}${branch} — ${last}`,
+    );
+  }
+  lines.push('');
+  lines.push('Remove one with /audit unsubscribe <owner/repo>.');
+  return lines.join('\n');
 }
