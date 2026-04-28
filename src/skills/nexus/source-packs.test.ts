@@ -126,10 +126,16 @@ describe('extractKeywords', () => {
   // The smoking gun from the "ai models and other fee features in cloudflare
   // workers" dossier: GitHub returned 0 hits because the API ANDed all 8
   // tokens. extractKeywords pre-processes natural-language queries before
-  // hitting keyword-strict APIs.
-  it('drops stop words from natural-language queries', () => {
+  // hitting keyword-strict APIs. Note: this is a fallback path — the
+  // primary route is the LLM classifier's `keywordQuery` output, which is
+  // expected to do better on cap selection than this local heuristic.
+  it('drops stop words and meta words from natural-language queries', () => {
+    // "and", "other", "in" are stop words; "features" is a meta word.
+    // After cap=4: ai, models, fee, cloudflare ("workers" cut off — known
+    // limitation of the heuristic; the LLM-driven keywordQuery is the
+    // robust path).
     expect(extractKeywords('ai models and other fee features in cloudflare workers'))
-      .toBe('ai models fee features');
+      .toBe('ai models fee cloudflare');
   });
 
   it('caps at 4 tokens by default to keep keyword search loose enough', () => {

@@ -56,10 +56,21 @@ Pick 2-4 most relevant sources. Some category guidance (combine across when usef
   - regulatory: secEdgar, worldBank, news, webSearch
   - historical: internetArchive, wikipedia, wikidata, webSearch
 
+Also distill the query into 2-4 distinctive keyword tokens for use by
+keyword-strict APIs (GitHub repo search, Stack Exchange Q&A, Wikidata
+entity match, World Bank indicator search, SEC EDGAR full-text). These
+APIs treat the query as an AND of every space-separated token, so a
+natural-language phrase like "ai models and other free features in
+cloudflare workers" returns zero hits — but "cloudflare workers ai"
+matches plenty. Drop articles, prepositions, conjunctions, generic
+qualifiers ("best", "free", "available"), and meta words ("features",
+"things"). Keep the 2-4 most distinctive nouns/proper-nouns/topic words.
+
 Respond with a JSON object:
 {
   "category": "<category>",
-  "sources": ["source1", "source2", "source3"]
+  "sources": ["source1", "source2", "source3"],
+  "keywordQuery": "<2-4 lowercase keywords, space-separated>"
 }`;
 
 export const NEXUS_SYNTHESIZE_PROMPT = `Synthesize these research findings into a clear, well-sourced analysis.

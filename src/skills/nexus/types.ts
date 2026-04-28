@@ -98,6 +98,14 @@ export interface QueryClassification {
   category: QueryCategory;
   /** Suggested source pack names to use. */
   sources: string[];
+  /**
+   * 2-4 distinctive keyword tokens distilled from the query, suitable for
+   * keyword-strict APIs (GitHub, Stack Exchange, Wikidata) that AND every
+   * token. Optional — when missing, source-packs falls back to the local
+   * stop-word-based extractor. The LLM classifier knows which words are
+   * domain-distinctive far better than a heuristic, so we prefer this.
+   */
+  keywordQuery?: string;
 }
 
 /** Type guard for QueryClassification. */

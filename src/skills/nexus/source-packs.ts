@@ -19,6 +19,21 @@ interface FetchResult {
   confidence: ConfidenceTier;
 }
 
+/**
+ * Per-fetch context. Used to pass distilled keyword tokens (from the LLM
+ * classifier) to keyword-strict fetchers that would otherwise stumble on
+ * natural-language queries. Optional and additive — fetchers that don't
+ * need it ignore it.
+ */
+export interface SourceFetchContext {
+  /**
+   * 2-4 distinctive keyword tokens for keyword-strict APIs (GitHub, Stack
+   * Exchange, Wikidata, etc.). Provided by the classifier LLM, with the
+   * local extractKeywords() heuristic as a fallback.
+   */
+  keywordQuery?: string;
+}
+
 function makeToolCall(name: string, args: Record<string, unknown>): ToolCall {
   return {
     id: `nexus-${name}-${Date.now()}`,
@@ -59,6 +74,10 @@ const STOP_WORDS = new Set([
   // generic qualifiers that are noise for repo/QA search
   'best', 'free', 'available', 'other', 'top', 'good', 'better', 'kind', 'kinds',
   'type', 'types', 'this', 'that', 'these', 'those', 'about', 'some', 'any',
+  // meta words that aren't usually in repo names / SO question titles
+  'features', 'feature', 'thing', 'things', 'stuff', 'way', 'ways', 'list',
+  'option', 'options', 'overview', 'introduction', 'guide', 'tutorial',
+  'example', 'examples',
   // verbs
   'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
   'do', 'does', 'did', 'can', 'could', 'should', 'would', 'will', 'shall', 'may',
@@ -158,33 +177,33 @@ async function fetchFinance(query: string, env: MoltbotEnv, userId?: string): Pr
 // isToolError() so a 4xx/5xx never inflates the final source count.
 // ---------------------------------------------------------------------------
 
-async function fetchStackExchange(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchStackExchange(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // /search/excerpts returns title + body excerpt + score per hit, which is
   // higher signal for synthesis than just titles. Stack Overflow is the
   // default site; Stack Exchange has 170+ sister sites (cooking, photography,
   // math, writing, etc.) but cross-site search needs site-id and complicates
   // the call — leave that to a future "site picker" pass.
-  // The API treats `q` as AND of all tokens — passing natural-language
-  // queries directly returns zero hits, so we extract keywords first.
-  const keywords = extractKeywords(query) || query;
+  // The API treats `q` as AND of all tokens. Prefer the LLM-distilled
+  // keywordQuery; fall back to the local extractor; last resort, raw query.
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
   const seUrl = `https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q=${encodeURIComponent(keywords)}&site=stackoverflow&pagesize=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: seUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
   if (/"items"\s*:\s*\[\s*\]/.test(result.content)) {
-    throw new Error('Stack Exchange: no matching questions');
+    throw new Error(`Stack Exchange: no matching questions (searched: "${keywords}")`);
   }
   return { data: result.content.slice(0, 3000), url: seUrl, source: 'Stack Exchange', confidence: 'high' };
 }
 
-async function fetchGitHub(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchGitHub(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // Goes through github_api so the request carries our PAT and avoids the
   // 60/hr unauth limit shared across all CF egress IPs. Repository search
   // by stars is a reasonable default — relevant projects + descriptions +
   // language for any tool/library/concept query.
-  // GitHub search syntax ANDs tokens — passing 8 natural-language tokens
-  // matches no repos. Extract keywords first.
-  const keywords = extractKeywords(query) || query;
+  // GitHub search syntax ANDs tokens. Prefer the LLM-distilled
+  // keywordQuery; fall back to the local extractor; last resort, raw query.
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
   const endpoint = `/search/repositories?q=${encodeURIComponent(keywords)}&sort=stars&order=desc&per_page=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('github_api', { endpoint, method: 'GET' }), ctx);
@@ -227,13 +246,13 @@ async function fetchArxiv(query: string, env: MoltbotEnv, userId?: string): Prom
   return { data: result.content.slice(0, 3000), url: arxivUrl, source: 'arXiv', confidence: 'high' };
 }
 
-async function fetchWikidata(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchWikidata(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // wbsearchentities is the simplest Wikidata search — returns id+label+
   // description per match. Avoids constructing SPARQL while still giving
   // the synthesis LLM authoritative entity hooks (Q-IDs) it can cite.
-  // wbsearchentities matches against entity labels — give it the 2-3 most
-  // distinctive keywords, not a sentence.
-  const keywords = extractKeywords(query, 3) || query;
+  // wbsearchentities matches against entity labels — prefer the
+  // LLM-distilled keywordQuery; fall back to a 3-token local extraction.
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query, 3) || query;
   const wdUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(keywords)}&language=en&format=json&limit=10&type=item`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: wdUrl }), ctx);
@@ -259,13 +278,12 @@ async function fetchInternetArchive(query: string, env: MoltbotEnv, userId?: str
   return { data: result.content.slice(0, 3000), url: iaUrl, source: 'Internet Archive', confidence: 'medium' };
 }
 
-async function fetchWorldBank(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchWorldBank(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // World Bank's indicator-metadata search — returns indicator codes,
   // names, sources, topics. For actual time-series the LLM would need a
   // follow-up call with a specific indicator code, but for "is there a
   // World Bank dataset on X" research questions the metadata is enough.
-  // Indicator search is keyword-based — extract keywords.
-  const keywords = extractKeywords(query) || query;
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
   const wbUrl = `https://api.worldbank.org/v2/sources/2/indicators?format=json&search=${encodeURIComponent(keywords)}&per_page=10`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: wbUrl }), ctx);
@@ -278,15 +296,13 @@ async function fetchWorldBank(query: string, env: MoltbotEnv, userId?: string): 
   return { data: result.content.slice(0, 3000), url: wbUrl, source: 'World Bank', confidence: 'high' };
 }
 
-async function fetchSecEdgar(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchSecEdgar(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // EDGAR's full-text search of EDGAR filings. Heads-up: SEC's fair access
   // policy requires a User-Agent identifying the requester with a contact
   // email; the shared MoltworkerBot UA may get rate-limited or blocked. If
   // this source consistently fails, the fix is to extend fetch_url with
   // per-call header overrides — left as a follow-up.
-  // EDGAR's full-text q is keyword-based; long natural-language strings
-  // typically match nothing.
-  const keywords = extractKeywords(query) || query;
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
   const secUrl = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(keywords)}&forms=10-K&hits=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: secUrl }), ctx);
@@ -315,7 +331,12 @@ async function fetchBluesky(query: string, env: MoltbotEnv, userId?: string): Pr
 // Source pack registry
 // ---------------------------------------------------------------------------
 
-type SourceFetcher = (query: string, env: MoltbotEnv, userId?: string) => Promise<FetchResult>;
+type SourceFetcher = (
+  query: string,
+  env: MoltbotEnv,
+  userId?: string,
+  ctx?: SourceFetchContext,
+) => Promise<FetchResult>;
 
 const SOURCE_REGISTRY: Record<string, SourceFetcher> = {
   webSearch: fetchWebSearch,
@@ -353,6 +374,7 @@ export async function fetchSources(
   sourceNames: string[],
   env: MoltbotEnv,
   userId?: string,
+  fetchContext?: SourceFetchContext,
 ): Promise<{ evidence: EvidenceItem[]; toolCalls: number; attempts: SourceAttempt[] }> {
   // Track which classifier-named source corresponds to each settled result
   // so failure logs name the actual source (not just an index). Filter out
@@ -385,7 +407,7 @@ export async function fetchSources(
     named.map(async (n, i) => {
       const t0 = Date.now();
       try {
-        const r = await n.fn(query, env, userId);
+        const r = await n.fn(query, env, userId, fetchContext);
         attempts[i] = { source: n.name, status: 'ok', durationMs: Date.now() - t0 };
         return r;
       } catch (err) {
