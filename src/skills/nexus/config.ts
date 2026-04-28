@@ -9,7 +9,7 @@
 export const SOURCE_FETCH_TIMEOUT_MS = 30_000;
 
 /** Max ms for the classifier LLM call (fast JSON response). */
-export const CLASSIFY_LLM_TIMEOUT_MS = 30_000;
+export const CLASSIFY_LLM_TIMEOUT_MS = 45_000;
 
 /** Max ms for the synthesis LLM call (larger evidence payload). */
 export const SYNTHESIS_LLM_TIMEOUT_MS = 90_000;
