@@ -6792,7 +6792,7 @@ Allowed keys: id, name, cost, score, specialty, maxContext, supportsTools, suppo
   private async sendStartMenu(chatId: number): Promise<void> {
     const welcome = `🤖 Welcome to Moltworker!
 
-Your multi-model AI assistant with 15 real-time tools, 4 skills, and 30+ AI models.
+Your multi-model AI assistant with 15 real-time tools, 5 skills, and 30+ AI models.
 
 Just type a message to chat, or tap a button below to explore:`;
 
@@ -6814,6 +6814,7 @@ Just type a message to chat, or tap a button below to explore:`;
         { text: '💡 Spark', callback_data: 'start:spark' },
         { text: '🔬 Nexus', callback_data: 'start:nexus' },
         { text: '🎼 Orchestra', callback_data: 'start:orchestra' },
+        { text: '🔎 Audit', callback_data: 'start:audit' },
       ],
       // Row 5: Workflows
       [
@@ -7117,6 +7118,51 @@ Auto-triggers before /orch next:
 
 Each /orch next picks up where the last one left off.`;
 
+      case 'audit':
+        return `🔎 Audit — Repo Analysis & Root-Cause
+
+Scan any GitHub repo for bugs, security issues, stale deps, type gaps, dead code, and performance problems — no clone needed. Returns findings with severity, root-cause analysis, and corrective + preventive actions.
+
+━━━ Quick start ━━━
+
+Plan (free, zero LLM — shows file selections + cost estimate):
+  /audit owner/repo
+
+Run a full analysis:
+  /audit owner/repo --analyze
+
+━━━ Analysis lenses ━━━
+security — vulnerabilities, injection, auth/crypto
+deps     — outdated packages, version mismatches
+types    — type safety gaps, missing declarations
+tests    — coverage, fixture quality
+deadcode — unused exports, unreachable code
+perf     — bottlenecks, N+1 queries, memory leaks
+
+━━━ Depth tiers ━━━
+quick    — ~5–15 files, fast (default)
+standard — ~20–40 files
+deep     — 40+ files (dispatched to background task)
+
+━━━ Flags ━━━
+--lens <name>     Focus on one lens (e.g. --lens security)
+--depth <tier>    quick | standard | deep
+--branch <name>   Analyse a specific branch
+
+━━━ Report commands ━━━
+/audit export <runId>                  — Full report (markdown)
+/audit export <runId> --format json    — Machine-readable
+/audit suppress <runId> <findingId>    — Hide a finding forever
+/audit unsuppress <runId> <findingId>  — Re-enable it
+/audit fix <runId> <findingId>         — Hand off to Orchestra
+
+━━━ Scheduled audits ━━━
+/audit subscribe owner/repo                          — Weekly (default)
+/audit subscribe owner/repo --daily                  — Daily cadence
+/audit subscribe owner/repo --lens security --depth standard --branch main
+/audit unsubscribe owner/repo                        — Stop
+/audit subs                                          — List active subscriptions`;
+
       default:
         return '';
     }
@@ -7379,6 +7425,20 @@ Compute:
 • Review auto-triggers before /orch next: <!-- review-gate --> markers
   in ROADMAP.md or ≥2 runtime risk escalations in recent runs.
   Bypass with /orch next --force.
+
+━━━ Audit — Repo Analysis ━━━
+/audit <owner/repo> — Plan (zero LLM, shows file selections + cost)
+/audit <owner/repo> --analyze — Full analysis (all lenses, quick depth)
+/audit <owner/repo> --lens security --depth standard — Focused scan
+/audit export <runId> — Full report · --format json for machine output
+/audit suppress <runId> <findingId> — Hide a finding permanently
+/audit fix <runId> <findingId> — Hand finding off to Orchestra
+/audit subscribe owner/repo [--daily] [--lens X] [--depth Y] — Recurring
+/audit unsubscribe owner/repo — Stop scheduled audits
+/audit subs — List active subscriptions
+
+Lenses: security · deps · types · tests · deadcode · perf
+Depth: quick (~5-15 files) · standard (~20-40) · deep (40+, background)
 
 ━━━ Special Prefixes ━━━
 think:high <msg> — Deep reasoning (also: low, medium, off)
