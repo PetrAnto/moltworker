@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isToolError, getAvailableSources, expandSourcePicks, CATEGORY_DEFAULTS, extractKeywords } from './source-packs';
+import { isToolError, getAvailableSources, expandSourcePicks, CATEGORY_DEFAULTS, extractKeywords, normalizeKeywordQuery } from './source-packs';
 import { NEXUS_CLASSIFY_PROMPT, NEXUS_SYNTHESIZE_PROMPT, NEXUS_DECISION_PROMPT } from './prompts';
 
 describe('isToolError', () => {
@@ -193,6 +193,34 @@ describe('synthesis prompts', () => {
     expect(NEXUS_DECISION_PROMPT).toMatch(/Cite sources by name/);
     expect(NEXUS_DECISION_PROMPT).toMatch(/\[Brave Search\]/);
     expect(NEXUS_DECISION_PROMPT).not.toMatch(/Do NOT use index-style/);
+  });
+});
+
+describe('normalizeKeywordQuery', () => {
+  it('lowercases and strips punctuation', () => {
+    // C++ → "c" after punctuation strip → single-char, filtered (same as C#)
+    expect(normalizeKeywordQuery('C++, Rust & Go!')).toBe('rust go');
+  });
+
+  it('clamps to 4 tokens by default', () => {
+    const out = normalizeKeywordQuery('llm tool use prompt engineering vision websearch');
+    expect(out.split(' ').length).toBeLessThanOrEqual(4);
+    expect(out).toBe('llm tool use prompt');
+  });
+
+  it('respects explicit max', () => {
+    const out = normalizeKeywordQuery('cloudflare workers ai models pricing', 3);
+    expect(out.split(' ').length).toBe(3);
+  });
+
+  it('drops single-char tokens (e.g. stripped C# → c)', () => {
+    // C# becomes "c" after punctuation strip — too short, filtered
+    expect(normalizeKeywordQuery('C# async patterns')).toBe('async patterns');
+  });
+
+  it('does NOT apply stop-word filtering (trusts LLM selection)', () => {
+    // "the" and "and" are stop words in extractKeywords but not here
+    expect(normalizeKeywordQuery('the llm and tools')).toContain('the');
   });
 });
 

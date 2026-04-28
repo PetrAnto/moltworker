@@ -43,6 +43,7 @@ export interface MoltbotEnv {
   TELEGRAM_DM_ALLOW_FROM?: string; // Comma-separated user IDs for allowlist DM policy
   GITHUB_TOKEN?: string; // GitHub PAT for tool calls (repo access)
   BRAVE_SEARCH_KEY?: string; // Brave Search API key for web_search tool (fallback)
+  STACK_EXCHANGE_KEY?: string; // Stack Exchange API key (10k req/day vs 300 unauthenticated)
   TAVILY_API_KEY?: string; // Tavily Search API key for web_search tool (preferred — no credit card required, AI-shaped results)
   // web_search rate limiting (defense in depth for multi-user deployments)
   WEB_SEARCH_USER_DAILY_LIMIT?: string; // Max web searches per user per day (default: 20)

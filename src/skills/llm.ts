@@ -128,21 +128,31 @@ export async function callSkillLLM(options: CallSkillLLMOptions): Promise<CallSk
   // we surface a clear error pointing the user at compatible models.
   const modelIdOverride = resolveSkillModelId(modelAlias);
 
-  const callPromise = client.chatCompletion(modelAlias, messages, {
-    maxTokens: maxTokens ?? 4096,
-    temperature: temperature ?? 0.7,
-    responseFormat,
-    modelIdOverride,
-  });
+  // When a timeout is requested, use AbortController so the underlying fetch
+  // is actually cancelled rather than left orphaned in the background.
+  const controller = timeoutMs ? new AbortController() : undefined;
+  const timer = timeoutMs
+    ? setTimeout(() => controller!.abort(new Error(`LLM call timed out after ${timeoutMs}ms`)), timeoutMs)
+    : undefined;
 
-  const response = await (timeoutMs
-    ? Promise.race([
-        callPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`LLM call timed out after ${timeoutMs}ms`)), timeoutMs),
-        ),
-      ])
-    : callPromise);
+  let response;
+  try {
+    response = await client.chatCompletion(modelAlias, messages, {
+      maxTokens: maxTokens ?? 4096,
+      temperature: temperature ?? 0.7,
+      responseFormat,
+      modelIdOverride,
+      signal: controller?.signal,
+    });
+  } catch (err) {
+    // Rethrow AbortError with a cleaner message matching the old behaviour.
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(`LLM call timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = response.choices[0]?.message?.content ?? '';
   const tokens = response.usage
