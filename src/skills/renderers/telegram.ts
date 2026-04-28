@@ -11,6 +11,7 @@ import type { AuditFinding, AuditRun } from '../audit/types';
 import { isImageBrief, isVideoBrief, type ImageBrief, type VideoBrief } from '../lyra/media-types';
 import { isNexusDossier, type NexusDossier } from '../nexus/types';
 import { computeConfidence, confidenceLabel } from '../nexus/evidence';
+import { markdownToTelegramHtml } from '../../utils/telegram-format';
 
 /** Telegram's message character limit. */
 const TELEGRAM_MAX_LENGTH = 4096;
@@ -150,7 +151,7 @@ function renderDossier(result: SkillResult): TelegramChunk {
     const confidence = confidenceLabel(computeConfidence(dossier.evidence));
     lines.push(escapeHtml(`${confidence} (${dossier.evidence.length} sources, ${dossier.mode} mode)\n`));
 
-    lines.push(escapeHtml(dossier.synthesis));
+    lines.push(markdownToTelegramHtml(dossier.synthesis));
 
     if (dossier.decision) {
       lines.push('');

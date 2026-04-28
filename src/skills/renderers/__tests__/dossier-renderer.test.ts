@@ -113,6 +113,24 @@ describe('Telegram dossier renderer', () => {
     expect(text).toContain('<b>Research Dossier</b>');
   });
 
+  it('converts Markdown bold in synthesis to Telegram <b> tags', () => {
+    const dossier: NexusDossier = {
+      query: 'q',
+      mode: 'quick',
+      synthesis: '**pgvector** is fast and **Milvus** scales better',
+      evidence: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    const chunks = renderForTelegram(makeDossierResult(dossier));
+    const text = chunks.map(c => c.text).join('\n');
+
+    expect(text).toContain('<b>pgvector</b>');
+    expect(text).toContain('<b>Milvus</b>');
+    // No raw asterisks in the output
+    expect(text).not.toContain('**');
+  });
+
   it('renders decision sections with bold headers', () => {
     const dossier: NexusDossier = {
       query: 'A vs B',
