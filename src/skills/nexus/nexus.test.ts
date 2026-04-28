@@ -164,6 +164,41 @@ describe('/research (quick mode)', () => {
     expect(args.endpoint).not.toMatch(/and%20other/);
     expect(args.endpoint).not.toMatch(/free%20features/);
   });
+
+  it('clamps LLM keywordQuery to 4 tokens even when classifier over-generates', async () => {
+    // Regression: classifier returned 7-token keywordQuery in production
+    // ("llm tool use prompt engineering vision websearch"), which GitHub
+    // ANDs together → 0 hits. Clamping must happen before fetchSources.
+    mockCallLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        category: 'technical',
+        sources: ['github'],
+        keywordQuery: 'llm tool use prompt engineering vision websearch',
+      }),
+    });
+    mockExecTool.mockResolvedValue({
+      tool_call_id: 'test',
+      role: 'tool',
+      content: '{"total_count":5,"items":[{"name":"llm-tools"}]}',
+    });
+    mockCallLLM.mockResolvedValueOnce({
+      text: JSON.stringify({ synthesis: 'analysis' }),
+    });
+
+    await handleNexus(makeRequest({ text: 'add vision and websearch to any llm' }));
+
+    type CapturedToolCall = { function: { name: string; arguments: string } };
+    const githubCalls = mockExecTool.mock.calls.filter(call => {
+      const toolCall = call[1] as CapturedToolCall;
+      return toolCall.function.name === 'github_api';
+    });
+    expect(githubCalls.length).toBeGreaterThan(0);
+    const args = JSON.parse((githubCalls[0][1] as CapturedToolCall).function.arguments);
+    const q = decodeURIComponent(args.endpoint.match(/q=([^&]+)/)?.[1] ?? '');
+    expect(q.split(' ').length).toBeLessThanOrEqual(4);
+    expect(q).not.toContain('engineering');
+    expect(q).not.toContain('websearch');
+  });
 });
 
 describe('/research --decision', () => {

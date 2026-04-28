@@ -184,7 +184,7 @@ async function executeResearch(
     ? classification.category
     : undefined;
   const llmKeywordQuery = classification && isQueryClassification(classification)
-    ? classification.keywordQuery
+    ? classification.keywordQuery?.trim().split(/\s+/).slice(0, 4).join(' ')
     : undefined;
 
   // Always expand the classifier's picks with category-default backbones so
