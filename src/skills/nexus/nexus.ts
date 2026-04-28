@@ -172,6 +172,7 @@ async function executeResearch(
     modelAlias: model,
     responseFormat: { type: 'json_object' },
     env: request.env,
+    timeoutMs: 30_000,
   });
   llmCalls++;
 
@@ -230,6 +231,7 @@ async function executeResearch(
     modelAlias: model,
     responseFormat: { type: 'json_object' },
     env: request.env,
+    timeoutMs: 60_000,
   });
   llmCalls++;
 

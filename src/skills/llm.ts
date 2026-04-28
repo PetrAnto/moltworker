@@ -78,6 +78,8 @@ export interface CallSkillLLMOptions {
   temperature?: number;
   /** Worker env (needed for API key). */
   env: MoltbotEnv;
+  /** Abort the call and throw if no response arrives within this many ms. */
+  timeoutMs?: number;
 }
 
 export interface CallSkillLLMResult {
@@ -102,6 +104,7 @@ export async function callSkillLLM(options: CallSkillLLMOptions): Promise<CallSk
     maxTokens,
     temperature,
     env,
+    timeoutMs,
   } = options;
 
   const apiKey = env.OPENROUTER_API_KEY;
@@ -125,12 +128,21 @@ export async function callSkillLLM(options: CallSkillLLMOptions): Promise<CallSk
   // we surface a clear error pointing the user at compatible models.
   const modelIdOverride = resolveSkillModelId(modelAlias);
 
-  const response = await client.chatCompletion(modelAlias, messages, {
+  const callPromise = client.chatCompletion(modelAlias, messages, {
     maxTokens: maxTokens ?? 4096,
     temperature: temperature ?? 0.7,
     responseFormat,
     modelIdOverride,
   });
+
+  const response = await (timeoutMs
+    ? Promise.race([
+        callPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`LLM call timed out after ${timeoutMs}ms`)), timeoutMs),
+        ),
+      ])
+    : callPromise);
 
   const text = response.choices[0]?.message?.content ?? '';
   const tokens = response.usage
