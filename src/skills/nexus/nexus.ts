@@ -166,27 +166,33 @@ async function executeResearch(
     }
   }
 
-  // 2. Classify query → select sources
-  const classifyResult = await callSkillLLM({
-    systemPrompt: `${systemPrompt}\n\n${NEXUS_CLASSIFY_PROMPT}`,
-    userPrompt: `Query: ${query}`,
-    modelAlias: model,
-    responseFormat: { type: 'json_object' },
-    env: request.env,
-    timeoutMs: CLASSIFY_LLM_TIMEOUT_MS,
-  });
-  llmCalls++;
+  // 2. Classify query → select sources. Failures (timeout, bad JSON, network)
+  // degrade to sensible defaults so a slow classifier never kills the dossier.
+  let classifierPicks: string[] = ['webSearch', 'wikipedia'];
+  let category: string | undefined;
+  let llmKeywordQuery: string | undefined;
+  try {
+    const classifyResult = await callSkillLLM({
+      systemPrompt: `${systemPrompt}\n\n${NEXUS_CLASSIFY_PROMPT}`,
+      userPrompt: `Query: ${query}`,
+      modelAlias: model,
+      responseFormat: { type: 'json_object' },
+      env: request.env,
+      timeoutMs: CLASSIFY_LLM_TIMEOUT_MS,
+    });
+    llmCalls++;
 
-  const classification = safeJsonParse<QueryClassification>(classifyResult.text);
-  const classifierPicks = classification && isQueryClassification(classification)
-    ? classification.sources
-    : ['webSearch', 'wikipedia']; // Fallback when classifier output isn't usable
-  const category = classification && isQueryClassification(classification)
-    ? classification.category
-    : undefined;
-  const llmKeywordQuery = classification && isQueryClassification(classification) && classification.keywordQuery
-    ? normalizeKeywordQuery(classification.keywordQuery)
-    : undefined;
+    const classification = safeJsonParse<QueryClassification>(classifyResult.text);
+    if (classification && isQueryClassification(classification)) {
+      classifierPicks = classification.sources;
+      category = classification.category;
+      if (classification.keywordQuery) {
+        llmKeywordQuery = normalizeKeywordQuery(classification.keywordQuery);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Nexus] classify failed (${err instanceof Error ? err.message : err}), using defaults`);
+  }
 
   // Always expand the classifier's picks with category-default backbones so
   // a thin pick (e.g. just ["webSearch"]) still fans out to complementary
