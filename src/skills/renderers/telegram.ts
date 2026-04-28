@@ -172,6 +172,12 @@ function renderDossier(result: SkillResult): TelegramChunk {
 
     lines.push('\n<b>Sources:</b>');
     lines.push(renderEvidenceLinks(dossier));
+
+    // Diagnostic block: when any classifier-asked source failed, surface
+    // the per-source reasons inline. Means the next thin dossier reveals
+    // its own root cause without needing wrangler tail.
+    const attemptsBlock = renderAttemptsDiagnostics(dossier);
+    if (attemptsBlock) lines.push(attemptsBlock);
   } else {
     // Fallback when data is missing \u2014 best-effort plain-text body. URLs in
     // this path may still be entity-mangled, but this branch shouldn't fire
@@ -183,6 +189,22 @@ function renderDossier(result: SkillResult): TelegramChunk {
   lines.push(`\n<i>${escapeHtml(tel.model)} \u2022 ${tel.llmCalls} calls \u2022 ${(tel.durationMs / 1000).toFixed(1)}s</i>`);
 
   return { text: lines.join('\n'), parseMode: 'HTML' };
+}
+
+function renderAttemptsDiagnostics(dossier: NexusDossier): string | null {
+  const attempts = dossier.attempts;
+  if (!attempts || attempts.length === 0) return null;
+  const failed = attempts.filter(a => a.status === 'failed');
+  if (failed.length === 0) return null; // all green — no diagnostics needed
+
+  const succeeded = attempts.length - failed.length;
+  const lines: string[] = [];
+  lines.push(`\n<b>Source attempts (${succeeded}/${attempts.length} succeeded):</b>`);
+  for (const a of failed) {
+    const reason = a.reason ? `: ${a.reason}` : '';
+    lines.push(escapeHtml(`✗ ${a.source} (${a.durationMs}ms)${reason}`));
+  }
+  return lines.join('\n');
 }
 
 function renderEvidenceLinks(dossier: NexusDossier): string {

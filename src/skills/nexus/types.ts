@@ -17,6 +17,24 @@ export interface EvidenceItem {
   confidence: ConfidenceTier;
 }
 
+/**
+ * Per-source attempt record. Captured by fetchSources for every source the
+ * classifier asked us to try, regardless of outcome. Surfaced in the
+ * rendered dossier when any source fails so the user (and we) can see
+ * exactly which fetchers ran and why each non-evidence source dropped —
+ * without needing wrangler tail. Field is optional for backwards
+ * compatibility with cached pre-2026-04-27 dossiers in KV.
+ */
+export interface SourceAttempt {
+  /** Registry key (e.g. "stackExchange", "github"). */
+  source: string;
+  status: 'ok' | 'failed';
+  /** Failure reason; empty when status === 'ok'. */
+  reason?: string;
+  /** Wall-clock duration of the fetch in milliseconds. */
+  durationMs: number;
+}
+
 /** A completed research dossier. */
 export interface NexusDossier {
   /** The research query/topic. */
@@ -27,6 +45,11 @@ export interface NexusDossier {
   synthesis: string;
   /** Evidence items backing the synthesis. */
   evidence: EvidenceItem[];
+  /**
+   * Per-source attempt outcomes (see SourceAttempt). Optional so cached
+   * dossiers from before 2026-04-27 still parse cleanly via isNexusDossier.
+   */
+  attempts?: SourceAttempt[];
   /** For decision mode: structured pros/cons/risks. */
   decision?: {
     pros: string[];

@@ -6,7 +6,7 @@
  * Uses executeSkillTool for policy-enforced tool access.
  */
 
-import type { EvidenceItem, ConfidenceTier } from './types';
+import type { EvidenceItem, ConfidenceTier, SourceAttempt } from './types';
 import { executeSkillTool, buildSkillToolContext } from '../skill-tools';
 import type { ToolCall } from '../../openrouter/tools';
 import type { MoltbotEnv } from '../../types';
@@ -284,14 +284,18 @@ export { fetchUrl };
 
 /**
  * Fetch from multiple sources in parallel, with graceful degradation.
- * Returns evidence items for all sources that succeeded.
+ * Returns evidence items for all sources that succeeded plus an `attempts`
+ * record for every source the classifier asked us to try (success or
+ * failure). The attempts list is what the renderer surfaces in the dossier
+ * when a fetcher drops — so the next failing dossier reveals its own
+ * smoking gun without requiring wrangler tail access.
  */
 export async function fetchSources(
   query: string,
   sourceNames: string[],
   env: MoltbotEnv,
   userId?: string,
-): Promise<{ evidence: EvidenceItem[]; toolCalls: number }> {
+): Promise<{ evidence: EvidenceItem[]; toolCalls: number; attempts: SourceAttempt[] }> {
   // Track which classifier-named source corresponds to each settled result
   // so failure logs name the actual source (not just an index). Filter out
   // unknown registry names but keep the parallel name list aligned with the
@@ -310,8 +314,28 @@ export async function fetchSources(
     named.push({ name: 'webSearch', fn: fetchWebSearch });
   }
 
+  // Pre-allocate attempts so each parallel fetch can write its own slot
+  // without races; Promise.allSettled preserves order.
+  const attempts: SourceAttempt[] = named.map(n => ({
+    source: n.name,
+    status: 'failed',
+    reason: 'pending',
+    durationMs: 0,
+  }));
+
   const results = await Promise.allSettled(
-    named.map(n => n.fn(query, env, userId)),
+    named.map(async (n, i) => {
+      const t0 = Date.now();
+      try {
+        const r = await n.fn(query, env, userId);
+        attempts[i] = { source: n.name, status: 'ok', durationMs: Date.now() - t0 };
+        return r;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        attempts[i] = { source: n.name, status: 'failed', reason, durationMs: Date.now() - t0 };
+        throw err;
+      }
+    }),
   );
 
   const evidence: EvidenceItem[] = [];
@@ -328,15 +352,15 @@ export async function fetchSources(
         confidence: result.value.confidence,
       });
     } else {
-      // Graceful degradation — failed sources don't break the dossier, but
-      // log so we can tell whether a thin source list is "classifier picked
-      // narrowly" vs. "classifier picked broadly but everything 4xx'd".
+      // Graceful degradation — failed sources don't break the dossier. Log
+      // for wrangler tail; the rendered dossier also surfaces this via the
+      // attempts list, so the user sees it without log access.
       const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
       console.warn(`[Nexus] source "${named[i].name}" failed: ${reason}`);
     }
   }
 
-  return { evidence, toolCalls };
+  return { evidence, toolCalls, attempts };
 }
 
 /** Get all available source names. */

@@ -198,7 +198,7 @@ async function executeResearch(
   );
 
   // 3. Fetch sources in parallel
-  const { evidence, toolCalls } = await fetchSources(query, sourceNames, request.env, request.userId);
+  const { evidence, toolCalls, attempts } = await fetchSources(query, sourceNames, request.env, request.userId);
   console.log(`[Nexus] sources returned evidence: ${JSON.stringify(evidence.map(e => e.source))} (${evidence.length}/${sourceNames.length})`);
 
   if (evidence.length === 0) {
@@ -244,6 +244,7 @@ async function executeResearch(
     mode,
     synthesis: synthesisText,
     evidence,
+    attempts,
     decision: synthesis && isSynthesisResponse(synthesis) ? synthesis.decision : undefined,
     createdAt: new Date().toISOString(),
   };
