@@ -222,7 +222,15 @@ async function executeResearch(
   // hallucination under the old [Source N] indexing, and the prior fix's
   // strict "Do NOT" prompt got kimi26or to return an empty synthesis.
   const synthesizePrompt = mode === 'decision' ? NEXUS_DECISION_PROMPT : NEXUS_SYNTHESIZE_PROMPT;
-  const evidenceText = formatEvidenceForLLM(evidence);
+  // Cap the evidence payload at 12 000 chars so the synthesis prompt stays
+  // within a manageable context window regardless of how many sources
+  // succeeded. 9 sources × 3 000 chars each = 27 000 chars uncapped, which
+  // pushes flash model past its sweet spot and causes slow / timed-out calls.
+  const MAX_EVIDENCE_CHARS = 12_000;
+  const rawEvidenceText = formatEvidenceForLLM(evidence);
+  const evidenceText = rawEvidenceText.length > MAX_EVIDENCE_CHARS
+    ? rawEvidenceText.slice(0, MAX_EVIDENCE_CHARS) + '\n\n[...evidence truncated for synthesis...]'
+    : rawEvidenceText;
   const availableSources = evidence.map(e => `[${e.source}]`).join(', ');
 
   const synthesisResult = await callSkillLLM({
@@ -231,7 +239,7 @@ async function executeResearch(
     modelAlias: model,
     responseFormat: { type: 'json_object' },
     env: request.env,
-    timeoutMs: 60_000,
+    timeoutMs: 90_000,
   });
   llmCalls++;
 
