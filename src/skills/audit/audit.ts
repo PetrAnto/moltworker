@@ -210,6 +210,11 @@ interface RunFullAuditCtx {
 async function dispatchOrInline(ctx: RunFullAuditCtx): Promise<SkillResult> {
   const { plan, request } = ctx;
 
+  // Already inside the DO — run directly, no further dispatch.
+  if (request.context?.runningInDO === true) {
+    return runFullAudit(ctx);
+  }
+
   // Compute selected-paths size up-front; used by both the inline-safe check
   // and the DO payload (so the DO doesn't have to re-derive selections).
   const selectedPaths = new Set<string>();
@@ -217,15 +222,10 @@ async function dispatchOrInline(ctx: RunFullAuditCtx): Promise<SkillResult> {
     for (const p of plan.selections[lens]) selectedPaths.add(p);
   }
 
-  const inlineSafe = plan.depth === 'quick' && selectedPaths.size <= INLINE_MAX_FILES;
-  const insideDO = request.context?.runningInDO === true;
-
-  // Already in the DO, or the audit is small — run inline.
-  if (insideDO || inlineSafe) {
-    return runFullAudit(ctx);
-  }
-
-  // Worker side, audit is too big for inline. Try DO dispatch.
+  // Prefer DO dispatch for Telegram transport: even a quick/small audit makes
+  // one LLM call per lens (up to 6), which easily exceeds the Worker's 30s
+  // wall-clock limit when calls are sequential. The DO has 30s of CPU +
+  // auto-resume via alarm, making it the right host for any multi-LLM workflow.
   const taskProcessor = request.env.TASK_PROCESSOR as
     | DurableObjectNamespace<TaskProcessor>
     | undefined;
@@ -237,15 +237,20 @@ async function dispatchOrInline(ctx: RunFullAuditCtx): Promise<SkillResult> {
   const canDispatch =
     hasUsableDO && request.transport === 'telegram' && !!telegramToken && !!chatId;
 
-  if (!canDispatch) {
-    return errorResult(
-      `Audit too large for inline execution: depth=${plan.depth}, ${selectedPaths.size} files selected (max inline: depth=quick + ${INLINE_MAX_FILES} files).\n` +
-        `Larger audits need the TaskProcessor DO + Telegram transport. Use --depth quick + --lens <single-lens> for the inline envelope.`,
-    );
+  if (canDispatch) {
+    return dispatchToDO(ctx, taskProcessor!, telegramToken!, chatId!);
   }
 
-  // Dispatch — fire-and-forget; the DO sends the report when ready.
-  return dispatchToDO(ctx, taskProcessor!, telegramToken!, chatId!);
+  // Non-Telegram transport (simulate endpoint, tests) — run inline if within budget.
+  const inlineSafe = plan.depth === 'quick' && selectedPaths.size <= INLINE_MAX_FILES;
+  if (inlineSafe) {
+    return runFullAudit(ctx);
+  }
+
+  return errorResult(
+    `Audit too large for inline execution: depth=${plan.depth}, ${selectedPaths.size} files selected (max inline: depth=quick + ${INLINE_MAX_FILES} files).\n` +
+      `Larger audits need the TaskProcessor DO + Telegram transport. Use --depth quick + --lens <single-lens> for the inline envelope.`,
+  );
 }
 
 async function dispatchToDO(
