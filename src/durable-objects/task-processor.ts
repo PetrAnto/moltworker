@@ -640,6 +640,7 @@ export function buildSkillEnv(
     OPENROUTER_API_KEY: request.openrouterKey ?? doEnv.OPENROUTER_API_KEY,
     GITHUB_TOKEN: request.githubToken ?? doEnv.GITHUB_TOKEN,
     BRAVE_SEARCH_KEY: request.braveSearchKey ?? doEnv.BRAVE_SEARCH_KEY,
+    STACK_EXCHANGE_KEY: doEnv.STACK_EXCHANGE_KEY,
     TAVILY_API_KEY: request.tavilyKey ?? doEnv.TAVILY_API_KEY,
     CLOUDFLARE_API_TOKEN: request.cloudflareApiToken ?? doEnv.CLOUDFLARE_API_TOKEN,
     ANTHROPIC_API_KEY: request.anthropicKey ?? doEnv.ANTHROPIC_API_KEY,
@@ -685,6 +686,7 @@ export interface TaskProcessorEnv {
   OPENROUTER_API_KEY?: string;
   GITHUB_TOKEN?: string;
   BRAVE_SEARCH_KEY?: string;
+  STACK_EXCHANGE_KEY?: string;
   TAVILY_API_KEY?: string;
   CLOUDFLARE_API_TOKEN?: string;
   ANTHROPIC_API_KEY?: string;

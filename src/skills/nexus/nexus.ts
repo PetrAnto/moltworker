@@ -14,7 +14,8 @@ import type { TaskProcessor } from '../../durable-objects/task-processor';
 import type { NexusDossier, SynthesisResponse, QueryClassification } from './types';
 import { isSynthesisResponse, isQueryClassification } from './types';
 import { callSkillLLM, selectSkillModel } from '../llm';
-import { fetchSources, expandSourcePicks } from './source-packs';
+import { fetchSources, expandSourcePicks, normalizeKeywordQuery } from './source-packs';
+import { CLASSIFY_LLM_TIMEOUT_MS, SYNTHESIS_LLM_TIMEOUT_MS } from './config';
 import { getCachedDossier, cacheDossier } from './cache';
 import { computeConfidence, confidenceLabel, formatEvidenceForLLM, formatEvidenceSummary } from './evidence';
 import { safeJsonParse } from '../validators';
@@ -172,7 +173,7 @@ async function executeResearch(
     modelAlias: model,
     responseFormat: { type: 'json_object' },
     env: request.env,
-    timeoutMs: 30_000,
+    timeoutMs: CLASSIFY_LLM_TIMEOUT_MS,
   });
   llmCalls++;
 
@@ -183,8 +184,8 @@ async function executeResearch(
   const category = classification && isQueryClassification(classification)
     ? classification.category
     : undefined;
-  const llmKeywordQuery = classification && isQueryClassification(classification)
-    ? classification.keywordQuery?.trim().split(/\s+/).slice(0, 4).join(' ')
+  const llmKeywordQuery = classification && isQueryClassification(classification) && classification.keywordQuery
+    ? normalizeKeywordQuery(classification.keywordQuery)
     : undefined;
 
   // Always expand the classifier's picks with category-default backbones so
@@ -222,15 +223,9 @@ async function executeResearch(
   // hallucination under the old [Source N] indexing, and the prior fix's
   // strict "Do NOT" prompt got kimi26or to return an empty synthesis.
   const synthesizePrompt = mode === 'decision' ? NEXUS_DECISION_PROMPT : NEXUS_SYNTHESIZE_PROMPT;
-  // Cap the evidence payload at 12 000 chars so the synthesis prompt stays
-  // within a manageable context window regardless of how many sources
-  // succeeded. 9 sources × 3 000 chars each = 27 000 chars uncapped, which
-  // pushes flash model past its sweet spot and causes slow / timed-out calls.
-  const MAX_EVIDENCE_CHARS = 12_000;
-  const rawEvidenceText = formatEvidenceForLLM(evidence);
-  const evidenceText = rawEvidenceText.length > MAX_EVIDENCE_CHARS
-    ? rawEvidenceText.slice(0, MAX_EVIDENCE_CHARS) + '\n\n[...evidence truncated for synthesis...]'
-    : rawEvidenceText;
+  // formatEvidenceForLLM distributes MAX_EVIDENCE_CHARS evenly across sources
+  // so no source loses its header and citations remain valid.
+  const evidenceText = formatEvidenceForLLM(evidence);
   const availableSources = evidence.map(e => `[${e.source}]`).join(', ');
 
   const synthesisResult = await callSkillLLM({
@@ -239,7 +234,7 @@ async function executeResearch(
     modelAlias: model,
     responseFormat: { type: 'json_object' },
     env: request.env,
-    timeoutMs: 90_000,
+    timeoutMs: SYNTHESIS_LLM_TIMEOUT_MS,
   });
   llmCalls++;
 

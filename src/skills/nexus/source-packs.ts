@@ -10,9 +10,9 @@ import type { EvidenceItem, ConfidenceTier, SourceAttempt } from './types';
 import { executeSkillTool, buildSkillToolContext } from '../skill-tools';
 import type { ToolCall } from '../../openrouter/tools';
 import type { MoltbotEnv } from '../../types';
+import { SOURCE_FETCH_TIMEOUT_MS, MAX_KEYWORD_TOKENS } from './config';
 
-/** Maximum wall-clock time to wait for a single source fetch. */
-const SOURCE_FETCH_TIMEOUT_MS = 30_000;
+// SOURCE_FETCH_TIMEOUT_MS imported from ./config
 
 /** Result from a source fetcher. */
 interface FetchResult {
@@ -95,12 +95,30 @@ const STOP_WORDS = new Set([
  * query for use with keyword-strict search APIs. Lowercases, strips
  * punctuation, drops stop words and 1-char tokens, preserves order.
  */
-export function extractKeywords(query: string, max = 4): string {
+export function extractKeywords(query: string, max = MAX_KEYWORD_TOKENS): string {
   return query
     .toLowerCase()
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
     .filter(w => w.length >= 2 && !STOP_WORDS.has(w))
+    .slice(0, max)
+    .join(' ');
+}
+
+/**
+ * Normalize a pre-distilled keyword string (e.g. from the LLM classifier)
+ * for use with keyword-strict APIs. Strips punctuation, lowercases, drops
+ * single-char tokens, and clamps to `max` tokens.
+ *
+ * Unlike extractKeywords this does NOT apply stop-word filtering — the LLM
+ * already selected the right words; we only normalize and enforce the cap.
+ */
+export function normalizeKeywordQuery(raw: string, max = MAX_KEYWORD_TOKENS): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 2)
     .slice(0, max)
     .join(' ');
 }
@@ -189,7 +207,8 @@ async function fetchStackExchange(query: string, env: MoltbotEnv, userId?: strin
   // The API treats `q` as AND of all tokens. Prefer the LLM-distilled
   // keywordQuery; fall back to the local extractor; last resort, raw query.
   const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
-  const seUrl = `https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q=${encodeURIComponent(keywords)}&site=stackoverflow&pagesize=5`;
+  const keyParam = env.STACK_EXCHANGE_KEY ? `&key=${encodeURIComponent(env.STACK_EXCHANGE_KEY)}` : '';
+  const seUrl = `https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q=${encodeURIComponent(keywords)}&site=stackoverflow&pagesize=5${keyParam}`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: seUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);

@@ -455,6 +455,8 @@ export class OpenRouterClient {
        * needs the namespaced form `anthropic/claude-sonnet-4-6`).
        */
       modelIdOverride?: string;
+      /** AbortSignal to cancel the underlying fetch (e.g. on timeout). */
+      signal?: AbortSignal;
     }
   ): Promise<ChatCompletionResponse> {
     const modelId = options?.modelIdOverride ?? getModelId(modelAlias);
@@ -487,6 +489,7 @@ export class OpenRouterClient {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(request),
+      signal: options?.signal,
     });
 
     if (!response.ok) {

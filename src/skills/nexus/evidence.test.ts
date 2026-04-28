@@ -71,6 +71,34 @@ describe('formatEvidenceForLLM', () => {
     expect(text).toContain('---');
     expect(text).not.toMatch(/\[Source\s+\d+/);
   });
+
+  it('never exceeds MAX_EVIDENCE_CHARS total', () => {
+    // 5 sources each with 5000 chars of data → 25 000 chars uncapped
+    const evidence: EvidenceItem[] = Array.from({ length: 5 }, (_, i) => ({
+      source: `Source${i}`,
+      data: 'x'.repeat(5000),
+      confidence: 'medium' as const,
+    }));
+    const text = formatEvidenceForLLM(evidence);
+    // Allow small overage for headers and separators (≤ 500 chars)
+    expect(text.length).toBeLessThan(12_500);
+  });
+
+  it('preserves source headers even when body is truncated', () => {
+    const evidence: EvidenceItem[] = [
+      { source: 'GitHub', url: 'https://github.com', data: 'x'.repeat(5000), confidence: 'high' },
+      { source: 'Brave Search', data: 'y'.repeat(5000), confidence: 'medium' },
+    ];
+    const text = formatEvidenceForLLM(evidence);
+    // Headers must always be present regardless of truncation
+    expect(text).toContain('[GitHub]');
+    expect(text).toContain('[Brave Search]');
+    expect(text).toContain('https://github.com');
+  });
+
+  it('returns empty string for empty evidence', () => {
+    expect(formatEvidenceForLLM([])).toBe('');
+  });
 });
 
 describe('formatEvidenceSummary', () => {

@@ -221,3 +221,71 @@ describe('Telegram dossier renderer', () => {
     expect(text).toContain('<b>Research Dossier</b>');
   });
 });
+
+// ---------------------------------------------------------------------------
+// End-to-end pipeline render checks (audit recommendation: verify full
+// Telegram payload shape from a realistic dossier, not just individual parts)
+// ---------------------------------------------------------------------------
+
+describe('Dossier full pipeline render', () => {
+  const fullDossier: NexusDossier = {
+    query: 'open source llm agent frameworks',
+    mode: 'full',
+    synthesis: 'LangChain & AutoGen lead the space [Brave Search]. GitHub shows 668 repos [GitHub].',
+    evidence: [
+      {
+        source: 'Brave Search',
+        data: 'LangChain, AutoGen, CrewAI are popular frameworks.',
+        confidence: 'medium',
+      },
+      {
+        source: 'GitHub',
+        url: 'https://github.com/search?q=llm+agent&type=repositories',
+        data: '{"total_count":668}',
+        confidence: 'high',
+      },
+    ],
+    attempts: [
+      { source: 'Brave Search', status: 'ok', durationMs: 310 },
+      { source: 'GitHub', status: 'ok', durationMs: 289 },
+      { source: 'stackExchange', status: 'failed', reason: 'HTTP 400: Bad Request', durationMs: 153 },
+    ],
+    createdAt: new Date().toISOString(),
+  };
+
+  it('contains bold Research Dossier header', () => {
+    const text = renderForTelegram(makeDossierResult(fullDossier)).map(c => c.text).join('\n');
+    expect(text).toContain('<b>Research Dossier</b>');
+  });
+
+  it('contains bold Sources header', () => {
+    const text = renderForTelegram(makeDossierResult(fullDossier)).map(c => c.text).join('\n');
+    expect(text).toContain('<b>Sources:</b>');
+  });
+
+  it('wraps GitHub URL in an anchor tag', () => {
+    const text = renderForTelegram(makeDossierResult(fullDossier)).map(c => c.text).join('\n');
+    expect(text).toContain('<a href="https://github.com/search?q=llm+agent&amp;type=repositories">');
+  });
+
+  it('does not double-escape ampersands in synthesis text', () => {
+    const text = renderForTelegram(makeDossierResult(fullDossier)).map(c => c.text).join('\n');
+    // Synthesis contains '&' — should be entity-escaped exactly once
+    expect(text).toContain('LangChain &amp; AutoGen');
+    expect(text).not.toContain('&amp;amp;');
+  });
+
+  it('renders Source attempts block listing the failed source', () => {
+    const text = renderForTelegram(makeDossierResult(fullDossier)).map(c => c.text).join('\n');
+    expect(text).toContain('Source attempts');
+    expect(text).toContain('stackExchange');
+    expect(text).toContain('HTTP 400');
+  });
+
+  it('all chunks carry HTML parse mode', () => {
+    const chunks = renderForTelegram(makeDossierResult(fullDossier));
+    for (const chunk of chunks) {
+      expect(chunk.parseMode).toBe('HTML');
+    }
+  });
+});
