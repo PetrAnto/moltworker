@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isToolError, getAvailableSources, expandSourcePicks, CATEGORY_DEFAULTS } from './source-packs';
+import { isToolError, getAvailableSources, expandSourcePicks, CATEGORY_DEFAULTS, extractKeywords } from './source-packs';
 import { NEXUS_CLASSIFY_PROMPT, NEXUS_SYNTHESIZE_PROMPT, NEXUS_DECISION_PROMPT } from './prompts';
 
 describe('isToolError', () => {
@@ -119,6 +119,52 @@ describe('expandSourcePicks', () => {
     for (const cat of ['entity', 'topic', 'market', 'decision', 'technical', 'academic', 'regulatory', 'historical']) {
       expect(CATEGORY_DEFAULTS[cat], `missing defaults for category ${cat}`).toBeDefined();
     }
+  });
+});
+
+describe('extractKeywords', () => {
+  // The smoking gun from the "ai models and other fee features in cloudflare
+  // workers" dossier: GitHub returned 0 hits because the API ANDed all 8
+  // tokens. extractKeywords pre-processes natural-language queries before
+  // hitting keyword-strict APIs.
+  it('drops stop words from natural-language queries', () => {
+    expect(extractKeywords('ai models and other fee features in cloudflare workers'))
+      .toBe('ai models fee features');
+  });
+
+  it('caps at 4 tokens by default to keep keyword search loose enough', () => {
+    const out = extractKeywords('compare bun vs deno for serverless edge runtimes');
+    expect(out.split(/\s+/).length).toBeLessThanOrEqual(4);
+    // "vs" and "for" are stop words; "compare" stays — distinctive enough
+    expect(out).toContain('bun');
+    expect(out).toContain('deno');
+  });
+
+  it('respects an explicit max', () => {
+    const out = extractKeywords('cloudflare workers ai pricing tier limits', 2);
+    expect(out.split(/\s+/).length).toBe(2);
+  });
+
+  it('strips punctuation', () => {
+    const out = extractKeywords('what are the best free AI models, available?');
+    expect(out).not.toMatch(/[?,]/);
+    // "what", "are", "the", "best", "free", "available" are all stop words
+    // — leaves: ai, models
+    expect(out).toBe('ai models');
+  });
+
+  it('lowercases tokens', () => {
+    const out = extractKeywords('Cloudflare Workers AI Models');
+    expect(out).toBe('cloudflare workers ai models');
+  });
+
+  it('returns empty string when every token is a stop word or too short', () => {
+    expect(extractKeywords('what is it about?')).toBe('');
+  });
+
+  it('does not drop domain-meaningful short words like "ai"', () => {
+    // Two-letter tokens pass; only single-letter and stop words are dropped.
+    expect(extractKeywords('ai models')).toBe('ai models');
   });
 });
 

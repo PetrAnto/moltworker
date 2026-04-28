@@ -39,6 +39,50 @@ export function isToolError(content: string): boolean {
   return content.startsWith('Error:') || content.startsWith('Error executing ');
 }
 
+/**
+ * Stop-word list for keyword extraction on keyword-strict APIs (GitHub
+ * search, Stack Exchange, Wikidata entity search, World Bank indicator
+ * search, SEC EDGAR full-text). These APIs treat the query string as an
+ * AND of all tokens, so passing a natural-language phrase like "ai models
+ * and other fee features in cloudflare workers" returns zero hits because
+ * no single repo/question matches every token. Conservative list: only
+ * obvious noise/connectives, not domain-meaningful words.
+ */
+const STOP_WORDS = new Set([
+  // articles + prepositions
+  'a', 'an', 'the', 'of', 'in', 'on', 'at', 'by', 'for', 'to', 'with', 'from',
+  'into', 'onto', 'over', 'under', 'between', 'across',
+  // conjunctions
+  'and', 'or', 'but', 'vs', 'versus', 'so',
+  // question + comparison words
+  'what', 'where', 'when', 'who', 'why', 'which', 'how', 'whose',
+  // generic qualifiers that are noise for repo/QA search
+  'best', 'free', 'available', 'other', 'top', 'good', 'better', 'kind', 'kinds',
+  'type', 'types', 'this', 'that', 'these', 'those', 'about', 'some', 'any',
+  // verbs
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+  'do', 'does', 'did', 'can', 'could', 'should', 'would', 'will', 'shall', 'may',
+  'might', 'must',
+  // pronouns
+  'it', 'its', 'they', 'them', 'their', 'he', 'she', 'his', 'her', 'i', 'me',
+  'my', 'we', 'us', 'our', 'you', 'your',
+]);
+
+/**
+ * Extract up to `max` distinctive keyword tokens from a natural-language
+ * query for use with keyword-strict search APIs. Lowercases, strips
+ * punctuation, drops stop words and 1-char tokens, preserves order.
+ */
+export function extractKeywords(query: string, max = 4): string {
+  return query
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 2 && !STOP_WORDS.has(w))
+    .slice(0, max)
+    .join(' ');
+}
+
 // ---------------------------------------------------------------------------
 // Fetchers
 // ---------------------------------------------------------------------------
@@ -120,7 +164,10 @@ async function fetchStackExchange(query: string, env: MoltbotEnv, userId?: strin
   // default site; Stack Exchange has 170+ sister sites (cooking, photography,
   // math, writing, etc.) but cross-site search needs site-id and complicates
   // the call — leave that to a future "site picker" pass.
-  const seUrl = `https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q=${encodeURIComponent(query)}&site=stackoverflow&pagesize=5`;
+  // The API treats `q` as AND of all tokens — passing natural-language
+  // queries directly returns zero hits, so we extract keywords first.
+  const keywords = extractKeywords(query) || query;
+  const seUrl = `https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q=${encodeURIComponent(keywords)}&site=stackoverflow&pagesize=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: seUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
@@ -135,14 +182,17 @@ async function fetchGitHub(query: string, env: MoltbotEnv, userId?: string): Pro
   // 60/hr unauth limit shared across all CF egress IPs. Repository search
   // by stars is a reasonable default — relevant projects + descriptions +
   // language for any tool/library/concept query.
-  const endpoint = `/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=5`;
+  // GitHub search syntax ANDs tokens — passing 8 natural-language tokens
+  // matches no repos. Extract keywords first.
+  const keywords = extractKeywords(query) || query;
+  const endpoint = `/search/repositories?q=${encodeURIComponent(keywords)}&sort=stars&order=desc&per_page=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('github_api', { endpoint, method: 'GET' }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
   if (/"total_count"\s*:\s*0\b/.test(result.content)) {
-    throw new Error('GitHub: no matching repositories');
+    throw new Error(`GitHub: no matching repositories (searched: "${keywords}")`);
   }
-  const browseUrl = `https://github.com/search?q=${encodeURIComponent(query)}&type=repositories`;
+  const browseUrl = `https://github.com/search?q=${encodeURIComponent(keywords)}&type=repositories`;
   return { data: result.content.slice(0, 3000), url: browseUrl, source: 'GitHub', confidence: 'high' };
 }
 
@@ -181,7 +231,10 @@ async function fetchWikidata(query: string, env: MoltbotEnv, userId?: string): P
   // wbsearchentities is the simplest Wikidata search — returns id+label+
   // description per match. Avoids constructing SPARQL while still giving
   // the synthesis LLM authoritative entity hooks (Q-IDs) it can cite.
-  const wdUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(query)}&language=en&format=json&limit=10&type=item`;
+  // wbsearchentities matches against entity labels — give it the 2-3 most
+  // distinctive keywords, not a sentence.
+  const keywords = extractKeywords(query, 3) || query;
+  const wdUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(keywords)}&language=en&format=json&limit=10&type=item`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: wdUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
@@ -211,7 +264,9 @@ async function fetchWorldBank(query: string, env: MoltbotEnv, userId?: string): 
   // names, sources, topics. For actual time-series the LLM would need a
   // follow-up call with a specific indicator code, but for "is there a
   // World Bank dataset on X" research questions the metadata is enough.
-  const wbUrl = `https://api.worldbank.org/v2/sources/2/indicators?format=json&search=${encodeURIComponent(query)}&per_page=10`;
+  // Indicator search is keyword-based — extract keywords.
+  const keywords = extractKeywords(query) || query;
+  const wbUrl = `https://api.worldbank.org/v2/sources/2/indicators?format=json&search=${encodeURIComponent(keywords)}&per_page=10`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: wbUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
@@ -229,7 +284,10 @@ async function fetchSecEdgar(query: string, env: MoltbotEnv, userId?: string): P
   // email; the shared MoltworkerBot UA may get rate-limited or blocked. If
   // this source consistently fails, the fix is to extend fetch_url with
   // per-call header overrides — left as a follow-up.
-  const secUrl = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(query)}&forms=10-K&hits=5`;
+  // EDGAR's full-text q is keyword-based; long natural-language strings
+  // typically match nothing.
+  const keywords = extractKeywords(query) || query;
+  const secUrl = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(keywords)}&forms=10-K&hits=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: secUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
