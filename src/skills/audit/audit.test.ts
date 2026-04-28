@@ -1502,9 +1502,10 @@ describe('--analyze: DO dispatch routing', () => {
     expect(stub.fetch).not.toHaveBeenCalled();
   });
 
-  it('falls back to inline (no dispatch) when audit fits the inline envelope', async () => {
-    // Small repo + depth=quick → inline path. DO is available but should
-    // not be used.
+  it('dispatches to DO even when audit fits the inline envelope (Telegram transport)', async () => {
+    // Small repo + depth=quick + Telegram transport → always dispatch to DO.
+    // Multi-lens audits make one LLM call per lens; even quick audits easily
+    // exceed the Worker's 30s wall-clock when calls are sequential.
     const tree = [
       { path: 'package.json', type: 'blob', sha: 'm0', size: 30 },
       { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: 30 },
@@ -1527,19 +1528,17 @@ describe('--analyze: DO dispatch routing', () => {
         body: { ref: 'refs/heads/main', object: { sha: 'a'.repeat(40) } },
       },
       { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
-      {
-        match: (u) => u.includes('/contents/package.json'),
-        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
-      },
-      {
-        match: (u) => u.includes('/contents/src/auth.ts'),
-        body: { encoding: 'base64', content: btoa('export const x = 1;'), sha: 'a1', size: 30 },
-      },
       { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
     ]);
-    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
 
-    const stub = { fetch: vi.fn() };
+    const stub = {
+      fetch: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ status: 'started', taskId: 'test-id', kind: 'skill' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    };
     const taskProcessor = {
       idFromName: vi.fn().mockReturnValue('do-id'),
       get: vi.fn().mockReturnValue(stub),
@@ -1559,10 +1558,11 @@ describe('--analyze: DO dispatch routing', () => {
       }),
     );
 
-    // Inline path used: result is an audit_run, not the "started" text.
-    expect(result.kind).toBe('audit_run');
-    // DO was NEVER dispatched.
-    expect(stub.fetch).not.toHaveBeenCalled();
+    // DO was dispatched — result is the async "started" confirmation, not an audit_run.
+    expect(stub.fetch).toHaveBeenCalledOnce();
+    expect(result.kind).toBe('text');
+    expect(result.body).toMatch(/Audit started/i);
+    expect((result.data as { async?: boolean })?.async).toBe(true);
   });
 
   it('runs inline (no re-dispatch loop) when context.runningInDO=true', async () => {
