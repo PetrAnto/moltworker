@@ -2496,9 +2496,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
    */
   private async processSkillTask(request: SkillTaskRequest): Promise<void> {
     const start = Date.now();
+    // Hard outer deadline — belt-and-suspenders in case individual per-step
+    // timeouts (AbortController, Promise.race) fail in the DO context.
+    // Set to 3 minutes: classify(45s) + sources(30s) + synthesis(90s) = 165s
+    // worst case; 180s gives 15s of slack for Telegram delivery.
+    const SKILL_TASK_HARD_TIMEOUT_MS = 180_000;
     console.log(
       `[TaskProcessor] Starting skill task ${request.taskId} for skill ${request.skillRequest.skillId}`,
     );
+
+    // Set a watchdog alarm so the DO doesn't silently hang if waitUntil keeps
+    // it alive past all internal timeouts. Alarm fires after the hard timeout
+    // and will see status='processing' + a stale lastUpdate → declare stuck.
+    await this.doState.storage.setAlarm(Date.now() + SKILL_TASK_HARD_TIMEOUT_MS + 30_000);
 
     // Store minimal state for /status queries
     const skillState: TaskState = {
@@ -2540,8 +2550,19 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         },
       };
 
-      // Run the skill
-      const result = await runSkill(enrichedRequest);
+      // Run the skill with a hard outer deadline. Individual steps have their
+      // own timeouts (classify 45s, sources 30s, synthesis 90s), but if any
+      // of those silently misfire in the DO context this catches the residual.
+      const remainingMs = SKILL_TASK_HARD_TIMEOUT_MS - (Date.now() - start);
+      const result = await Promise.race([
+        runSkill(enrichedRequest),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Research timed out after ${Math.round(SKILL_TASK_HARD_TIMEOUT_MS / 1000)}s`)),
+            Math.max(remainingMs, 5_000),
+          ),
+        ),
+      ]);
 
       // Render and send to Telegram. Renderer chunks already carry finished
       // Telegram HTML — pass them through verbatim (rawHtml) so the markdown
@@ -2558,7 +2579,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         });
       }
 
-      // Mark completed
+      // Mark completed and cancel the watchdog alarm (task finished cleanly)
+      await this.doState.storage.deleteAlarm();
       skillState.status = 'completed';
       skillState.result = result.body.slice(0, 5000);
       skillState.lastUpdate = Date.now();
@@ -2575,11 +2597,14 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[TaskProcessor] Skill task ${request.taskId} failed:`, message);
 
+      // Cancel the watchdog alarm — task is done (failed)
+      try { await this.doState.storage.deleteAlarm(); } catch { /* best-effort */ }
+
       // Notify user
       await this.sendTelegramMessage(
         request.telegramToken,
         request.chatId,
-        `❌ Research failed: ${message}`,
+        `⚠️ Skill error (nexus): ${message}`,
       );
 
       // Mark failed
