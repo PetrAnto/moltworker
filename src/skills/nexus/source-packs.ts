@@ -11,6 +11,9 @@ import { executeSkillTool, buildSkillToolContext } from '../skill-tools';
 import type { ToolCall } from '../../openrouter/tools';
 import type { MoltbotEnv } from '../../types';
 
+/** Maximum wall-clock time to wait for a single source fetch. */
+const SOURCE_FETCH_TIMEOUT_MS = 30_000;
+
 /** Result from a source fetcher. */
 interface FetchResult {
   data: string;
@@ -406,11 +409,22 @@ export async function fetchSources(
   const results = await Promise.allSettled(
     named.map(async (n, i) => {
       const t0 = Date.now();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const r = await n.fn(query, env, userId, fetchContext);
+        const r = await Promise.race([
+          n.fn(query, env, userId, fetchContext),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`timed out after ${SOURCE_FETCH_TIMEOUT_MS}ms`)),
+              SOURCE_FETCH_TIMEOUT_MS,
+            );
+          }),
+        ]);
+        clearTimeout(timer);
         attempts[i] = { source: n.name, status: 'ok', durationMs: Date.now() - t0 };
         return r;
       } catch (err) {
+        clearTimeout(timer);
         const reason = err instanceof Error ? err.message : String(err);
         attempts[i] = { source: n.name, status: 'failed', reason, durationMs: Date.now() - t0 };
         throw err;
