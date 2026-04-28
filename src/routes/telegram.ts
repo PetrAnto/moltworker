@@ -155,6 +155,7 @@ telegram.get('/setup', async (c) => {
     { command: 'write', description: 'Lyra: draft content' },
     { command: 'research', description: 'Nexus: multi-source research' },
     { command: 'save', description: 'Spark: capture ideas to your inbox' },
+    { command: 'audit', description: 'Audit a repo for bugs, security, deps & more' },
     { command: 'cf', description: 'Cloudflare API search / execute' },
     { command: 'pick', description: 'Choose a model by intent' },
     { command: 'models', description: 'Browse models with prices' },
