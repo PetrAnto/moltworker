@@ -19,6 +19,21 @@ interface FetchResult {
   confidence: ConfidenceTier;
 }
 
+/**
+ * Per-fetch context. Used to pass distilled keyword tokens (from the LLM
+ * classifier) to keyword-strict fetchers that would otherwise stumble on
+ * natural-language queries. Optional and additive — fetchers that don't
+ * need it ignore it.
+ */
+export interface SourceFetchContext {
+  /**
+   * 2-4 distinctive keyword tokens for keyword-strict APIs (GitHub, Stack
+   * Exchange, Wikidata, etc.). Provided by the classifier LLM, with the
+   * local extractKeywords() heuristic as a fallback.
+   */
+  keywordQuery?: string;
+}
+
 function makeToolCall(name: string, args: Record<string, unknown>): ToolCall {
   return {
     id: `nexus-${name}-${Date.now()}`,
@@ -37,6 +52,54 @@ function makeToolCall(name: string, args: Record<string, unknown>): ToolCall {
  */
 export function isToolError(content: string): boolean {
   return content.startsWith('Error:') || content.startsWith('Error executing ');
+}
+
+/**
+ * Stop-word list for keyword extraction on keyword-strict APIs (GitHub
+ * search, Stack Exchange, Wikidata entity search, World Bank indicator
+ * search, SEC EDGAR full-text). These APIs treat the query string as an
+ * AND of all tokens, so passing a natural-language phrase like "ai models
+ * and other fee features in cloudflare workers" returns zero hits because
+ * no single repo/question matches every token. Conservative list: only
+ * obvious noise/connectives, not domain-meaningful words.
+ */
+const STOP_WORDS = new Set([
+  // articles + prepositions
+  'a', 'an', 'the', 'of', 'in', 'on', 'at', 'by', 'for', 'to', 'with', 'from',
+  'into', 'onto', 'over', 'under', 'between', 'across',
+  // conjunctions
+  'and', 'or', 'but', 'vs', 'versus', 'so',
+  // question + comparison words
+  'what', 'where', 'when', 'who', 'why', 'which', 'how', 'whose',
+  // generic qualifiers that are noise for repo/QA search
+  'best', 'free', 'available', 'other', 'top', 'good', 'better', 'kind', 'kinds',
+  'type', 'types', 'this', 'that', 'these', 'those', 'about', 'some', 'any',
+  // meta words that aren't usually in repo names / SO question titles
+  'features', 'feature', 'thing', 'things', 'stuff', 'way', 'ways', 'list',
+  'option', 'options', 'overview', 'introduction', 'guide', 'tutorial',
+  'example', 'examples',
+  // verbs
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+  'do', 'does', 'did', 'can', 'could', 'should', 'would', 'will', 'shall', 'may',
+  'might', 'must',
+  // pronouns
+  'it', 'its', 'they', 'them', 'their', 'he', 'she', 'his', 'her', 'i', 'me',
+  'my', 'we', 'us', 'our', 'you', 'your',
+]);
+
+/**
+ * Extract up to `max` distinctive keyword tokens from a natural-language
+ * query for use with keyword-strict search APIs. Lowercases, strips
+ * punctuation, drops stop words and 1-char tokens, preserves order.
+ */
+export function extractKeywords(query: string, max = 4): string {
+  return query
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 2 && !STOP_WORDS.has(w))
+    .slice(0, max)
+    .join(' ');
 }
 
 // ---------------------------------------------------------------------------
@@ -114,35 +177,41 @@ async function fetchFinance(query: string, env: MoltbotEnv, userId?: string): Pr
 // isToolError() so a 4xx/5xx never inflates the final source count.
 // ---------------------------------------------------------------------------
 
-async function fetchStackExchange(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchStackExchange(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // /search/excerpts returns title + body excerpt + score per hit, which is
   // higher signal for synthesis than just titles. Stack Overflow is the
   // default site; Stack Exchange has 170+ sister sites (cooking, photography,
   // math, writing, etc.) but cross-site search needs site-id and complicates
   // the call — leave that to a future "site picker" pass.
-  const seUrl = `https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q=${encodeURIComponent(query)}&site=stackoverflow&pagesize=5`;
+  // The API treats `q` as AND of all tokens. Prefer the LLM-distilled
+  // keywordQuery; fall back to the local extractor; last resort, raw query.
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
+  const seUrl = `https://api.stackexchange.com/2.3/search/excerpts?order=desc&sort=relevance&q=${encodeURIComponent(keywords)}&site=stackoverflow&pagesize=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: seUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
   if (/"items"\s*:\s*\[\s*\]/.test(result.content)) {
-    throw new Error('Stack Exchange: no matching questions');
+    throw new Error(`Stack Exchange: no matching questions (searched: "${keywords}")`);
   }
   return { data: result.content.slice(0, 3000), url: seUrl, source: 'Stack Exchange', confidence: 'high' };
 }
 
-async function fetchGitHub(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchGitHub(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // Goes through github_api so the request carries our PAT and avoids the
   // 60/hr unauth limit shared across all CF egress IPs. Repository search
   // by stars is a reasonable default — relevant projects + descriptions +
   // language for any tool/library/concept query.
-  const endpoint = `/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=5`;
+  // GitHub search syntax ANDs tokens. Prefer the LLM-distilled
+  // keywordQuery; fall back to the local extractor; last resort, raw query.
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
+  const endpoint = `/search/repositories?q=${encodeURIComponent(keywords)}&sort=stars&order=desc&per_page=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('github_api', { endpoint, method: 'GET' }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
   if (/"total_count"\s*:\s*0\b/.test(result.content)) {
-    throw new Error('GitHub: no matching repositories');
+    throw new Error(`GitHub: no matching repositories (searched: "${keywords}")`);
   }
-  const browseUrl = `https://github.com/search?q=${encodeURIComponent(query)}&type=repositories`;
+  const browseUrl = `https://github.com/search?q=${encodeURIComponent(keywords)}&type=repositories`;
   return { data: result.content.slice(0, 3000), url: browseUrl, source: 'GitHub', confidence: 'high' };
 }
 
@@ -177,11 +246,14 @@ async function fetchArxiv(query: string, env: MoltbotEnv, userId?: string): Prom
   return { data: result.content.slice(0, 3000), url: arxivUrl, source: 'arXiv', confidence: 'high' };
 }
 
-async function fetchWikidata(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchWikidata(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // wbsearchentities is the simplest Wikidata search — returns id+label+
   // description per match. Avoids constructing SPARQL while still giving
   // the synthesis LLM authoritative entity hooks (Q-IDs) it can cite.
-  const wdUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(query)}&language=en&format=json&limit=10&type=item`;
+  // wbsearchentities matches against entity labels — prefer the
+  // LLM-distilled keywordQuery; fall back to a 3-token local extraction.
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query, 3) || query;
+  const wdUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(keywords)}&language=en&format=json&limit=10&type=item`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: wdUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
@@ -206,12 +278,13 @@ async function fetchInternetArchive(query: string, env: MoltbotEnv, userId?: str
   return { data: result.content.slice(0, 3000), url: iaUrl, source: 'Internet Archive', confidence: 'medium' };
 }
 
-async function fetchWorldBank(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchWorldBank(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // World Bank's indicator-metadata search — returns indicator codes,
   // names, sources, topics. For actual time-series the LLM would need a
   // follow-up call with a specific indicator code, but for "is there a
   // World Bank dataset on X" research questions the metadata is enough.
-  const wbUrl = `https://api.worldbank.org/v2/sources/2/indicators?format=json&search=${encodeURIComponent(query)}&per_page=10`;
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
+  const wbUrl = `https://api.worldbank.org/v2/sources/2/indicators?format=json&search=${encodeURIComponent(keywords)}&per_page=10`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: wbUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
@@ -223,13 +296,14 @@ async function fetchWorldBank(query: string, env: MoltbotEnv, userId?: string): 
   return { data: result.content.slice(0, 3000), url: wbUrl, source: 'World Bank', confidence: 'high' };
 }
 
-async function fetchSecEdgar(query: string, env: MoltbotEnv, userId?: string): Promise<FetchResult> {
+async function fetchSecEdgar(query: string, env: MoltbotEnv, userId?: string, fctx?: SourceFetchContext): Promise<FetchResult> {
   // EDGAR's full-text search of EDGAR filings. Heads-up: SEC's fair access
   // policy requires a User-Agent identifying the requester with a contact
   // email; the shared MoltworkerBot UA may get rate-limited or blocked. If
   // this source consistently fails, the fix is to extend fetch_url with
   // per-call header overrides — left as a follow-up.
-  const secUrl = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(query)}&forms=10-K&hits=5`;
+  const keywords = (fctx?.keywordQuery && fctx.keywordQuery.trim()) || extractKeywords(query) || query;
+  const secUrl = `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(keywords)}&forms=10-K&hits=5`;
   const ctx = buildSkillToolContext(env, userId);
   const result = await executeSkillTool('nexus', makeToolCall('fetch_url', { url: secUrl }), ctx);
   if (isToolError(result.content)) throw new Error(result.content);
@@ -257,7 +331,12 @@ async function fetchBluesky(query: string, env: MoltbotEnv, userId?: string): Pr
 // Source pack registry
 // ---------------------------------------------------------------------------
 
-type SourceFetcher = (query: string, env: MoltbotEnv, userId?: string) => Promise<FetchResult>;
+type SourceFetcher = (
+  query: string,
+  env: MoltbotEnv,
+  userId?: string,
+  ctx?: SourceFetchContext,
+) => Promise<FetchResult>;
 
 const SOURCE_REGISTRY: Record<string, SourceFetcher> = {
   webSearch: fetchWebSearch,
@@ -295,6 +374,7 @@ export async function fetchSources(
   sourceNames: string[],
   env: MoltbotEnv,
   userId?: string,
+  fetchContext?: SourceFetchContext,
 ): Promise<{ evidence: EvidenceItem[]; toolCalls: number; attempts: SourceAttempt[] }> {
   // Track which classifier-named source corresponds to each settled result
   // so failure logs name the actual source (not just an index). Filter out
@@ -327,7 +407,7 @@ export async function fetchSources(
     named.map(async (n, i) => {
       const t0 = Date.now();
       try {
-        const r = await n.fn(query, env, userId);
+        const r = await n.fn(query, env, userId, fetchContext);
         attempts[i] = { source: n.name, status: 'ok', durationMs: Date.now() - t0 };
         return r;
       } catch (err) {

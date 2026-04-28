@@ -125,6 +125,45 @@ describe('/research (quick mode)', () => {
     expect(result.kind).toBe('dossier');
     expect(result.body).toContain('Fallback synthesis');
   });
+
+  it('passes the LLM-distilled keywordQuery to keyword-strict fetchers', async () => {
+    // Smoking-gun fix: GitHub/Stack Exchange were ANDing every token of a
+    // natural-language query and returning zero hits. The classifier now
+    // outputs `keywordQuery` and the github fetcher must use it for the
+    // `q=` param (NOT the raw natural-language query).
+    mockCallLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        category: 'technical',
+        sources: ['webSearch', 'github'],
+        keywordQuery: 'cloudflare workers ai',
+      }),
+    });
+    mockExecTool.mockResolvedValue({
+      tool_call_id: 'test',
+      role: 'tool',
+      content: '{"total_count":42,"items":[{"name":"some-repo"}]}',
+    });
+    mockCallLLM.mockResolvedValueOnce({
+      text: JSON.stringify({ synthesis: 'tech analysis' }),
+    });
+
+    await handleNexus(makeRequest({
+      text: 'ai models and other free features in cloudflare workers',
+    }));
+
+    type CapturedToolCall = { function: { name: string; arguments: string } };
+    const githubCalls = mockExecTool.mock.calls.filter(call => {
+      const toolCall = call[1] as CapturedToolCall;
+      return toolCall.function.name === 'github_api';
+    });
+    expect(githubCalls.length).toBeGreaterThan(0);
+    const args = JSON.parse((githubCalls[0][1] as CapturedToolCall).function.arguments);
+    // The github_api endpoint must carry the LLM keywordQuery (URL-encoded).
+    expect(args.endpoint).toMatch(/q=cloudflare%20workers%20ai/);
+    // And must NOT carry tokens from the natural-language phrasing.
+    expect(args.endpoint).not.toMatch(/and%20other/);
+    expect(args.endpoint).not.toMatch(/free%20features/);
+  });
 });
 
 describe('/research --decision', () => {

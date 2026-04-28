@@ -182,6 +182,9 @@ async function executeResearch(
   const category = classification && isQueryClassification(classification)
     ? classification.category
     : undefined;
+  const llmKeywordQuery = classification && isQueryClassification(classification)
+    ? classification.keywordQuery
+    : undefined;
 
   // Always expand the classifier's picks with category-default backbones so
   // a thin pick (e.g. just ["webSearch"]) still fans out to complementary
@@ -194,11 +197,19 @@ async function executeResearch(
   // shows what the classifier asked for and what we expanded it to.
   console.log(
     `[Nexus] category=${category ?? 'unknown'} classifierPicks=${JSON.stringify(classifierPicks)} ` +
-    `expanded=${JSON.stringify(sourceNames)}`,
+    `expanded=${JSON.stringify(sourceNames)} keywordQuery=${JSON.stringify(llmKeywordQuery)}`,
   );
 
-  // 3. Fetch sources in parallel
-  const { evidence, toolCalls, attempts } = await fetchSources(query, sourceNames, request.env, request.userId);
+  // 3. Fetch sources in parallel. Pass the LLM-distilled keyword query so
+  // keyword-strict APIs (GitHub, Stack Exchange, Wikidata, World Bank, SEC
+  // EDGAR) don't trip on natural-language phrasing.
+  const { evidence, toolCalls, attempts } = await fetchSources(
+    query,
+    sourceNames,
+    request.env,
+    request.userId,
+    { keywordQuery: llmKeywordQuery },
+  );
   console.log(`[Nexus] sources returned evidence: ${JSON.stringify(evidence.map(e => e.source))} (${evidence.length}/${sourceNames.length})`);
 
   if (evidence.length === 0) {
