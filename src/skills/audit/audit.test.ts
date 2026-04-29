@@ -1341,7 +1341,14 @@ describe('--analyze: surfaces missing-grammar coverage warning', () => {
     expect(result.kind).toBe('audit_run');
     expect(result.body).toMatch(/coverage partial/i);
     expect(result.body).toContain('typescript');
+    // The warning now leads with the in-bot `/audit grammars` path (one-tap
+    // bootstrap from chat) and keeps the npm script as the laptop fallback.
+    expect(result.body).toMatch(/\/audit grammars/);
     expect(result.body).toMatch(/audit:upload-grammars/);
+    // The structured run carries the missing-grammar set so the renderer
+    // can wire up the 📚 Install grammars button.
+    const run = result.data as { missingGrammars?: string[] } | undefined;
+    expect(run?.missingGrammars).toContain('typescript');
   });
 });
 

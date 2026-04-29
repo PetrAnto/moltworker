@@ -219,6 +219,11 @@ export interface AuditRun {
   sanitization?: AuditRunSanitization;
   /** Prior runId if this run was a delta against a cached profile. */
   cachedFrom?: string;
+  /** Languages whose tree-sitter grammar was unavailable during extraction.
+   *  When non-empty, the renderer surfaces an "Install grammars" button that
+   *  invokes the in-bot `/audit grammars` bootstrap so the next run gets
+   *  real coverage. */
+  missingGrammars?: string[];
 }
 
 // ---------------------------------------------------------------------------

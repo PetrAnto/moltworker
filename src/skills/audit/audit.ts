@@ -590,6 +590,9 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     if (m) missingGrammars.add(m[1]);
     else otherParseErrors++;
   }
+  if (missingGrammars.size > 0) {
+    run.missingGrammars = [...missingGrammars].sort();
+  }
 
   // Persist the run for /audit export <runId>. The top-5 view in the
   // Telegram message is bounded; the full report (all findings + full
@@ -812,7 +815,7 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
   if (c.missingGrammars.size > 0) {
     const langs = [...c.missingGrammars].sort().join(', ');
     lines.push(
-      `⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — run \`npm run audit:upload-grammars\` to enable.`,
+      `⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — tap 📚 Install grammars below or run \`/audit grammars\` to bootstrap them (laptop operators: \`npm run audit:upload-grammars\`).`,
     );
   }
   if (c.otherParseErrors > 0) lines.push(`⚠️ ${c.otherParseErrors} file(s) had parse issues`);
