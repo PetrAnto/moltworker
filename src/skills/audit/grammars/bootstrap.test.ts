@@ -54,6 +54,13 @@ function createMockBucket(initial: Record<string, Uint8Array | string> = {}): {
         async arrayBuffer() { return v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength); },
       };
     }),
+    head: vi.fn(async (key: string) => {
+      // Mirrors R2's head: returns metadata-only when present, null when not.
+      // Used by bootstrap's self-heal path to detect a manifest entry whose
+      // byte object has gone missing.
+      const v = state.store.get(key);
+      return v === undefined ? null : ({} as R2Object);
+    }),
     put: vi.fn(async (key: string, value: ArrayBuffer | Uint8Array | string) => {
       state.putCalls.push(key);
       if (state.putShouldFail?.has(key)) {
@@ -182,6 +189,79 @@ describe('bootstrapGrammars — idempotency', () => {
     expect(second.manifestWritten).toBe(false);
     const grammarItems = second.items.filter((i) => i.kind === 'grammar' && i.language);
     expect(grammarItems.every((i) => i.status === 'unchanged')).toBe(true);
+  });
+
+  it('self-heals when manifest references a byte object that is missing from R2', async () => {
+    // Reproduces the production case observed on PetrAnto/wagmi: the
+    // manifest survived from a prior upload but the per-language WASM
+    // object was no longer in R2 (partial upload, manual prune, binding
+    // swap, etc.). Pre-fix, bootstrap saw `prev.sha256 === sha`, declared
+    // the entry "unchanged", wrote nothing, and the loader kept returning
+    // null — every subsequent audit silently lost coverage for that
+    // language.
+    const { bucket, state } = createMockBucket();
+    const fetchImpl = makeFetchMock();
+
+    // First run: populates R2 with a complete manifest + bytes.
+    await bootstrapGrammars({ MOLTBOT_BUCKET: bucket }, { fetchImpl });
+    expect(state.store.has('audit/grammars/manifest.json')).toBe(true);
+    const sha8 = sha256Hex(WASM_BYTES).slice(0, 8);
+    const jsKey = `audit/grammars/javascript@${sha8}.wasm`;
+    const tsxKey = `audit/grammars/tsx@${sha8}.wasm`;
+    expect(state.store.has(jsKey)).toBe(true);
+    expect(state.store.has(tsxKey)).toBe(true);
+
+    // Simulate the broken state: drop the byte objects but keep the
+    // manifest. This is what the production R2 looked like when the
+    // user's audit complained "grammar(s) missing for javascript, tsx"
+    // even though bootstrap reported every entry as unchanged.
+    state.store.delete(jsKey);
+    state.store.delete(tsxKey);
+    state.putCalls.length = 0;
+
+    const second = await bootstrapGrammars({ MOLTBOT_BUCKET: bucket }, { fetchImpl });
+
+    // The two re-uploaded grammars should be marked `uploaded`, not
+    // `unchanged` — and the actual byte objects should be back in R2.
+    const jsItem = second.items.find(
+      (i) => i.kind === 'grammar' && i.language === 'javascript',
+    );
+    const tsxItem = second.items.find(
+      (i) => i.kind === 'grammar' && i.language === 'tsx',
+    );
+    expect(jsItem?.status).toBe('uploaded');
+    expect(tsxItem?.status).toBe('uploaded');
+    expect(state.putCalls).toContain(jsKey);
+    expect(state.putCalls).toContain(tsxKey);
+    expect(state.store.has(jsKey)).toBe(true);
+    expect(state.store.has(tsxKey)).toBe(true);
+
+    // The other grammars whose bytes were still present must remain
+    // a no-op — we only re-upload what's missing.
+    const otherItems = second.items.filter(
+      (i) => i.kind === 'grammar' && i.language !== 'javascript' && i.language !== 'tsx',
+    );
+    expect(otherItems.every((i) => i.status === 'unchanged')).toBe(true);
+  });
+
+  it('self-heals when the runtime byte object is missing but the manifest entry remains', async () => {
+    const { bucket, state } = createMockBucket();
+    const fetchImpl = makeFetchMock();
+
+    await bootstrapGrammars({ MOLTBOT_BUCKET: bucket }, { fetchImpl });
+    const sha8 = sha256Hex(WASM_BYTES).slice(0, 8);
+    const runtimeKey = `audit/grammars/runtime@${sha8}.wasm`;
+    expect(state.store.has(runtimeKey)).toBe(true);
+
+    state.store.delete(runtimeKey);
+    state.putCalls.length = 0;
+
+    const second = await bootstrapGrammars({ MOLTBOT_BUCKET: bucket }, { fetchImpl });
+
+    const runtimeItem = second.items.find((i) => i.kind === 'runtime');
+    expect(runtimeItem?.status).toBe('uploaded');
+    expect(state.putCalls).toContain(runtimeKey);
+    expect(state.store.has(runtimeKey)).toBe(true);
   });
 
   it('re-uploads when upstream bytes change', async () => {
