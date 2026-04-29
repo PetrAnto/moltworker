@@ -479,6 +479,8 @@ interface TaskState {
   // than chat/orchestra tasks. The watchdog must NOT try to chat-style auto-resume
   // these; they manage their own completion via processSkillTask + waitUntil.
   isSkillTask?: boolean;
+  // Which skill is running — persisted so the watchdog eviction message is specific.
+  skillId?: string;
   // Centralized execution profile — drives resume caps, sandbox gating, prompt tier
   executionProfile?: OrchestraExecutionProfile;
   // F.20: Runtime risk profile — second-stage classification updated during execution
@@ -1671,7 +1673,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
         await this.sendTelegramMessage(
           task.telegramToken,
           task.chatId,
-          `⚠️ Audit interrupted before completion (${elapsed}s elapsed). Please re-run the command.`,
+          `⚠️ Task interrupted before completion (${elapsed}s elapsed, skill: ${task.skillId ?? 'unknown'}). Please re-run the command.`,
         );
       }
       return;
@@ -2559,6 +2561,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       telegramToken: request.telegramToken,
       openrouterKey: request.openrouterKey ?? '',
       isSkillTask: true,
+      skillId: request.skillRequest.skillId,
     };
     await this.doState.storage.put('task', skillState);
 
@@ -2615,7 +2618,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       }
 
       // Mark completed and cancel the watchdog alarm (task finished cleanly)
-      await this.doState.storage.deleteAlarm();
+      try { await this.doState.storage.deleteAlarm(); } catch { /* best-effort */ }
       skillState.status = 'completed';
       skillState.result = result.body.slice(0, 5000);
       skillState.lastUpdate = Date.now();

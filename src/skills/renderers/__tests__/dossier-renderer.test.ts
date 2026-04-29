@@ -306,4 +306,25 @@ describe('Dossier full pipeline render', () => {
       expect(chunk.parseMode).toBe('HTML');
     }
   });
+
+  it('empty synthesis fallback is visible when data is missing', () => {
+    // Simulates what the DO sends when result.data is absent (e.g. skill
+    // timed out after writing body but before populating structured data).
+    const result: SkillResult = {
+      skillId: 'nexus',
+      kind: 'dossier',
+      body: 'Research timed out. Partial answer: Cloudflare Workers & Durable Objects.',
+      telemetry,
+    };
+    const chunks = renderForTelegram(result);
+    const text = chunks.map(c => c.text).join('\n');
+
+    // Fallback body is present and entity-escaped exactly once.
+    expect(text).toContain('Research timed out. Partial answer: Cloudflare Workers &amp; Durable Objects.');
+    expect(text).not.toContain('&amp;amp;');
+    // Header is still rendered.
+    expect(text).toContain('<b>Research Dossier</b>');
+    // Parse mode is HTML so the header tag is rendered.
+    expect(chunks[0].parseMode).toBe('HTML');
+  });
 });
