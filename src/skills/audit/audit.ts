@@ -87,6 +87,9 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   if (request.subcommand === 'subs') {
     return handleListSubs(request, start);
   }
+  if (request.subcommand === 'grammars') {
+    return handleGrammars(request, start);
+  }
 
   // 1. Parse args
   const repoArg = request.text.trim().split(/\s+/)[0] ?? '';
@@ -1523,6 +1526,43 @@ async function handleListSubs(request: SkillRequest, start: number): Promise<Ski
     body,
     data: { subscriptions: subs.length },
     telemetry: { durationMs: Date.now() - start, model: 'none', llmCalls: 0, toolCalls: 0 },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// /audit grammars — bootstrap tree-sitter WASMs into R2 from a CDN
+// ---------------------------------------------------------------------------
+//
+// This is the in-bot equivalent of `npm run audit:upload-grammars`: it
+// fetches the same MVP grammar set + runtime from a public npm CDN
+// (jsdelivr → unpkg fallback) and writes them to MOLTBOT_BUCKET in the
+// exact manifest layout the loader expects. The point is to remove the
+// "you need a laptop with `wrangler` configured" prerequisite for the
+// audit pipeline so the bot can self-bootstrap and operate independently
+// on arbitrary repos.
+
+async function handleGrammars(request: SkillRequest, start: number): Promise<SkillResult> {
+  const { bootstrapGrammars, renderBootstrapReport } = await import('./grammars/bootstrap');
+  const dryRun = request.flags['dry-run'] === 'true' || request.flags.dry === 'true';
+  const result = await bootstrapGrammars(
+    { MOLTBOT_BUCKET: request.env.MOLTBOT_BUCKET },
+    { dryRun },
+  );
+  return {
+    skillId: 'audit',
+    kind: result.ok ? 'text' : 'error',
+    body: renderBootstrapReport(result),
+    data: {
+      manifestWritten: result.manifestWritten,
+      bytesFetched: result.bytesFetched,
+      items: result.items,
+    },
+    telemetry: {
+      durationMs: Date.now() - start,
+      model: 'none',
+      llmCalls: 0,
+      toolCalls: 0,
+    },
   };
 }
 

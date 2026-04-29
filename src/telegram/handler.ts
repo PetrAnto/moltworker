@@ -7161,7 +7161,11 @@ deep     — 40+ files (dispatched to background task)
 /audit subscribe owner/repo --daily                  — Daily cadence
 /audit subscribe owner/repo --lens security --depth standard --branch main
 /audit unsubscribe owner/repo                        — Stop
-/audit subs                                          — List active subscriptions`;
+/audit subs                                          — List active subscriptions
+
+━━━ Setup ━━━
+/audit grammars             — Bootstrap tree-sitter WASMs into R2 (one-time)
+/audit grammars --dry-run   — Hash + diff without writing`;
 
       default:
         return '';
