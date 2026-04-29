@@ -2638,18 +2638,24 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       // Cancel the watchdog alarm — task is done (failed)
       try { await this.doState.storage.deleteAlarm(); } catch { /* best-effort */ }
 
-      // Notify user
-      await this.sendTelegramMessage(
-        request.telegramToken,
-        request.chatId,
-        `⚠️ Skill error (${request.skillRequest.skillId}): ${message}`,
-      );
-
-      // Mark failed
+      // Mark failed BEFORE notifying — if Telegram send fails, the alarm at
+      // +30s still sees 'failed' and stops the watchdog instead of sending
+      // a misleading "Task interrupted" message.
       skillState.status = 'failed';
       skillState.error = message;
       skillState.lastUpdate = Date.now();
-      await this.doState.storage.put('task', skillState);
+      try { await this.doState.storage.put('task', skillState); } catch { /* best-effort */ }
+
+      // Notify user (best-effort — a Telegram error must not mask the real error)
+      try {
+        await this.sendTelegramMessage(
+          request.telegramToken,
+          request.chatId,
+          `⚠️ Skill error (${request.skillRequest.skillId}): ${message}`,
+        );
+      } catch (notifyErr) {
+        console.error('[TaskProcessor] Failed to notify user of skill error:', notifyErr);
+      }
     } finally {
       this.isRunning = false;
     }
