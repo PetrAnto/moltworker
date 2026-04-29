@@ -147,6 +147,9 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
       // model produces the same finding-id hash across reruns.
       temperature: 0,
       env: opts.env,
+      // Hard cap per lens: 6 lenses run concurrently; if any one hangs it must
+      // not block the others or outlast the DO's 180 s hard-timeout budget.
+      timeoutMs: 60_000,
     });
     llmText = result.text;
     tokens = result.tokens;
