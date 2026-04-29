@@ -467,6 +467,27 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   // for the file; manifests + workflow snippets reach every lens because
   // their relevance varies by lens (a Dockerfile is signal for security,
   // deps, perf, …).
+  // Run all lens LLM calls in parallel — each lens is independent (no shared
+  // mutable state). Sequential execution (one per ~30–45 s) would exceed the
+  // 180 s DO hard-timeout for the common 6-lens case; parallel execution
+  // completes in the time of the single slowest lens (~45 s).
+  const lensResults = await Promise.allSettled(
+    plan.lenses.map((lens) => {
+      const lensPaths = new Set(plan.selections[lens]);
+      const lensSnippets = extracted.snippets.filter(
+        (s) => lensPaths.has(s.path) || s.kind === 'manifest' || s.kind === 'workflow',
+      );
+      return analyzeWithLens({
+        profile,
+        snippets: lensSnippets,
+        lens,
+        env: request.env,
+        modelAlias: request.modelAlias,
+        defaultModel: AUDIT_META.defaultModel,
+      });
+    }),
+  );
+
   const findings: AuditFinding[] = [];
   let llmCalls = 0;
   let promptTokens = 0;
@@ -477,19 +498,12 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   // so the operator can see where injection attempts came from, not
   // just a counter on telemetry.
   const allSanitizationNotices: import('./sanitize').SanitizeNotice[] = [];
-  for (const lens of plan.lenses) {
-    const lensPaths = new Set(plan.selections[lens]);
-    const lensSnippets = extracted.snippets.filter(
-      (s) => lensPaths.has(s.path) || s.kind === 'manifest' || s.kind === 'workflow',
-    );
-    const result = await analyzeWithLens({
-      profile,
-      snippets: lensSnippets,
-      lens,
-      env: request.env,
-      modelAlias: request.modelAlias,
-      defaultModel: AUDIT_META.defaultModel,
-    });
+  for (const [i, settled] of lensResults.entries()) {
+    if (settled.status === 'rejected') {
+      console.error(`[Audit] lens ${plan.lenses[i]} failed:`, settled.reason);
+      continue;
+    }
+    const result = settled.value;
     if (result.telemetry.llmCalled) llmCalls++;
     if (result.telemetry.tokens) {
       promptTokens += result.telemetry.tokens.prompt;
