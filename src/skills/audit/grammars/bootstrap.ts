@@ -156,7 +156,16 @@ export async function bootstrapGrammars(
     const sha8 = sha.slice(0, 8);
     const key = `audit/grammars/${lang}@${sha8}.wasm`;
     const prev = existingByLang.get(lang);
-    const unchanged = prev?.sha256 === sha;
+    const shaMatches = prev?.sha256 === sha;
+    // SHA-only equality is not enough to declare a no-op: the manifest can
+    // outlive the byte object (partial prior upload, manual prune, R2
+    // binding swap), and in that state the loader returns null and audits
+    // silently lose coverage. Verify the bytes are actually in R2 before
+    // skipping the put — if missing, fall through to upload and self-heal.
+    const bytesPresent = shaMatches && prev
+      ? await objectExists(bucket, prev.key)
+      : false;
+    const unchanged = shaMatches && bytesPresent;
 
     if (!unchanged && !dryRun) {
       try {
@@ -198,7 +207,13 @@ export async function bootstrapGrammars(
     const sha = await sha256Hex(runtimeFetched.bytes);
     const sha8 = sha.slice(0, 8);
     const key = `audit/grammars/runtime@${sha8}.wasm`;
-    const unchanged = existing?.runtime?.sha256 === sha;
+    const runtimeShaMatches = existing?.runtime?.sha256 === sha;
+    // Same self-heal rule as grammars above: don't trust a SHA-equal
+    // manifest entry whose R2 object has gone missing.
+    const runtimeBytesPresent = runtimeShaMatches && existing?.runtime
+      ? await objectExists(bucket, existing.runtime.key)
+      : false;
+    const unchanged = runtimeShaMatches && runtimeBytesPresent;
 
     if (!unchanged && !dryRun) {
       try {
@@ -370,6 +385,26 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     out += view[i].toString(16).padStart(2, '0');
   }
   return out;
+}
+
+/**
+ * Cheap existence probe — `head` returns metadata without the body, so this
+ * is O(1) regardless of object size. Some R2 mocks (and a hypothetical older
+ * binding) may not implement `head`; fall back to `get` and discard the
+ * stream. Errors are treated as "not present" so a transient R2 hiccup
+ * triggers a re-upload rather than a silent skip.
+ */
+async function objectExists(bucket: R2Bucket, key: string): Promise<boolean> {
+  try {
+    if (typeof bucket.head === 'function') {
+      const meta = await bucket.head(key);
+      return meta != null;
+    }
+    const obj = await bucket.get(key);
+    return obj != null;
+  } catch {
+    return false;
+  }
 }
 
 async function readExistingManifest(bucket: R2Bucket): Promise<GrammarManifest | null> {
