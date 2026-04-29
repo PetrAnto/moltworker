@@ -475,6 +475,10 @@ interface TaskState {
   validationRetryCount?: number;
   // Whether this is an orchestra task (persisted so alarm handler can use tighter limits)
   isOrchestraTask?: boolean;
+  // Whether this is a skill task (audit, nexus, etc.) — has a different lifecycle
+  // than chat/orchestra tasks. The watchdog must NOT try to chat-style auto-resume
+  // these; they manage their own completion via processSkillTask + waitUntil.
+  isSkillTask?: boolean;
   // Centralized execution profile — drives resume caps, sandbox gating, prompt tier
   executionProfile?: OrchestraExecutionProfile;
   // F.20: Runtime risk profile — second-stage classification updated during execution
@@ -1647,6 +1651,32 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       return;
     }
 
+    // Skill tasks (audit, nexus, etc.) have a different lifecycle than chat
+    // tasks — they aren't checkpoint-resumable, so the chat-style "Tap Resume"
+    // flow doesn't apply. If the in-memory flag says we're still running,
+    // reschedule. If the DO was evicted before completion, mark failed cleanly
+    // with a re-run hint instead of a broken Resume button.
+    if (task.isSkillTask) {
+      if (this.isRunning) {
+        console.log('[TaskProcessor] Skill task still running, rescheduling watchdog');
+        await this.doState.storage.setAlarm(Date.now() + WATCHDOG_INTERVAL_MS);
+        return;
+      }
+      const elapsed = Math.round((Date.now() - task.startTime) / 1000);
+      console.log(`[TaskProcessor] Skill task evicted before completion (${elapsed}s)`);
+      task.status = 'failed';
+      task.error = `Skill task evicted before completion after ${elapsed}s.`;
+      await this.doState.storage.put('task', taskForStorage(task));
+      if (task.telegramToken) {
+        await this.sendTelegramMessage(
+          task.telegramToken,
+          task.chatId,
+          `⚠️ Audit interrupted before completion (${elapsed}s elapsed). Please re-run the command.`,
+        );
+      }
+      return;
+    }
+
     // Stale task guard: if the task has been alive for > 1 hour, it's almost
     // certainly a zombie from a previous deployment. Abandon it to prevent
     // stale DO state from interfering with new code.
@@ -2510,6 +2540,10 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
     // and will see status='processing' + a stale lastUpdate → declare stuck.
     await this.doState.storage.setAlarm(Date.now() + SKILL_TASK_HARD_TIMEOUT_MS + 30_000);
 
+    // In-memory running flag — the watchdog checks this first and reschedules
+    // instead of declaring the task stuck while we're still executing.
+    this.isRunning = true;
+
     // Store minimal state for /status queries
     const skillState: TaskState = {
       taskId: request.taskId,
@@ -2524,6 +2558,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       lastUpdate: start,
       telegramToken: request.telegramToken,
       openrouterKey: request.openrouterKey ?? '',
+      isSkillTask: true,
     };
     await this.doState.storage.put('task', skillState);
 
@@ -2612,6 +2647,8 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       skillState.error = message;
       skillState.lastUpdate = Date.now();
       await this.doState.storage.put('task', skillState);
+    } finally {
+      this.isRunning = false;
     }
   }
 
