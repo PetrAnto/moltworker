@@ -335,8 +335,18 @@ function renderAudit(result: SkillResult): TelegramChunk {
  * stable id (lens-prefixed hash, ~20 chars) — fits comfortably.
  */
 function buildAuditRunKeyboard(run: AuditRun | undefined): ChunkButton[][] | undefined {
-  if (!run || run.findings.length === 0) return undefined;
+  if (!run) return undefined;
   const rows: ChunkButton[][] = [];
+  // Coverage gap CTA: when grammars were missing, the run is effectively
+  // empty for those languages — surface a one-tap bootstrap so the next
+  // run actually sees the code. Shown even when findings.length === 0
+  // (the common "no findings because we couldn't parse anything" case).
+  if (run.missingGrammars && run.missingGrammars.length > 0) {
+    rows.push([
+      { text: '📚 Install grammars', callback_data: 'audit:grammars' },
+    ]);
+  }
+  if (run.findings.length === 0) return rows.length > 0 ? rows : undefined;
   for (const f of run.findings.slice(0, 3) as AuditFinding[]) {
     // callback_data uses short verb codes (`fix`, `sup`) to stay within
     // Telegram's 64-byte cap on the longest payload:

@@ -4594,6 +4594,19 @@ export class TelegramHandler {
             query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never,
             `/audit suppress ${runId} ${findingId}`,
           );
+        } else if (sub === 'grammars') {
+          // One-tap bootstrap of the in-R2 grammar set. Equivalent to the
+          // user typing `/audit grammars` themselves; kept on the same
+          // dispatch path so flag parsing and renderer wiring stay in sync.
+          await this.handleCommand(
+            query.message ? { ...query.message, from: query.from } : { chat: { id: chatId } as never, from: query.from } as never,
+            '/audit grammars',
+          );
+          // Drop the keyboard from the audit report message so re-tapping
+          // can't fire a duplicate bootstrap mid-flight.
+          if (query.message) {
+            await this.bot.editMessageReplyMarkup(chatId, query.message.message_id, null);
+          }
         } else {
           console.warn('[Telegram] Unrecognized audit callback:', callbackData);
         }
