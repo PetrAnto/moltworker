@@ -2642,7 +2642,7 @@ export class TaskProcessor extends DurableObject<TaskProcessorEnv> {
       await this.sendTelegramMessage(
         request.telegramToken,
         request.chatId,
-        `⚠️ Skill error (nexus): ${message}`,
+        `⚠️ Skill error (${request.skillRequest.skillId}): ${message}`,
       );
 
       // Mark failed
