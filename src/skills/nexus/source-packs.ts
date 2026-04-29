@@ -10,7 +10,7 @@ import type { EvidenceItem, ConfidenceTier, SourceAttempt } from './types';
 import { executeSkillTool, buildSkillToolContext } from '../skill-tools';
 import type { ToolCall } from '../../openrouter/tools';
 import type { MoltbotEnv } from '../../types';
-import { SOURCE_FETCH_TIMEOUT_MS, MAX_KEYWORD_TOKENS } from './config';
+import { SOURCE_FETCH_TIMEOUT_MS, MAX_KEYWORD_TOKENS, MAX_SOURCES } from './config';
 
 // SOURCE_FETCH_TIMEOUT_MS imported from ./config
 
@@ -90,35 +90,35 @@ const STOP_WORDS = new Set([
   'my', 'we', 'us', 'our', 'you', 'your',
 ]);
 
-/**
- * Extract up to `max` distinctive keyword tokens from a natural-language
- * query for use with keyword-strict search APIs. Lowercases, strips
- * punctuation, drops stop words and 1-char tokens, preserves order.
- */
-export function extractKeywords(query: string, max = MAX_KEYWORD_TOKENS): string {
-  return query
+/** Shared tokenizer: lowercase, strip punctuation, drop 1-char tokens. */
+function tokenizeRaw(text: string): string[] {
+  return text
     .toLowerCase()
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
-    .filter(w => w.length >= 2 && !STOP_WORDS.has(w))
+    .filter(w => w.length >= 2);
+}
+
+/**
+ * Extract up to `max` distinctive keyword tokens from a natural-language
+ * query for use with keyword-strict search APIs. Applies stop-word filtering
+ * to remove common words that add no search signal.
+ */
+export function extractKeywords(query: string, max = MAX_KEYWORD_TOKENS): string {
+  return tokenizeRaw(query)
+    .filter(w => !STOP_WORDS.has(w))
     .slice(0, max)
     .join(' ');
 }
 
 /**
  * Normalize a pre-distilled keyword string (e.g. from the LLM classifier)
- * for use with keyword-strict APIs. Strips punctuation, lowercases, drops
- * single-char tokens, and clamps to `max` tokens.
- *
- * Unlike extractKeywords this does NOT apply stop-word filtering — the LLM
- * already selected the right words; we only normalize and enforce the cap.
+ * for use with keyword-strict APIs. Does NOT apply stop-word filtering —
+ * the LLM already selected the right words; we only normalize and enforce
+ * the cap.
  */
 export function normalizeKeywordQuery(raw: string, max = MAX_KEYWORD_TOKENS): string {
-  return raw
-    .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length >= 2)
+  return tokenizeRaw(raw)
     .slice(0, max)
     .join(' ');
 }
@@ -503,8 +503,7 @@ export const CATEGORY_DEFAULTS: Record<string, string[]> = {
 /** Backbone used when category is missing/unknown. */
 const FALLBACK_DEFAULTS = ['webSearch', 'wikipedia', 'hackerNews'];
 
-/** Maximum number of sources to fetch in parallel per dossier. */
-const MAX_SOURCES = 5;
+// MAX_SOURCES imported from ./config
 
 /**
  * Expand the classifier's picks with category-appropriate defaults so the

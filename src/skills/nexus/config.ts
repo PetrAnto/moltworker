@@ -19,3 +19,6 @@ export const MAX_EVIDENCE_CHARS = 12_000;
 
 /** Maximum keyword tokens sent to keyword-strict APIs. */
 export const MAX_KEYWORD_TOKENS = 4;
+
+/** Maximum number of sources to fetch in parallel per dossier. */
+export const MAX_SOURCES = 5;
