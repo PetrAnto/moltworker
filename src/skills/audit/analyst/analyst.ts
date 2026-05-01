@@ -80,8 +80,15 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
   const start = Date.now();
   const model = selectSkillModel(opts.modelAlias, opts.defaultModel ?? 'flash');
 
-  // No snippets = no LLM call. Cheaper than a no-op API round-trip.
-  if (opts.snippets.length === 0) {
+  // No snippets and no out-of-band signal = no LLM call. The deps lens
+  // is the exception: even with zero parsed snippets, OSV advisories
+  // (cross-referenced from manifests, not from extracted code) ARE valid
+  // evidence on their own. Skipping the LLM there would silently drop
+  // every dep finding when the repo has no code in our supported
+  // languages but does declare vulnerable npm packages.
+  const hasDepsSignal =
+    opts.lens === 'deps' && (opts.profile.osvAlerts?.length ?? 0) > 0;
+  if (opts.snippets.length === 0 && !hasDepsSignal) {
     return {
       findings: [],
       issues: [],
@@ -130,6 +137,21 @@ export async function analyzeWithLens(opts: AnalyzeOptions): Promise<AnalyzeResu
       treePathEnum: opts.profile.tree.map((t) => t.path),
       snippets: cleanSnippets,
       codeScanningAlerts: cleanAlerts,
+      // Only inject OSV advisories on the deps lens — surfacing them on
+      // every lens would just bloat prompts that have no use for them.
+      osvAlerts:
+        opts.lens === 'deps'
+          ? (opts.profile.osvAlerts ?? []).map((a) => ({
+              id: a.id,
+              severity: a.severity,
+              summary: a.summary,
+              packageName: a.packageName,
+              ecosystem: a.ecosystem,
+              affectedVersion: a.affectedVersion,
+              manifestPath: a.manifestPath,
+              url: a.url,
+            }))
+          : undefined,
     }),
   ].join('\n');
 

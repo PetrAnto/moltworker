@@ -647,6 +647,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       suppressionReadError: suppression.error,
       runtimeSource,
       r2RuntimeFailureReason,
+      osvQueryFailed: profile.osvQueryFailed,
     }),
     data: run,
     telemetry: {
@@ -817,6 +818,9 @@ interface FormatRunCounts {
    *  configured but broken" (loud). Routine cases (no_bucket /
    *  no_manifest / missing_runtime) deliberately don't trigger this. */
   r2RuntimeFailureReason?: string | null;
+  /** Set when the Scout's OSV.dev pass returned a network/API failure.
+   *  Surfaced so users know the deps lens may have under-reported. */
+  osvQueryFailed?: boolean;
 }
 
 function formatRun(run: AuditRun, c: FormatRunCounts): string {
@@ -849,6 +853,11 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
     const langs = [...c.missingGrammars].sort().join(', ');
     lines.push(
       `⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — tap 📚 Install grammars below or run \`/audit grammars\` to bootstrap them (laptop operators: \`npm run audit:upload-grammars\`).`,
+    );
+  }
+  if (c.osvQueryFailed) {
+    lines.push(
+      '⚠️ OSV.dev advisory lookup failed — dependency findings may be incomplete. The audit ran the rest of the pipeline; retry to refresh the advisory cross-reference.',
     );
   }
   if (c.otherParseErrors > 0) lines.push(`⚠️ ${c.otherParseErrors} file(s) had parse issues`);

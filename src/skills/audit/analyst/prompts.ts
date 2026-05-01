@@ -165,6 +165,19 @@ export function buildEvidenceBlock(opts: {
     path: string;
     lineStart?: number;
   }>;
+  /** OSV.dev advisories for declared deps. Surface alongside Code Scanning
+   *  alerts so the Analyst's `deps` lens can ground its findings on a
+   *  concrete advisory id + manifest path. */
+  osvAlerts?: Array<{
+    id: string;
+    severity: string;
+    summary: string;
+    packageName: string;
+    ecosystem: string;
+    affectedVersion: string;
+    manifestPath: string;
+    url?: string;
+  }>;
 }): string {
   const lines: string[] = [];
 
@@ -176,6 +189,16 @@ export function buildEvidenceBlock(opts: {
     lines.push('PRE-EXISTING GITHUB CODE SCANNING ALERTS (free signal — incorporate where relevant):');
     for (const a of opts.codeScanningAlerts) {
       lines.push(`  - ${a.severity.toUpperCase()} ${a.rule} @ ${a.path}${a.lineStart ? `:${a.lineStart}` : ''}: ${a.description}`);
+    }
+    lines.push('');
+  }
+
+  if (opts.osvAlerts && opts.osvAlerts.length > 0) {
+    lines.push('OSV.DEV ADVISORIES (cross-referenced from declared dependencies — cite by manifest path):');
+    for (const a of opts.osvAlerts) {
+      lines.push(
+        `  - ${a.severity.toUpperCase()} ${a.id} ${a.packageName}@${a.affectedVersion} (${a.ecosystem}) in ${a.manifestPath}: ${a.summary}`,
+      );
     }
     lines.push('');
   }

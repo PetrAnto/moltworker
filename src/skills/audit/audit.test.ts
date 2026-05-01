@@ -46,9 +46,25 @@ interface MockResp {
 }
 
 function installFetchMock(routes: MockResp[]): ReturnType<typeof vi.fn> {
+  // Default OSV.dev routes: tests that don't care about advisories get
+  // "no vulns found" automatically so the Scout's deps cross-reference
+  // doesn't 404 and trip the osvQueryFailed warning. Tests that DO care
+  // about OSV behavior pass an explicit route earlier in `routes` and
+  // their match wins (we iterate the user's list first).
+  const osvDefaults: MockResp[] = [
+    {
+      match: (u) => u.startsWith('https://api.osv.dev/v1/querybatch'),
+      body: { results: [] },
+    },
+    {
+      match: (u) => u.startsWith('https://api.osv.dev/v1/vulns/'),
+      body: {},
+    },
+  ];
+  const allRoutes = [...routes, ...osvDefaults];
   const fn = vi.fn(async (url: string | Request) => {
     const u = typeof url === 'string' ? url : url.url;
-    for (const r of routes) {
+    for (const r of allRoutes) {
       if (r.match(u)) {
         const status = r.status ?? 200;
         return new Response(JSON.stringify(r.body), { status });
@@ -1826,7 +1842,7 @@ describe('audit_do_key — deterministic DO identity', () => {
       owner: string;
       repo: string;
       sha: string;
-      lenses: ('security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf')[];
+      lenses: ('security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf' | 'drift')[];
       depth: 'quick' | 'standard' | 'deep';
     }> = {},
   ) {
@@ -1854,7 +1870,7 @@ describe('audit_do_key — deterministic DO identity', () => {
       },
       lenses: overrides.lenses ?? (['security'] as const),
       depth: overrides.depth ?? 'quick',
-      selections: { security: [], deps: [], types: [], tests: [], deadcode: [], perf: [] },
+      selections: { security: [], deps: [], types: [], tests: [], deadcode: [], perf: [], drift: [] },
       estimate: { llmCalls: 0, inputTokens: 0, costUsd: 0 },
       notes: [],
     } as Parameters<typeof audit_do_key>[1];
