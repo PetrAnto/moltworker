@@ -27,6 +27,7 @@ import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { profileCacheKey } from './cache';
 import { findingPriority, isLens, isDepth, isFindingId, FINDING_ID_RE } from './types';
+import { evaluateGate } from './audit';
 import { callSkillLLM } from '../llm';
 import type { AuditPlan, AuditRun, RepoProfile, AuditFinding, TreeEntry } from './types';
 import type { SkillRequest } from '../types';
@@ -328,6 +329,81 @@ describe('findingPriority', () => {
     expect(findingPriority(mkFinding('high', 1.0))).toBeGreaterThan(
       findingPriority(mkFinding('high', 0.25)),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// evaluateGate (--gate / --threshold policy decisioning)
+// ---------------------------------------------------------------------------
+
+describe('evaluateGate', () => {
+  const mkFinding = (
+    id: string,
+    severity: AuditFinding['severity'],
+    suppressed = false,
+  ): AuditFinding => ({
+    id,
+    lens: 'security',
+    severity,
+    confidence: 1.0,
+    evidence: [{ path: 'a', source: 'github' }],
+    symptom: `symptom for ${id}`,
+    rootCause: '',
+    correctiveAction: '',
+    preventiveAction: { kind: 'lint', detail: '' },
+    suppressed,
+  });
+  const runWith = (findings: AuditFinding[]): AuditRun => ({
+    runId: 'r1',
+    repo: { owner: 'o', name: 'r', sha: 'a'.repeat(40) },
+    lenses: ['security'],
+    depth: 'quick',
+    findings,
+    telemetry: { durationMs: 0, llmCalls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, githubApiCalls: 0 },
+  });
+
+  it('passes when there are no live findings', () => {
+    const g = evaluateGate(runWith([]), 'high');
+    expect(g.decision).toBe('pass');
+    expect(g.blockingFindings.length).toBe(0);
+  });
+
+  it('blocks when any finding meets the threshold severity', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'high'), mkFinding('b', 'low')]), 'high');
+    expect(g.decision).toBe('block');
+    expect(g.blockingFindings.map((f) => f.id)).toEqual(['a']);
+  });
+
+  it('warns when there are findings, all below the threshold', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'medium'), mkFinding('b', 'low')]), 'high');
+    expect(g.decision).toBe('warn');
+    expect(g.blockingFindings.length).toBe(0);
+  });
+
+  it('treats critical as ≥ high (severity rank, not equality)', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'critical')]), 'high');
+    expect(g.decision).toBe('block');
+  });
+
+  it('does not block on suppressed findings (operator already dismissed them)', () => {
+    const g = evaluateGate(
+      runWith([mkFinding('a', 'high', true), mkFinding('b', 'medium')]),
+      'high',
+    );
+    // Only the medium finding is live; it doesn't meet the high threshold.
+    expect(g.decision).toBe('warn');
+  });
+
+  it('respects a stricter --threshold critical (only critical blocks)', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'high'), mkFinding('b', 'critical')]), 'critical');
+    expect(g.decision).toBe('block');
+    expect(g.blockingFindings.map((f) => f.id)).toEqual(['b']);
+  });
+
+  it('respects a looser --threshold medium (medium and above block)', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'medium'), mkFinding('b', 'low')]), 'medium');
+    expect(g.decision).toBe('block');
+    expect(g.blockingFindings.map((f) => f.id)).toEqual(['a']);
   });
 });
 
@@ -695,6 +771,114 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
     expect(run.telemetry.tokensOut).toBe(200);
     expect(result.body).toContain('Hardcoded API token');
     expect(result.body).toContain('gitleaks');
+  });
+
+  it('--gate flag attaches a gate decision and prepends a banner for CI consumption', async () => {
+    // Same fixture shape as the happy-path test, but with --gate set.
+    const sourceContent = `export function login(user: string, pass: string) {
+  const TOKEN = 'sk_live_DEADBEEFCAFE';
+  return TOKEN + user + pass;
+}`;
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 50 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: sourceContent.length },
+    ];
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main', private: false, archived: false,
+          size: 1, language: 'TypeScript', description: null,
+        },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'c'.repeat(40) } },
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 50 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa(sourceContent), sha: 'a1', size: sourceContent.length },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [
+          {
+            lens: 'security', severity: 'high', confidence: 0.75,
+            symptom: 'Hardcoded API token in login()',
+            rootCause: 'Secret committed to repo; CI lacks pre-commit secret scan',
+            correctiveAction: 'Move TOKEN to env var; rotate the leaked secret',
+            preventiveAction: { kind: 'ci', detail: 'Add gitleaks step to .github/workflows/ci.yml' },
+            evidence: [{ path: 'src/auth.ts', lines: '2-2', snippet: "const TOKEN = 'sk_live_…';" }],
+          },
+        ],
+      }),
+      tokens: { prompt: 800, completion: 200 },
+    });
+
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'quick', gate: 'true' },
+      }),
+    );
+
+    expect(result.kind).toBe('audit_run');
+    const run = result.data as AuditRun;
+    expect(run.gate).toBeDefined();
+    expect(run.gate?.decision).toBe('block');
+    expect(run.gate?.threshold).toBe('high');
+    expect(run.gate?.blockingFindings.length).toBe(1);
+    expect(run.gate?.blockingFindings[0].severity).toBe('high');
+    // Banner is the first body line so a CI consumer can grep "GATE: BLOCK".
+    expect(result.body.split('\n')[0]).toMatch(/GATE: BLOCK/);
+  });
+
+  it('--gate without findings emits GATE: PASS', async () => {
+    const tree = [{ path: 'package.json', type: 'blob', sha: 'm0', size: 30 }];
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } },
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'quick', gate: 'true' },
+      }),
+    );
+
+    const run = result.data as AuditRun;
+    expect(run.gate?.decision).toBe('pass');
+    expect(result.body.split('\n')[0]).toMatch(/GATE: PASS/);
+  });
+
+  it('rejects an unknown --threshold value loudly', async () => {
+    const result = await handleAudit(
+      makeRequest({ flags: { analyze: 'true', gate: 'true', threshold: 'bogus' } }),
+    );
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/threshold/i);
+    expect(result.body).toMatch(/critical, high, medium, low/);
   });
 
   it('drops findings whose evidence cites paths outside the tree (anti-hallucination at handler level)', async () => {

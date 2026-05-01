@@ -225,6 +225,23 @@ export interface AuditRun {
    *  invokes the in-bot `/audit grammars` bootstrap so the next run gets
    *  real coverage. */
   missingGrammars?: string[];
+  /** Populated when the run was invoked with `--gate`. Caller surface
+   *  (CI integration, admin route) reads `decision` to allow/warn/block;
+   *  the audit body also leads with a GATE banner for human readers. */
+  gate?: AuditGate;
+}
+
+/** Qodo-style policy gate result. Caller picks a `threshold` severity;
+ *  any unsuppressed finding ≥ threshold turns the gate into `block`. */
+export interface AuditGate {
+  decision: 'pass' | 'warn' | 'block';
+  /** Severity at which findings start to block. */
+  threshold: Severity;
+  /** Findings that triggered the block (severity >= threshold, not
+   *  suppressed). Empty when decision is pass/warn. */
+  blockingFindings: ReadonlyArray<{ id: string; lens: string; severity: Severity; symptom: string }>;
+  /** One-sentence operator summary suitable for a CI annotation. */
+  reason: string;
 }
 
 // ---------------------------------------------------------------------------
