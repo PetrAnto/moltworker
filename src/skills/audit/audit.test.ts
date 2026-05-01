@@ -239,7 +239,8 @@ describe('depthBudget', () => {
 describe('type guards', () => {
   it('isLens accepts MVP lenses, rejects others', () => {
     expect(isLens('security')).toBe(true);
-    expect(isLens('drift')).toBe(false);
+    expect(isLens('drift')).toBe(true);
+    expect(isLens('not-a-lens')).toBe(false);
     expect(isLens(42)).toBe(false);
   });
   it('isDepth accepts the three tiers', () => {

@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 /** Audit lenses. Only MVP set is wired in v0; the rest land post-MVP. */
-export type Lens = 'security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf';
+export type Lens = 'security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf' | 'drift';
 
 export const MVP_LENSES: ReadonlyArray<Lens> = [
   'security',
@@ -19,6 +19,7 @@ export const MVP_LENSES: ReadonlyArray<Lens> = [
   'tests',
   'deadcode',
   'perf',
+  'drift',
 ];
 
 /** Severity scale per finding. */
