@@ -552,6 +552,38 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     return findingPriority(b) - findingPriority(a);
   });
 
+  // Distiller stage (design doc §4 four-role pipeline). Opt-in via
+  // --distill: a single Flash/Haiku-tier LLM call that compresses the
+  // top findings' symptom / rootCause / correctiveAction into tight
+  // 1-line prose, splice the result back onto the ranked array. We
+  // distill ONLY the live findings the renderer will surface — the
+  // bottom-N suppressed entries don't pay for it.
+  let distilled = ranked;
+  let distillerCalls = 0;
+  if (request.flags.distill === 'true' && ranked.length > 0) {
+    const { distillFindings, applyDistilledProse } = await import('./distiller/distiller');
+    const live = ranked.filter((f) => !f.suppressed).slice(0, 5);
+    if (live.length > 0) {
+      const result = await distillFindings({
+        findings: live,
+        env: request.env,
+        modelAlias: request.modelAlias,
+        defaultModel: AUDIT_META.defaultModel,
+      });
+      if (result.ok && result.findings.length > 0) {
+        distilled = applyDistilledProse(ranked, result.findings);
+        distillerCalls = 1;
+        if (result.telemetry.tokens) {
+          promptTokens += result.telemetry.tokens.prompt;
+          completionTokens += result.telemetry.tokens.completion;
+        }
+      }
+      // ok=false silently keeps `ranked` — the deterministic formatRun
+      // path still ships a usable report.
+    }
+  }
+  llmCalls += distillerCalls;
+
   // Build the sanitization summary for the run record. Cap samples at 5
   // to keep the persisted record bounded under adversarial inputs (a
   // hostile repo could plant thousands of injection markers; the count
@@ -572,7 +604,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     repo: { owner: profile.owner, name: profile.repo, sha: profile.sha },
     lenses: plan.lenses,
     depth: plan.depth,
-    findings: ranked,
+    findings: distilled,
     sanitization,
     telemetry: {
       durationMs: Date.now() - ctx.start,
