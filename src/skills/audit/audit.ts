@@ -21,7 +21,7 @@
  */
 
 import type { SkillRequest, SkillResult, SkillMeta } from '../types';
-import type { AuditFinding, AuditPlan, AuditRun, Depth, Lens, RepoProfile } from './types';
+import type { AuditFinding, AuditGate, AuditPlan, AuditRun, Depth, Lens, RepoProfile, Severity } from './types';
 import { MVP_LENSES, findingPriority, isLens, isDepth, isFindingId } from './types';
 import { scout, fetchFileContents, parseRepoCoords } from './scout';
 import { fileMatchesLens, depthBudget } from './lenses';
@@ -117,6 +117,16 @@ export async function handleAudit(request: SkillRequest): Promise<SkillResult> {
   }
 
   const branch = request.flags.branch;
+
+  // --gate enables Qodo-style allow/warn/block decisioning. --threshold
+  // overrides the default block-at-high cutoff. Validated up front so a
+  // bad value fails fast — actual evaluation runs inside runFullAudit
+  // after the findings are ranked.
+  if (request.flags.threshold && !parseSeverityFlag(request.flags.threshold)) {
+    return errorResult(
+      `Unknown --threshold "${request.flags.threshold}". Valid: critical, high, medium, low.`,
+    );
+  }
 
   // 2. Scout — fetch from cache or call GitHub
   const githubToken = request.env.GITHUB_TOKEN;
@@ -542,6 +552,38 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     return findingPriority(b) - findingPriority(a);
   });
 
+  // Distiller stage (design doc §4 four-role pipeline). Opt-in via
+  // --distill: a single Flash/Haiku-tier LLM call that compresses the
+  // top findings' symptom / rootCause / correctiveAction into tight
+  // 1-line prose, splice the result back onto the ranked array. We
+  // distill ONLY the live findings the renderer will surface — the
+  // bottom-N suppressed entries don't pay for it.
+  let distilled = ranked;
+  let distillerCalls = 0;
+  if (request.flags.distill === 'true' && ranked.length > 0) {
+    const { distillFindings, applyDistilledProse } = await import('./distiller/distiller');
+    const live = ranked.filter((f) => !f.suppressed).slice(0, 5);
+    if (live.length > 0) {
+      const result = await distillFindings({
+        findings: live,
+        env: request.env,
+        modelAlias: request.modelAlias,
+        defaultModel: AUDIT_META.defaultModel,
+      });
+      if (result.ok && result.findings.length > 0) {
+        distilled = applyDistilledProse(ranked, result.findings);
+        distillerCalls = 1;
+        if (result.telemetry.tokens) {
+          promptTokens += result.telemetry.tokens.prompt;
+          completionTokens += result.telemetry.tokens.completion;
+        }
+      }
+      // ok=false silently keeps `ranked` — the deterministic formatRun
+      // path still ships a usable report.
+    }
+  }
+  llmCalls += distillerCalls;
+
   // Build the sanitization summary for the run record. Cap samples at 5
   // to keep the persisted record bounded under adversarial inputs (a
   // hostile repo could plant thousands of injection markers; the count
@@ -562,7 +604,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
     repo: { owner: profile.owner, name: profile.repo, sha: profile.sha },
     lenses: plan.lenses,
     depth: plan.depth,
-    findings: ranked,
+    findings: distilled,
     sanitization,
     telemetry: {
       durationMs: Date.now() - ctx.start,
@@ -592,6 +634,15 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
   }
   if (missingGrammars.size > 0) {
     run.missingGrammars = [...missingGrammars].sort();
+  }
+
+  // --gate evaluation runs after the rank+suppress pipeline, so suppressed
+  // findings (explicit user dismissals) never drive a block. Caller
+  // surfaces (CI runner, admin route) read run.gate.decision; the human
+  // body leads with a GATE banner via formatRun below.
+  if (request.flags.gate === 'true') {
+    const threshold = parseSeverityFlag(request.flags.threshold) ?? 'high';
+    run.gate = evaluateGate(run, threshold);
   }
 
   // Persist the run for /audit export <runId>. The top-5 view in the
@@ -628,6 +679,7 @@ async function runFullAudit(ctx: RunFullAuditCtx): Promise<SkillResult> {
       suppressionReadError: suppression.error,
       runtimeSource,
       r2RuntimeFailureReason,
+      osvQueryFailed: profile.osvQueryFailed,
     }),
     data: run,
     telemetry: {
@@ -798,10 +850,27 @@ interface FormatRunCounts {
    *  configured but broken" (loud). Routine cases (no_bucket /
    *  no_manifest / missing_runtime) deliberately don't trigger this. */
   r2RuntimeFailureReason?: string | null;
+  /** Set when the Scout's OSV.dev pass returned a network/API failure.
+   *  Surfaced so users know the deps lens may have under-reported. */
+  osvQueryFailed?: boolean;
 }
 
 function formatRun(run: AuditRun, c: FormatRunCounts): string {
   const lines: string[] = [];
+  // GATE banner leads when --gate was set so a CI consumer reading the
+  // first line gets the decision before any prose. The structured run.gate
+  // also carries the blocking-findings list for programmatic consumers.
+  if (run.gate) {
+    const banner =
+      run.gate.decision === 'block' ? '🛑 GATE: BLOCK'
+      : run.gate.decision === 'warn' ? '⚠️ GATE: WARN'
+      : '✅ GATE: PASS';
+    lines.push(`${banner} (threshold=${run.gate.threshold}) — ${run.gate.reason}`);
+    for (const f of run.gate.blockingFindings.slice(0, 5)) {
+      lines.push(`  • [${f.severity.toUpperCase()}] ${f.id}: ${f.symptom}`);
+    }
+    lines.push('');
+  }
   lines.push(`Audit report: ${run.repo.owner}/${run.repo.name}@${run.repo.sha.slice(0, 7)}`);
   const runtimeNote = c.runtimeSource ? ` • runtime: ${c.runtimeSource}` : '';
   lines.push(
@@ -816,6 +885,11 @@ function formatRun(run: AuditRun, c: FormatRunCounts): string {
     const langs = [...c.missingGrammars].sort().join(', ');
     lines.push(
       `⚠️ Analysis coverage partial: grammar(s) missing for ${langs}. Files in those languages were skipped — tap 📚 Install grammars below or run \`/audit grammars\` to bootstrap them (laptop operators: \`npm run audit:upload-grammars\`).`,
+    );
+  }
+  if (c.osvQueryFailed) {
+    lines.push(
+      '⚠️ OSV.dev advisory lookup failed — dependency findings may be incomplete. The audit ran the rest of the pipeline; retry to refresh the advisory cross-reference.',
     );
   }
   if (c.otherParseErrors > 0) lines.push(`⚠️ ${c.otherParseErrors} file(s) had parse issues`);
@@ -1341,6 +1415,56 @@ function parseLensFlag(raw: string | undefined): Lens | null {
 function parseDepthFlag(raw: string | undefined): Depth | null {
   if (!raw) return null;
   return isDepth(raw) ? raw : null;
+}
+
+const SEVERITY_RANK: Record<Severity, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+function parseSeverityFlag(raw: string | undefined): Severity | null {
+  if (!raw) return null;
+  const v = raw.toLowerCase();
+  return (v === 'critical' || v === 'high' || v === 'medium' || v === 'low') ? v : null;
+}
+
+/**
+ * Apply the --gate / --threshold policy to an already-built AuditRun.
+ *
+ * Block: at least one unsuppressed finding meets or exceeds `threshold`.
+ * Warn:  any other unsuppressed finding exists (below threshold).
+ * Pass:  no unsuppressed findings.
+ *
+ * Suppressed findings (the explicit dismissal list) never block — the
+ * audit operator already decided they're acceptable. Confidence ≥ 0.5
+ * has already been enforced upstream by the precision threshold so we
+ * don't filter again here.
+ */
+export function evaluateGate(run: AuditRun, threshold: Severity): AuditGate {
+  const cutoff = SEVERITY_RANK[threshold];
+  const live = run.findings.filter((f) => !f.suppressed);
+  const blocking = live.filter((f) => SEVERITY_RANK[f.severity] >= cutoff);
+  const decision: AuditGate['decision'] =
+    blocking.length > 0 ? 'block' : live.length > 0 ? 'warn' : 'pass';
+  const reason =
+    decision === 'block'
+      ? `${blocking.length} finding(s) at severity ≥ ${threshold}`
+      : decision === 'warn'
+        ? `${live.length} finding(s) below ${threshold} threshold`
+        : 'No findings above the precision threshold';
+  return {
+    decision,
+    threshold,
+    blockingFindings: blocking.map((f) => ({
+      id: f.id,
+      lens: f.lens,
+      severity: f.severity,
+      symptom: f.symptom,
+    })),
+    reason,
+  };
 }
 
 function errorResult(message: string): SkillResult {

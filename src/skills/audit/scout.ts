@@ -14,6 +14,7 @@
  */
 
 import { ALWAYS_FETCH_MANIFESTS, VENDORED_PATTERNS } from './lenses';
+import { lookupOsvAdvisories } from './osv';
 import type { RepoProfile, TreeEntry, ManifestFile, CodeScanningAlert, Severity } from './types';
 
 const GITHUB_API = 'https://api.github.com';
@@ -67,6 +68,10 @@ export interface ScoutOptions {
   branch?: string;
   /** GitHub PAT or OAuth token. */
   token: string | undefined;
+  /** Disable the OSV.dev cross-reference (default: enabled). Tests opt out
+   *  to avoid hitting the public API; the rare operator who wants Code
+   *  Scanning alerts only can flip this off via a future `/audit ... --no-osv`. */
+  osvDisabled?: boolean;
 }
 
 export interface ScoutResult {
@@ -168,6 +173,20 @@ export async function scout(opts: ScoutOptions): Promise<ScoutResult> {
   }
   // 404 / 403 / 410 are all "code scanning not available here" — silent.
 
+  // 6. OSV.dev cross-reference for direct deps. Best-effort: a network /
+  //    API failure degrades to "no alerts + osvQueryFailed=true" so the
+  //    Analyst's deps lens still runs and the run body warns about
+  //    partial advisory coverage. This is NOT counted in apiCalls — that
+  //    metric is GitHub-specific and OSV is a separate budget.
+  const realManifests = manifests.filter((m): m is ManifestFile => m !== null);
+  let osvAlerts: import('./types').OsvAlert[] = [];
+  let osvQueryFailed = false;
+  if (!opts.osvDisabled && realManifests.length > 0) {
+    const osvResult = await lookupOsvAdvisories(realManifests);
+    osvAlerts = osvResult.alerts;
+    osvQueryFailed = osvResult.failed;
+  }
+
   const profile: RepoProfile = {
     owner: opts.owner,
     repo: opts.repo,
@@ -182,9 +201,11 @@ export async function scout(opts: ScoutOptions): Promise<ScoutResult> {
       description: meta.description,
     },
     tree,
-    manifests: manifests.filter((m): m is ManifestFile => m !== null),
+    manifests: realManifests,
     codeScanningAlerts,
     codeScanningAlertsTruncated,
+    osvAlerts,
+    osvQueryFailed,
     treeTruncated,
     profileHash: hashProfile(sha, tree),
     collectedAt: new Date().toISOString(),

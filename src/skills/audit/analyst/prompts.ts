@@ -49,7 +49,7 @@ Output a single JSON object — no prose, no code fences. Schema:
 {
   "findings": [
     {
-      "lens": "security" | "deps" | "types" | "tests" | "deadcode" | "perf",
+      "lens": "security" | "deps" | "types" | "tests" | "deadcode" | "perf" | "drift",
       "severity": "critical" | "high" | "medium" | "low",
       "confidence": 0.25 | 0.5 | 0.75 | 1.0,
       "symptom": "...",            // observable defect
@@ -114,6 +114,23 @@ unreachable branches, dead conditional config, files never imported
 Look for: N+1 query patterns, sync I/O in async paths, unbounded loops,
 missing memoization on hot React components, large synchronous JSON
 parses on hot paths.`,
+
+  drift: `LENS: drift (architectural drift).
+
+The evidence includes the repo's stated architectural rules — pulled
+from root markdown files (ARCHITECTURE.md, README.md, CONTRIBUTING.md,
+CLAUDE.md, docs/architecture/**) — plus a top-level layout sample.
+
+Compare CLAIM against REALITY:
+  - Stated module boundaries vs actual import directions.
+  - Stated tech choices (e.g. "no SQL in handlers") vs presence in tree.
+  - Stated layering (e.g. domain → service → handler) vs the layout.
+  - Stated naming / structural rules vs deviations in the tree path enum.
+
+A finding here MUST cite both the rule (a snippet from the doc) AND the
+violating evidence (a path or snippet that contradicts it). If the docs
+make no concrete architectural claim, return no findings — speculation
+about "ideal" architecture is out of scope for this lens.`,
 };
 
 export function lensUserPromptHeader(lens: Lens): string {
@@ -148,6 +165,19 @@ export function buildEvidenceBlock(opts: {
     path: string;
     lineStart?: number;
   }>;
+  /** OSV.dev advisories for declared deps. Surface alongside Code Scanning
+   *  alerts so the Analyst's `deps` lens can ground its findings on a
+   *  concrete advisory id + manifest path. */
+  osvAlerts?: Array<{
+    id: string;
+    severity: string;
+    summary: string;
+    packageName: string;
+    ecosystem: string;
+    affectedVersion: string;
+    manifestPath: string;
+    url?: string;
+  }>;
 }): string {
   const lines: string[] = [];
 
@@ -159,6 +189,16 @@ export function buildEvidenceBlock(opts: {
     lines.push('PRE-EXISTING GITHUB CODE SCANNING ALERTS (free signal — incorporate where relevant):');
     for (const a of opts.codeScanningAlerts) {
       lines.push(`  - ${a.severity.toUpperCase()} ${a.rule} @ ${a.path}${a.lineStart ? `:${a.lineStart}` : ''}: ${a.description}`);
+    }
+    lines.push('');
+  }
+
+  if (opts.osvAlerts && opts.osvAlerts.length > 0) {
+    lines.push('OSV.DEV ADVISORIES (cross-referenced from declared dependencies — cite by manifest path):');
+    for (const a of opts.osvAlerts) {
+      lines.push(
+        `  - ${a.severity.toUpperCase()} ${a.id} ${a.packageName}@${a.affectedVersion} (${a.ecosystem}) in ${a.manifestPath}: ${a.summary}`,
+      );
     }
     lines.push('');
   }

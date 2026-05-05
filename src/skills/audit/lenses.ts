@@ -116,6 +116,18 @@ export function fileMatchesLens(entry: TreeEntry, lens: Lens): boolean {
         /(server|app|main|index|worker)\.(ts|tsx|js|jsx|py|go)$/.test(path)
       );
 
+    case 'drift':
+      // Architectural drift: feed the Analyst the stated rules (root arch
+      // docs are pre-fetched as manifests) plus a representative sample of
+      // top-level source dirs so it can compare layout-vs-claim. We pick
+      // entry points + module roots; deeper files are out of scope for
+      // this lens (the tree path enum is enough for layout reasoning).
+      if (/^(README|ARCHITECTURE|CONTRIBUTING|CLAUDE)\.md$/.test(path)) return true;
+      if (/^docs\/(architecture|design|adr)\/.+\.md$/i.test(path)) return true;
+      return /\.(ts|tsx|js|jsx|py|go|rs)$/.test(path) && (
+        /^(src|app|pkg|internal|cmd|lib)\/(index|main|server|app|worker|router)\.(ts|tsx|js|jsx|py|go)$/.test(path)
+      );
+
     default:
       return false;
   }

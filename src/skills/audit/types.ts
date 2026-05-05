@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 /** Audit lenses. Only MVP set is wired in v0; the rest land post-MVP. */
-export type Lens = 'security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf';
+export type Lens = 'security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf' | 'drift';
 
 export const MVP_LENSES: ReadonlyArray<Lens> = [
   'security',
@@ -19,6 +19,7 @@ export const MVP_LENSES: ReadonlyArray<Lens> = [
   'tests',
   'deadcode',
   'perf',
+  'drift',
 ];
 
 /** Severity scale per finding. */
@@ -76,6 +77,15 @@ export interface RepoProfile {
   codeScanningAlerts: CodeScanningAlert[];
   /** True if the alerts list was truncated (we only paginate the first page). */
   codeScanningAlertsTruncated: boolean;
+  /** OSV.dev advisories for direct dependencies parsed out of package.json
+   *  (and future lockfiles). Populated by the Scout when MOLTBOT_OSV_ENABLED
+   *  is on; empty array when OSV is unreachable or there are no manifests
+   *  to query. The Analyst's `deps` lens consumes these as evidence. */
+  osvAlerts?: OsvAlert[];
+  /** True when at least one OSV query failed — surfaced in the run body so
+   *  "no advisories" doesn't read as "no vulnerabilities" when we couldn't
+   *  reach the API. */
+  osvQueryFailed?: boolean;
   /** True if GitHub truncated the recursive tree response (>~100k entries or
    *  >7 MB serialized — the API caps recursive listings). When true, audit
    *  coverage is partial and the user must be told. */
@@ -111,6 +121,28 @@ export interface CodeScanningAlert {
   path: string;
   lineStart?: number;
   lineEnd?: number;
+}
+
+/** OSV.dev advisory cross-referenced against a single (package, version)
+ *  pair from a manifest. Mirrors what the Analyst needs to cite — id +
+ *  severity + summary + the manifest evidence that produced the query. */
+export interface OsvAlert {
+  /** OSV id (e.g. GHSA-xxxx-xxxx-xxxx) used for citation. */
+  id: string;
+  /** Highest severity across the advisory's CVSS scores; mapped to our
+   *  4-tier scheme so it composes with the gate. */
+  severity: Severity;
+  /** Short human summary from the advisory. */
+  summary: string;
+  /** Package coords the advisory applies to. */
+  packageName: string;
+  ecosystem: 'npm' | 'PyPI' | 'Go' | 'crates.io';
+  affectedVersion: string;
+  /** The manifest path the dep was read from (so the Analyst can cite it
+   *  by path+lines, satisfying the evidence-bound rule). */
+  manifestPath: string;
+  /** Optional advisory URL (osv.dev or upstream) for the operator to read. */
+  url?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +256,23 @@ export interface AuditRun {
    *  invokes the in-bot `/audit grammars` bootstrap so the next run gets
    *  real coverage. */
   missingGrammars?: string[];
+  /** Populated when the run was invoked with `--gate`. Caller surface
+   *  (CI integration, admin route) reads `decision` to allow/warn/block;
+   *  the audit body also leads with a GATE banner for human readers. */
+  gate?: AuditGate;
+}
+
+/** Qodo-style policy gate result. Caller picks a `threshold` severity;
+ *  any unsuppressed finding ≥ threshold turns the gate into `block`. */
+export interface AuditGate {
+  decision: 'pass' | 'warn' | 'block';
+  /** Severity at which findings start to block. */
+  threshold: Severity;
+  /** Findings that triggered the block (severity >= threshold, not
+   *  suppressed). Empty when decision is pass/warn. */
+  blockingFindings: ReadonlyArray<{ id: string; lens: string; severity: Severity; symptom: string }>;
+  /** One-sentence operator summary suitable for a CI annotation. */
+  reason: string;
 }
 
 // ---------------------------------------------------------------------------

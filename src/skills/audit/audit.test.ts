@@ -27,6 +27,7 @@ import { parseCommandMessage } from '../command-map';
 import { fileMatchesLens, depthBudget } from './lenses';
 import { profileCacheKey } from './cache';
 import { findingPriority, isLens, isDepth, isFindingId, FINDING_ID_RE } from './types';
+import { evaluateGate } from './audit';
 import { callSkillLLM } from '../llm';
 import type { AuditPlan, AuditRun, RepoProfile, AuditFinding, TreeEntry } from './types';
 import type { SkillRequest } from '../types';
@@ -45,9 +46,25 @@ interface MockResp {
 }
 
 function installFetchMock(routes: MockResp[]): ReturnType<typeof vi.fn> {
+  // Default OSV.dev routes: tests that don't care about advisories get
+  // "no vulns found" automatically so the Scout's deps cross-reference
+  // doesn't 404 and trip the osvQueryFailed warning. Tests that DO care
+  // about OSV behavior pass an explicit route earlier in `routes` and
+  // their match wins (we iterate the user's list first).
+  const osvDefaults: MockResp[] = [
+    {
+      match: (u) => u.startsWith('https://api.osv.dev/v1/querybatch'),
+      body: { results: [] },
+    },
+    {
+      match: (u) => u.startsWith('https://api.osv.dev/v1/vulns/'),
+      body: {},
+    },
+  ];
+  const allRoutes = [...routes, ...osvDefaults];
   const fn = vi.fn(async (url: string | Request) => {
     const u = typeof url === 'string' ? url : url.url;
-    for (const r of routes) {
+    for (const r of allRoutes) {
       if (r.match(u)) {
         const status = r.status ?? 200;
         return new Response(JSON.stringify(r.body), { status });
@@ -239,7 +256,8 @@ describe('depthBudget', () => {
 describe('type guards', () => {
   it('isLens accepts MVP lenses, rejects others', () => {
     expect(isLens('security')).toBe(true);
-    expect(isLens('drift')).toBe(false);
+    expect(isLens('drift')).toBe(true);
+    expect(isLens('not-a-lens')).toBe(false);
     expect(isLens(42)).toBe(false);
   });
   it('isDepth accepts the three tiers', () => {
@@ -327,6 +345,81 @@ describe('findingPriority', () => {
     expect(findingPriority(mkFinding('high', 1.0))).toBeGreaterThan(
       findingPriority(mkFinding('high', 0.25)),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// evaluateGate (--gate / --threshold policy decisioning)
+// ---------------------------------------------------------------------------
+
+describe('evaluateGate', () => {
+  const mkFinding = (
+    id: string,
+    severity: AuditFinding['severity'],
+    suppressed = false,
+  ): AuditFinding => ({
+    id,
+    lens: 'security',
+    severity,
+    confidence: 1.0,
+    evidence: [{ path: 'a', source: 'github' }],
+    symptom: `symptom for ${id}`,
+    rootCause: '',
+    correctiveAction: '',
+    preventiveAction: { kind: 'lint', detail: '' },
+    suppressed,
+  });
+  const runWith = (findings: AuditFinding[]): AuditRun => ({
+    runId: 'r1',
+    repo: { owner: 'o', name: 'r', sha: 'a'.repeat(40) },
+    lenses: ['security'],
+    depth: 'quick',
+    findings,
+    telemetry: { durationMs: 0, llmCalls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, githubApiCalls: 0 },
+  });
+
+  it('passes when there are no live findings', () => {
+    const g = evaluateGate(runWith([]), 'high');
+    expect(g.decision).toBe('pass');
+    expect(g.blockingFindings.length).toBe(0);
+  });
+
+  it('blocks when any finding meets the threshold severity', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'high'), mkFinding('b', 'low')]), 'high');
+    expect(g.decision).toBe('block');
+    expect(g.blockingFindings.map((f) => f.id)).toEqual(['a']);
+  });
+
+  it('warns when there are findings, all below the threshold', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'medium'), mkFinding('b', 'low')]), 'high');
+    expect(g.decision).toBe('warn');
+    expect(g.blockingFindings.length).toBe(0);
+  });
+
+  it('treats critical as ≥ high (severity rank, not equality)', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'critical')]), 'high');
+    expect(g.decision).toBe('block');
+  });
+
+  it('does not block on suppressed findings (operator already dismissed them)', () => {
+    const g = evaluateGate(
+      runWith([mkFinding('a', 'high', true), mkFinding('b', 'medium')]),
+      'high',
+    );
+    // Only the medium finding is live; it doesn't meet the high threshold.
+    expect(g.decision).toBe('warn');
+  });
+
+  it('respects a stricter --threshold critical (only critical blocks)', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'high'), mkFinding('b', 'critical')]), 'critical');
+    expect(g.decision).toBe('block');
+    expect(g.blockingFindings.map((f) => f.id)).toEqual(['b']);
+  });
+
+  it('respects a looser --threshold medium (medium and above block)', () => {
+    const g = evaluateGate(runWith([mkFinding('a', 'medium'), mkFinding('b', 'low')]), 'medium');
+    expect(g.decision).toBe('block');
+    expect(g.blockingFindings.map((f) => f.id)).toEqual(['a']);
   });
 });
 
@@ -694,6 +787,252 @@ describe('handleAudit --analyze (end-to-end with mocked LLM)', () => {
     expect(run.telemetry.tokensOut).toBe(200);
     expect(result.body).toContain('Hardcoded API token');
     expect(result.body).toContain('gitleaks');
+  });
+
+  it('--distill compresses Analyst prose via a second LLM call and folds tokens into the run telemetry', async () => {
+    // Same fixture as the happy-path test, plus --distill and a second
+    // mockLLM response for the Distiller pass.
+    const sourceContent = `export function login(user: string, pass: string) {
+  const TOKEN = 'sk_live_DEADBEEFCAFE';
+  return TOKEN + user + pass;
+}`;
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 50 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: sourceContent.length },
+    ];
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'e'.repeat(40) } },
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 50 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa(sourceContent), sha: 'a1', size: sourceContent.length },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+
+    // First call: Analyst returns the verbose finding.
+    // Second call: Distiller compresses it.
+    mockLLM
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          findings: [
+            {
+              lens: 'security', severity: 'high', confidence: 0.75,
+              symptom: 'There appears to be a hardcoded API token committed to the repository in the login() function which is a serious security concern',
+              rootCause: 'Secrets were committed to source control because the team did not configure pre-commit secret scanning, which would have caught this before it reached the remote',
+              correctiveAction: 'The team should rotate the leaked token immediately, move it to an environment variable, and add gitleaks scanning to CI to prevent regressions',
+              preventiveAction: { kind: 'ci', detail: 'Add gitleaks step to .github/workflows/ci.yml' },
+              evidence: [{ path: 'src/auth.ts', lines: '2-2', snippet: "const TOKEN = 'sk_live_…';" }],
+            },
+          ],
+        }),
+        tokens: { prompt: 800, completion: 400 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          findings: [
+            {
+              // The Distiller MUST echo the same id the Analyst produced
+              // (lens-prefixed hash). We don't know it ahead of time, so
+              // resolve it dynamically below — see assertion that the
+              // Distiller's output ended up on result.findings[0].
+              id: 'PLACEHOLDER',
+              symptom: 'Hardcoded API token in login()',
+              rootCause: 'CI lacks pre-commit secret scan',
+              fix: 'Rotate token; move to env var; add gitleaks to CI',
+            },
+          ],
+        }),
+        tokens: { prompt: 200, completion: 80 },
+      });
+
+    // Pre-run with no distill to get the finding id (deterministic
+    // hash of lens+path+symptom). We just call handleAudit twice with
+    // different LLM mock setups — first run captures the id, second
+    // run uses it.
+    // Simpler approach: rather than resolve the id, mock the Distiller
+    // to return whatever id the Analyst emitted by capturing it from
+    // the first call.
+    let capturedId = '';
+    mockLLM.mockReset();
+    mockLLM
+      .mockImplementationOnce(async () => ({
+        text: JSON.stringify({
+          findings: [
+            {
+              lens: 'security', severity: 'high', confidence: 0.75,
+              symptom: 'Hardcoded API token in login()',
+              rootCause: 'Secret committed to repo; CI lacks pre-commit secret scan',
+              correctiveAction: 'Move TOKEN to env var; rotate the leaked secret',
+              preventiveAction: { kind: 'ci', detail: 'Add gitleaks step to .github/workflows/ci.yml' },
+              evidence: [{ path: 'src/auth.ts', lines: '2-2', snippet: "const TOKEN = 'sk_live_…';" }],
+            },
+          ],
+        }),
+        tokens: { prompt: 800, completion: 400 },
+      }))
+      .mockImplementationOnce(async (opts: unknown) => {
+        // The Distiller's user prompt embeds the AuditFinding payload as
+        // JSON; pull the id out so the mocked response matches.
+        const userPrompt = (opts as { userPrompt?: string }).userPrompt ?? '';
+        const idMatch = /"id":\s*"([^"]+)"/.exec(userPrompt);
+        capturedId = idMatch?.[1] ?? '';
+        return {
+          text: JSON.stringify({
+            findings: [
+              {
+                id: capturedId,
+                symptom: 'distilled symptom',
+                rootCause: 'distilled root',
+                fix: 'distilled fix',
+              },
+            ],
+          }),
+          tokens: { prompt: 200, completion: 80 },
+        };
+      });
+
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'quick', distill: 'true' },
+      }),
+    );
+
+    expect(result.kind).toBe('audit_run');
+    const run = result.data as AuditRun;
+    expect(run.findings).toHaveLength(1);
+    // Distiller prose should have replaced the original Analyst prose.
+    expect(run.findings[0].symptom).toBe('distilled symptom');
+    expect(run.findings[0].rootCause).toBe('distilled root');
+    expect(run.findings[0].correctiveAction).toBe('distilled fix');
+    // Preventive artifact and evidence stay untouched (Distiller only
+    // rewrites prose fields).
+    expect(run.findings[0].preventiveAction.kind).toBe('ci');
+    expect(run.findings[0].evidence[0].path).toBe('src/auth.ts');
+    // Telemetry: 2 LLM calls (Analyst + Distiller), tokens summed.
+    expect(run.telemetry.llmCalls).toBe(2);
+    expect(run.telemetry.tokensIn).toBe(1000); // 800 + 200
+    expect(run.telemetry.tokensOut).toBe(480); // 400 + 80
+  });
+
+  it('--gate flag attaches a gate decision and prepends a banner for CI consumption', async () => {
+    // Same fixture shape as the happy-path test, but with --gate set.
+    const sourceContent = `export function login(user: string, pass: string) {
+  const TOKEN = 'sk_live_DEADBEEFCAFE';
+  return TOKEN + user + pass;
+}`;
+    const tree = [
+      { path: 'package.json', type: 'blob', sha: 'm0', size: 50 },
+      { path: 'src/auth.ts', type: 'blob', sha: 'a1', size: sourceContent.length },
+    ];
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: {
+          default_branch: 'main', private: false, archived: false,
+          size: 1, language: 'TypeScript', description: null,
+        },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'c'.repeat(40) } },
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 50 },
+      },
+      {
+        match: (u) => u.includes('/contents/src/auth.ts'),
+        body: { encoding: 'base64', content: btoa(sourceContent), sha: 'a1', size: sourceContent.length },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({
+      text: JSON.stringify({
+        findings: [
+          {
+            lens: 'security', severity: 'high', confidence: 0.75,
+            symptom: 'Hardcoded API token in login()',
+            rootCause: 'Secret committed to repo; CI lacks pre-commit secret scan',
+            correctiveAction: 'Move TOKEN to env var; rotate the leaked secret',
+            preventiveAction: { kind: 'ci', detail: 'Add gitleaks step to .github/workflows/ci.yml' },
+            evidence: [{ path: 'src/auth.ts', lines: '2-2', snippet: "const TOKEN = 'sk_live_…';" }],
+          },
+        ],
+      }),
+      tokens: { prompt: 800, completion: 200 },
+    });
+
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'quick', gate: 'true' },
+      }),
+    );
+
+    expect(result.kind).toBe('audit_run');
+    const run = result.data as AuditRun;
+    expect(run.gate).toBeDefined();
+    expect(run.gate?.decision).toBe('block');
+    expect(run.gate?.threshold).toBe('high');
+    expect(run.gate?.blockingFindings.length).toBe(1);
+    expect(run.gate?.blockingFindings[0].severity).toBe('high');
+    // Banner is the first body line so a CI consumer can grep "GATE: BLOCK".
+    expect(result.body.split('\n')[0]).toMatch(/GATE: BLOCK/);
+  });
+
+  it('--gate without findings emits GATE: PASS', async () => {
+    const tree = [{ path: 'package.json', type: 'blob', sha: 'm0', size: 30 }];
+    installFetchMock([
+      {
+        match: (u) => /\/repos\/[^/]+\/[^/]+$/.test(u),
+        body: { default_branch: 'main', private: false, archived: false, size: 1, language: 'TypeScript', description: null },
+      },
+      { match: (u) => /\/languages$/.test(u), body: { TypeScript: 1 } },
+      {
+        match: (u) => /\/git\/refs\/heads\//.test(u),
+        body: { ref: 'refs/heads/main', object: { sha: 'd'.repeat(40) } },
+      },
+      { match: (u) => /\/git\/trees\//.test(u), body: { truncated: false, tree } },
+      {
+        match: (u) => u.includes('/contents/package.json'),
+        body: { encoding: 'base64', content: btoa('{"name":"x"}'), sha: 'm0', size: 30 },
+      },
+      { match: (u) => u.includes('/code-scanning/alerts'), status: 404, body: {} },
+    ]);
+    mockLLM.mockResolvedValue({ text: JSON.stringify({ findings: [] }) });
+
+    const result = await handleAudit(
+      makeRequest({
+        flags: { analyze: 'true', lens: 'security', depth: 'quick', gate: 'true' },
+      }),
+    );
+
+    const run = result.data as AuditRun;
+    expect(run.gate?.decision).toBe('pass');
+    expect(result.body.split('\n')[0]).toMatch(/GATE: PASS/);
+  });
+
+  it('rejects an unknown --threshold value loudly', async () => {
+    const result = await handleAudit(
+      makeRequest({ flags: { analyze: 'true', gate: 'true', threshold: 'bogus' } }),
+    );
+    expect(result.kind).toBe('error');
+    expect(result.body).toMatch(/threshold/i);
+    expect(result.body).toMatch(/critical, high, medium, low/);
   });
 
   it('drops findings whose evidence cites paths outside the tree (anti-hallucination at handler level)', async () => {
@@ -1641,7 +1980,7 @@ describe('audit_do_key — deterministic DO identity', () => {
       owner: string;
       repo: string;
       sha: string;
-      lenses: ('security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf')[];
+      lenses: ('security' | 'deps' | 'types' | 'tests' | 'deadcode' | 'perf' | 'drift')[];
       depth: 'quick' | 'standard' | 'deep';
     }> = {},
   ) {
@@ -1669,7 +2008,7 @@ describe('audit_do_key — deterministic DO identity', () => {
       },
       lenses: overrides.lenses ?? (['security'] as const),
       depth: overrides.depth ?? 'quick',
-      selections: { security: [], deps: [], types: [], tests: [], deadcode: [], perf: [] },
+      selections: { security: [], deps: [], types: [], tests: [], deadcode: [], perf: [], drift: [] },
       estimate: { llmCalls: 0, inputTokens: 0, costUsd: 0 },
       notes: [],
     } as Parameters<typeof audit_do_key>[1];
