@@ -1,10 +1,10 @@
-# Upstream OpenClaw Bump — 2026.4.10 (planned)
+# Upstream OpenClaw Bump — 2026.4.11
 
-**Date opened**: 2026-04-11
-**Status**: Scaffolded, version bump deferred
+**Date opened**: 2026-04-11 (updated 2026-04-12 after 2026.4.11 patch)
+**Status**: PR 3 drafted
 **Current pin**: `openclaw@2026.3.23-2` (Dockerfile:44)
-**Target pin**: `openclaw@2026.4.10` (or latest `2026.4.10-N` patch)
-**Releases skipped**: 2026.3.28, 2026.4.5, 2026.4.9, 2026.4.10
+**Target pin**: `openclaw@2026.4.11`
+**Releases skipped**: 2026.3.28, 2026.4.5, 2026.4.9, 2026.4.10, 2026.4.11
 
 ## Why this doc exists
 
@@ -115,3 +115,4 @@ PR 3 (the OpenClaw version bump) installs the binary, which physically flips the
 - `openclaw/openclaw#29418` — OAuth identity-scope-only bug (fixed in 4.10)
 - `openclaw/openclaw#52037`, `#53317` — Token refresh races (moot after 4.10 bundled provider)
 - `pwrdrvr/openclaw-codex-app-server` — pre-bundled reference implementation
+- [OpenClaw v2026.4.11 release](https://github.com/openclaw/openclaw/releases/tag/v2026.4.11) — Codex OAuth scope fix + app-server chatter leak fix

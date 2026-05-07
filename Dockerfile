@@ -40,9 +40,15 @@ RUN mkdir -p /root/repos
 # Install pnpm globally
 RUN npm install -g pnpm
 
-# Install OpenClaw (formerly clawdbot/moltbot)
-RUN npm install -g openclaw@2026.3.23-2 \
-    && openclaw --version
+# Install OpenClaw (formerly clawdbot/moltbot) and OpenAI Codex CLI.
+# The Codex CLI binary is required for the bundled Codex provider added in
+# OpenClaw 2026.4.10+ — its presence is the physical gate that activates
+# the CODEX_STAGE_ACTIVE paths in start-openclaw.sh (see PR 2).
+# v2026.4.11 includes a critical Codex OAuth scope fix and app-server
+# chatter-leak fix shipped one day after 2026.4.10.
+RUN npm install -g openclaw@2026.4.11 @openai/codex \
+    && openclaw --version \
+    && codex --version
 
 # Use /home/openclaw as the home directory in addition to /root.
 # The Sandbox SDK backup API only allows directories under /home, /workspace,
@@ -58,7 +64,7 @@ RUN mkdir -p /home/openclaw/.openclaw \
     && ln -sf /home/openclaw/.codex /root/.codex \
     && ln -sf /home/openclaw/clawd /root/clawd
 
-# Build cache bust: 2026-04-11-v2-codex-bootstrap-scaffold
+# Build cache bust: 2026-04-12-v3-openclaw-2026.4.11-codex
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 COPY scripts/codex-auth-watcher.mjs /usr/local/bin/codex-auth-watcher.mjs
 RUN chmod +x /usr/local/bin/start-openclaw.sh \
